@@ -90,24 +90,74 @@ function scriptKindFor(fileName: string): ts.ScriptKind {
   return ts.ScriptKind.TS;
 }
 
+/** Folds string literals, `+` concatenations and templates whose parts are all constant. */
+function foldConstantString(node: ts.Expression): string | undefined {
+  if (ts.isStringLiteralLike(node)) {
+    return node.text;
+  }
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
+    return foldConstantString(node.expression);
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = foldConstantString(node.left);
+    const right = left === undefined ? undefined : foldConstantString(node.right);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  if (ts.isTemplateExpression(node)) {
+    let text = node.head.text;
+    for (const span of node.templateSpans) {
+      const part = foldConstantString(span.expression);
+      if (part === undefined) {
+        return undefined;
+      }
+      text += part + span.literal.text;
+    }
+    return text;
+  }
+  return undefined;
+}
+
+export interface ModuleReferences {
+  imports: string[];
+  typeReferences: string[];
+  /** Source text of module-loading calls whose target is not a compile-time constant. */
+  unresolvedModuleLoads: string[];
+}
+
 /**
  * Module specifiers from an AST walk: import/export declarations (including `export * as ns`),
- * `import x = require()`, dynamic `import()`, `require()`/`require.resolve()`, `import("x").T`
- * type queries and `/// <reference path>` targets. Text inside strings/JSX is never matched.
+ * `import x = require()`, dynamic `import()`, `require()`/`require.resolve()`/`module.require()`,
+ * `process.getBuiltinModule()`, `import("x").T` type queries and `/// <reference path>` targets.
+ * Text inside strings/JSX is never matched. Loader calls with computed targets are folded when
+ * constant and otherwise reported, so the gate fails closed instead of silently skipping them.
  */
-export function extractModuleReferences(
-  sourceText: string,
-  fileName = "file.ts",
-): { imports: string[]; typeReferences: string[] } {
+export function extractModuleReferences(sourceText: string, fileName = "file.ts"): ModuleReferences {
   const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true, scriptKindFor(fileName));
   const imports: string[] = sourceFile.referencedFiles.map((reference) => reference.fileName);
   const typeReferences = sourceFile.typeReferenceDirectives.map((reference) => reference.fileName);
+  const unresolvedModuleLoads: string[] = [];
 
   const addLiteral = (node: ts.Node | undefined) => {
     if (node && ts.isStringLiteralLike(node)) {
       imports.push(node.text);
     }
   };
+
+  const addLoaderTarget = (call: ts.CallExpression) => {
+    const argument = call.arguments[0];
+    const folded = argument && !ts.isSpreadElement(argument) ? foldConstantString(argument) : undefined;
+    if (folded === undefined) {
+      unresolvedModuleLoads.push(call.getText(sourceFile).slice(0, 120));
+    } else {
+      imports.push(folded);
+    }
+  };
+
+  const isNamedCall = (callee: ts.Expression, object: string, method: string): boolean =>
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === object &&
+    callee.name.text === method;
 
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
@@ -118,22 +168,27 @@ export function extractModuleReferences(
       addLiteral(node.argument.literal);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
-      const isDynamicImport = callee.kind === ts.SyntaxKind.ImportKeyword;
-      const isRequire = ts.isIdentifier(callee) && callee.text === "require";
-      const isRequireResolve =
-        ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        callee.expression.text === "require" &&
-        callee.name.text === "resolve";
-      if (isDynamicImport || isRequire || isRequireResolve) {
-        addLiteral(node.arguments[0]);
+      if (
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require") ||
+        isNamedCall(callee, "require", "resolve") ||
+        isNamedCall(callee, "module", "require")
+      ) {
+        addLoaderTarget(node);
+      } else if (isNamedCall(callee, "process", "getBuiltinModule")) {
+        const folded = node.arguments[0] ? foldConstantString(node.arguments[0]) : undefined;
+        if (folded === undefined) {
+          unresolvedModuleLoads.push(node.getText(sourceFile).slice(0, 120));
+        } else {
+          imports.push(folded.startsWith("node:") ? folded : `node:${folded}`);
+        }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
 
-  return { imports, typeReferences };
+  return { imports, typeReferences, unresolvedModuleLoads };
 }
 
 async function collectSourceFiles(

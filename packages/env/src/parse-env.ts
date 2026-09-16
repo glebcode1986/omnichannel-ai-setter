@@ -11,7 +11,10 @@ export interface ParseEnvOptions {
 }
 
 export interface EnvIssue {
-  /** Variable name (or nested path) that failed validation. */
+  /**
+   * Name of the schema-declared variable that failed validation, `(root)` for object-level issues or
+   * `(schema)` when the schema threw. Nested path segments are never included (they can be input).
+   */
   readonly key: string;
   /**
    * Zod's built-in message for the failed check (these never include the input), or a fixed
@@ -21,9 +24,10 @@ export interface EnvIssue {
 }
 
 /**
- * Thrown when environment validation fails. The message lists variable names plus Zod's built-in
- * rule descriptions; custom schema messages and exceptions thrown by transforms are replaced with
- * fixed text, so no part of the message is derived from the environment values.
+ * Thrown when environment validation fails. Every part of the message comes from the schema or from
+ * fixed text: schema-declared variable names, Zod's built-in descriptions for issue kinds whose
+ * metadata is schema-owned (expected type/format/bounds/options), and placeholders for everything
+ * else — custom messages, input-derived metadata such as unrecognized keys, and thrown exceptions.
  */
 export class EnvValidationError extends Error {
   readonly issues: readonly EnvIssue[];
@@ -40,7 +44,26 @@ export class EnvValidationError extends Error {
   }
 }
 
-const CUSTOM_MESSAGE_WITHHELD = "Invalid value (custom validation message withheld; it may contain the value)";
+const MESSAGE_WITHHELD = "Invalid value (validation details withheld; they may contain the value)";
+const NESTED_SUFFIX = " (in a nested value)";
+
+/**
+ * Issue kinds whose built-in message is assembled only from schema-owned metadata (expected type,
+ * format/pattern, bounds, allowed options) or is generic. Everything else is withheld — notably
+ * `custom` (arbitrary text) and `unrecognized_keys` (lists keys taken from the input). New Zod
+ * issue kinds are withheld until reviewed and added here.
+ */
+const SCHEMA_OWNED_ISSUE_CODES: ReadonlySet<string> = new Set([
+  "invalid_type",
+  "invalid_value",
+  "invalid_format",
+  "too_small",
+  "too_big",
+  "not_multiple_of",
+  "invalid_union",
+  "invalid_key",
+  "invalid_element",
+]);
 const SCHEMA_THREW = "Validation threw an exception (details withheld; they may contain values)";
 
 /** A value of the same primitive type, so regenerated messages never see the real input. */
@@ -64,10 +87,14 @@ function typeStandIn(value: unknown): unknown {
 }
 
 /**
- * True when `issue.message` is exactly what Zod's locale produces for this issue without seeing the
- * input — i.e. a built-in message, not one authored by the schema (which could embed the value).
+ * True when the issue kind carries only schema-owned metadata and `issue.message` is exactly what
+ * Zod's locale produces for it without seeing the input — i.e. a built-in message, not one authored
+ * by the schema (which could embed the value).
  */
-function isBuiltInMessage(issue: z.core.$ZodIssue, rawInput: unknown): boolean {
+function isSafeBuiltInMessage(issue: z.core.$ZodIssue, rawInput: unknown): boolean {
+  if (!SCHEMA_OWNED_ISSUE_CODES.has(issue.code)) {
+    return false;
+  }
   // Resolved after parsing: Zod installs its default locale lazily.
   const localeError = z.config().localeError ?? z.locales.en().localeError;
   const regenerated = localeError?.({ ...issue, input: typeStandIn(rawInput) } as unknown as Parameters<
@@ -81,9 +108,9 @@ function isBuiltInMessage(issue: z.core.$ZodIssue, rawInput: unknown): boolean {
  * Validates `source` (default `process.env`) against a Zod object schema and returns the typed,
  * defaulted result. Unknown variables are ignored; only the keys declared in `schema` are read.
  *
- * Error messages are value-free by construction: built-in Zod messages are kept, custom messages
- * are replaced with a fixed placeholder and exceptions thrown inside the schema become a fixed
- * `(schema)` issue.
+ * Diagnostics are value-free by construction (see `EnvValidationError`): keys are schema-declared
+ * variable names, messages are safe built-in descriptions or fixed placeholders, and exceptions
+ * thrown inside the schema become a fixed `(schema)` issue.
  */
 export function parseEnv<TShape extends z.ZodRawShape>(
   schema: z.ZodObject<TShape>,
@@ -108,13 +135,17 @@ export function parseEnv<TShape extends z.ZodRawShape>(
   }
 
   if (!result.success) {
+    const declaredKeys = new Set(Object.keys(schema.shape));
     throw new EnvValidationError(
       result.error.issues.map((issue) => {
         const firstSegment = issue.path[0];
-        const rawInput = typeof firstSegment === "string" ? input[firstSegment] : undefined;
+        const variable = typeof firstSegment === "string" && declaredKeys.has(firstSegment) ? firstSegment : undefined;
+        const message = isSafeBuiltInMessage(issue, variable === undefined ? undefined : input[variable])
+          ? issue.message
+          : MESSAGE_WITHHELD;
         return {
-          key: issue.path.length > 0 ? issue.path.map(String).join(".") : "(root)",
-          message: isBuiltInMessage(issue, rawInput) ? issue.message : CUSTOM_MESSAGE_WITHHELD,
+          key: variable ?? "(root)",
+          message: issue.path.length > 1 ? `${message}${NESTED_SUFFIX}` : message,
         };
       }),
     );

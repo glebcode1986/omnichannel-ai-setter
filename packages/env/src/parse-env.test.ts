@@ -102,6 +102,50 @@ describe("parseEnv", () => {
     }
   });
 
+  it("withholds built-in messages whose metadata comes from the input, such as unrecognized keys (R1-03)", () => {
+    const secret = "r1-fake-secret-DO-NOT-LOG";
+    const schema = z.object({
+      CONFIG: z
+        .string()
+        .transform((value) => JSON.parse(value) as unknown)
+        .pipe(z.strictObject({})),
+    });
+
+    const error = captureError(() => parseEnv(schema, { CONFIG: JSON.stringify({ [secret]: true }) }));
+
+    expect(error.issues).toEqual([{ key: "CONFIG", message: expect.stringMatching(/withheld/) as string }]);
+    expect(JSON.stringify(error.issues)).not.toContain(secret);
+    expect(error.message).not.toContain(secret);
+  });
+
+  it("never copies issue paths beyond the schema-declared variable name (R1-03)", () => {
+    const secret = "r1-fake-secret-DO-NOT-LOG";
+    const schema = z
+      .object({
+        TOKEN: z.string().superRefine((value, ctx) => {
+          ctx.addIssue({ code: "custom", path: [value], message: "invalid" });
+        }),
+        RECORD_JSON: z
+          .string()
+          .transform((value) => JSON.parse(value) as unknown)
+          .pipe(z.record(z.string(), z.number())),
+      })
+      .superRefine((value, ctx) => {
+        ctx.addIssue({ code: "custom", path: [value.TOKEN], message: "object-level" });
+      });
+
+    const error = captureError(() =>
+      parseEnv(schema, { TOKEN: secret, RECORD_JSON: JSON.stringify({ [secret]: "not-a-number" }) }),
+    );
+
+    expect(error.issues.map((issue) => issue.key).sort()).toEqual(["RECORD_JSON", "TOKEN"]);
+    expect(error.issues.find((issue) => issue.key === "RECORD_JSON")?.message).toBe(
+      "Invalid input: expected number, received string (in a nested value)",
+    );
+    expect(JSON.stringify(error.issues)).not.toContain(secret);
+    expect(error.message).not.toContain(secret);
+  });
+
   it("converts exceptions thrown by transforms into a fixed, value-free EnvValidationError", () => {
     const secret = "not-json-app-secret-value";
     class SecretBearingError extends Error {

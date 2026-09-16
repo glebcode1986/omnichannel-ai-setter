@@ -121,6 +121,65 @@ describe("createLogger", () => {
     expect(entry?.objectCode).not.toHaveProperty("code");
   });
 
+  it("never executes an error's toJSON or discloses exceptions from toJSON/getters (R1-04)", () => {
+    const secret = "r1-fake-secret-DO-NOT-LOG";
+    const { logger, lines } = captureLogger("info");
+    let toJsonCalls = 0;
+    const throwingToJson = Object.assign(new Error("request failed"), {
+      toJSON() {
+        toJsonCalls += 1;
+        throw new Error(secret);
+      },
+    });
+    const throwingGetter = Object.defineProperty(new Error("getter failed"), "code", {
+      get() {
+        throw new Error(secret);
+      },
+    });
+    const throwingField = Object.defineProperty({}, "value", {
+      enumerable: true,
+      get() {
+        throw new Error(secret);
+      },
+    });
+    const throwingPlainToJson = {
+      toJSON() {
+        throw new Error(secret);
+      },
+    };
+
+    logger.error("request.failed", { error: throwingToJson });
+    logger.error("getter.failed", { error: throwingGetter, throwingField, throwingPlainToJson });
+
+    const output = JSON.stringify(lines);
+    expect(output).not.toContain(secret);
+    expect(toJsonCalls).toBe(0);
+    expect(lines[0]?.entry).toMatchObject({ event: "request.failed", error: { name: "Error", message: "request failed" } });
+    expect(lines[1]?.entry).toMatchObject({
+      event: "getter.failed",
+      error: { message: "getter failed", code: "[unserializable]" },
+      throwingField: { value: "[unserializable]" },
+      throwingPlainToJson: "[unserializable]",
+    });
+  });
+
+  it("uses fixed text when the entry cannot be serialized at all", () => {
+    const { logger, lines } = captureLogger("info");
+    const hostileKeys = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("r1-fake-secret-DO-NOT-LOG");
+        },
+      },
+    );
+
+    logger.info("hostile", hostileKeys);
+
+    expect(lines[0]?.entry).toMatchObject({ event: "hostile", logSerializationError: "[unserializable]" });
+    expect(JSON.stringify(lines)).not.toContain("r1-fake-secret");
+  });
+
   it("serializes errors created in another realm", async () => {
     const { runInNewContext } = await import("node:vm");
     const { logger, lines } = captureLogger("info");
@@ -160,8 +219,9 @@ describe("createLogger", () => {
 
     expect(lines[0]?.entry).toMatchObject({ level: "info", event: "spoof" });
     expect(lines[0]?.entry).not.toHaveProperty("spoof");
-    expect(lines[1]?.entry).toMatchObject({ level: "info", event: "getter", logSerializationError: "Error: getter threw" });
-    expect(lines[2]?.entry).toMatchObject({ level: "info", event: "nested-getter", logSerializationError: "Error: getter threw" });
+    expect(lines[1]?.entry).toMatchObject({ level: "info", event: "getter", boom: "[unserializable]" });
+    expect(lines[2]?.entry).toMatchObject({ level: "info", event: "nested-getter", nested: { boom: "[unserializable]" } });
+    expect(JSON.stringify(lines)).not.toContain("getter threw");
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 

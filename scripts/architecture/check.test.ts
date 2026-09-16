@@ -529,6 +529,45 @@ describe("checkWorkspace: source imports", () => {
     ]);
   });
 
+  it("fails closed on computed module loads in any package file (R1-01)", () => {
+    const refs = extractModuleReferences('export async function probe(): Promise<void> { await import("node:" + "fs"); }');
+    const computed = extractModuleReferences("export const load = (target: string) => import(target);");
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(scoped("application"), {}, [
+          { path: "src/probe.ts", ...refs },
+          { path: "src/loader.ts", ...computed },
+          { path: "src/loader.test.ts", ...computed },
+        ]),
+      ]),
+    );
+
+    expect(kindsAndFiles(violations)).toEqual([
+      ["node-builtin-in-pure-package", "packages/application/src/probe.ts"],
+      ["unresolvable-module-load", "packages/application/src/loader.ts"],
+      ["unresolvable-module-load", "packages/application/src/loader.test.ts"],
+    ]);
+  });
+
+  it("rejects runtime JavaScript files in every package but allows JavaScript tooling outside src (R1-02)", () => {
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(scoped("application"), {}, [
+          file("src/r1-probe.ts", ["./r1-io.js"]),
+          file("src/r1-io.js", []),
+          file("src/legacy.mjs", []),
+          file("src/helper.test.js", []),
+        ]),
+        workspacePackage(scoped("web"), {}, [file("postcss.config.mjs", [])]),
+      ]),
+    );
+
+    expect(kindsAndFiles(violations)).toEqual([
+      ["javascript-runtime-file", "packages/application/src/r1-io.js"],
+      ["javascript-runtime-file", "packages/application/src/legacy.mjs"],
+    ]);
+  });
+
   it("rejects specifiers that are not valid package names when no alias defines them", () => {
     const violations = checkWorkspace(
       baselineWorkspace([workspacePackage(scoped("web"), {}, [file("src/app/page.tsx", ["@/lib/site"])])]),
@@ -614,6 +653,36 @@ describe("helpers", () => {
         "side-effect",
       ],
       typeReferences: ["node"],
+      unresolvedModuleLoads: [],
+    });
+  });
+
+  it("folds constant loader targets and reports computed ones instead of dropping them", () => {
+    const source = `
+      const base = "../../db/src";
+      export async function probe(name: string): Promise<void> {
+        await import("node:" + "fs");
+        await import(\`node:\${"child_process"}\`);
+        require(("../../" + "queue/src") as string);
+        process.getBuiltinModule("net");
+        await import(base);
+        await import("node:" + name);
+        await import(\`../../\${name}/src\`);
+        module.require(name);
+        process.getBuiltinModule(name);
+      }
+    `;
+
+    expect(extractModuleReferences(source)).toEqual({
+      imports: ["node:fs", "node:child_process", "../../queue/src", "node:net"],
+      typeReferences: [],
+      unresolvedModuleLoads: [
+        "import(base)",
+        'import("node:" + name)',
+        "import(`../../${name}/src`)",
+        "module.require(name)",
+        "process.getBuiltinModule(name)",
+      ],
     });
   });
 
@@ -671,7 +740,9 @@ describe("loadWorkspace", () => {
       { pattern: "#lib/*", targets: ["./src/lib/*"] },
       { pattern: "@/*", targets: ["./src/*"] },
     ]);
-    expect(root.sourceFiles).toEqual([{ path: "scripts/tool.ts", imports: ["whatsapp-web.js"], typeReferences: [] }]);
+    expect(root.sourceFiles).toEqual([
+      { path: "scripts/tool.ts", imports: ["whatsapp-web.js"], typeReferences: [], unresolvedModuleLoads: [] },
+    ]);
   });
 
   it("reports symlinks even when they use names the scanner otherwise skips, and honours tsconfig baseUrl", async () => {
@@ -696,6 +767,26 @@ describe("loadWorkspace", () => {
 
     expect(a?.symlinks?.slice().sort()).toEqual([".shared", "dist", "src/node_modules"]);
     expect(a?.aliases).toEqual([{ pattern: "#infra/*", targets: ["../b/src/*"] }]);
+  });
+
+  it("rejects the reviewer's two-file runtime JavaScript fixture end to end through the real loader (R1-02)", async () => {
+    const rootDir = await scaffold({
+      "package.json": JSON.stringify({ name: "root" }),
+      "pnpm-workspace.yaml": "packages:\n  - packages/*\n",
+      "packages/application/package.json": JSON.stringify({ name: "@omnichannel/application" }),
+      "packages/application/tsconfig.json": JSON.stringify({ compilerOptions: { types: [] }, include: ["src"] }),
+      "packages/application/src/r1-probe.ts": 'import "./r1-io.js";\n',
+      "packages/application/src/r1-io.js": "process.cwd();\n",
+      "packages/application/src/r1-computed.ts": 'export async function probe(): Promise<void> { await import("node:" + "fs"); }\n',
+    });
+
+    const { packages, root } = await loadWorkspace(rootDir);
+    const violations = checkWorkspace(packages, { root }).filter((violation) => violation.kind !== "missing-package");
+
+    expect(kindsAndFiles(violations)).toEqual([
+      ["node-builtin-in-pure-package", "packages/application/src/r1-computed.ts"],
+      ["javascript-runtime-file", "packages/application/src/r1-io.js"],
+    ]);
   });
 
   it("fails loudly on a malformed package.json instead of skipping the package", async () => {

@@ -60,15 +60,16 @@ export default defineConfig(
   },
 
   {
-    // Plain JavaScript config files are not part of any tsconfig project.
-    files: ["**/*.{js,mjs,cjs}"],
+    // Only JavaScript *config* files skip type-aware linting. Any other JavaScript is not part of a
+    // tsconfig project, so the project service rejects it and `pnpm lint` fails closed.
+    files: ["eslint.config.js", "**/*.config.{js,mjs,cjs}"],
     extends: [tseslint.configs.disableTypeChecked],
   },
 
   {
     // Pure packages must not reach for Node.js process/runtime globals (see scripts/architecture/rules.ts).
-    files: ["packages/domain/src/**/*.ts", "packages/channel-core/src/**/*.ts", "packages/application/src/**/*.ts"],
-    ignores: ["**/*.test.ts", "**/*.spec.ts", "**/__tests__/**"],
+    files: ["packages/{domain,channel-core,application}/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    ignores: ["**/*.test.*", "**/*.spec.*", "**/__tests__/**"],
     rules: {
       "no-restricted-globals": [
         "error",

@@ -27,6 +27,8 @@ export interface SourceFile {
   readonly imports: readonly string[];
   /** `/// <reference types="..." />` directives. */
   readonly typeReferences?: readonly string[];
+  /** Module-loading calls (`import()`, `require()`, …) whose target could not be folded to a constant. */
+  readonly unresolvedModuleLoads?: readonly string[];
 }
 
 /** A module alias from package.json `imports` or tsconfig `paths`. */
@@ -76,6 +78,8 @@ export type ViolationKind =
   | "runtime-import-of-non-runtime-code"
   | "unresolved-alias-import"
   | "invalid-import-specifier"
+  | "unresolvable-module-load"
+  | "javascript-runtime-file"
   | "symlink-in-package";
 
 export interface Violation {
@@ -567,6 +571,21 @@ function checkSourceImports(
 
     for (const specifier of new Set(sourceFile.imports)) {
       checkSpecifier(specifier, 0);
+    }
+
+    for (const call of sourceFile.unresolvedModuleLoads ?? []) {
+      report(
+        "unresolvable-module-load",
+        `${call} loads a module whose target is not a compile-time constant, so architecture rules cannot be ` +
+          "checked; use a static import or a string-literal specifier.",
+      );
+    }
+
+    if (runtime && /\.(?:[cm]?js|jsx)$/.test(sourceFile.path)) {
+      report(
+        "javascript-runtime-file",
+        "Runtime code must be TypeScript: JavaScript files are not strictly type-checked and escape pure-package typing.",
+      );
     }
 
     for (const typeReference of new Set(sourceFile.typeReferences ?? [])) {
