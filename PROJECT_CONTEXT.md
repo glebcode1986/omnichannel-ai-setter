@@ -1,6 +1,6 @@
 # Project Context — Canonical Memory
 
-> Durable project memory. A new AI session must read this file first, then `docs/handoff/CURRENT_HANDOFF.md`, then `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`, `docs/tasks/README.md`, relevant specs/ADRs/issues. Chat history is not the source of truth.
+> Durable project memory. A new AI session must read this file first, then `docs/handoff/CURRENT_HANDOFF.md`, `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`, `docs/tasks/README.md`, relevant specs/ADRs/issues. Chat history is not the source of truth.
 
 ## Goal
 
@@ -12,88 +12,80 @@ One shared conversation/AI/policy/delivery/handoff core with channel adapters. M
 
 The SaaS UX is **Inbox-first**: one unified operational inbox is the primary daily workspace, with Review, Leads, Knowledge, Style, Analytics and Settings as supporting surfaces. Instagram and WhatsApp render through the same product shell with capability-specific states rather than separate dashboards.
 
-## Verified platform constraints — 2026-09-16 baseline
+## Platform choices — Accepted
 
 ### Instagram
 - professional accounts via Instagram API with Instagram Login;
 - inbound-first messaging;
-- after-window Human Agent support is a separately eligible/approved human-support path and must be re-verified at implementation/App Review time.
+- after-window product modes: `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED` (ADR-014);
+- extended mode is real-human review/send under current eligible Human Agent rules, not unattended AI impersonation.
 
 ### WhatsApp
-- production transport is official WhatsApp Cloud API only;
-- customer message opens the current platform-defined customer-service window (currently 24 hours) for supported free-form customer-care replies;
-- outside free-form window, approved message templates are the supported provider mechanism rather than arbitrary free-form continuation;
-- official Messages API supports text, media including audio, templates, read receipts, typing indicator and webhook delivery/read statuses;
-- SaaS client onboarding uses current Meta Embedded Signup/business asset flow;
-- coexistence with an existing WhatsApp Business App number is modeled as capability-gated, not universally assumed.
+- production transport is official Cloud API only;
+- Embedded Signup for SaaS onboarding (ADR-015);
+- customer-service free-form window currently 24 hours; outside it use approved template mechanisms under current policy;
+- after-window modes: `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT` (ADR-016);
+- autopilot requires an explicit allowlist; no stored choice means conservative service-window-only behavior.
 
-See `docs/research/META_API_VERIFICATION.md`, `META_INSTAGRAM_PHASE2_VERIFICATION.md`, and `META_WHATSAPP_PHASE4_VERIFICATION.md`.
-
-## Instagram after-window product choice — Accepted
-
-Support both:
-- `STANDARD_ONLY`;
-- `HUMAN_ASSISTED_EXTENDED` — AI may prepare draft; real human explicitly reviews/edits/approves and initiates an eligible tagged Human Agent send.
-
-A background AI worker does not silently label itself as `HUMAN_AGENT`. See ADR-014.
-
-## WhatsApp after-window product choice — Accepted
-
-ADR-016 is Accepted. Expose all three account/workspace-selectable modes:
-
-- `SERVICE_WINDOW_ONLY` — no outside-window customer delivery until the customer reopens the free-form service window;
-- `TEMPLATE_REVIEW` — system may select/prepare an eligible approved template, but an authorized human approves the send;
-- `TEMPLATE_AUTOPILOT` — deterministic policy may auto-send only current approved templates/use-cases explicitly allowlisted for automation.
-
-No explicit stored choice means conservative `SERVICE_WINDOW_ONLY` behavior until configured. `TEMPLATE_AUTOPILOT` with an empty allowlist sends nothing unattended. Current consent/template/account-health/STOP rules remain authoritative and are revalidated immediately before send.
+Re-verify current Meta rules/scopes/API behavior at implementation/App Review time.
 
 ## SaaS UX architecture — Prepared
 
-Phase 5 specs/issues/contracts are prepared for:
-- app shell + resumable onboarding;
-- unified Instagram/WhatsApp Inbox;
-- first-class Review queue and conversation operations;
-- AI settings/presets + no-send simulation playground;
-- separate versioned Knowledge and verified Style management;
-- conversation-linked Leads pipeline;
-- operational Analytics + append-oriented Audit;
-- responsive/accessibility/E2E hardening.
+Phase 5 specs/issues/contracts #27–#36 cover app shell/onboarding, unified Inbox, first-class Review queue, AI settings/simulation, separate Knowledge/Style management, Leads, Analytics/Audit and responsive/accessibility E2E.
 
-Knowledge answers what is true; Style answers how the business sounds. They remain separate storage/retrieval/UI domains. Review actions and optimistic UI never bypass server-side policy, delivery revalidation or workspace authorization.
+Knowledge answers what is true; Style answers how the business sounds. They remain separate storage/retrieval/UI domains.
+
+## Commercial SaaS architecture — Prepared
+
+Phase 6 specs/ADRs/issues/contracts #38–#45 are prepared.
+
+Accepted decisions:
+- billing/payment provider is an adapter behind application-owned provider-neutral ports (ADR-017);
+- server-side entitlement state is authoritative; UI state is never authorization;
+- plan definitions are versioned/immutable so grandfathered subscriptions retain meaning;
+- customer-facing AI usage is metered by logical generation operations, not raw provider requests/tokens (ADR-018);
+- one logical generation cycle can retry/repair provider output without double-charging;
+- inbound customer messages continue to ingest/persist when quota/subscription blocks AI;
+- delayed automated sends revalidate current entitlement before send;
+- downgrade/cancel never deletes customer data merely to meet a commercial limit;
+- initial packaging shape is Starter / Growth / Scale, but actual prices, quotas, currencies, trial, overage and billing provider remain explicit owner decisions before production billing.
+
+Concrete billing-provider Issue #41 is blocked until provider + merchant/legal/payment-jurisdiction strategy is selected. Production plan-values Issue #43 is blocked until pricing/quota/trial/overage decisions are accepted.
+
+## Architecture review decision from PR #26 — pending implementation in that PR
+
+ChatGPT architecture review requested one blocking correction before Issue #2 can merge:
+- `application` must **not** depend on `ai`;
+- `application` owns provider-neutral use-case ports such as `ReplyModel`/`EmbeddingProvider` when implemented;
+- `ai`, `db`, `queue` are infrastructure implementations and may depend on `application` ports;
+- `application` remains runtime-agnostic/pure with no Node built-ins/globals/types;
+- model-output Zod boundary schema/DTO belongs at the application boundary, then maps to pure domain values/entities; domain does not own provider DTOs and does not depend on `ai`/application.
+
+Section-5 decisions accepted from PR #26: `db/queue -> application` allowed; `db -> ai` forbidden; `application -> observability` forbidden; browser automation test/dev-only. PR #26 currently has a `REQUEST_CHANGES` architecture review and must be re-reviewed before merge.
 
 ## Open-source references
 
 - **OpenSetter** (`xbirimensah/opensetter`, anchor `aa7d97c38b6d6698df1202d87c00fef5c983cfcb`, MIT) — AI setter/queue/send/handoff reference.
 - **wacrm** (`ArnasDon/wacrm`, anchor `80c3f9a1aecdaf21b98311f230fdaaaec7d85f7d`, MIT) — official WhatsApp Cloud API webhook/send/template/media/signature/inbox patterns.
-- **InstaAuto** — UX/automation patterns; verify license/commit before code reuse.
-- **Claude Instagram Bot** — qualification/voice/handoff ideas; verify license/commit before code reuse.
-- **Senqo** — agent/inbox/CRM/eval ideas only; reject Baileys/QR production transport.
+- InstaAuto / Claude Instagram Bot / Senqo are idea references only unless license/anchor is verified for any code reuse; reject unofficial WhatsApp Web/Baileys production transport.
 
 All source reuse requires file-level attribution in `THIRD_PARTY.md`.
 
-## Accepted architecture
+## Core architecture
 
-- channel-neutral domain/application core and `ChannelAdapter` boundary;
 - TypeScript, Next.js 16/React 19, pnpm workspace;
 - Prisma 7 + PostgreSQL;
 - BullMQ 5 + Redis/ioredis;
 - Auth.js + Prisma WorkspaceMember tenancy;
+- channel-neutral domain/application core + `ChannelAdapter` boundary;
 - webhooks verify/normalize/persist/enqueue and ACK quickly;
 - AI generation and delivery are separate;
-- provider-neutral schema-validated AI contract;
 - factual knowledge and style memory are separate retrieval domains;
 - deterministic policy engine owns send/review eligibility;
-- one delivery coordinator owns natural delay, final revalidation, atomic claim and send-result handling;
-- manual human activity wins and pauses/cancels automation;
+- durable 7–12s inbound debounce and 30–120s post-draft natural delay targets;
+- final pre-send revalidation checks newer inbound, takeover, mode, channel policy/window, entitlement, draft freshness, account health and idempotency;
 - ambiguous provider send outcomes are quarantined, never blindly retried;
-- WhatsApp onboarding is official Embedded Signup; no password/QR/session scraping;
-- WhatsApp voice-note understanding is media fetch + separate transcription provider + shared AI core;
-- WhatsApp read/typing presence is best-effort UX near delivery, not a replacement for durable delay;
-- platform-specific policy facts stay in channel adapters/policy inputs, not prompts.
-
-## Human-like timing
-
-Initial targets: inbound burst debounce 7–12 seconds; post-draft delivery delay 30–120 seconds with a non-uniform natural distribution. Final pre-send gate always rechecks newer inbound, takeover, mode, policy/window, draft freshness, account health and idempotency.
+- manual human activity wins and pauses/cancels automation.
 
 ## Modes
 
@@ -101,24 +93,22 @@ Initial targets: inbound burst debounce 7–12 seconds; post-draft delivery dela
 - `DRAFT`: generate and hold;
 - `AUTOPILOT`: auto-send only when deterministic gates pass.
 
-After-window policies are separate from AiMode.
+Channel after-window policy and commercial entitlement are separate from `AiMode`.
 
 ## Development workflow
 
 - ChatGPT: product/architecture lead, research/specs/issues/task contracts/review/durable memory.
 - Claude: primary implementation agent, one issue/task contract at a time, PR only, no self-merge.
 - Codex/Astra: independent reviewer/test author by default, especially concurrency/security/idempotency/adversarial coverage.
-- Human programmer/supervisor can use `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` as the stable launch/monitoring page for Claude.
+- Human programmer/supervisor uses `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` as the stable launch/monitoring page.
 
 ## Current execution state
 
-- Phase 0 complete.
-- Claude is currently working on Phase 1 Issue #2 / P1-01; P1-02 / Issue #3 is prepared and starts only after #2 is reviewed/accepted/merged.
-- Phase 1 issues #2–#6 + review #7 remain the current coding path.
-- Phase 2 Instagram/shared-AI architecture, issues #8–#17 and task contracts are fully prepared but coding waits for Phase 1 exit criteria.
-- Phase 4 WhatsApp architecture, current Meta verification, issues #18–#25 and task contracts are prepared; ADR-016 is Accepted with all three outside-window modes.
-- Phase 5 SaaS UX architecture, issues #27–#36 and task contracts are prepared. Phase 5 features may begin incrementally when their backend dependencies stabilize; they do not need to wait for every WhatsApp feature.
+- PR #26 implements P1-01 / Issue #2 and is open. Architecture review requested changes; do not merge/start #3 until corrected head is re-reviewed and accepted.
+- #37 adds an early GitHub Actions `pnpm verify` gate after the scaffold is accepted.
+- P1-02 / Issue #3 is prepared for fresh `main` after #2 merge.
+- Phase 2 Instagram/shared-AI #8–#17, Phase 4 WhatsApp #18–#25, Phase 5 SaaS UX #27–#36 and Phase 6 commercial SaaS #38–#45 are architected/task-contracted subject to their dependency gates.
 
 ## Continuity rule
 
-Every material decision, task, completed milestone and unresolved question must be committed into this repository. New sessions continue from GitHub alone.
+Every material decision, task, completed milestone and unresolved question must be committed into the repository. New sessions continue from GitHub alone.
