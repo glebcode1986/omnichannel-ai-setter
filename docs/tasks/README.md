@@ -11,38 +11,48 @@ This directory contains durable, executable instructions for coding/review agent
 | P1-03 | #4 | Claude | `P1-03_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; may run alongside P1-04 |
 | P1-04 | #5 | Claude | `P1-04_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; shared IDs stable |
 | P1-05 | #6 | Claude | `P1-05_CLAUDE_TASK_CONTRACT.md` | #3/#4/#5 accepted |
-| R1 | #7 | Codex/Astra | `R1_CODEX_ASTRA_REVIEW_CONTRACT.md` | run incrementally on reviewable Phase 1 PRs |
+| R1 | #7 | Codex/Astra | `R1_CODEX_ASTRA_REVIEW_CONTRACT.md` | incremental Phase 1 review |
 
-## Phase 2 execution order
+## Phase 2 execution order — Instagram + shared AI
 
-Phase 2 implementation starts only after Phase 1 exit criteria are met.
+Starts only after Phase 1 exit criteria.
 
-| Step | Issue | Executor | Contract | Primary dependency |
-|---|---:|---|---|---|
-| P2-01 | #8 | Claude | `P2-01_CLAUDE_TASK_CONTRACT.md` | Phase 1 exit |
-| P2-02 | #9 | Claude | `P2-02_CLAUDE_TASK_CONTRACT.md` | Phase 1 exit / coordinate with P2-01 |
-| P2-03 | #10 | Claude | `P2-03_CLAUDE_TASK_CONTRACT.md` | stable core/application |
-| P2-04 | #11 | Claude | `P2-04_CLAUDE_TASK_CONTRACT.md` | DB + P2-03 request contract |
-| P2-05 | #12 | Claude | `P2-05_CLAUDE_TASK_CONTRACT.md` | P2-03 + P2-04 |
-| P2-06 | #13 | Claude | `P2-06_CLAUDE_TASK_CONTRACT.md` | queue + P2-01 + P2-05 |
-| P2-07 | #14 | Claude | `P2-07_CLAUDE_TASK_CONTRACT.md` | P2-01 + P2-05 + P2-06 |
-| P2-08 | #15 | Claude + independent adversarial additions | `P2-08_CLAUDE_TASK_CONTRACT.md` | P2-03–P2-07 stable |
-| P2-09 | #16 | Claude | `P2-09_CLAUDE_TASK_CONTRACT.md` | P2-01–P2-08 accepted |
-| R2 | #17 | Codex/Astra | `R2_CODEX_ASTRA_REVIEW_CONTRACT.md` | run incrementally; required for final vertical slice |
+| Step | Issue | Executor | Contract |
+|---|---:|---|---|
+| P2-01 | #8 | Claude | `P2-01_CLAUDE_TASK_CONTRACT.md` |
+| P2-02 | #9 | Claude | `P2-02_CLAUDE_TASK_CONTRACT.md` |
+| P2-03 | #10 | Claude | `P2-03_CLAUDE_TASK_CONTRACT.md` |
+| P2-04 | #11 | Claude | `P2-04_CLAUDE_TASK_CONTRACT.md` |
+| P2-05 | #12 | Claude | `P2-05_CLAUDE_TASK_CONTRACT.md` |
+| P2-06 | #13 | Claude | `P2-06_CLAUDE_TASK_CONTRACT.md` |
+| P2-07 | #14 | Claude | `P2-07_CLAUDE_TASK_CONTRACT.md` |
+| P2-08 | #15 | Claude + independent adversarial additions | `P2-08_CLAUDE_TASK_CONTRACT.md` |
+| P2-09 | #16 | Claude | `P2-09_CLAUDE_TASK_CONTRACT.md` |
+| R2 | #17 | Codex/Astra | `R2_CODEX_ASTRA_REVIEW_CONTRACT.md` |
+
+## Phase 4 execution order — WhatsApp Cloud API
+
+Implementation reuses the stable shared AI/policy/delivery/handoff core. See `docs/specs/PHASE4_WHATSAPP_IMPLEMENTATION_PLAN.md`.
+
+| Step | Issue | Executor | Contract |
+|---|---:|---|---|
+| P4-01 | #18 | Claude | `P4-01_CLAUDE_TASK_CONTRACT.md` |
+| P4-02 | #19 | Claude | `P4-02_CLAUDE_TASK_CONTRACT.md` |
+| P4-03 | #20 | Claude | `P4-03_CLAUDE_TASK_CONTRACT.md` |
+| P4-04 | #21 | Claude | `P4-04_CLAUDE_TASK_CONTRACT.md` |
+| P4-05 | #22 | Claude | `P4-05_CLAUDE_TASK_CONTRACT.md` |
+| P4-06 | #23 | Claude | `P4-06_CLAUDE_TASK_CONTRACT.md` |
+| P4-07 | #24 | Claude | `P4-07_CLAUDE_TASK_CONTRACT.md` |
+| R4 | #25 | Codex/Astra | `R4_CODEX_ASTRA_REVIEW_CONTRACT.md` |
 
 ## Agent operating rule
 
-For Claude: execute one contract/issue at a time on its specified branch. Do not opportunistically implement the next contract.
+Claude executes one contract/issue at a time on its specified branch and does not opportunistically implement the next contract. Codex/Astra independently reviews/tests by default and reads specs before diffs. ChatGPT maintains product architecture, task contracts, durable memory and architecture review.
 
-For Codex/Astra: act as an independent reviewer/test author by default. Read specs/contracts before the implementation diff. Do not edit the same feature module concurrently unless explicitly reassigned.
+## Instagram after-window choice — Accepted
 
-For ChatGPT: maintain architecture/specs/task contracts and review implementation against them. Any material decision from a conversation must be committed to project documentation before it is treated as durable project state.
+Both `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED` are supported. See ADR-014. Extended mode is an explicit real-human review/send path under currently permitted Human Agent eligibility, not an unattended AI worker pretending to be human.
 
-## Instagram after-window product choice
+## WhatsApp after-window choice — Still open
 
-The accepted product supports both:
-
-- `STANDARD_ONLY`
-- `HUMAN_ASSISTED_EXTENDED`
-
-See ADR-014. `HUMAN_ASSISTED_EXTENDED` means AI drafting plus explicit real-human review/send through a currently permitted/approved Human Agent path; it is not a background worker silently labelling AI output as human activity.
+ADR-016 is **Proposed**, not Accepted. Architecture can support both `SERVICE_WINDOW_ONLY` and `TEMPLATE_ASSISTED`, but the product owner has not yet selected the default or whether eligible outside-window templates may auto-send vs require human approval. Coding agents must not invent this decision.
