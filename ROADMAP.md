@@ -22,7 +22,7 @@
 
 **Phase 0 architecture freeze is complete enough for Phase 1 implementation.** New architectural changes require spec/ADR updates rather than silent code divergence.
 
-## Phase 1 — Skeleton (ready to start)
+## Phase 1 — Skeleton (implementation entry point)
 
 - [ ] #2 project/monorepo scaffolding
 - [ ] #3 domain types/interfaces + channel contracts
@@ -31,22 +31,40 @@
 - [ ] #6 channel-neutral webhook ingestion
 - [ ] #7 independent Codex/Astra regression/architecture review
 
-## Phase 2 — Instagram + AI core
+Phase 2 coding remains blocked until Phase 1 exit criteria are satisfied.
 
-- [ ] Instagram connect/webhook/send
-- [ ] normalized inbox persistence
-- [ ] AI draft engine
-- [ ] knowledge/style retrieval
-- [ ] safety gates
-- [ ] draft/autopilot modes
+## Phase 2 — Instagram + AI core (architecture ready)
 
-## Phase 3 — Delay & human handoff
+Design/specification complete:
+- [x] Instagram transport/onboarding architecture
+- [x] provider-neutral AI contract
+- [x] separate factual/style retrieval design
+- [x] deterministic policy engine design
+- [x] delivery coordinator + ambiguity design
+- [x] human handoff/review state design
+- [x] configurable Instagram after-window policy: `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED`
+- [x] Phase 2 implementation backlog created
 
-- [ ] debounce product behavior
-- [ ] randomized delayed delivery
-- [ ] final revalidation
-- [ ] human takeover
-- [ ] review queue
+Implementation backlog:
+- [ ] #8 Instagram transport adapter + fixtures
+- [ ] #9 Instagram Login onboarding/token lifecycle
+- [ ] #10 provider-neutral AI draft engine
+- [ ] #11 factual + style retrieval
+- [ ] #12 deterministic policy engine
+- [ ] #13 delivery coordinator/final revalidation
+- [ ] #14 human handoff/review state machine
+- [ ] #15 evaluation harness/golden conversations
+- [ ] #16 Instagram end-to-end AI vertical slice
+- [ ] #17 independent Codex/Astra Phase 2 review
+
+## Phase 3 — Productized delay & review UX
+
+Core timing/handoff logic is specified in Phase 2, then productized here:
+- [ ] human-delay settings UI (`Fast / Natural / Custom`)
+- [ ] debounce/delay observability and cancellation UI
+- [ ] unified review queue
+- [ ] Human Agent review state/expiry UI
+- [ ] manual claim/resume controls
 
 ## Phase 4 — WhatsApp Cloud API
 
@@ -55,7 +73,9 @@
 - [ ] free-form sends
 - [ ] templates/out-of-window handling
 - [ ] status/read events
+- [ ] typing/read UX
 - [ ] interactive/media support
+- [ ] voice-note transcription path
 
 ## Phase 5 — Unified SaaS UX
 
@@ -64,12 +84,14 @@
 - [ ] knowledge/style configuration
 - [ ] lead stages
 - [ ] analytics/audit UI
+- [ ] cross-channel contact linking only when explicitly verified
 
 ## Phase 6 — Hardening
 
-- [ ] evaluation suite
+- [ ] evaluation suite expansion
 - [ ] rate limits/quotas
 - [ ] reconciliation
 - [ ] security review
 - [ ] load/failure testing
 - [ ] deployment/runbooks
+- [ ] privacy/data-retention controls
