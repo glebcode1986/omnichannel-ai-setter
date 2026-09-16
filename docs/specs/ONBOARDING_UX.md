@@ -69,6 +69,15 @@ Use a test/sandbox conversation or simulation that shows:
 ### Step 9 — Activation
 Activation checklist must show channel connection, knowledge present, style configured or intentionally skipped, policy selected, and unresolved blocking review items.
 
+Before first AUTOPILOT activation, explain in plain language:
+- AUTOPILOT runs on the server and continues when the dashboard/browser/computer is closed;
+- human takeover always wins;
+- uncertain/unsupported cases may be routed to Review instead of being sent;
+- where the connected channel exposes reliable native-app outbound echoes, manually replying from the native business app can pause AI for that conversation;
+- provider/capability limitations must be shown honestly when native-app takeover detection is not available.
+
+AUTOPILOT activation requires an explicit owner/admin action; it must never be inferred merely from finishing onboarding or closing the activation screen.
+
 ## Progressive disclosure
 
 The first-run experience should use plain-language presets. Advanced controls remain available in Settings but should not block a non-technical owner from launching.
@@ -79,4 +88,6 @@ The first-run experience should use plain-language presets. Advanced controls re
 - workspace roles constrain channel connection and policy changes;
 - incomplete Meta authorization is shown as an actionable connection problem, not a generic error;
 - the UI must distinguish `configured`, `connected`, `eligible`, and `currently sendable` states;
-- onboarding can be resumed without losing prior steps.
+- onboarding can be resumed without losing prior steps;
+- browser/WebSocket presence must never be required for AUTOPILOT operation;
+- reconnecting the dashboard reconstructs current automation/conversation state from server-authoritative records.
