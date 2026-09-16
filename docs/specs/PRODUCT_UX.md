@@ -74,6 +74,72 @@ Each review item shows:
 
 Bulk approval is not permitted for customer-facing AI sends in the initial product.
 
+## Settings architecture
+
+Settings should be grouped into understandable sections rather than one long page:
+- Workspace;
+- Business Profiles;
+- Channels;
+- AI & Automation;
+- Knowledge;
+- Style;
+- Leads / Goals;
+- Notifications;
+- Team & Roles;
+- Billing;
+- Audit / Security.
+
+Most operational behavior that differs between businesses should be Business-Profile-aware rather than globally forced across the workspace.
+
+## Notifications
+
+### Principle
+AUTOPILOT should be quiet while everything is working normally. Do not notify an owner for every AI message.
+
+Default high-signal notification classes may include:
+- human action required / Review blocker;
+- qualified or configured high-value lead;
+- customer explicitly asks for a manager, call or human;
+- complaint / negative escalation;
+- booking / next-step goal reached where configured;
+- channel/authentication issue that blocks automation;
+- billing/entitlement/voice allowance issue that materially affects operation;
+- ambiguous or failed delivery requiring intervention.
+
+### Delivery channels
+Initial notification delivery may include:
+- in-app;
+- email;
+- browser/mobile push when supported.
+
+Do not reuse the same customer-facing WhatsApp/Instagram channel as an admin alert transport by default. Dedicated notification connectors may be added later.
+
+### Importance levels
+Use at least:
+- `CRITICAL` — automation/channel/access cannot safely continue;
+- `ACTION_NEEDED` — Review, human requested, qualified/high-value lead, booking/call request;
+- `INFORMATIONAL` — summaries and non-blocking status.
+
+### Quiet hours and digests
+Workspace/member notification preferences may define quiet hours. Quiet hours suppress or defer non-critical owner notifications but do **not** stop AUTOPILOT itself.
+
+Support digest-style summaries so a user can receive one useful summary instead of many low-value alerts. Example summary fields may include conversations handled, pending Review items, qualified leads and channel warnings.
+
+### Deduplication and escalation
+The same unresolved event must not repeatedly generate identical alerts.
+
+Notification state should support deduplication/acknowledgement and optional escalation policies. Example: notify assigned manager first; if an actionable Review item remains untouched for a configured interval, escalate to OWNER/ADMIN.
+
+A quoted or repeated representation of the same underlying event must not create a second logical alert.
+
+### Member and Business Profile scope
+Notifications respect member access and assignment. A member who is scoped only to one Business Profile should not receive content/alerts for another profile.
+
+Sensitive profiles should use privacy-preserving push/email previews. For example, a relationship-oriented business may notify `Conversation requires attention` without putting intimate customer text in the lock-screen notification.
+
+### Testing
+Provide `Send test notification` / equivalent verification for supported channels so a user can confirm that alerts are actually deliverable.
+
 ## Interaction invariants
 
 - UI never presents a send as guaranteed before the delivery coordinator reports accepted/provider state.
@@ -82,6 +148,7 @@ Bulk approval is not permitted for customer-facing AI sends in the initial produ
 - Workspace scoping applies to every query/action.
 - Destructive/high-impact actions require explicit confirmation where appropriate.
 - Accessible keyboard navigation and responsive behavior are required for inbox/review workflows.
+- Notification preferences never become the authorization boundary for the underlying action.
 
 ## Mobile
 
