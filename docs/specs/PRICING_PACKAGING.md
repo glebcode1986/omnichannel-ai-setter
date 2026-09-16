@@ -1,4 +1,4 @@
-# Pricing & Packaging Specification — v0.5
+# Pricing & Packaging Specification — v0.6
 
 ## Principle
 
@@ -8,13 +8,31 @@ The product should support multiple plans and grandfathered plan versions withou
 
 ## Initial packaging shape
 
-Use three customer-facing tiers as the initial product shape:
+Use three customer-facing self-serve tiers as the initial product shape:
 
 1. **Starter** — solo/small business, one primary operator.
 2. **Growth** — multiple business profiles/team members, richer analytics/automation.
 3. **Scale** — larger teams/agencies/multi-profile operations, larger limits and advanced controls.
 
-These names are product defaults, not hard-coded billing identifiers. Actual public prices remain a product-owner decision and can change by plan version.
+These names are product defaults, not hard-coded billing identifiers.
+
+For organizations needing more than the self-serve Scale limits, expose **Custom / Contact us** rather than inventing a fourth fixed public tier. Custom may extend Business Profiles, seats, support/SLA, retention, exports/API or agency controls by explicit agreement.
+
+## Accepted public pricing
+
+Initial launch pricing is accepted as:
+
+| Plan | Monthly | Annual |
+|---|---:|---:|
+| Starter | **€49/month** | **€490/year** |
+| Growth | **€99/month** | **€990/year** |
+| Scale | **€249/month** | **€2,490/year** |
+
+EUR is the initial primary public price book currency. Additional currencies may be introduced later as separate versioned price books; application/domain logic must not assume EUR forever.
+
+Annual pricing follows the accepted rule **pay for 10 months, receive 12 months of service** (approximately 16.7% effective discount). Public UX may market this as **"2 months free with annual billing"**.
+
+Growth should be visually positioned as the primary/most-popular self-serve plan, subject to final marketing design.
 
 ## Accepted commercial unit: Business Profile
 
@@ -89,10 +107,11 @@ Definitions for public/product UX:
 - **DRAFT** = AI prepares a reply but does not send it until an authorized human reviews/edits/sends it.
 - **Review Queue** = the operational queue collecting items that require human attention, including DRAFT replies, low confidence, missing facts, sensitive/unsupported cases, Instagram human-assisted sends, WhatsApp template review, transcription/media failures and ambiguous delivery outcomes.
 
-## Accepted tier capacity direction
+## Accepted tier capacities
 
 | Capability | Starter | Growth | Scale |
 |---|---:|---:|---:|
+| Public price | **€49/mo** | **€99/mo** | **€249/mo** |
 | Business Profiles | 1 | 3 | 10 |
 | Instagram + WhatsApp inside each Business Profile | included | included | included |
 | Team seats | 1 | 5 | 15 |
@@ -109,7 +128,7 @@ Definitions for public/product UX:
 | Team roles/controls | single owner | OWNER / ADMIN / AGENT | OWNER / ADMIN / AGENT + advanced scope/audit direction |
 | Priority support | — | — | included direction |
 
-Working price hypothesis remains **€49 / €99 / €249 per month**, but prices are not accepted production catalog values yet.
+Above 10 Business Profiles or 15 seats, the pricing UX should route to **Custom / Contact us** rather than silently stacking an arbitrary unlimited number of add-ons.
 
 ## Accepted voice-transcription behavior
 
@@ -146,7 +165,7 @@ Initial self-serve trial behavior:
 - **no payment card required** to start;
 - trial starts when the workspace successfully connects its **first Business Profile**, not merely when the user creates an account;
 - trial should expose the real product value rather than a crippled demo;
-- trial allowance direction: **1 Business Profile**, up to **3 team seats**, all core AI/Knowledge/Style/DRAFT/AUTOPILOT/Review/Leads features, and **100 voice-transcription minutes**;
+- trial allowance: **1 Business Profile**, up to **3 team seats**, all core AI/Knowledge/Style/DRAFT/AUTOPILOT/Review/Leads features, and **100 voice-transcription minutes**;
 - the product clearly shows trial days and relevant allowance remaining.
 
 At trial expiry without a paid subscription:
@@ -160,21 +179,9 @@ The user does **not** need to choose Starter/Growth/Scale before experiencing th
 
 ## Accepted annual billing policy
 
-All public paid tiers should support monthly and annual billing.
+All public paid tiers support monthly and annual billing.
 
-Initial annual pricing principle: **pay for 10 months and receive 12 months of service** (approximately 16.7% effective discount).
-
-At the current non-final monthly price hypothesis this would display as:
-
-| Plan | Monthly hypothesis | 12 monthly payments | Annual hypothesis |
-|---|---:|---:|---:|
-| Starter | €49 | €588 | **€490/year** |
-| Growth | €99 | €1,188 | **€990/year** |
-| Scale | €249 | €2,988 | **€2,490/year** |
-
-Public UX may market this as **"2 months free with annual billing"** rather than exposing a fractional discount percentage. Final euro prices still require explicit product-owner acceptance before production catalog creation.
-
-Annual subscriptions use immutable plan/version/provider price references just like monthly subscriptions; changing future prices does not rewrite historical subscription meaning.
+Annual pricing is **€490 / €990 / €2,490** for Starter/Growth/Scale respectively and uses immutable plan/version/provider price references just like monthly subscriptions; future price changes never rewrite historical subscription meaning.
 
 ## Accepted add-on policy
 
@@ -196,9 +203,21 @@ Rules:
 - voice top-ups are never purchased automatically and do not create surprise overage invoices;
 - unused voice top-up minutes may carry through the end of the **next** billing period, after which they expire unless a future product decision changes the rule;
 - top-up usage is consumed only after the plan's included monthly voice allowance for the current billing period is exhausted;
-- the product should proactively recommend a plan upgrade when the selected base plan + recurring add-ons costs as much as or more than a higher plan while providing fewer features; the user is never force-upgraded.
+- the product should proactively recommend a plan upgrade when the selected base plan + recurring add-ons costs as much as or more than a higher plan while providing fewer features; the user is never force-upgraded;
+- self-serve add-ons must not become an accidental substitute for negotiated Custom when a workspace materially exceeds Scale size.
 
 Pricing UX should show the effective monthly total before checkout/update and clearly distinguish recurring add-ons from one-time top-ups.
+
+## Accepted subscription lifecycle summary
+
+Commercial lifecycle behavior is defined in `BILLING_ENTITLEMENTS.md` and includes:
+- upgrade effective immediately after authoritative payment confirmation;
+- downgrade effective at end of paid period;
+- cancel-at-period-end by default;
+- 3-day failed-renewal grace period;
+- no customer-data deletion on downgrade/cancel/failed payment/refund/chargeback;
+- refund/chargeback scoped to the exact paid term and unable to revoke a newer valid subscription;
+- payment provider may change between terms without changing the plan model.
 
 ## Plan definition model
 
@@ -259,8 +278,10 @@ Public pricing page values come from product configuration/plan catalog, not dup
 
 Checkout uses immutable provider price references tied to a plan version. Updating public price creates a new plan version/provider price mapping rather than mutating historical invoice meaning.
 
-## Open product-owner decisions
+## Remaining launch decisions
 
-Before launch choose:
-- final monthly prices and supported currencies (the €49 / €99 / €249 figures remain hypotheses until explicitly accepted);
-- tax/invoice/payment-provider jurisdiction strategy.
+Before production launch choose/configure:
+- which payment providers are enabled first;
+- which legal seller entity/jurisdiction is used for each billing route;
+- tax/invoice/Merchant-of-Record behavior per billing route;
+- exact Custom commercial policy and sales process if/when first needed.
