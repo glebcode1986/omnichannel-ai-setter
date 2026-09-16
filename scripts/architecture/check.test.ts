@@ -550,7 +550,7 @@ describe("checkWorkspace: source imports", () => {
     expect(extractModuleReferences(source)).toEqual({
       imports: ["node:module", "node:module", "puppeteer", "baileys", "./fixtures/helper", "left-pad", "zod"],
       typeReferences: [],
-      unresolvedModuleLoads: ["load(name)", "makeRequire(import.meta.url)"],
+      unresolvedModuleLoads: ["load(name)", "makeRequire(...) used as a value: loader: makeRequire(import.meta.url)"],
     });
   });
 
@@ -596,6 +596,92 @@ describe("checkWorkspace: source imports", () => {
       "load used as a value: { resolve } = load",
       "load used as a value: load",
       "load used as a value: load as exportedLoader",
+    ]);
+  });
+
+  it("normalizes bracket and globalThis member access for loaders and rejects computed members (R1-01 follow-up 2)", () => {
+    const source = `
+      import * as nodeModule from "node:module";
+      import nodeModuleDefault from "node:module";
+      const load = nodeModule["createRequire"](import.meta.url);
+      void load("../../channel-whatsapp/src/index.ts");
+      const load2 = nodeModuleDefault.default.createRequire(import.meta.url);
+      load2(\`zod\`);
+      module["require"]("left-pad");
+      process["getBuiltinModule"]("fs");
+      globalThis.process.getBuiltinModule("net");
+      globalThis["process"]["getBuiltinModule"]("tls");
+      const key = "getBuiltinModule";
+      process[key]("dns");
+      const { getBuiltinModule } = process;
+      const { env, argv } = process;
+      const { createRequire: cr } = await import("node:module");
+      const load3 = cr(import.meta.url);
+      load3("puppeteer");
+      (await import("node:module")).createRequire(import.meta.url);
+      const ns = await import("node:module");
+      const load4 = ns.createRequire(import.meta.url);
+      load4("baileys");
+      export const fine = [process.env.X, process.on("SIGTERM", () => undefined), globalThis.crypto.randomUUID(), typeof require, require.cache];
+      const aliasedProcess = process;
+      Reflect.get(globalThis, "process");
+    `;
+
+    expect(extractModuleReferences(source)).toEqual({
+      imports: [
+        "node:module",
+        "node:module",
+        "../../channel-whatsapp/src/index.ts",
+        "zod",
+        "left-pad",
+        "node:fs",
+        "node:net",
+        "node:tls",
+        "node:module",
+        "puppeteer",
+        "node:module",
+        "node:module",
+        "baileys",
+      ],
+      typeReferences: [],
+      unresolvedModuleLoads: [
+        'process[computed] used as a value: process[key]("dns")',
+        "process used as a value: { getBuiltinModule } = process",
+        '(await import("node:module")).createRequire(...) used as a value: (await import("node:module")).createRequire(import.meta.url);',
+        "process used as a value: aliasedProcess = process",
+        'globalThis used as a value: Reflect.get(globalThis, "process")',
+      ],
+    });
+  });
+
+  it("rejects the reviewer's bracket-access loader fixture through the real workspace (R1-01 follow-up 2)", async () => {
+    const rootDir = path.resolve(import.meta.dirname, "../..");
+    const fixtures: Record<string, string> = {
+      "src/r1-element-loader.ts": `
+        import * as nodeModule from "node:module";
+        const load = nodeModule["createRequire"](import.meta.url);
+        void load("../../channel-whatsapp/src/index.ts");
+      `,
+      "src/r1-module-require.ts": 'module["require"]("../../channel-whatsapp/src/index.ts");',
+      "src/r1-builtin.ts": 'process["getBuiltinModule"](["fs"].join(""));',
+    };
+    const { packages, root } = await loadWorkspace(rootDir);
+    const modified = packages.map((candidate) =>
+      candidate.name === scoped("ai")
+        ? {
+            ...candidate,
+            sourceFiles: [
+              ...candidate.sourceFiles,
+              ...Object.entries(fixtures).map(([filePath, source]) => ({ path: filePath, ...extractModuleReferences(source) })),
+            ],
+          }
+        : candidate,
+    );
+
+    expect(kindsAndFiles(checkWorkspace(modified, { root }))).toEqual([
+      ["cross-package-relative-import", "packages/ai/src/r1-element-loader.ts"],
+      ["cross-package-relative-import", "packages/ai/src/r1-module-require.ts"],
+      ["unresolvable-module-load", "packages/ai/src/r1-builtin.ts"],
     ]);
   });
 
