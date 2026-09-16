@@ -22,6 +22,7 @@
 - ADRs 010–014 added for provider-neutral AI, hybrid retrieval, atomic/ambiguous delivery, echo-based takeover and configurable Instagram after-window policy.
 - Product owner explicitly chose two Instagram after-window modes: `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED`.
 - Phase 2 backlog open as #8–#16 with #17 independent Codex/Astra review.
+- First executable Claude task contract created at `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` for Issue #2.
 
 ## Important Instagram after-window rule
 
@@ -36,7 +37,7 @@ The current architecture does **not** authorize a background AI worker to silent
 
 ### Phase 1 — start here
 
-1. #2 — scaffold pnpm workspace/tooling (Claude).
+1. #2 — scaffold pnpm workspace/tooling (Claude). Task contract: `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md`.
 2. #3 — domain + channel contracts (Claude).
 3. #4 and #5 — DB/auth and queue/delay can proceed in parallel after #3 stabilizes.
 4. #6 — webhook ingestion after #3/#4/#5.
@@ -67,4 +68,4 @@ Codex/Astra is a reviewer/test author unless explicitly assigned a bounded indep
 
 ## Immediate next action
 
-Give Claude issue #2 (`[P1-01] Scaffold pnpm workspace and baseline tooling`) as its first implementation task. When Claude opens the PR, review it against #2 acceptance criteria and run the #7 independent review track before/alongside merge.
+Run `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` in Claude Code. Claude should create branch `feat/p1-01-project-skeleton`, implement only Issue #2, run required checks, and open a PR without merging. Then review that PR against #2 acceptance criteria and run the #7 independent review track before/alongside merge.
