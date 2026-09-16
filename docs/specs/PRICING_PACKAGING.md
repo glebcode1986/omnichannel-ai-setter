@@ -1,4 +1,4 @@
-# Pricing & Packaging Specification — v0.4
+# Pricing & Packaging Specification — v0.5
 
 ## Principle
 
@@ -125,7 +125,7 @@ When the included transcription allowance is exhausted:
 - the incoming voice message remains stored/visible in Inbox;
 - automatic transcription is not performed unless additional allowance is available;
 - the UI explains that the transcription allowance is exhausted;
-- the user may process the item manually or purchase an explicit transcription top-up when that add-on is implemented;
+- the user may process the item manually or purchase an explicit transcription top-up;
 - **no automatic overage charge** is enabled by default.
 
 ## Accepted analytics direction
@@ -176,6 +176,30 @@ Public UX may market this as **"2 months free with annual billing"** rather than
 
 Annual subscriptions use immutable plan/version/provider price references just like monthly subscriptions; changing future prices does not rewrite historical subscription meaning.
 
+## Accepted add-on policy
+
+Initial self-serve add-ons are accepted as follows:
+
+| Add-on | Price | Billing behavior |
+|---|---:|---|
+| +1 Business Profile | **€25/month** | recurring; increases Business Profile capacity by 1 |
+| +1 team seat | **€7/month** | recurring; increases member/seat capacity by 1 |
+| +500 voice-transcription minutes | **€8** | one-time top-up |
+| +2,000 voice-transcription minutes | **€25** | one-time top-up |
+| +5,000 voice-transcription minutes | **€49** | one-time top-up |
+
+Rules:
+- add-ons increase capacity/allowance but **do not upgrade the feature class of the base plan**;
+- e.g. Starter + an extra Business Profile still has Starter analytics/retention/team-control entitlements;
+- recurring Business Profile/seat add-ons added mid-cycle are prorated for the remaining paid period where the billing provider supports reliable proration;
+- removing a recurring add-on takes effect at the end of the already-paid period unless a provider/customer-specific refund policy explicitly says otherwise;
+- voice top-ups are never purchased automatically and do not create surprise overage invoices;
+- unused voice top-up minutes may carry through the end of the **next** billing period, after which they expire unless a future product decision changes the rule;
+- top-up usage is consumed only after the plan's included monthly voice allowance for the current billing period is exhausted;
+- the product should proactively recommend a plan upgrade when the selected base plan + recurring add-ons costs as much as or more than a higher plan while providing fewer features; the user is never force-upgraded.
+
+Pricing UX should show the effective monthly total before checkout/update and clearly distinguish recurring add-ons from one-time top-ups.
+
 ## Plan definition model
 
 A versioned plan definition includes:
@@ -188,22 +212,11 @@ A versioned plan definition includes:
 - hard capacity limits;
 - internal usage/fair-use policy references;
 - voice/transcription quota grants;
-- top-up policy where applicable;
+- add-on/top-up policy references;
 - trial policy reference;
 - availability (`PUBLIC`, `PRIVATE`, `LEGACY`).
 
 Never infer entitlements from display-name strings or provider price IDs in application code.
-
-## Add-ons / overrides
-
-Architecture should support later:
-- extra Business Profile packs;
-- extra seats;
-- voice/transcription top-up packs;
-- future explicitly metered usage packs if product strategy changes;
-- temporary/manual sales overrides.
-
-Overrides must be explicit, scoped, time-bounded where appropriate and audited.
 
 ## Usage / fair-use UX
 
@@ -211,8 +224,9 @@ Because the initial product direction does not expose a monthly AI-reply quota, 
 
 For voice transcription show:
 - included allowance;
+- purchased top-up balance;
 - consumed/remaining amount;
-- reset date;
+- reset/expiry date;
 - warning state before exhaustion;
 - top-up/manual-processing behavior at exhaustion.
 
@@ -226,7 +240,7 @@ Architecture may support explicit future metered resources with:
 - `AUTO_OVERAGE`;
 - `UNMETERED`.
 
-Initial core AI generation is `UNMETERED` customer-facing. Initial voice transcription uses included allowance + manual/top-up path; automatic paid overage is not enabled by default.
+Initial core AI generation is `UNMETERED` customer-facing. Initial voice transcription uses included allowance + explicit one-time top-ups; automatic paid overage is not enabled.
 
 ## Downgrade handling
 
@@ -249,5 +263,4 @@ Checkout uses immutable provider price references tied to a plan version. Updati
 
 Before launch choose:
 - final monthly prices and supported currencies (the €49 / €99 / €249 figures remain hypotheses until explicitly accepted);
-- exact extra Business Profile / extra seat / transcription top-up pricing;
 - tax/invoice/payment-provider jurisdiction strategy.
