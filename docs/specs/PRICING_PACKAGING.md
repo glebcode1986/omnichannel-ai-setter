@@ -1,4 +1,4 @@
-# Pricing & Packaging Specification — v0.2
+# Pricing & Packaging Specification — v0.3
 
 ## Principle
 
@@ -54,13 +54,13 @@ The platform must still meter logical AI generation cycles internally for:
 
 Internal provider retries, schema repair attempts and queue retries remain one logical generation operation and must not inflate internal business usage counts.
 
-Initial public plans should therefore treat normal AI generation as customer-facing **included/unmetered**, subject to documented fair-use/abuse controls rather than a visible per-message quota. A future plan version may introduce explicit metered AI usage only by a new product-owner decision; the architecture retains usage-ledger capability for that reason.
+Initial public plans therefore treat normal AI generation as customer-facing **included/unmetered**, subject to documented fair-use/abuse controls rather than a visible per-message quota. A future plan version may introduce explicit metered AI usage only by a new product-owner decision; the architecture retains usage-ledger capability for that reason.
 
-## What should differentiate plans
+## What differentiates plans
 
 Prefer capacity/operational scale over crippling the core product promise.
 
-Good differentiators:
+Accepted differentiators:
 - Business Profile slots (each slot may contain one Instagram + one WhatsApp connection);
 - seats/members;
 - voice transcription allowance;
@@ -73,9 +73,9 @@ Do **not** use public AI-reply counts as an initial differentiator.
 
 Avoid making factual safety, human takeover, audit basics or core policy compliance premium-only. Safety and platform-correctness are product invariants.
 
-## Core feature recommendation
+## Core features across all paid plans
 
-All paid tiers should be capable of the main value proposition:
+All paid tiers include:
 - unified inbox;
 - knowledge + style configuration;
 - DRAFT mode;
@@ -89,28 +89,54 @@ Definitions for public/product UX:
 - **DRAFT** = AI prepares a reply but does not send it until an authorized human reviews/edits/sends it.
 - **Review Queue** = the operational queue collecting items that require human attention, including DRAFT replies, low confidence, missing facts, sensitive/unsupported cases, Instagram human-assisted sends, WhatsApp template review, transcription/media failures and ambiguous delivery outcomes.
 
-Plans then scale capacity and advanced operations rather than selling an intentionally unsafe/incomplete low tier.
-
-## Working tier proposal — not yet fully accepted
+## Accepted tier capacity direction
 
 | Capability | Starter | Growth | Scale |
 |---|---:|---:|---:|
 | Business Profiles | 1 | 3 | 10 |
 | Instagram + WhatsApp inside each Business Profile | included | included | included |
 | Team seats | 1 | 5 | 15 |
-| Core AI replies | included | included | included |
+| Core AI replies | included / no public quota | included / no public quota | included / no public quota |
 | Knowledge Base | included | included | included |
 | Style Training | included | included | included |
 | DRAFT | included | included | included |
 | AUTOPILOT | included | included | included |
 | Review Queue | included | included | included |
 | Leads | included | included | included |
-| Voice transcription | proposed 120 min/month | proposed 600 min/month | proposed 3,000 min/month |
-| Analytics | basic | advanced | advanced + multi-profile rollup/export direction |
+| Voice transcription | **300 min/month** | **1,500 min/month** | **6,000 min/month** |
+| Analytics retention | **30 days** | **6 months** | **24 months** |
+| Analytics depth | core operational metrics | conversion/channel/manager/review/knowledge analytics | all Growth analytics + multi-profile rollups/export direction |
 | Team roles/controls | single owner | OWNER / ADMIN / AGENT | OWNER / ADMIN / AGENT + advanced scope/audit direction |
 | Priority support | — | — | included direction |
 
 Working price hypothesis remains **€49 / €99 / €249 per month**, but prices are not accepted production catalog values yet.
+
+## Accepted voice-transcription behavior
+
+Voice transcription is the initial explicitly customer-metered usage resource.
+
+Included monthly allowances:
+- Starter: **300 minutes**;
+- Growth: **1,500 minutes**;
+- Scale: **6,000 minutes**.
+
+When the included transcription allowance is exhausted:
+- text conversations and normal AI behavior continue;
+- the incoming voice message remains stored/visible in Inbox;
+- automatic transcription is not performed unless additional allowance is available;
+- the UI explains that the transcription allowance is exhausted;
+- the user may process the item manually or purchase an explicit transcription top-up when that add-on is implemented;
+- **no automatic overage charge** is enabled by default.
+
+## Accepted analytics direction
+
+Starter analytics retain the prior **30 days** and cover the core operational view, such as conversation volume, leads, AI-vs-human handling and response-time indicators.
+
+Growth retains **6 months** and additionally supports deeper business analysis such as lead-stage conversion, channel comparison, manager/team analysis, Review Queue reasons and missing-knowledge patterns.
+
+Scale retains **24 months** and adds cross-Business-Profile rollups/comparison plus export direction and deeper audit/operational analysis.
+
+Exact metric names and export formats remain implementation-level product design, but the retention/depth tiers above are accepted commercial behavior.
 
 ## Plan definition model
 
@@ -123,8 +149,8 @@ A versioned plan definition includes:
 - feature entitlements;
 - hard capacity limits;
 - internal usage/fair-use policy references;
-- voice/transcription quota grants where applicable;
-- overage/top-up policy where applicable;
+- voice/transcription quota grants;
+- top-up policy where applicable;
 - trial policy reference;
 - availability (`PUBLIC`, `PRIVATE`, `LEGACY`).
 
@@ -135,7 +161,7 @@ Never infer entitlements from display-name strings or provider price IDs in appl
 Architecture should support later:
 - extra Business Profile packs;
 - extra seats;
-- voice/transcription packs;
+- voice/transcription top-up packs;
 - future explicitly metered usage packs if product strategy changes;
 - temporary/manual sales overrides.
 
@@ -152,32 +178,30 @@ Recommended UX behavior:
 - expired trial does not delete inbox/history;
 - automation stops according to effective entitlement while stored conversations remain available according to workspace-access policy.
 
-A specific trial length (for example 7/14 days) is **not accepted yet** and requires product-owner decision.
+A specific trial length/card rule is **not accepted yet** and requires product-owner decision.
 
 ## Usage / fair-use UX
 
 Because the initial product direction does not expose a monthly AI-reply quota, do not show provider-token counts or internal AI-generation counters as a billable allowance.
 
-Where a customer-facing resource is actually limited (for example voice transcription), show:
+For voice transcription show:
 - included allowance;
 - consumed/remaining amount;
 - reset date;
 - warning state before exhaustion;
-- exact behavior at exhaustion (pause vs top-up/overage) based on plan policy.
+- top-up/manual-processing behavior at exhaustion.
 
 Internal AI/cost metering remains visible to product operations/finance tooling, not presented as a customer billable unit unless a future plan version explicitly adopts that model.
 
 ## Overage options
 
-Architecture supports, per explicitly metered resource:
-- `HARD_STOP` — no new metered work after quota;
-- `TOP_UP_REQUIRED` — purchase/add quota before continuing;
-- `AUTO_OVERAGE` — continue and bill approved overage units;
-- `UNMETERED` — no customer quota, still track internal cost.
+Architecture may support explicit future metered resources with:
+- `HARD_STOP`;
+- `TOP_UP_REQUIRED`;
+- `AUTO_OVERAGE`;
+- `UNMETERED`.
 
-Initial core AI generation direction is `UNMETERED` customer-facing with internal fair-use/cost telemetry.
-
-Do not silently enable auto-overage. It requires explicit plan/customer authorization.
+Initial core AI generation is `UNMETERED` customer-facing. Initial voice transcription uses included allowance + manual/top-up path; automatic paid overage is not enabled by default.
 
 ## Downgrade handling
 
@@ -200,10 +224,7 @@ Checkout uses immutable provider price references tied to a plan version. Updati
 
 Before launch choose:
 - actual monthly/annual prices and supported currencies;
-- accept or revise proposed voice transcription allowances (120 / 600 / 3,000 minutes);
 - trial length and card requirement;
-- hard-stop vs top-up behavior for voice/transcription allowance;
 - annual discount policy;
-- exact advanced analytics retention/export differences;
-- extra Business Profile / extra seat add-on policy;
+- exact extra Business Profile / extra seat / transcription top-up pricing;
 - tax/invoice/payment-provider jurisdiction strategy.
