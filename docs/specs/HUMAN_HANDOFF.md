@@ -1,4 +1,4 @@
-# Human Handoff & Takeover Specification — v0.3
+# Human Handoff & Takeover Specification — v0.4
 
 ## Principle
 
@@ -44,7 +44,18 @@ Provider capability differences matter: if a channel/account configuration does 
 
 ## Resume
 
-Support explicit resume. Optional timed auto-resume may occur only when configured and only if there has been no newer human activity, no pending review and the channel remains eligible. A new manual outbound extends/restarts takeover.
+Support explicit resume at all times.
+
+Accepted default product behavior: **automatic resume after 30 minutes of inactivity following the latest human outbound activity in that conversation**.
+
+Auto-resume is allowed only when all of the following remain true at execution time:
+- no newer human/manual activity has occurred;
+- no unresolved `REVIEW_REQUIRED` item blocks the conversation;
+- no fresh customer event or draft state makes the scheduled resume stale;
+- the effective account/conversation mode still permits AI operation;
+- the channel/account remains connected, eligible and currently usable under current policy/window rules.
+
+Any new human outbound restarts the 30-minute inactivity timer. A user may explicitly choose `Resume AI` earlier. Future workspace settings may allow `MANUAL_ONLY`, `AFTER_INACTIVITY` and `ON_RESOLVE` policies, but the initial default is `AFTER_INACTIVITY` with 30 minutes.
 
 ## Human approvals/edits
 
