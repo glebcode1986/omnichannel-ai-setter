@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Reject dependencies whose `engines` exclude the running Node.js version. The repository's own
+# Node.js requirement is enforced by `devEngines.runtime` in the root package.json.
+engineStrict: true
+
+# pnpm blocks dependency lifecycle scripts unless explicitly approved here.
+allowBuilds:
+  # Verifies the platform-specific esbuild binary (used by tsx, vite and the worker bundle).
+  esbuild: true

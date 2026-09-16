@@ -13,7 +13,7 @@ A style example can never satisfy a factual-support requirement.
 
 Keep retrieval in PostgreSQL. Phase 2 uses PostgreSQL full-text search plus pgvector semantic retrieval behind `packages/db` / retrieval repositories. Prisma 7 does not need vector details in domain code; custom SQL/TypedSQL and migrations stay in infrastructure boundaries.
 
-Embedding generation is hidden behind an `EmbeddingProvider` interface. Embeddings carry an explicit profile/version so model changes trigger controlled re-embedding rather than mixing incompatible vectors.
+Embedding generation is hidden behind an `EmbeddingProvider` port declared in `packages/application` and implemented in `packages/ai`; `packages/db` never calls an AI provider (application passes vectors/query inputs to db retrieval). Embeddings carry an explicit profile/version so model changes trigger controlled re-embedding rather than mixing incompatible vectors.
 
 ## Knowledge ingestion
 
