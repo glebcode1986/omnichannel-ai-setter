@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false --env-file-if-exists=.env src/main.ts",
+    "dev": "node --watch --watch-preserve-output --import tsx --env-file-if-exists=.env src/main.ts",
     "build": "tsx build.ts",
     "start": "node --enable-source-maps dist/main.js",
     "typecheck": "tsc --noEmit",

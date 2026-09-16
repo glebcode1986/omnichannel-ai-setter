@@ -1,5 +1,5 @@
 /**
- * Workspace architecture rules (ADR-001, ADR-002, ADR-008, docs/specs/REPOSITORY_LAYOUT.md).
+ * Workspace architecture rules (ADR-001, ADR-002, ADR-008, ADR-010, docs/specs/REPOSITORY_LAYOUT.md).
  *
  * This file is the single source of truth for which workspace packages may depend on which.
  * Changing an allowed edge is an architecture change: update REPOSITORY_LAYOUT.md in the same PR.
@@ -19,8 +19,8 @@ export interface PackageRule {
   /** Workspace packages this package may declare/import. `"all-packages"` = every non-app package. */
   readonly allowedWorkspaceDependencies: readonly string[] | "all-packages";
   /**
-   * Pure packages may not import Node.js built-ins either (domain logic must run anywhere and
-   * must not touch process, filesystem or network directly).
+   * Pure packages may not use Node.js built-ins, Node.js type definitions or Node.js globals
+   * (domain logic must run anywhere and must not touch process, filesystem or network directly).
    */
   readonly pure?: boolean;
   /** Third-party packages this package must never depend on or import. */
@@ -50,7 +50,7 @@ export const CORE_FORBIDDEN_THIRD_PARTY: readonly string[] = [
   "react-dom",
   "next-auth",
   "@auth/*",
-  // LLM providers
+  // LLM providers (ADR-010: provider SDKs stay behind packages/ai)
   "openai",
   "@anthropic-ai/*",
   "@google/genai",
@@ -61,8 +61,9 @@ export const CORE_FORBIDDEN_THIRD_PARTY: readonly string[] = [
 ];
 
 /**
- * Unofficial messaging transports and scraping automation are rejected for the product
- * (ADR-002; AGENTS.md). No workspace package may depend on them, in any dependency field.
+ * Unofficial messaging transports and account automation are rejected for the product
+ * (ADR-002; AGENTS.md). No workspace package — nor the root manifest — may depend on them,
+ * in any dependency field. This is a best-effort denylist of known libraries, not a proof.
  */
 export const GLOBALLY_FORBIDDEN_DEPENDENCIES: readonly string[] = [
   "baileys",
@@ -73,6 +74,20 @@ export const GLOBALLY_FORBIDDEN_DEPENDENCIES: readonly string[] = [
   "@wppconnect-team/wppconnect",
   "@open-wa/wa-automate",
   "instagram-private-api",
+];
+
+/**
+ * Browser automation (ADR-002 names Puppeteer; QR/session automation is rejected) must not ship
+ * in production code. Allowed only as `devDependencies` (e.g. end-to-end tests of our own UI) and
+ * only imported from test/tooling files.
+ */
+export const RUNTIME_FORBIDDEN_DEPENDENCIES: readonly string[] = [
+  "puppeteer",
+  "puppeteer-core",
+  "puppeteer-extra",
+  "playwright",
+  "playwright-core",
+  "selenium-webdriver",
 ];
 
 export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
@@ -90,7 +105,9 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
   },
   [pkg("application")]: {
     layer: "core",
-    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core")],
+    // `ai`: ADR-010 / AI_ORCHESTRATION.md declare the provider-neutral ReplyModel port and the
+    // Zod draft contract in packages/ai; application orchestration consumes them.
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("ai")],
     forbiddenThirdParty: CORE_FORBIDDEN_THIRD_PARTY,
   },
   [pkg("db")]: {
@@ -103,7 +120,8 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
   },
   [pkg("ai")]: {
     layer: "infrastructure",
-    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("application"), pkg("observability")],
+    // No `application`: application depends on ai's contracts, so the reverse edge would be a cycle.
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("observability")],
   },
   [pkg("channel-instagram")]: {
     layer: "channel-adapter",

@@ -66,6 +66,20 @@ export default defineConfig(
   },
 
   {
+    // Pure packages must not reach for Node.js process/runtime globals (see scripts/architecture/rules.ts).
+    files: ["packages/domain/src/**/*.ts", "packages/channel-core/src/**/*.ts"],
+    ignores: ["**/*.test.ts", "**/*.spec.ts", "**/__tests__/**"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        ...["process", "Buffer", "global", "require", "module", "__dirname", "__filename", "setImmediate"].map(
+          (name) => ({ name, message: `${name} is a Node.js runtime global; pure packages must stay runtime-agnostic.` }),
+        ),
+      ],
+    },
+  },
+
+  {
     // Repository tooling prints human-readable CLI output.
     files: ["scripts/**/*.ts"],
     rules: {

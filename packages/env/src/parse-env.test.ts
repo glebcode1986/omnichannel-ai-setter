@@ -62,4 +62,48 @@ describe("parseEnv", () => {
     expect((caught as EnvValidationError).message).not.toContain(secret);
     expect(JSON.stringify((caught as EnvValidationError).issues)).not.toContain(secret);
   });
+
+  it("withholds custom messages that interpolate the rejected value", () => {
+    const secret = "fake-app-secret-value";
+    const schema = z.object({
+      APP_SECRET: z.string().refine(() => false, { error: (issue) => `bad secret ${String(issue.input)}` }),
+      OTHER: z.string().refine(() => false, { error: "must be something else" }),
+    });
+
+    const error = captureError(() => parseEnv(schema, { APP_SECRET: secret, OTHER: "abc" }));
+
+    expect(error.issues).toEqual([
+      { key: "APP_SECRET", message: expect.stringContaining("withheld") as string },
+      { key: "OTHER", message: "must be something else" },
+    ]);
+    expect(error.message).not.toContain(secret);
+  });
+
+  it("converts exceptions thrown by transforms into a value-free EnvValidationError", () => {
+    const secret = "not-json-app-secret-value";
+    const schema = z.object({
+      SECRETS_JSON: z.string().transform((value) => JSON.parse(value) as unknown),
+      CALLBACK_URL: z.string().transform((value) => new URL(value)),
+    });
+
+    for (const source of [{ SECRETS_JSON: secret, CALLBACK_URL: "https://example.test" }, { SECRETS_JSON: "{}", CALLBACK_URL: secret }]) {
+      const error = captureError(() => parseEnv(schema, source));
+
+      expect(error.issues).toEqual([{ key: "(schema)", message: expect.stringMatching(/threw (SyntaxError|TypeError)/) as string }]);
+      expect(error.message).not.toContain(secret);
+      expect(error.cause).toBeUndefined();
+    }
+  });
 });
+
+function captureError(action: () => unknown): EnvValidationError {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof EnvValidationError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected parseEnv to throw");
+}

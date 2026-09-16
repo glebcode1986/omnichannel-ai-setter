@@ -22,7 +22,7 @@
 
 ## Phase 1 — Skeleton (implementation entry point)
 
-- [ ] #2 project/monorepo scaffolding
+- [ ] #2 project/monorepo scaffolding — implemented on `feat/p1-01-project-skeleton`, PR open for review
 - [ ] #3 domain types/interfaces + channel contracts
 - [ ] #4 PostgreSQL/Prisma + Auth.js/workspace isolation
 - [ ] #5 BullMQ queue/delay primitives

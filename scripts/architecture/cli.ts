@@ -4,12 +4,12 @@
  */
 import path from "node:path";
 
-import { checkWorkspace, findDependencyCycles } from "./check.ts";
+import { checkWorkspace } from "./check.ts";
 import { loadWorkspace } from "./workspace.ts";
 
 const rootDir = path.resolve(import.meta.dirname, "../..");
-const { packages, rootDevDependencies } = await loadWorkspace(rootDir);
-const violations = checkWorkspace(packages, { rootDevDependencies });
+const { packages, root } = await loadWorkspace(rootDir);
+const violations = checkWorkspace(packages, { root });
 
 if (violations.length > 0) {
   console.error(`Architecture boundary check failed with ${violations.length} violation(s):\n`);
@@ -22,6 +22,6 @@ if (violations.length > 0) {
 
 const fileCount = packages.reduce((total, workspacePackage) => total + workspacePackage.sourceFiles.length, 0);
 console.log(
-  `Architecture boundaries OK: ${packages.length} packages, ${fileCount} source files, ` +
-    `${findDependencyCycles(packages).length} dependency cycles.`,
+  `Architecture boundaries OK: ${packages.length} packages, ${fileCount} package source files, ` +
+    `${root.sourceFiles.length} root tooling files, no dependency cycles.`,
 );

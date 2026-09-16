@@ -30,7 +30,20 @@ No stored choice means `SERVICE_WINDOW_ONLY` until configured. Empty autopilot a
 
 ## Execution state right now
 
-Claude is reported by the product owner to be working on **P1-01 / Issue #2**. At the time of this handoff update, no open PR for that work was visible in the repository.
+**P1-01 / Issue #2 is implemented** on branch `feat/p1-01-project-skeleton` and a PR into `main` is open for review (not merged). The repository now contains code:
+
+- pnpm 12 workspace: `apps/web`, `apps/worker` and all required `packages/*` under `@omnichannel/*`, plus `packages/env` (environment validation, requested by #2). Non-support packages are documented placeholders without business logic.
+- Toolchain: Node 24 (enforced via `devEngines`), TypeScript 6.0 strict, type-aware ESLint 10, Vitest 5, Zod 4. `pnpm verify` = typecheck + lint (incl. `lint:boundaries`) + test + build and is the pre-PR gate.
+- `apps/web`: Next.js 16 with `/api/health` and startup env validation. `apps/worker`: graceful SIGINT/SIGTERM lifecycle, esbuild production bundle.
+- `pnpm lint:boundaries` enforces the dependency matrix in `docs/specs/REPOSITORY_LAYOUT.md`.
+
+Decisions for architecture review (details in the PR and `REPOSITORY_LAYOUT.md`):
+
+- `application -> ai` is allowed (ADR-010/AI_ORCHESTRATION place the ReplyModel port and draft contract in `packages/ai`); `ai -> application` and `db -> ai` are not. `application -> observability` is not allowed; if #6 needs logging inside application, amend the matrix/spec explicitly.
+- TypeScript is pinned to 6.0 because `typescript-eslint` does not support TypeScript 7 yet.
+- Next.js `agentRules: false` keeps `next dev` from generating `apps/web/AGENTS.md`/`CLAUDE.md`.
+
+Follow-ups outside #2: no GitHub Actions CI yet (the implementing session's token lacks the `workflow` scope; add a Node 24 job running `corepack enable && pnpm install --frozen-lockfile && pnpm verify`); no formatter chosen yet.
 
 The next Claude task is already prepared:
 
@@ -44,7 +57,7 @@ Do not start actual Phase 2 Instagram+AI implementation until Phase 1 exit crite
 ## Execution order
 
 ### Phase 1
-1. #2 — `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` — currently running.
+1. #2 — `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` — implemented, PR open for review.
 2. #3 — `P1-02_CLAUDE_TASK_CONTRACT.md` — ready after #2 merge.
 3. #4 — `P1-03_CLAUDE_TASK_CONTRACT.md`.
 4. #5 — `P1-04_CLAUDE_TASK_CONTRACT.md`.
@@ -81,6 +94,6 @@ Read `PROJECT_CONTEXT.md`, this file, `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`, `d
 
 ## Immediate next actions
 
-1. Let Claude finish P1-01/#2 and open a PR; do not merge automatically.
+1. P1-01/#2 PR is open; do not merge automatically.
 2. Review #2 against its task contract and run the R1/Codex-Astra review track.
 3. After #2 is accepted/merged, launch P1-02/#3 from `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md` on fresh `main`.

@@ -70,6 +70,74 @@ describe("createLogger", () => {
     expect(entry?.circular).toEqual({ name: "loop", self: "[Circular]" });
   });
 
+  it("keeps allowlisted diagnostics, causes and aggregate errors but not arbitrary error properties", () => {
+    const { logger, lines } = captureLogger("info");
+    const rootCause = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+      port: 5432,
+      config: { headers: { authorization: "Bearer should-not-be-logged" } },
+    });
+    const wrapped = new Error("query failed", { cause: rootCause });
+    const aggregate = new AggregateError([new Error("a"), new Error("b")], "many");
+
+    logger.error("failure", { error: wrapped, aggregate });
+
+    const entry = lines[0]?.entry;
+    expect(entry).toMatchObject({
+      error: {
+        message: "query failed",
+        cause: { name: "Error", message: "connect ECONNREFUSED", code: "ECONNREFUSED", syscall: "connect", port: 5432 },
+      },
+      aggregate: { name: "AggregateError", errors: [{ message: "a" }, { message: "b" }] },
+    });
+    expect(JSON.stringify(entry)).not.toContain("should-not-be-logged");
+  });
+
+  it("marks self-referencing error causes as circular", () => {
+    const { logger, lines } = captureLogger("info");
+    const error = new Error("loop");
+    (error as Error & { cause?: unknown }).cause = error;
+
+    logger.error("failure", { error });
+
+    expect(lines[0]?.entry).toMatchObject({ error: { message: "loop", cause: "[Circular]" } });
+  });
+
+  it("never lets caller fields replace the entry or throw into the caller", () => {
+    const { logger, lines } = captureLogger("info");
+    const throwingGetter = Object.defineProperty({}, "boom", {
+      enumerable: true,
+      get() {
+        throw new Error("getter threw");
+      },
+    });
+
+    const hostile = Object.assign(JSON.parse('{"__proto__": {"polluted": true}}') as Record<string, unknown>, {
+      toJSON: () => ({ spoof: true }),
+    });
+    logger.info("spoof", hostile);
+    expect(() => logger.info("getter", throwingGetter)).not.toThrow();
+    expect(() => logger.info("nested-getter", { nested: throwingGetter })).not.toThrow();
+
+    expect(lines[0]?.entry).toMatchObject({ level: "info", event: "spoof" });
+    expect(lines[0]?.entry).not.toHaveProperty("spoof");
+    expect(lines[1]?.entry).toMatchObject({ level: "info", event: "getter", logSerializationError: "Error: getter threw" });
+    expect(lines[2]?.entry).toMatchObject({ level: "info", event: "nested-getter", logSerializationError: "Error: getter threw" });
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("swallows sink failures", () => {
+    const logger = createLogger({
+      level: "info",
+      sink: () => {
+        throw new Error("EPIPE");
+      },
+    });
+
+    expect(() => logger.info("anything")).not.toThrow();
+  });
+
   it("does not mark repeated non-circular references as circular", () => {
     const { logger, lines } = captureLogger("info");
     const shared = { id: "shared" };

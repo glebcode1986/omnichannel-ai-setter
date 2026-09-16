@@ -26,6 +26,15 @@ export interface LoggerOptions {
 
 const SEVERITY: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
+/** Core fields are always set by the logger and cannot be overridden by bindings or fields. */
+const CORE_FIELDS = new Set(["time", "level", "event"]);
+
+/**
+ * Diagnostic properties copied from errors in addition to name/message/stack. Deliberately an
+ * allowlist: HTTP/DB client errors often carry request config, headers or credentials.
+ */
+const ERROR_DIAGNOSTIC_FIELDS = ["code", "errno", "syscall", "address", "port", "cause", "errors"] as const;
+
 export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === "string" && (LOG_LEVELS as readonly string[]).includes(value);
 }
@@ -37,7 +46,7 @@ const defaultSink = (line: string, level: LogLevel): void => {
 
 /**
  * Structured JSON-lines logger. Core fields (`time`, `level`, `event`) always win over
- * caller-supplied fields so entries stay machine-parseable.
+ * caller-supplied fields, and a log call never throws into the caller.
  */
 export function createLogger(options: LoggerOptions): Logger {
   const sink = options.sink ?? defaultSink;
@@ -49,7 +58,22 @@ export function createLogger(options: LoggerOptions): Logger {
     if (SEVERITY[level] < threshold) {
       return;
     }
-    sink(serializeEntry({ ...bindings, ...fields, time: now().toISOString(), level, event }), level);
+    let line: string;
+    try {
+      line = JSON.stringify(buildEntry(level, event, now(), bindings, fields), jsonReplacer());
+    } catch (error) {
+      line = JSON.stringify({
+        time: new Date().toISOString(),
+        level,
+        event,
+        logSerializationError: error instanceof Error ? `${error.name}: ${error.message}` : "unknown error",
+      });
+    }
+    try {
+      sink(line, level);
+    } catch {
+      // A broken sink (e.g. closed stdout pipe) must not take business code down with it.
+    }
   };
 
   return {
@@ -57,23 +81,42 @@ export function createLogger(options: LoggerOptions): Logger {
     info: (event, fields) => write("info", event, fields),
     warn: (event, fields) => write("warn", event, fields),
     error: (event, fields) => write("error", event, fields),
-    child: (childBindings) =>
-      createLogger({ ...options, bindings: { ...bindings, ...childBindings } }),
+    child: (childBindings) => createLogger({ ...options, bindings: { ...bindings, ...childBindings } }),
   };
 }
 
-function serializeEntry(entry: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(entry, jsonReplacer());
-  } catch (error) {
-    // Never let a log call throw into business code; emit a minimal, still-valid entry instead.
-    return JSON.stringify({
-      time: entry.time,
-      level: entry.level,
-      event: entry.event,
-      logSerializationError: error instanceof Error ? error.message : String(error),
-    });
+function buildEntry(
+  level: LogLevel,
+  event: string,
+  time: Date,
+  bindings: LogFields,
+  fields: LogFields | undefined,
+): Record<string, unknown> {
+  // Null prototype: a `__proto__` field becomes a plain property instead of changing the prototype.
+  const entry = Object.create(null) as Record<string, unknown>;
+  for (const source of [bindings, fields ?? {}]) {
+    for (const key of Object.keys(source)) {
+      // An own `toJSON` would replace the whole entry during JSON.stringify.
+      if (!CORE_FIELDS.has(key) && key !== "toJSON") {
+        entry[key] = source[key];
+      }
+    }
   }
+  entry.time = time.toISOString();
+  entry.level = level;
+  entry.event = event;
+  return entry;
+}
+
+function serializeError(error: Error): Record<string, unknown> {
+  const serialized: Record<string, unknown> = { name: error.name, message: error.message, stack: error.stack };
+  const record = error as unknown as Record<string, unknown>;
+  for (const field of ERROR_DIAGNOSTIC_FIELDS) {
+    if (record[field] !== undefined) {
+      serialized[field] = record[field];
+    }
+  }
+  return serialized;
 }
 
 function jsonReplacer(): (key: string, value: unknown) => unknown {
@@ -81,9 +124,6 @@ function jsonReplacer(): (key: string, value: unknown) => unknown {
   return function (this: unknown, _key: string, value: unknown): unknown {
     if (typeof value === "bigint") {
       return value.toString();
-    }
-    if (value instanceof Error) {
-      return { name: value.name, message: value.message, stack: value.stack };
     }
     if (typeof value !== "object" || value === null) {
       return value;
@@ -96,6 +136,12 @@ function jsonReplacer(): (key: string, value: unknown) => unknown {
       return "[Circular]";
     }
     ancestors.push(value);
+    if (value instanceof Error) {
+      // Its children are visited with the serialized object as `this`, so track both.
+      const serialized = serializeError(value);
+      ancestors.push(serialized);
+      return serialized;
+    }
     return value;
   };
 }

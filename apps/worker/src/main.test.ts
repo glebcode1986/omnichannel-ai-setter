@@ -63,6 +63,22 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
   }, 30_000);
 
+  it("treats a burst of repeated signals (one Ctrl+C relayed by pnpm/watchers) as one graceful shutdown", async () => {
+    let signalled = false;
+    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info" }, (stdout, child) => {
+      if (!signalled && stdout.includes('"event":"worker.started"')) {
+        signalled = true;
+        child.kill("SIGINT");
+        child.kill("SIGINT");
+        child.kill("SIGTERM");
+      }
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+  }, 30_000);
+
   it("fails fast with exit code 1 and no value echo when the environment is invalid", async () => {
     const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish" });
 
