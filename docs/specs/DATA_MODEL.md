@@ -1,4 +1,4 @@
-# Data Model — v0.2
+# Data Model — v0.3
 
 ## Workspace
 
@@ -7,6 +7,8 @@ Tenant boundary. Owns members, channel accounts, knowledge/style sources, polici
 ## ChannelAccount
 
 Conceptual fields: `id`, `workspace_id`, `channel (INSTAGRAM|WHATSAPP)`, `external_account_id`, `display_name`, `encrypted_credentials_ref`, `status`, `capabilities_json`, `default_ai_mode`, timestamps.
+
+Instagram capability/config metadata may include whether Human Agent approval is known/verified, but current eligibility is evaluated from live/current policy state rather than assumed from a stale boolean alone.
 
 ## Contact / ContactIdentity
 
@@ -18,7 +20,7 @@ Conceptual fields: `id`, `workspace_id`, `channel (INSTAGRAM|WHATSAPP)`, `extern
 
 ## Message
 
-`conversation_id`, `channel_message_id`, `direction (IN|OUT)`, `source (PARTICIPANT|AI|HUMAN|AUTOMATION|SYSTEM)`, `type`, text, media reference/metadata, timestamps and delivery/read state.
+`conversation_id`, `channel_message_id`, `direction (IN|OUT)`, `source (PARTICIPANT|AI|HUMAN|AUTOMATION|SYSTEM)`, `type`, text, media reference/metadata, timestamps and delivery/read state. Outbound metadata records whether the send used a normal transport path or an explicitly human-initiated approved Human Agent path.
 
 ## AiDraft
 
@@ -38,7 +40,11 @@ Inbound context plus verified human outbound example, scope and provenance (`HUM
 
 ## AutomationPolicy
 
-Account/workspace defaults and permitted overrides: mode, confidence threshold, review categories, timing ranges, quiet hours, takeover duration and channel policy options.
+Account/workspace defaults and permitted overrides: mode, confidence threshold, review categories, timing ranges, quiet hours, takeover duration, channel policy options, and `instagram_after_window_policy` with values initially `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED`.
+
+## Review/Handoff state
+
+Review state should preserve why human action is needed. For Instagram Human Agent review, store the relevant window/eligibility snapshot and re-evaluate immediately before final human send rather than trusting the stored snapshot.
 
 ## Key constraints
 
@@ -46,4 +52,5 @@ Account/workspace defaults and permitted overrides: mode, confidence threshold, 
 - unique source event per channel account;
 - unique platform message IDs where stable;
 - one completed outbound send per AI draft/action;
+- human-agent sends require a human action/audit actor identity;
 - foreign keys favor preserving audit history over destructive cascades.
