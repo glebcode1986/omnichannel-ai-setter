@@ -66,6 +66,11 @@ interface SchemaDefinition {
   value?: unknown;
   inclusive?: unknown;
   pattern?: unknown;
+  length?: unknown;
+  size?: unknown;
+  prefix?: unknown;
+  suffix?: unknown;
+  includes?: unknown;
 }
 
 function definitionOf(schema: unknown): SchemaDefinition | undefined {
@@ -127,60 +132,134 @@ function formatOptions(values: readonly unknown[]): string | undefined {
   return printable.length > 0 ? `one of ${printable.map((value) => JSON.stringify(value)).join("|")}` : undefined;
 }
 
-function numberText(value: unknown): string | undefined {
-  return typeof value === "number" || typeof value === "bigint" ? String(value) : undefined;
+/** Schema-owned bound values: numbers, bigints and dates (from `.min(new Date(...))`). */
+function boundText(value: unknown): string | undefined {
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : undefined;
 }
 
-function boundsOf(definition: SchemaDefinition, unit: "length" | "value"): string[] {
-  const bounds: string[] = [];
+const INTEGER_FORMATS: ReadonlySet<unknown> = new Set(["safeint", "int32", "uint32"]);
+
+/** A string format rule, described by its schema-owned parameters. */
+function formatRule(definition: SchemaDefinition): string | undefined {
+  switch (definition.format) {
+    case "regex":
+      return definition.pattern instanceof RegExp ? `matching ${String(definition.pattern)}` : "matching a pattern";
+    case "starts_with":
+      return typeof definition.prefix === "string" ? `starting with ${JSON.stringify(definition.prefix)}` : undefined;
+    case "ends_with":
+      return typeof definition.suffix === "string" ? `ending with ${JSON.stringify(definition.suffix)}` : undefined;
+    case "includes":
+      return typeof definition.includes === "string" ? `including ${JSON.stringify(definition.includes)}` : undefined;
+    case "lowercase":
+    case "uppercase":
+      return definition.format;
+    default:
+      return typeof definition.format === "string" ? `a valid ${definition.format}` : undefined;
+  }
+}
+
+interface Rules {
+  formats: string[];
+  sizes: string[];
+  bounds: string[];
+  multiples: string[];
+  integer: boolean;
+}
+
+function rulesOf(definition: SchemaDefinition): Rules {
+  const rules: Rules = { formats: [], sizes: [], bounds: [], multiples: [], integer: INTEGER_FORMATS.has(definition.format) };
   const checks: readonly unknown[] = Array.isArray(definition.checks) ? definition.checks : [];
   for (const check of checks) {
-    const checkDefinition = definitionOf(check);
-    const check_ = checkDefinition?.check;
-    if (unit === "length" && check_ === "min_length" && numberText(checkDefinition?.minimum) !== undefined) {
-      bounds.push(`length >= ${numberText(checkDefinition?.minimum)}`);
-    } else if (unit === "length" && check_ === "max_length" && numberText(checkDefinition?.maximum) !== undefined) {
-      bounds.push(`length <= ${numberText(checkDefinition?.maximum)}`);
-    } else if (unit === "value" && (check_ === "greater_than" || check_ === "less_than")) {
-      const value = numberText(checkDefinition?.value);
-      if (value !== undefined) {
-        const operator = check_ === "greater_than" ? ">" : "<";
-        bounds.push(`${operator}${checkDefinition?.inclusive === true ? "=" : ""} ${value}`);
+    const rule = definitionOf(check);
+    switch (rule?.check) {
+      case "string_format": {
+        const text = formatRule(rule);
+        if (text !== undefined) rules.formats.push(text);
+        break;
       }
-    } else if (unit === "length" && check_ === "string_format" && checkDefinition?.pattern instanceof RegExp) {
-      bounds.push(`matching ${String(checkDefinition.pattern)}`);
+      case "number_format":
+        if (INTEGER_FORMATS.has(rule.format)) rules.integer = true;
+        break;
+      case "min_length":
+      case "min_size":
+        if (boundText(rule.minimum) !== undefined) rules.sizes.push(`length >= ${boundText(rule.minimum)}`);
+        break;
+      case "max_length":
+      case "max_size":
+        if (boundText(rule.maximum) !== undefined) rules.sizes.push(`length <= ${boundText(rule.maximum)}`);
+        break;
+      case "length_equals":
+      case "size_equals": {
+        const exact = boundText(rule.check === "length_equals" ? rule.length : rule.size);
+        if (exact !== undefined) rules.sizes.push(`length = ${exact}`);
+        break;
+      }
+      case "greater_than":
+      case "less_than": {
+        const value = boundText(rule.value);
+        if (value !== undefined) {
+          rules.bounds.push(`${rule.check === "greater_than" ? ">" : "<"}${rule.inclusive === true ? "=" : ""} ${value}`);
+        }
+        break;
+      }
+      case "multiple_of":
+        if (boundText(rule.value) !== undefined) rules.multiples.push(`a multiple of ${boundText(rule.value)}`);
+        break;
+      default:
+        break;
     }
   }
-  return bounds;
+  return rules;
 }
 
-/** What the schema expects, from its definition only (schema code, never input). */
-function describeExpectation(schema: unknown): string | undefined {
+/**
+ * What the schema expects for this kind of failure, from its definition only (schema code, never
+ * input): format rules for format failures, size/bound rules for too small/big, and so on.
+ */
+function describeExpectation(schema: unknown, code: string): string | undefined {
   const definition = definitionOf(unwrap(schema));
-  switch (definition?.type) {
+  if (!definition) {
+    return undefined;
+  }
+  switch (definition.type) {
     case "enum":
       return definition.entries !== null && typeof definition.entries === "object"
         ? formatOptions(Object.values(definition.entries))
         : undefined;
     case "literal":
       return Array.isArray(definition.values) ? formatOptions(definition.values) : undefined;
-    case "string": {
-      if (typeof definition.format === "string") {
-        return `a valid ${definition.format}`;
+    case "string":
+    case "array":
+    case "set": {
+      const rules = rulesOf(definition);
+      const topFormat = definition.type === "string" ? formatRule(definition) : undefined;
+      const subject = topFormat ?? definition.type;
+      const formats = [...(topFormat ? [topFormat] : []), ...rules.formats];
+      if (code === "invalid_format") {
+        return formats.length > 0 ? formats.join(", ") : subject;
       }
-      const bounds = boundsOf(definition, "length");
-      return bounds.length > 0 ? `string with ${bounds.join(", ")}` : "string";
+      if (code === "too_small" || code === "too_big") {
+        return rules.sizes.length > 0 ? `${subject} with ${rules.sizes.join(", ")}` : subject;
+      }
+      const details = [...rules.formats, ...(rules.sizes.length > 0 ? [`with ${rules.sizes.join(", ")}`] : [])];
+      return [subject, ...details].join(" ");
     }
-    case "number": {
-      const checks: readonly unknown[] = Array.isArray(definition.checks) ? definition.checks : [];
-      const integer = checks.some((check) => ["safeint", "int32", "uint32"].includes(String(definitionOf(check)?.format)));
-      const bounds = boundsOf(definition, "value");
-      return `${integer ? "integer" : "number"}${bounds.length > 0 ? ` ${bounds.join(", ")}` : ""}`;
+    case "number":
+    case "bigint":
+    case "date": {
+      const rules = rulesOf(definition);
+      const subject = definition.type === "number" && rules.integer ? "integer" : definition.type;
+      if (code === "not_multiple_of") {
+        return rules.multiples.length > 0 ? rules.multiples.join(", ") : subject;
+      }
+      const details = code === "too_small" || code === "too_big" ? rules.bounds : [...rules.bounds, ...rules.multiples];
+      return details.length > 0 ? `${subject} ${details.join(", ")}` : subject;
     }
     case "boolean":
-    case "bigint":
-    case "date":
-      return definition.type;
+      return "boolean";
     default:
       return undefined;
   }
@@ -201,14 +280,15 @@ const FAILURE_TEXT: Readonly<Record<string, string>> = {
 const CUSTOM_FAILURE_TEXT = "Invalid value (custom validation details withheld)";
 
 function describeIssue(schema: z.ZodObject, issue: z.core.$ZodIssue, rawInput: string | undefined): string {
-  const code: unknown = issue.code;
+  const rawCode: unknown = issue.code;
+  const code = typeof rawCode === "string" ? rawCode : "";
   const path: readonly PropertyKey[] = Array.isArray(issue.path) ? issue.path : [];
-  const failure = typeof code === "string" && Object.hasOwn(FAILURE_TEXT, code) ? FAILURE_TEXT[code] : undefined;
+  const failure = Object.hasOwn(FAILURE_TEXT, code) ? FAILURE_TEXT[code] : undefined;
   if (failure === undefined) {
     return path.length > 1 ? `${CUSTOM_FAILURE_TEXT}${NESTED_SUFFIX}` : CUSTOM_FAILURE_TEXT;
   }
   let message = failure;
-  const expectation = code === "unrecognized_keys" ? undefined : describeExpectation(schemaAtPath(schema, path));
+  const expectation = code === "unrecognized_keys" ? undefined : describeExpectation(schemaAtPath(schema, path), code);
   if (expectation !== undefined) {
     message += `: expected ${expectation}`;
     // Only the kind of raw value (never its text), and only for the top-level environment string.

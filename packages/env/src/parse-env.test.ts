@@ -266,6 +266,55 @@ describe("parseEnv", () => {
     expect(error.message).not.toMatch(/four|not-a-port|sometimes/);
   });
 
+  it("names the rule that actually failed for formats combined with length, prefix and numeric checks", () => {
+    const schema = z.object({
+      ENCRYPTION_KEY_HEX: z.hex().length(64),
+      AUTH_URL: z.url().startsWith("https://"),
+      WEBHOOK_BASE_URL: z.url().endsWith("/"),
+      DATABASE_URL: z.string().url(),
+      SHORT_URL: z.url().max(20),
+      FIXED_KEY: z.string().length(64),
+      BATCH: z.coerce.number().multipleOf(5),
+      RETRY_AFTER: z.coerce.date().min(new Date("2026-01-01T00:00:00.000Z")),
+      LIMIT: z.coerce.bigint().min(10n),
+      TAGS: z
+        .string()
+        .transform((value) => value.split(","))
+        .pipe(z.array(z.string()).min(3)),
+      WORKERS: z.string().transform(Number).pipe(z.int().min(1)),
+    });
+
+    const error = captureError(() =>
+      parseEnv(schema, {
+        ENCRYPTION_KEY_HEX: "ab".repeat(16),
+        AUTH_URL: "http://app.example.com",
+        WEBHOOK_BASE_URL: "https://hooks.example.com",
+        DATABASE_URL: "localhost",
+        SHORT_URL: "https://a-rather-long-host.example.com/path",
+        FIXED_KEY: "short",
+        BATCH: "7",
+        RETRY_AFTER: "2025-06-01",
+        LIMIT: "3",
+        TAGS: "a,b",
+        WORKERS: "1.5",
+      }),
+    );
+
+    expect(error.issues).toEqual([
+      { key: "ENCRYPTION_KEY_HEX", message: "Too small: expected a valid hex with length = 64" },
+      { key: "AUTH_URL", message: 'Invalid format: expected a valid url, starting with "https://"' },
+      { key: "WEBHOOK_BASE_URL", message: 'Invalid format: expected a valid url, ending with "/"' },
+      { key: "DATABASE_URL", message: "Invalid format: expected a valid url" },
+      { key: "SHORT_URL", message: "Too big: expected a valid url with length <= 20" },
+      { key: "FIXED_KEY", message: "Too small: expected string with length = 64" },
+      { key: "BATCH", message: "Invalid multiple: expected a multiple of 5" },
+      { key: "RETRY_AFTER", message: "Too small: expected date >= 2026-01-01T00:00:00.000Z" },
+      { key: "LIMIT", message: "Too small: expected bigint >= 10" },
+      { key: "TAGS", message: "Too small: expected array with length >= 3" },
+      { key: "WORKERS", message: "Invalid input: expected integer >= 1, received string" },
+    ]);
+  });
+
   it("converts exceptions thrown by transforms into a fixed, value-free EnvValidationError", () => {
     const secret = "not-json-app-secret-value";
     class SecretBearingError extends Error {
