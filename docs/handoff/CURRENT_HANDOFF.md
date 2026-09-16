@@ -6,22 +6,24 @@
 
 ## Completed
 
-- Dedicated private GitHub repository created and connected.
-- Canonical project/scaffold documentation committed.
-- Product direction: multi-channel AI setter, Instagram + WhatsApp first.
-- Official WhatsApp Cloud API only for production.
-- Channel-neutral core, durable debounce/delay, final pre-send revalidation and human takeover are accepted decisions.
-- Open-source WhatsApp research identified `wacrm` as the strongest official-API implementation reference; Senqo is useful for agent/inbox/eval ideas but not transport.
+- Dedicated private GitHub repository created and project-memory scaffold committed.
+- Product is a multi-channel AI setter, Instagram + WhatsApp first.
+- Core is channel-neutral; human-like delays are durable jobs; final revalidation and human takeover are mandatory.
+- Production WhatsApp uses official Meta Cloud API only.
+- Current Meta constraints verified: Instagram professional-account messaging is inbound-first; WhatsApp uses a 24-hour customer-service window for free-form replies; Threads has no verified public DM API and is excluded from MVP.
+- OpenSetter reviewed at `aa7d97c38b6d6698df1202d87c00fef5c983cfcb` (MIT). Its Prisma 7 + BullMQ 5 + Redis stack aligns with our needs.
+- wacrm reviewed at `80c3f9a1aecdaf21b98311f230fdaaaec7d85f7d` (MIT) as our strongest WhatsApp implementation reference.
+- ADR accepted for Prisma/PostgreSQL + BullMQ/Redis and Instagram Login path.
 
 ## Immediate next work
 
-1. Verify current Meta Instagram and WhatsApp API constraints from official documentation.
-2. Deep-review `wacrm` webhook/send/template/AI-handoff code paths and license before any reuse.
-3. Freeze monorepo layout, ORM, queue and auth/workspace decisions via ADRs.
-4. Freeze `ChannelAdapter`, normalized event and send result contracts.
-5. Create Phase 1 GitHub issues for Claude with acceptance criteria and explicit ownership.
-6. Use Codex/Astra as independent reviewer/test author rather than simultaneous editor of the same module.
+1. Create extraction map: exact OpenSetter/wacrm files to adapt vs independently reimplement.
+2. Decide monorepo/package layout.
+3. Decide auth/workspace model.
+4. Freeze `ChannelAdapter`, normalized event and `SendResult` contracts.
+5. Create Phase 1 implementation issues for Claude.
+6. Assign Codex/Astra independent verification/testing tasks rather than concurrent edits to Claude-owned modules.
 
 ## Next-session instruction
 
-Read `PROJECT_CONTEXT.md` and this file first. Do not rely on old chat history. Continue from open GitHub issues and current ADR/spec status.
+Read `PROJECT_CONTEXT.md`, this file, open ADRs and GitHub issues. Continue from repository state rather than old chat transcripts.

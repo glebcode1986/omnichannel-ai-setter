@@ -4,16 +4,19 @@
 
 - [x] Establish Instagram + WhatsApp product direction
 - [x] Initial Instagram open-source research
-- [x] Initial WhatsApp open-source research (wacrm, Senqo, Cloud API patterns)
+- [x] Initial WhatsApp open-source research
 - [x] Official WhatsApp Cloud API decision
 - [x] Channel-agnostic core decision
 - [x] Durable human-delay principle
 - [x] Repository continuity / coding-agent rules
-- [ ] Verify current Meta platform constraints against official docs
-- [ ] Deep review selected WhatsApp code paths and licenses
+- [x] Verify current Meta platform constraints (2026-09-16)
+- [x] Verify OpenSetter + wacrm licenses/anchor commits
+- [x] Choose ORM: Prisma 7 + PostgreSQL
+- [x] Choose queue: BullMQ 5 + Redis/ioredis
+- [x] Prefer Instagram API with Instagram Login
+- [x] Exclude Threads DM from MVP until official API exists
+- [ ] Deep code-path extraction map for OpenSetter and wacrm
 - [ ] Finalize monorepo/package layout
-- [ ] Choose ORM and migration approach
-- [ ] Choose queue/deployment topology
 - [ ] Finalize auth/workspace model
 - [ ] Freeze `ChannelAdapter` and normalized event contracts
 - [ ] Produce Phase 1 implementation issues with acceptance criteria
