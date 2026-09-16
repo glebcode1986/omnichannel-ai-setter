@@ -2,11 +2,13 @@
 
 This directory contains durable, executable instructions for coding/review agents. Chat history is not an implementation contract.
 
+Supervisor shortcut: use [`CLAUDE_EXECUTION_QUEUE.md`](./CLAUDE_EXECUTION_QUEUE.md) to see the current/next Claude task and launch condition.
+
 ## Phase 1 execution order
 
 | Step | Issue | Executor | Contract | Start condition |
 |---|---:|---|---|---|
-| P1-01 | #2 | Claude | `P1-01_CLAUDE_TASK_CONTRACT.md` | start now |
+| P1-01 | #2 | Claude | `P1-01_CLAUDE_TASK_CONTRACT.md` | running now |
 | P1-02 | #3 | Claude | `P1-02_CLAUDE_TASK_CONTRACT.md` | #2 accepted/merged |
 | P1-03 | #4 | Claude | `P1-03_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; may run alongside P1-04 |
 | P1-04 | #5 | Claude | `P1-04_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; shared IDs stable |
@@ -15,7 +17,7 @@ This directory contains durable, executable instructions for coding/review agent
 
 ## Phase 2 execution order — Instagram + shared AI
 
-Starts only after Phase 1 exit criteria.
+Starts only after Phase 1 exit criteria unless the architecture plan is explicitly amended.
 
 | Step | Issue | Executor | Contract |
 |---|---:|---|---|
@@ -53,6 +55,12 @@ Claude executes one contract/issue at a time on its specified branch and does no
 
 Both `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED` are supported. See ADR-014. Extended mode is an explicit real-human review/send path under currently permitted Human Agent eligibility, not an unattended AI worker pretending to be human.
 
-## WhatsApp after-window choice — Still open
+## WhatsApp after-window choice — Accepted
 
-ADR-016 is **Proposed**, not Accepted. Architecture can support both `SERVICE_WINDOW_ONLY` and `TEMPLATE_ASSISTED`, but the product owner has not yet selected the default or whether eligible outside-window templates may auto-send vs require human approval. Coding agents must not invent this decision.
+ADR-016 supports all three account/workspace-selectable modes:
+
+- `SERVICE_WINDOW_ONLY`
+- `TEMPLATE_REVIEW`
+- `TEMPLATE_AUTOPILOT`
+
+No stored choice means `SERVICE_WINDOW_ONLY` until configured. `TEMPLATE_AUTOPILOT` requires an explicit automation allowlist; an empty allowlist sends nothing unattended. Current provider consent/template/account-health/STOP rules and final pre-send revalidation always win.
