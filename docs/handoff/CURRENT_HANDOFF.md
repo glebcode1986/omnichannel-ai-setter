@@ -6,24 +6,23 @@
 
 ## Completed
 
-- Dedicated private GitHub repository created and project-memory scaffold committed.
-- Product is a multi-channel AI setter, Instagram + WhatsApp first.
-- Core is channel-neutral; human-like delays are durable jobs; final revalidation and human takeover are mandatory.
-- Production WhatsApp uses official Meta Cloud API only.
-- Current Meta constraints verified: Instagram professional-account messaging is inbound-first; WhatsApp uses a 24-hour customer-service window for free-form replies; Threads has no verified public DM API and is excluded from MVP.
-- OpenSetter reviewed at `aa7d97c38b6d6698df1202d87c00fef5c983cfcb` (MIT). Its Prisma 7 + BullMQ 5 + Redis stack aligns with our needs.
-- wacrm reviewed at `80c3f9a1aecdaf21b98311f230fdaaaec7d85f7d` (MIT) as our strongest WhatsApp implementation reference.
-- ADR accepted for Prisma/PostgreSQL + BullMQ/Redis and Instagram Login path.
+- Dedicated private GitHub repository and durable project-memory docs.
+- Instagram + WhatsApp product direction; Threads DM explicitly future-only until official API exists.
+- Official Meta constraints verified and documented.
+- Channel-neutral core; durable debounce/delay; final pre-send revalidation; human takeover.
+- OpenSetter anchor `aa7d97c38b6d6698df1202d87c00fef5c983cfcb` MIT; wacrm anchor `80c3f9a1aecdaf21b98311f230fdaaaec7d85f7d` MIT.
+- Accepted core stack: Next.js/TypeScript, Prisma/PostgreSQL, BullMQ/Redis, Vitest/Zod.
+- Accepted pnpm workspace layout with separate `apps/web` and `apps/worker` plus bounded packages.
+- Accepted Auth.js + Prisma workspace membership model for MVP.
+- Initial `ChannelAdapter`, normalized event, window-decision and send-result contracts frozen in `docs/specs/CHANNEL_CONTRACTS.md`.
 
 ## Immediate next work
 
-1. Create extraction map: exact OpenSetter/wacrm files to adapt vs independently reimplement.
-2. Decide monorepo/package layout.
-3. Decide auth/workspace model.
-4. Freeze `ChannelAdapter`, normalized event and `SendResult` contracts.
-5. Create Phase 1 implementation issues for Claude.
-6. Assign Codex/Astra independent verification/testing tasks rather than concurrent edits to Claude-owned modules.
+1. Create exact OpenSetter/wacrm extraction map: files/concepts to adapt vs reimplement.
+2. Create Phase 1 GitHub issues with dependencies, package ownership and acceptance criteria.
+3. Claude begins only with P1-01 after Phase-0 backlog is committed.
+4. Codex/Astra receives independent test/review tickets; avoid simultaneous edits to Claude-owned packages.
 
-## Next-session instruction
+## New-session instruction
 
-Read `PROJECT_CONTEXT.md`, this file, open ADRs and GitHub issues. Continue from repository state rather than old chat transcripts.
+Read `PROJECT_CONTEXT.md`, this file, open ADRs/specs and GitHub issues. Continue from repository state, not old chat history.

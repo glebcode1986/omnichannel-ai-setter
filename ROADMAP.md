@@ -3,8 +3,7 @@
 ## Phase 0 — Architecture & specification (current)
 
 - [x] Establish Instagram + WhatsApp product direction
-- [x] Initial Instagram open-source research
-- [x] Initial WhatsApp open-source research
+- [x] Initial Instagram/WhatsApp open-source research
 - [x] Official WhatsApp Cloud API decision
 - [x] Channel-agnostic core decision
 - [x] Durable human-delay principle
@@ -15,11 +14,11 @@
 - [x] Choose queue: BullMQ 5 + Redis/ioredis
 - [x] Prefer Instagram API with Instagram Login
 - [x] Exclude Threads DM from MVP until official API exists
+- [x] Finalize monorepo/package layout: pnpm workspace
+- [x] Finalize MVP auth/workspace model: Auth.js + Prisma WorkspaceMember
+- [x] Freeze initial `ChannelAdapter`, normalized event and `SendResult` contracts
 - [ ] Deep code-path extraction map for OpenSetter and wacrm
-- [ ] Finalize monorepo/package layout
-- [ ] Finalize auth/workspace model
-- [ ] Freeze `ChannelAdapter` and normalized event contracts
-- [ ] Produce Phase 1 implementation issues with acceptance criteria
+- [ ] Create Phase 1 implementation issues with acceptance criteria
 
 ## Phase 1 — Skeleton
 
@@ -29,6 +28,7 @@
 - [ ] queue abstraction
 - [ ] channel adapter interfaces
 - [ ] webhook ingestion framework
+- [ ] Auth.js + workspace authorization baseline
 - [ ] baseline CI/tests
 
 ## Phase 2 — Instagram + AI core
