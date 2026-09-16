@@ -46,11 +46,10 @@
 
 ## Phase 3 — Productized delay & review UX
 
-- [ ] human-delay settings UI (`Fast / Natural / Custom`)
-- [ ] debounce/delay observability and cancellation UI
-- [ ] unified review queue
-- [ ] Human Agent review state/expiry UI
-- [ ] manual claim/resume controls
+Phase 3 concerns are now represented as reusable backend behavior in Phase 2 and concrete product surfaces in Phase 5. Keep this phase as a tracking bridge rather than a second implementation of the same logic.
+
+- [x] timing/review UX requirements incorporated into Phase 5 specs
+- [x] manual claim/resume and Human Agent review state incorporated into P5-03/P5-04
 
 ## Phase 4 — WhatsApp Cloud API (architecture/backlog/task contracts prepared)
 
@@ -64,7 +63,7 @@ Architecture:
 - [x] current Meta verification recorded
 - [x] Phase 4 issues #18–#25 created
 - [x] Phase 4 Claude/Codex task contracts created
-- [ ] **Product-owner decision:** accept ADR-016 choice/default for `SERVICE_WINDOW_ONLY` vs `TEMPLATE_ASSISTED`, including whether template-assisted sends require human approval or may auto-send under explicit policy
+- [x] ADR-016 accepted with three modes: `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT`
 
 Implementation:
 - [ ] #18 WhatsApp Cloud API transport adapter
@@ -76,16 +75,32 @@ Implementation:
 - [ ] #24 WhatsApp end-to-end AI vertical slice
 - [ ] #25 independent Codex/Astra WhatsApp review
 
-## Phase 5 — Unified SaaS UX
+## Phase 5 — Unified SaaS UX (architecture/backlog/task contracts prepared)
 
-- [ ] unified Instagram + WhatsApp inbox
-- [ ] channel/account settings
-- [ ] knowledge/style configuration
-- [ ] lead stages
-- [ ] analytics/audit UI
-- [ ] cross-channel contact linking only when explicitly verified
-- [ ] WhatsApp template/catalog/review UI
-- [ ] account health/onboarding status UI
+Architecture:
+- [x] inbox-first product UX architecture
+- [x] resumable onboarding flow
+- [x] AI settings + no-send simulation design
+- [x] separate Knowledge and Style management UX
+- [x] lead pipeline + qualification UX
+- [x] operational analytics + audit UX
+- [x] responsive/accessibility/E2E requirements
+- [x] Phase 5 issues #27–#36 created
+- [x] Phase 5 Claude/Codex task contracts created
+
+Implementation:
+- [ ] #27 app shell + resumable onboarding
+- [ ] #28 unified omnichannel Inbox
+- [ ] #29 conversation operations + Review Queue
+- [ ] #30 AI Settings + no-send simulation playground
+- [ ] #31 versioned Knowledge Library + retrieval tester
+- [ ] #32 Style Training + verified examples
+- [ ] #33 Leads pipeline + qualification workspace
+- [ ] #34 operational Analytics + searchable Audit
+- [ ] #35 SaaS UX E2E/responsive/accessibility pass
+- [ ] #36 independent Codex/Astra Phase 5 review
+
+Phase 5 may begin incrementally as its backend dependencies stabilize; it does not need to wait for every WhatsApp feature. Channel capability differences should render conditionally inside one product rather than fork the product into separate Instagram/WhatsApp dashboards.
 
 ## Phase 6 — Hardening
 

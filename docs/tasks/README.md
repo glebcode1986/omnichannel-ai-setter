@@ -47,6 +47,23 @@ Implementation reuses the stable shared AI/policy/delivery/handoff core. See `do
 | P4-07 | #24 | Claude | `P4-07_CLAUDE_TASK_CONTRACT.md` |
 | R4 | #25 | Codex/Astra | `R4_CODEX_ASTRA_REVIEW_CONTRACT.md` |
 
+## Phase 5 execution order — SaaS product UX
+
+Phase 5 can start incrementally once each feature's backend dependencies are stable; it does not require every WhatsApp feature to be finished first.
+
+| Step | Issue | Executor | Contract |
+|---|---:|---|---|
+| P5-01 | #27 | Claude | `P5-01_CLAUDE_TASK_CONTRACT.md` |
+| P5-02 | #28 | Claude | `P5-02_CLAUDE_TASK_CONTRACT.md` |
+| P5-03 | #29 | Claude | `P5-03_CLAUDE_TASK_CONTRACT.md` |
+| P5-04 | #30 | Claude | `P5-04_CLAUDE_TASK_CONTRACT.md` |
+| P5-05 | #31 | Claude | `P5-05_CLAUDE_TASK_CONTRACT.md` |
+| P5-06 | #32 | Claude | `P5-06_CLAUDE_TASK_CONTRACT.md` |
+| P5-07 | #33 | Claude | `P5-07_CLAUDE_TASK_CONTRACT.md` |
+| P5-08 | #34 | Claude | `P5-08_CLAUDE_TASK_CONTRACT.md` |
+| P5-09 | #35 | Claude | `P5-09_CLAUDE_TASK_CONTRACT.md` |
+| R5 | #36 | Codex/Astra | `R5_CODEX_ASTRA_REVIEW_CONTRACT.md` |
+
 ## Agent operating rule
 
 Claude executes one contract/issue at a time on its specified branch and does not opportunistically implement the next contract. Codex/Astra independently reviews/tests by default and reads specs before diffs. ChatGPT maintains product architecture, task contracts, durable memory and architecture review.
