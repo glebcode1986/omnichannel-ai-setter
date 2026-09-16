@@ -687,6 +687,63 @@ describe("checkWorkspace: source imports", () => {
     ]);
   });
 
+  it("rejects escaping function constructors but allows safe constructor reads (R1-01 follow-up 4)", () => {
+    const source = `
+      const compile = (() => {}).constructor as (source: string) => () => boolean;
+      const loaded = compile("return typeof process.getBuiltinModule('fs').readFileSync === 'function'")();
+      const viaBracket = (async () => undefined)["con" + "structor"];
+      const { constructor: destructured } = () => undefined;
+      const { ["constructor"]: computedKey } = () => undefined;
+      const fromReflect = Reflect.get(() => undefined, "constructor");
+      const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => undefined), "constructor");
+      register((() => undefined).constructor);
+      function leak() { return (function* () {}).constructor; }
+      export const fine = [
+        loaded,
+        viaBracket,
+        destructured,
+        computedKey,
+        fromReflect,
+        descriptor,
+        ({}).constructor.name,
+        ({}).constructor === Object,
+        [] instanceof ([]).constructor,
+        typeof (() => undefined).constructor,
+      ];
+      function register(value: unknown): unknown { return value; }
+    `;
+
+    expect(extractModuleReferences(source).unresolvedModuleLoads).toEqual([
+      "dynamic code evaluation (constructor reference): compile = (() => {}).constructor as (source: string) => () => boolean",
+      'dynamic code evaluation (constructor reference): viaBracket = (async () => undefined)["con" + "structor"]',
+      "dynamic code evaluation (constructor destructuring): { constructor: destructured } = () => undefined",
+      'dynamic code evaluation (constructor destructuring): { ["constructor"]: computedKey } = () => undefined',
+      'dynamic code evaluation (constructor lookup): Reflect.get(() => undefined, "constructor")',
+      'dynamic code evaluation (constructor lookup): Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => undefined), "constructor")',
+      "dynamic code evaluation (constructor reference): register((() => undefined).constructor)",
+      "dynamic code evaluation (constructor reference): return (function* () {}).constructor;",
+    ]);
+  });
+
+  it("rejects the reviewer's constructor-alias fixture in a pure package through the real workspace (R1-01 follow-up 4)", async () => {
+    const rootDir = path.resolve(import.meta.dirname, "../..");
+    const source = `
+      const compile = (() => {}).constructor as (source: string) => () => boolean;
+      const loaded = compile("return typeof process.getBuiltinModule('fs').readFileSync === 'function'")();
+      if (!loaded) throw new Error("Synthetic fs capability check failed");
+    `;
+    const { packages, root } = await loadWorkspace(rootDir);
+    const modified = packages.map((candidate) =>
+      candidate.name === scoped("application")
+        ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-constructor-alias.ts", ...extractModuleReferences(source) }] }
+        : candidate,
+    );
+
+    expect(kindsAndFiles(checkWorkspace(modified, { root }))).toEqual([
+      ["unresolvable-module-load", "packages/application/src/r1-constructor-alias.ts"],
+    ]);
+  });
+
   it("rejects the reviewer's global self-reference fixture in a pure package through the real workspace (R1-01 follow-up 3)", async () => {
     const rootDir = path.resolve(import.meta.dirname, "../..");
     const source = `

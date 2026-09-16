@@ -79,6 +79,12 @@ export default defineConfig(
           (name) => ({ name, message: `${name} is a Node.js runtime global; pure packages must stay runtime-agnostic.` }),
         ),
       ],
+      // `fn.constructor` is the Function constructor (an evaluator); `__proto__` reaches it too.
+      "no-restricted-properties": [
+        "error",
+        { property: "constructor", message: "Function constructors evaluate code; pure packages must not reach them." },
+        { property: "__proto__", message: "Use Object.getPrototypeOf; pure packages must not reach constructors via __proto__." },
+      ],
     },
   },
 

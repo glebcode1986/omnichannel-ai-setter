@@ -411,6 +411,28 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
 
   const runtimeGlobals = new Set<string>();
 
+  /**
+   * `x.constructor` of a function is the Function (or AsyncFunction/GeneratorFunction) constructor, an
+   * evaluator. Bounded policy: it may only be read for `.name`, compared, used with `instanceof`, or
+   * inspected with `typeof`. Calling, aliasing, casting, passing, returning or storing it is rejected.
+   */
+  const CONSTRUCTOR_SAFE_OPERATORS = new Set([
+    ts.SyntaxKind.EqualsEqualsEqualsToken,
+    ts.SyntaxKind.ExclamationEqualsEqualsToken,
+    ts.SyntaxKind.EqualsEqualsToken,
+    ts.SyntaxKind.ExclamationEqualsToken,
+    ts.SyntaxKind.InstanceOfKeyword,
+  ]);
+  const checkConstructorUse = (node: ts.PropertyAccessExpression | ts.ElementAccessExpression): void => {
+    const usage = outermost(node);
+    const parent = usage.parent;
+    if (ts.isTypeOfExpression(parent)) return;
+    if (ts.isBinaryExpression(parent) && CONSTRUCTOR_SAFE_OPERATORS.has(parent.operatorToken.kind)) return;
+    if (isMemberAccess(parent) && parent.expression === usage && memberName(parent) === "name") return;
+    const label = ts.isCallExpression(parent) && parent.expression === usage ? "constructor call" : "constructor reference";
+    unresolvedModuleLoads.push(`dynamic code evaluation (${label}): ${snippet(parent)}`);
+  };
+
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && !isDeclarationName(node)) {
       if (RUNTIME_GLOBAL_NAMES.has(node.text)) runtimeGlobals.add(node.text);
@@ -421,11 +443,40 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
       const kind = known(node);
       if (kind !== undefined) checkKnownUse(node, kind);
     } else if (isMemberAccess(node)) {
-      if (memberName(node) === "constructor" && ts.isCallExpression(outermost(node).parent) && (outermost(node).parent as ts.CallExpression).expression === outermost(node)) {
-        unresolvedModuleLoads.push(`dynamic code evaluation (constructor call): ${snippet(outermost(node).parent)}`);
+      if (memberName(node) === "constructor") {
+        checkConstructorUse(node);
       }
       const kind = known(node);
       if (kind !== undefined) checkKnownUse(node, kind);
+    }
+
+    if (ts.isBindingElement(node)) {
+      const property = node.propertyName ?? (ts.isIdentifier(node.name) ? node.name : undefined);
+      const propertyText =
+        property && (ts.isIdentifier(property) || ts.isStringLiteralLike(property))
+          ? property.text
+          : property && ts.isComputedPropertyName(property)
+            ? foldConstantString(property.expression)
+            : undefined;
+      if (propertyText === "constructor") {
+        unresolvedModuleLoads.push(`dynamic code evaluation (constructor destructuring): ${snippet(node.parent.parent)}`);
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      isMemberAccess(unwrap(node.expression)) &&
+      node.arguments.some((argument) => !ts.isSpreadElement(argument) && foldConstantString(argument) === "constructor")
+    ) {
+      const callee = unwrap(node.expression) as ts.PropertyAccessExpression | ts.ElementAccessExpression;
+      const receiver = unwrap(callee.expression);
+      const method = memberName(callee);
+      const readsProperty =
+        ts.isIdentifier(receiver) &&
+        ((receiver.text === "Reflect" && (method === "get" || method === "getOwnPropertyDescriptor")) ||
+          (receiver.text === "Object" && method === "getOwnPropertyDescriptor"));
+      if (readsProperty) {
+        unresolvedModuleLoads.push(`dynamic code evaluation (constructor lookup): ${snippet(node)}`);
+      }
     }
 
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
