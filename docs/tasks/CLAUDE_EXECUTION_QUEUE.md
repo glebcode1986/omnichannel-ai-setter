@@ -42,26 +42,34 @@ Do not merge the PR and do not begin Issue #4 or #5.
 3. P1-05 / #6 — channel-neutral webhook ingestion (`P1-05_CLAUDE_TASK_CONTRACT.md`) after #3/#4/#5.
 4. R1 / #7 — independent Codex/Astra review throughout Phase 1.
 
-## Phase 2 gate
+## Phase 2 gate — Instagram + shared AI
 
-Do **not** start Instagram + AI Phase 2 merely because its contracts exist. Phase 2 implementation starts after Phase 1 exit criteria are met unless the architecture plan is explicitly amended.
+Do **not** start merely because contracts exist. Phase 2 starts after Phase 1 exit criteria unless architecture is explicitly amended. Contracts: `docs/tasks/P2-*`.
 
-Phase 2 contracts are already prepared under `docs/tasks/P2-*` and the execution order is in `docs/tasks/README.md`.
+## Phase 4 gate — WhatsApp
 
-## WhatsApp later
-
-Phase 4 WhatsApp contracts are already prepared under `docs/tasks/P4-*`. ADR-016 is Accepted with three after-window modes:
-
+Phase 4 contracts are prepared under `docs/tasks/P4-*`. ADR-016 is Accepted with:
 - `SERVICE_WINDOW_ONLY`
 - `TEMPLATE_REVIEW`
 - `TEMPLATE_AUTOPILOT`
 
-Do not start Phase 4 before the shared core/AI/delivery/handoff layers it reuses are stable.
+Do not start WhatsApp features before the shared core/AI/delivery/handoff dependencies each task requires are stable.
+
+## Phase 5 gate — SaaS UX
+
+Phase 5 contracts are prepared under `docs/tasks/P5-*`, Issues #27–#35, with #36 independent review.
+
+Phase 5 may start **incrementally** when a feature's backend dependency is stable. It does not need to wait for every WhatsApp feature. Examples:
+- P5-01 app shell/onboarding after Phase 1 auth/workspace is stable;
+- P5-02 Inbox after conversation/message query APIs are stable;
+- P5-03/P5-04 after policy/delivery/handoff/AI APIs are stable;
+- Knowledge/Style/Leads/Analytics after their respective backend APIs exist.
+
+Do not use a future prepared UX task as permission to bypass its explicit start condition.
 
 ## Supervisor rule
 
 After every Claude PR:
-
 1. stop before merge;
 2. run ChatGPT architecture review against the issue + contract;
 3. run the applicable Codex/Astra independent review contract;
