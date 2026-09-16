@@ -532,6 +532,28 @@ describe("checkWorkspace: source imports", () => {
     ]);
   });
 
+  it("follows createRequire loaders under any name and reports untracked loader values", () => {
+    const source = `
+      import { createRequire as makeRequire } from "node:module";
+      import * as nodeModule from "node:module";
+      const load = makeRequire(import.meta.url);
+      const other = nodeModule.createRequire(import.meta.url);
+      export const browser: unknown = load("puppeteer");
+      export const transport: unknown = other("baileys");
+      export const resolved = load.resolve("./fixtures/helper");
+      export const direct: unknown = makeRequire(import.meta.url)("left-pad");
+      export const parenthesized: unknown = (load)("zod");
+      export const computed = (name: string): unknown => load(name);
+      export const escaped = { loader: makeRequire(import.meta.url) };
+    `;
+
+    expect(extractModuleReferences(source)).toEqual({
+      imports: ["node:module", "node:module", "puppeteer", "baileys", "./fixtures/helper", "left-pad", "zod"],
+      typeReferences: [],
+      unresolvedModuleLoads: ["load(name)", "makeRequire(import.meta.url)"],
+    });
+  });
+
   it("fails closed on computed module loads in any package file (R1-01)", () => {
     const refs = extractModuleReferences('export async function probe(): Promise<void> { await import("node:" + "fs"); }');
     const computed = extractModuleReferences("export const load = (target: string) => import(target);");

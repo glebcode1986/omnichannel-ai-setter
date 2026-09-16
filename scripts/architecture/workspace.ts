@@ -160,7 +160,66 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
     callee.expression.text === object &&
     callee.name.text === method;
 
+  const unwrapExpression = (expression: ts.Expression): ts.Expression => {
+    let current = expression;
+    while (ts.isParenthesizedExpression(current) || ts.isAsExpression(current) || ts.isNonNullExpression(current) || ts.isSatisfiesExpression(current)) {
+      current = current.expression;
+    }
+    return current;
+  };
+
+  // `createRequire` (under any imported name, or as `<namespace>.createRequire`) returns a loader.
+  const createRequireNames = new Set(["createRequire"]);
+  for (const statement of sourceFile.statements) {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteralLike(statement.moduleSpecifier) &&
+      ["module", "node:module"].includes(statement.moduleSpecifier.text)
+    ) {
+      const bindings = statement.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          if ((element.propertyName ?? element.name).text === "createRequire") {
+            createRequireNames.add(element.name.text);
+          }
+        }
+      }
+    }
+  }
+  const isCreateRequireCall = (node: ts.Node): node is ts.CallExpression => {
+    if (!ts.isCallExpression(node)) {
+      return false;
+    }
+    const callee = unwrapExpression(node.expression);
+    return (
+      (ts.isIdentifier(callee) && createRequireNames.has(callee.text)) ||
+      (ts.isPropertyAccessExpression(callee) && callee.name.text === "createRequire")
+    );
+  };
+
+  // Identifiers bound directly to a createRequire(...) result are loaders; any other use of that
+  // result (passed along, stored in an object) cannot be followed and is reported.
+  const loaderNames = new Set<string>();
+  const trackedLoaderCalls = new Set<ts.Node>();
+  const collectLoaders = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const initializer = unwrapExpression(node.initializer);
+      if (isCreateRequireCall(initializer)) {
+        loaderNames.add(node.name.text);
+        trackedLoaderCalls.add(initializer);
+      }
+    }
+    if (ts.isCallExpression(node) && isCreateRequireCall(unwrapExpression(node.expression))) {
+      trackedLoaderCalls.add(unwrapExpression(node.expression));
+    }
+    ts.forEachChild(node, collectLoaders);
+  };
+  collectLoaders(sourceFile);
+
   const visit = (node: ts.Node): void => {
+    if (isCreateRequireCall(node) && !trackedLoaderCalls.has(node)) {
+      unresolvedModuleLoads.push(node.getText(sourceFile).slice(0, 120));
+    }
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       addLiteral(node.moduleSpecifier);
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
@@ -168,10 +227,18 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
       addLiteral(node.argument.literal);
     } else if (ts.isCallExpression(node)) {
-      const callee = node.expression;
+      const callee = unwrapExpression(node.expression);
+      const loaderCallee =
+        ts.isIdentifier(callee) && (callee.text === "require" || loaderNames.has(callee.text))
+          ? true
+          : ts.isPropertyAccessExpression(callee) &&
+            ts.isIdentifier(callee.expression) &&
+            loaderNames.has(callee.expression.text) &&
+            callee.name.text === "resolve";
       if (
         callee.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(callee) && callee.text === "require") ||
+        loaderCallee ||
+        isCreateRequireCall(callee) ||
         isNamedCall(callee, "require", "resolve") ||
         isNamedCall(callee, "module", "require")
       ) {

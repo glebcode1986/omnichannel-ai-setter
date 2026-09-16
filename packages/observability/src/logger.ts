@@ -122,70 +122,97 @@ function buildEntry(
   bindings: LogFields,
   fields: LogFields | undefined,
 ): Record<string, unknown> {
+  const context: SerializationContext = { ancestors: [], budget: MAX_NODES };
   // Null prototype: a `__proto__` field becomes a plain property instead of changing the prototype.
-  const raw = Object.create(null) as Record<string, unknown>;
+  const entry = Object.create(null) as Record<string, unknown>;
   for (const source of [bindings, fields ?? {}]) {
     for (const key of Object.keys(source)) {
-      // An own `toJSON` would replace the whole entry during JSON.stringify.
+      // An own `toJSON` would replace the whole entry during JSON.stringify. Each field is converted
+      // on its own: the entry itself is never classified (a `message` + `stack` pair is just fields).
       if (!CORE_FIELDS.has(key) && key !== "toJSON") {
         const read = readProperty(source, key);
-        raw[key] = read.ok ? read.value : UNSERIALIZABLE;
+        const converted = read.ok ? toJsonSafe(read.value, context, 1) : UNSERIALIZABLE;
+        if (converted !== undefined) {
+          entry[key] = converted;
+        }
       }
     }
   }
-  const entry = toJsonSafe(raw, [], 0) as Record<string, unknown>;
   entry.time = time.toISOString();
   entry.level = level;
   entry.event = event;
   return entry;
 }
 
+interface SerializationContext {
+  readonly ancestors: unknown[];
+  /** Objects/arrays still allowed in this entry; shared references cannot blow up memory. */
+  budget: number;
+}
+
+const MAX_NODES = 50_000;
+const MAX_ARRAY_ITEMS = 10_000;
+const MAX_PROTOTYPE_HOPS = 1_000;
 const nativeIsError = (Error as { isError?: (value: unknown) => boolean }).isError;
 
+type Classification = "error" | "plain" | "untrusted";
+
 /**
- * Error detection that also covers other realms (vm contexts), subclasses with a custom
- * `Symbol.toStringTag` and proxies: anything branded as an error or exposing string
- * `message` + `stack` is serialized through the error allowlist, never through its own toJSON.
+ * Brand checks first; otherwise walk the whole prototype chain looking for an `Error` constructor,
+ * which also covers errors from other realms (vm contexts), custom `Symbol.toStringTag` and proxies
+ * (whose receiver-checked `stack` reads as undefined). A chain that cannot be walked to its end is
+ * "untrusted": it is neither serialized as an error nor allowed to run its toJSON.
  */
-function isError(value: unknown): value is Error {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
+function classify(value: object): Classification {
   try {
     if (value instanceof Error || nativeIsError?.(value) === true || Object.prototype.toString.call(value) === "[object Error]") {
-      return true;
+      return "error";
     }
   } catch {
-    // A revoked proxy or hostile getPrototypeOf trap: fall through to the structural check.
+    // A revoked proxy or hostile trap: continue with the prototype walk.
   }
-  // Prototype chain of another realm (or seen through a proxy): look for an `Error` constructor.
   try {
+    const seen = new Set<unknown>();
     let prototype: unknown = Object.getPrototypeOf(value);
-    for (let hops = 0; prototype !== null && typeof prototype === "object" && hops < 16; hops += 1) {
+    for (let hops = 0; hops < MAX_PROTOTYPE_HOPS; hops += 1) {
+      if (prototype === null) {
+        return "plain";
+      }
+      if (typeof prototype !== "object" || seen.has(prototype)) {
+        return "untrusted";
+      }
+      seen.add(prototype);
       const constructor = readProperty(prototype, "constructor");
       if (constructor.ok && typeof constructor.value === "function" && constructor.value.name === "Error") {
-        return true;
+        return "error";
       }
       prototype = Object.getPrototypeOf(prototype);
     }
   } catch {
-    // Hostile getPrototypeOf trap: fall through to the structural check.
+    // Hostile getPrototypeOf trap.
   }
-  const message = readProperty(value, "message");
-  const stack = readProperty(value, "stack");
-  return message.ok && stack.ok && typeof message.value === "string" && typeof stack.value === "string";
+  return "untrusted";
+}
+
+function isError(value: unknown): value is Error {
+  return typeof value === "object" && value !== null && classify(value) === "error";
 }
 
 function isPrimitive(value: unknown): value is string | number | boolean {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 }
 
+function describeNonError(value: unknown): unknown {
+  return isPrimitive(value) ? value : `[non-error ${value === null ? "null" : typeof value}]`;
+}
+
 /**
- * Only name/message/stack, primitive diagnostic codes, and error-valued `cause`/`errors` are kept.
- * Nothing on the error is invoked: its own `toJSON` (where HTTP clients expose request config) is
- * never called, and throwing getters yield a fixed placeholder.
+ * Only name/message/stack, primitive diagnostic codes, and error-valued `cause`/`errors`
+ * (AggregateError) and `error`/`suppressed` (SuppressedError) are kept. Nothing on the error is
+ * invoked: its own `toJSON` (where HTTP clients expose request config) is never called, and throwing
+ * getters yield a fixed placeholder.
  */
-function serializeError(error: Error, ancestors: unknown[], depth: number): Record<string, unknown> {
+function serializeError(error: Error, context: SerializationContext, depth: number): Record<string, unknown> {
   const serialized = Object.create(null) as Record<string, unknown>;
   const text = (key: string, fallback?: string) => {
     const read = readProperty(error, key);
@@ -205,18 +232,20 @@ function serializeError(error: Error, ancestors: unknown[], depth: number): Reco
       serialized[field] = read.value;
     }
   }
-  const cause = readProperty(error, "cause");
-  if (!cause.ok) {
-    serialized.cause = UNSERIALIZABLE;
-  } else if (cause.value !== undefined) {
-    serialized.cause = isError(cause.value) ? toJsonSafe(cause.value, ancestors, depth + 1) : describeNonError(cause.value);
+  for (const field of ["cause", "error", "suppressed"]) {
+    const read = readProperty(error, field);
+    if (!read.ok) {
+      serialized[field] = UNSERIALIZABLE;
+    } else if (read.value !== undefined) {
+      serialized[field] = isError(read.value) ? toJsonSafe(read.value, context, depth + 1) : describeNonError(read.value);
+    }
   }
   const errors = readProperty(error, "errors");
   if (!errors.ok) {
     serialized.errors = UNSERIALIZABLE;
   } else if (Array.isArray(errors.value)) {
     serialized.errors = copyArray(errors.value, (entry) =>
-      isError(entry) ? toJsonSafe(entry, ancestors, depth + 1) : describeNonError(entry),
+      isError(entry) ? toJsonSafe(entry, context, depth + 1) : describeNonError(entry),
     );
   }
   return serialized;
@@ -228,26 +257,29 @@ function serializeError(error: Error, ancestors: unknown[], depth: number): Reco
  */
 function copyArray(source: readonly unknown[], convert: (entry: unknown) => unknown): unknown[] {
   const lengthRead = readProperty(source, "length");
-  const length = lengthRead.ok && typeof lengthRead.value === "number" ? Math.min(lengthRead.value, 10_000) : 0;
+  const length =
+    lengthRead.ok && typeof lengthRead.value === "number" && Number.isFinite(lengthRead.value)
+      ? Math.max(0, Math.min(Math.floor(lengthRead.value), MAX_ARRAY_ITEMS))
+      : 0;
   const result: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
     const entry = readProperty(source, index);
     result.push(entry.ok ? (convert(entry.value) ?? null) : UNSERIALIZABLE);
   }
+  if (lengthRead.ok && typeof lengthRead.value === "number" && lengthRead.value > MAX_ARRAY_ITEMS) {
+    result.push("[Truncated]");
+  }
   return result;
-}
-
-function describeNonError(value: unknown): unknown {
-  return isPrimitive(value) ? value : `[non-error ${value === null ? "null" : typeof value}]`;
 }
 
 /**
  * Converts caller data into plain JSON-safe values *before* JSON.stringify, so serialization can
  * neither throw nor run code on errors: bigints become strings, cycles become "[Circular]", errors
- * go through the allowlist, throwing getters/toJSON become "[unserializable]", depth is bounded.
- * Non-error `toJSON` (Date, Decimal, …) is honoured, as JSON.stringify would.
+ * go through the allowlist, throwing getters/toJSON become "[unserializable]", and depth, array size
+ * and the total number of objects per entry are bounded. Non-error `toJSON` (Date, redacting
+ * wrappers, …) is honoured, as JSON.stringify would.
  */
-function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknown {
+function toJsonSafe(value: unknown, context: SerializationContext, depth: number): unknown {
   switch (typeof value) {
     case "string":
     case "boolean":
@@ -266,16 +298,21 @@ function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknow
   if (value === null) {
     return null;
   }
-  if (ancestors.includes(value)) {
+  if (context.ancestors.includes(value)) {
     return "[Circular]";
   }
-  if (depth >= MAX_DEPTH) {
+  if (depth >= MAX_DEPTH || context.budget <= 0) {
     return "[Truncated]";
   }
-  ancestors.push(value);
+  context.budget -= 1;
+  context.ancestors.push(value);
   try {
-    if (isError(value)) {
-      return serializeError(value, ancestors, depth);
+    const classification = classify(value);
+    if (classification === "error") {
+      return serializeError(value as Error, context, depth);
+    }
+    if (classification === "untrusted") {
+      return UNSERIALIZABLE;
     }
     // Same order as JSON.stringify: a non-error value's own toJSON (arrays included) wins.
     const toJSON = readProperty(value, "toJSON");
@@ -284,18 +321,18 @@ function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknow
     }
     if (typeof toJSON.value === "function") {
       try {
-        return toJsonSafe((toJSON.value as () => unknown).call(value), ancestors, depth + 1);
+        return toJsonSafe((toJSON.value as () => unknown).call(value), context, depth + 1);
       } catch {
         return UNSERIALIZABLE;
       }
     }
     if (Array.isArray(value)) {
-      return copyArray(value, (entry) => toJsonSafe(entry, ancestors, depth + 1));
+      return copyArray(value, (entry) => toJsonSafe(entry, context, depth + 1));
     }
     const result = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value)) {
       const read = readProperty(value, key);
-      const converted = read.ok ? toJsonSafe(read.value, ancestors, depth + 1) : UNSERIALIZABLE;
+      const converted = read.ok ? toJsonSafe(read.value, context, depth + 1) : UNSERIALIZABLE;
       if (converted !== undefined) {
         result[key] = converted;
       }
@@ -305,6 +342,6 @@ function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknow
     // e.g. a Proxy whose ownKeys trap throws.
     return UNSERIALIZABLE;
   } finally {
-    ancestors.pop();
+    context.ancestors.pop();
   }
 }

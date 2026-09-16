@@ -93,10 +93,13 @@ describe("parseEnv", () => {
 
     const error = captureError(() => parseEnv(schema, values));
 
-    expect(error.issues.map((issue) => issue.key)).toEqual(["VERBATIM", "ESCAPED", "TRUNCATED", "TRIMMED", "STATIC"]);
-    for (const issue of error.issues) {
-      expect(issue.message).toMatch(/withheld/);
-    }
+    expect(error.issues).toEqual([
+      { key: "VERBATIM", message: "Invalid value (custom validation details withheld)" },
+      { key: "ESCAPED", message: "Invalid value (custom validation details withheld)" },
+      { key: "TRUNCATED", message: "Invalid value (custom validation details withheld)" },
+      { key: "TRIMMED", message: "Too small: expected string with length >= 100" },
+      { key: "STATIC", message: "Invalid value (custom validation details withheld)" },
+    ]);
     for (const fragment of ["verbatim-secret", "aped", "tok_live", "padded-secret", "static-secret"]) {
       expect(error.message).not.toContain(fragment);
     }
@@ -140,7 +143,7 @@ describe("parseEnv", () => {
 
     expect(error.issues.map((issue) => issue.key).sort()).toEqual(["RECORD_JSON", "TOKEN"]);
     expect(error.issues.find((issue) => issue.key === "RECORD_JSON")?.message).toBe(
-      "Invalid input: expected number, received string (in a nested value)",
+      "Invalid input: expected number (in a nested value)",
     );
     expect(JSON.stringify(error.issues)).not.toContain(secret);
     expect(error.message).not.toContain(secret);
@@ -182,32 +185,85 @@ describe("parseEnv", () => {
     const error = captureError(() => parseEnv(schema, values));
 
     expect(error.issues.length).toBeGreaterThanOrEqual(7);
-    for (const issue of error.issues) {
-      expect(issue.message).toMatch(/withheld/);
-    }
     expect(JSON.stringify(error.issues)).not.toContain(secret);
     expect(error.message).not.toContain(secret);
   });
 
-  it("keeps trusted built-in messages independent of a path-printing global locale", () => {
-    const secret = "SYNTH-SECRET-locale-path";
-    const previous = z.config();
-    z.config({ localeError: (issue) => `${issue.path?.join(".") ?? ""}: invalid (${issue.code})` });
+  it("ignores global locales and error maps that echo input, paths or nested messages (R1-03 follow-up)", () => {
+    const secret = "SYNTH-SECRET-error-maps";
+    const previousLocale = z.config().localeError;
+    z.config({
+      localeError: (issue) =>
+        `${issue.path?.join(".") ?? ""} ${JSON.stringify((issue as { errors?: unknown }).errors ?? "")} ${String(issue.input)}`,
+    });
     try {
       const schema = z.object({
+        REDIS_URL: z.union(
+          [
+            z.url({ protocol: /^rediss?$/ }),
+            z.string().refine((value) => value.startsWith("/"), {
+              error: (issue) => `not an absolute socket path: ${String(issue.input)}`,
+            }),
+          ],
+          {
+            error: (issue) =>
+              issue.code === "invalid_union"
+                ? issue.errors.map((branch) => branch.map((inner) => inner.message).join(", ")).join(" or ")
+                : undefined,
+          },
+        ),
         RECORD_JSON: z
           .string()
           .transform((value) => JSON.parse(value) as unknown)
           .pipe(z.record(z.string(), z.number())),
+        FORGED: z.string().superRefine((value, ctx) => {
+          ctx.addIssue({ code: "invalid_format", format: "starts_with", prefix: value, input: value, inst: z.string().regex(/^x/) });
+        }),
+        NON_STRING: z
+          .string()
+          .refine(() => false, { error: (issue) => ({ message: { leak: issue.input } as unknown as string }) }),
       });
 
-      const error = captureError(() => parseEnv(schema, { RECORD_JSON: JSON.stringify({ [secret]: "x" }) }));
+      const error = captureError(() =>
+        parseEnv(schema, {
+          REDIS_URL: secret,
+          RECORD_JSON: JSON.stringify({ [secret]: "x" }),
+          FORGED: secret,
+          NON_STRING: secret,
+        }),
+      );
 
-      expect(error.issues).toEqual([{ key: "RECORD_JSON", message: ": invalid (invalid_type) (in a nested value)" }]);
+      expect(error.issues).toEqual([
+        { key: "REDIS_URL", message: "Matched no allowed alternative" },
+        { key: "RECORD_JSON", message: "Invalid input: expected number (in a nested value)" },
+        { key: "FORGED", message: "Invalid format: expected string" },
+        { key: "NON_STRING", message: "Invalid value (custom validation details withheld)" },
+      ]);
       expect(error.message).not.toContain(secret);
     } finally {
-      z.config({ localeError: previous.localeError ?? z.locales.en().localeError });
+      z.config({ localeError: previousLocale });
     }
+  });
+
+  it("describes common env schemas truthfully without the value (coerced numbers, required optionals, stringbool)", () => {
+    const schema = z.object({
+      WORKER_CONCURRENCY: z.coerce.number().int().min(1),
+      PORT: z.string().transform(Number).pipe(z.number().int().max(65_535)),
+      REDIS_URL: z.url().optional().nonoptional(),
+      AI_REPLIES_ENABLED: z.stringbool(),
+    });
+
+    const error = captureError(() =>
+      parseEnv(schema, { WORKER_CONCURRENCY: "four", PORT: "not-a-port", AI_REPLIES_ENABLED: "sometimes" }),
+    );
+
+    expect(error.issues).toEqual([
+      { key: "WORKER_CONCURRENCY", message: "Invalid input: expected integer >= 1, received string" },
+      { key: "PORT", message: "Invalid input: expected integer <= 65535, received string" },
+      { key: "REDIS_URL", message: "Invalid input: expected a valid url, received undefined" },
+      { key: "AI_REPLIES_ENABLED", message: expect.stringMatching(/^Invalid option/) as string },
+    ]);
+    expect(error.message).not.toMatch(/four|not-a-port|sometimes/);
   });
 
   it("converts exceptions thrown by transforms into a fixed, value-free EnvValidationError", () => {

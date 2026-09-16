@@ -105,7 +105,7 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 
 ### Environment variables
 
-Each app validates its environment once at startup through `@omnichannel/env`; invalid configuration fails with a message naming the schema-declared variable and, where the rule's metadata comes from the schema (expected type, format, bounds, allowed options), Zod's built-in description; custom messages, input-derived details and thrown exceptions are replaced with fixed text, so values are not echoed.
+Each app validates its environment once at startup through `@omnichannel/env`; invalid configuration fails with a message naming the schema-declared variable, the kind of failure and what the schema expects (allowed options, type, format, bounds), all derived from the schema definition; Zod issue messages, error maps and thrown exceptions are never copied, so values are not echoed.
 
 - `apps/web/.env.example` → copy to `apps/web/.env.local` (loaded by Next.js).
 - `apps/worker/.env.example` → copy to `apps/worker/.env` (loaded by `pnpm dev:worker`; `start` reads only the real process environment). Without that file Node prints `.env not found. Continuing without it.` — harmless.

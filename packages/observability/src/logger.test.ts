@@ -210,6 +210,72 @@ describe("createLogger", () => {
     });
   });
 
+  it("keeps bindings and other fields when message and stack are logged as plain fields", () => {
+    const { logger, lines } = captureLogger("info");
+    const failure = new Error("OAuth token exchange failed");
+
+    logger
+      .child({ service: "worker", correlationId: "corr-123" })
+      .error("job.failed", { message: failure.message, stack: failure.stack, jobId: "job-1", nested: { message: "m", stack: "s", digest: "d" } });
+
+    expect(lines[0]?.entry).toMatchObject({
+      service: "worker",
+      correlationId: "corr-123",
+      message: "OAuth token exchange failed",
+      jobId: "job-1",
+      nested: { message: "m", stack: "s", digest: "d" },
+    });
+    expect(lines[0]?.entry).not.toHaveProperty("name");
+  });
+
+  it("keeps both errors of a SuppressedError", () => {
+    const { logger, lines } = captureLogger("info");
+    const SuppressedErrorCtor = (globalThis as { SuppressedError?: new (error: unknown, suppressed: unknown, message: string) => Error })
+      .SuppressedError;
+    const suppressed = SuppressedErrorCtor
+      ? new SuppressedErrorCtor(new Error("redis quit timed out"), new Error("channel send rejected (131047)"), "suppressed")
+      : Object.assign(new Error("suppressed"), {
+          error: new Error("redis quit timed out"),
+          suppressed: new Error("channel send rejected (131047)"),
+        });
+
+    logger.error("job.failed", { error: suppressed });
+
+    expect(lines[0]?.entry).toMatchObject({
+      error: { error: { message: "redis quit timed out" }, suppressed: { message: "channel send rejected (131047)" } },
+    });
+  });
+
+  it("bounds the total work for shared-reference graphs and huge arrays", () => {
+    const { logger, lines } = captureLogger("info");
+    let dag: Record<string, unknown> = { id: "leaf" };
+    for (let level = 0; level < 30; level += 1) {
+      dag = { left: dag, right: dag };
+    }
+
+    logger.info("dag", { dag, big: Array.from({ length: 20_000 }, (_, index) => index) });
+
+    const serialized = JSON.stringify(lines[0]?.entry);
+    expect(serialized).toContain("[Truncated]");
+    expect(serialized.length).toBeLessThan(5_000_000);
+  });
+
+  it("never runs toJSON of a proxied cross-realm error behind a deep class chain", async () => {
+    const { runInNewContext } = await import("node:vm");
+    const secret = "r104-deep-chain-secret";
+    const { logger, lines } = captureLogger("info");
+    const deep = runInNewContext(
+      `let C = Error; for (let i = 0; i < 40; i++) { C = class extends C {}; }
+       const e = new C("deep"); e.config = { authorization: "Bearer " + secret };
+       e.toJSON = function () { return { config: this.config }; }; e;`,
+      { secret },
+    ) as object;
+
+    logger.error("deep", { error: new Proxy(deep, {}) });
+
+    expect(JSON.stringify(lines)).not.toContain(secret);
+  });
+
   it("uses fixed text when the entry cannot be serialized at all", () => {
     const { logger, lines } = captureLogger("info");
     const hostileKeys = new Proxy(
