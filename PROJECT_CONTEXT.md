@@ -1,6 +1,6 @@
 # Project Context — Canonical Memory
 
-> Durable project memory. A new AI session must read this file first, then `docs/handoff/CURRENT_HANDOFF.md`, then `docs/tasks/README.md`, relevant specs/ADRs/issues. Chat history is not the source of truth.
+> Durable project memory. A new AI session must read this file first, then `docs/handoff/CURRENT_HANDOFF.md`, then `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`, `docs/tasks/README.md`, relevant specs/ADRs/issues. Chat history is not the source of truth.
 
 ## Goal
 
@@ -35,13 +35,15 @@ Support both:
 
 A background AI worker does not silently label itself as `HUMAN_AGENT`. See ADR-014.
 
-## WhatsApp after-window product choice — Open
+## WhatsApp after-window product choice — Accepted
 
-Architecture supports both proposed modes without schema redesign:
-- `SERVICE_WINDOW_ONLY`;
-- `TEMPLATE_ASSISTED` using current eligible approved templates.
+ADR-016 is Accepted. Expose all three account/workspace-selectable modes:
 
-ADR-016 is **Proposed**. Product owner still needs to select default behavior and whether eligible outside-window template sends are initially human-approved or can auto-send under explicit policy. Coding agents must not invent this decision.
+- `SERVICE_WINDOW_ONLY` — no outside-window customer delivery until the customer reopens the free-form service window;
+- `TEMPLATE_REVIEW` — system may select/prepare an eligible approved template, but an authorized human approves the send;
+- `TEMPLATE_AUTOPILOT` — deterministic policy may auto-send only current approved templates/use-cases explicitly allowlisted for automation.
+
+No explicit stored choice means conservative `SERVICE_WINDOW_ONLY` behavior until configured. `TEMPLATE_AUTOPILOT` with an empty allowlist sends nothing unattended. Current consent/template/account-health/STOP rules remain authoritative and are revalidated immediately before send.
 
 ## Open-source references
 
@@ -90,13 +92,16 @@ After-window policies are separate from AiMode.
 - ChatGPT: product/architecture lead, research/specs/issues/task contracts/review/durable memory.
 - Claude: primary implementation agent, one issue/task contract at a time, PR only, no self-merge.
 - Codex/Astra: independent reviewer/test author by default, especially concurrency/security/idempotency/adversarial coverage.
+- Human programmer/supervisor can use `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` as the stable launch/monitoring page for Claude.
 
 ## Current execution state
 
 - Phase 0 complete.
-- Phase 1 issues #2–#6 + review #7 are the current coding entry point.
+- Claude is currently working on Phase 1 Issue #2 / P1-01; no open PR was visible when this context was updated.
+- P1-02 / Issue #3 is fully prepared and may start only after #2 is reviewed/accepted/merged into `main`.
+- Phase 1 issues #2–#6 + review #7 remain the current coding path.
 - Phase 2 Instagram/shared-AI architecture, issues #8–#17 and task contracts are fully prepared but coding waits for Phase 1 exit criteria.
-- Phase 4 WhatsApp architecture, current Meta verification, issues #18–#25 and task contracts are prepared. ADR-016 remains the one explicit open product-policy choice for outside-window WhatsApp templates.
+- Phase 4 WhatsApp architecture, current Meta verification, issues #18–#25 and task contracts are prepared; ADR-016 is Accepted with all three outside-window modes.
 
 ## Continuity rule
 
