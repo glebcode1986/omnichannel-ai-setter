@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 0 — Architecture & specification (current)
+## Phase 0 — Architecture & specification
 
 - [x] Establish Instagram + WhatsApp product direction
 - [x] Initial Instagram/WhatsApp open-source research
@@ -17,19 +17,19 @@
 - [x] Finalize monorepo/package layout: pnpm workspace
 - [x] Finalize MVP auth/workspace model: Auth.js + Prisma WorkspaceMember
 - [x] Freeze initial `ChannelAdapter`, normalized event and `SendResult` contracts
-- [ ] Deep code-path extraction map for OpenSetter and wacrm
-- [ ] Create Phase 1 implementation issues with acceptance criteria
+- [x] Build file-level upstream extraction map for OpenSetter and wacrm
+- [x] Create Phase 1 implementation issues with acceptance criteria
 
-## Phase 1 — Skeleton
+**Phase 0 architecture freeze is complete enough for Phase 1 implementation.** New architectural changes require spec/ADR updates rather than silent code divergence.
 
-- [ ] project/monorepo scaffolding
-- [ ] domain types/interfaces
-- [ ] PostgreSQL schema/migrations
-- [ ] queue abstraction
-- [ ] channel adapter interfaces
-- [ ] webhook ingestion framework
-- [ ] Auth.js + workspace authorization baseline
-- [ ] baseline CI/tests
+## Phase 1 — Skeleton (ready to start)
+
+- [ ] #2 project/monorepo scaffolding
+- [ ] #3 domain types/interfaces + channel contracts
+- [ ] #4 PostgreSQL/Prisma + Auth.js/workspace isolation
+- [ ] #5 BullMQ queue/delay primitives
+- [ ] #6 channel-neutral webhook ingestion
+- [ ] #7 independent Codex/Astra regression/architecture review
 
 ## Phase 2 — Instagram + AI core
 
@@ -42,7 +42,7 @@
 
 ## Phase 3 — Delay & human handoff
 
-- [ ] debounce
+- [ ] debounce product behavior
 - [ ] randomized delayed delivery
 - [ ] final revalidation
 - [ ] human takeover
