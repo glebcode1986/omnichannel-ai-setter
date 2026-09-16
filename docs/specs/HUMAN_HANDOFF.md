@@ -1,4 +1,4 @@
-# Human Handoff & Takeover Specification — v0.2
+# Human Handoff & Takeover Specification — v0.3
 
 ## Principle
 
@@ -27,6 +27,20 @@ Persist reason, actor when known, timestamps and optional `paused_until`.
 ## Own-echo rule
 
 A correlated echo from our API send must not trigger takeover. Correlation uses provider/platform message IDs and operation records, never message-text equality alone.
+
+## Native-app takeover during AUTOPILOT
+
+AUTOPILOT may run continuously while the workspace owner has no dashboard/browser session open.
+
+When the connected provider/capability exposes outbound echoes or equivalent evidence of a manual send from the native Instagram/WhatsApp business app:
+
+- an outbound message correlated to our own delivery operation remains AI/system-owned and does not pause automation;
+- an unmatched manual/native-app outbound is treated as human activity and moves that conversation to `HUMAN_ACTIVE`;
+- any pending delayed AI send for that conversation must fail final revalidation after the manual activity is observed;
+- the takeover is conversation-scoped unless product policy explicitly applies a broader pause;
+- the owner does not need to open our dashboard first in order to take over when provider capabilities expose the manual native-app event.
+
+Provider capability differences matter: if a channel/account configuration does not expose reliable native-app outbound echoes, the product must not claim automatic takeover detection from that native app. The unified Inbox remains the reliable manual-control surface in that case.
 
 ## Resume
 
