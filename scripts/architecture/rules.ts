@@ -105,10 +105,10 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
   },
   [pkg("application")]: {
     layer: "core",
-    // `ai`: AI_ORCHESTRATION.md says packages/ai exposes the provider-neutral ReplyModel interface,
-    // which application orchestration (P2-03) consumes. Where the Zod draft schema lives is open:
-    // ADR-010 requires domain code to consume it too, so domain (with ai -> domain) is a candidate.
-    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("ai")],
+    // Declares the ports infrastructure implements (ADR-010 as amended in PR #26: ReplyModel,
+    // EmbeddingProvider and the model-output boundary schema live here; packages/ai implements them).
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core")],
+    pure: true,
     forbiddenThirdParty: CORE_FORBIDDEN_THIRD_PARTY,
   },
   [pkg("db")]: {
@@ -121,8 +121,8 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
   },
   [pkg("ai")]: {
     layer: "infrastructure",
-    // No `application`: application depends on ai's contracts, so the reverse edge would be a cycle.
-    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("observability")],
+    // Implements application-owned AI ports; provider SDKs stay private to this package.
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("application"), pkg("observability")],
   },
   [pkg("channel-instagram")]: {
     layer: "channel-adapter",

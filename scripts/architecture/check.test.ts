@@ -50,16 +50,15 @@ const kinds = (violations: Violation[]) => violations.map((violation) => violati
 const kindsAndFiles = (violations: Violation[]) => violations.map((violation) => [violation.kind, violation.file]);
 
 describe("checkWorkspace: manifest rules", () => {
-  it("accepts the canonical layout with ADR-008/ADR-010-compliant edges", () => {
+  it("accepts the canonical layout with ADR-008/ADR-010-compliant edges (ai implements application ports)", () => {
     const violations = checkWorkspace(
       baselineWorkspace([
         workspacePackage(scoped("channel-core"), { dependencies: { [scoped("domain")]: "workspace:*" } }),
         workspacePackage(scoped("application"), {
-          dependencies: {
-            [scoped("domain")]: "workspace:*",
-            [scoped("channel-core")]: "workspace:*",
-            [scoped("ai")]: "workspace:*",
-          },
+          dependencies: { [scoped("domain")]: "workspace:*", [scoped("channel-core")]: "workspace:*" },
+        }),
+        workspacePackage(scoped("ai"), {
+          dependencies: { [scoped("application")]: "workspace:*", [scoped("observability")]: "workspace:*" },
         }),
         workspacePackage(scoped("db"), {
           dependencies: { [scoped("application")]: "workspace:*", "@prisma/client": "^7.0.0" },
@@ -82,7 +81,7 @@ describe("checkWorkspace: manifest rules", () => {
     ["application", "db"],
     ["application", "queue"],
     ["application", "observability"],
-    ["ai", "application"],
+    ["application", "ai"],
     ["ai", "channel-instagram"],
     ["channel-instagram", "channel-whatsapp"],
     ["channel-whatsapp", "channel-instagram"],
@@ -374,12 +373,14 @@ describe("checkWorkspace: source imports", () => {
           file("src/ids.test.ts", ["node:crypto"]),
         ]),
         workspacePackage(scoped("application"), {}, [file("src/use-case.ts", ["node:crypto"])]),
+        workspacePackage(scoped("queue"), {}, [file("src/scheduler.ts", ["node:crypto"])]),
       ]),
     );
 
     expect(kindsAndFiles(violations)).toEqual([
       ["node-builtin-in-pure-package", "packages/domain/src/ids.ts"],
       ["node-builtin-in-pure-package", "packages/domain/src/clock.ts"],
+      ["node-builtin-in-pure-package", "packages/application/src/use-case.ts"],
     ]);
   });
 

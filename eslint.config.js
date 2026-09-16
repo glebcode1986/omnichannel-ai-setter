@@ -67,7 +67,7 @@ export default defineConfig(
 
   {
     // Pure packages must not reach for Node.js process/runtime globals (see scripts/architecture/rules.ts).
-    files: ["packages/domain/src/**/*.ts", "packages/channel-core/src/**/*.ts"],
+    files: ["packages/domain/src/**/*.ts", "packages/channel-core/src/**/*.ts", "packages/application/src/**/*.ts"],
     ignores: ["**/*.test.ts", "**/*.spec.ts", "**/__tests__/**"],
     rules: {
       "no-restricted-globals": [

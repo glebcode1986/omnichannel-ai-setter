@@ -6,9 +6,9 @@ The model drafts; deterministic application policy decides whether anything is s
 
 ## Provider boundary
 
-`packages/ai` exposes provider-neutral interfaces. Provider SDK types must not escape the package.
+`packages/application` declares the provider-neutral `ReplyModel` port and the Zod boundary schema/DTO for model output (ADR-010 as amended). `packages/ai` implements the port with concrete providers; provider SDK types must not escape `packages/ai`. Application code validates the result against its schema and maps it into pure `packages/domain` values (e.g. `AiDraft`). `application` never imports `ai`; the composition roots (`apps/web`, `apps/worker`) wire the implementation in.
 
-Conceptual interface:
+Conceptual port (owned by `packages/application`):
 
 ```ts
 interface ReplyModel {

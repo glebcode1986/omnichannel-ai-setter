@@ -11,6 +11,8 @@
 ## Objective
 Implement separate `KnowledgeRetriever`, `StyleRetriever` and `EmbeddingProvider` boundaries using PostgreSQL lexical retrieval plus pgvector semantic retrieval with deterministic rank fusion.
 
+Package ownership (ADR-010 as amended): the ports are declared in `packages/application`; `packages/db` implements the retrievers; `packages/ai` implements `EmbeddingProvider`. `db` must not depend on `ai` — application orchestrates embedding generation and passes vectors/query inputs to db retrieval.
+
 ## Core invariant
 Style can influence wording but can never establish or authorize a business fact. Factual knowledge and style examples remain separate in storage, retrieval APIs, provenance and prompt assembly.
 
