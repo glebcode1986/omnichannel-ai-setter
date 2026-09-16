@@ -1,7 +1,7 @@
 # Current Handoff
 
 **Date:** 2026-09-16  
-**Phase:** Phase 0 complete; Phase 1 ready to implement; Phase 2 architecture prepared  
+**Phase:** Phase 0 complete; Phase 1 ready to implement; Phase 2 fully specified and task-contracted  
 **Repository:** `glebcode1986/omnichannel-ai-setter`
 
 ## Completed
@@ -22,7 +22,9 @@
 - ADRs 010–014 added for provider-neutral AI, hybrid retrieval, atomic/ambiguous delivery, echo-based takeover and configurable Instagram after-window policy.
 - Product owner explicitly chose two Instagram after-window modes: `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED`.
 - Phase 2 backlog open as #8–#16 with #17 independent Codex/Astra review.
-- Complete Phase 1 executable task-contract set created under `docs/tasks/` for Claude (#2–#6) and Codex/Astra (#7), with `docs/tasks/README.md` as the execution index.
+- Complete Phase 1 executable task-contract set exists under `docs/tasks/` for Claude (#2–#6) and Codex/Astra (#7).
+- Complete Phase 2 executable task-contract set exists under `docs/tasks/` for Claude (#8–#16) and Codex/Astra (#17).
+- `docs/tasks/README.md` is the canonical execution index across Phase 1 and Phase 2.
 
 ## Important Instagram after-window rule
 
@@ -37,33 +39,33 @@ The current architecture does **not** authorize a background AI worker to silent
 
 ### Phase 1 — start here
 
-1. #2 — scaffold pnpm workspace/tooling (Claude). Contract: `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md`.
-2. #3 — domain + channel contracts (Claude). Contract: `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`.
-3. #4 — Prisma/Auth.js/workspace isolation (Claude). Contract: `docs/tasks/P1-03_CLAUDE_TASK_CONTRACT.md`.
-4. #5 — BullMQ durable queues/delay primitives (Claude). Contract: `docs/tasks/P1-04_CLAUDE_TASK_CONTRACT.md`. #4 and #5 may proceed in parallel only after #3/shared IDs stabilize and on separate modules/branches.
-5. #6 — webhook ingestion after #3/#4/#5 (Claude). Contract: `docs/tasks/P1-05_CLAUDE_TASK_CONTRACT.md`.
+1. #2 — scaffold pnpm workspace/tooling. Contract: `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md`.
+2. #3 — domain + channel contracts. Contract: `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`.
+3. #4 — Prisma/Auth.js/workspace isolation. Contract: `docs/tasks/P1-03_CLAUDE_TASK_CONTRACT.md`.
+4. #5 — BullMQ durable queues/delay primitives. Contract: `docs/tasks/P1-04_CLAUDE_TASK_CONTRACT.md`. #4 and #5 may proceed in parallel only after #3/shared IDs stabilize and on separate modules/branches.
+5. #6 — webhook ingestion after #3/#4/#5. Contract: `docs/tasks/P1-05_CLAUDE_TASK_CONTRACT.md`.
 6. #7 — independent Codex/Astra review throughout Phase 1. Contract: `docs/tasks/R1_CODEX_ASTRA_REVIEW_CONTRACT.md`.
 
-### Phase 2 — prepared but blocked until Phase 1 exit
+### Phase 2 — fully prepared but blocked until Phase 1 exit
 
-- #8 Instagram transport adapter/fixtures.
-- #9 Instagram Login onboarding/token lifecycle.
-- #10 provider-neutral AI draft engine.
-- #11 factual/style retrieval.
-- #12 deterministic policy engine.
-- #13 delivery coordinator/final revalidation.
-- #14 human handoff/review state machine.
-- #15 evaluation harness/golden conversations.
-- #16 end-to-end Instagram AI vertical slice.
-- #17 independent Codex/Astra Phase 2 review.
+1. #8 P2-01 Instagram transport adapter. Contract: `docs/tasks/P2-01_CLAUDE_TASK_CONTRACT.md`.
+2. #9 P2-02 Instagram Login onboarding. Contract: `docs/tasks/P2-02_CLAUDE_TASK_CONTRACT.md`.
+3. #10 P2-03 provider-neutral AI draft engine. Contract: `docs/tasks/P2-03_CLAUDE_TASK_CONTRACT.md`.
+4. #11 P2-04 factual/style retrieval. Contract: `docs/tasks/P2-04_CLAUDE_TASK_CONTRACT.md`.
+5. #12 P2-05 deterministic policy engine. Contract: `docs/tasks/P2-05_CLAUDE_TASK_CONTRACT.md`.
+6. #13 P2-06 delivery coordinator/final revalidation. Contract: `docs/tasks/P2-06_CLAUDE_TASK_CONTRACT.md`.
+7. #14 P2-07 human handoff/review state machine. Contract: `docs/tasks/P2-07_CLAUDE_TASK_CONTRACT.md`.
+8. #15 P2-08 evaluation harness/golden conversations. Contract: `docs/tasks/P2-08_CLAUDE_TASK_CONTRACT.md`.
+9. #16 P2-09 end-to-end Instagram AI vertical slice. Contract: `docs/tasks/P2-09_CLAUDE_TASK_CONTRACT.md`.
+10. #17 independent Codex/Astra Phase 2 review. Contract: `docs/tasks/R2_CODEX_ASTRA_REVIEW_CONTRACT.md`.
 
-See `docs/specs/PHASE2_IMPLEMENTATION_PLAN.md`.
+See `docs/specs/PHASE2_IMPLEMENTATION_PLAN.md` and `docs/tasks/README.md`.
 
 ## Coding rule for next session
 
-Do not restart architecture from chat memory. Read `PROJECT_CONTEXT.md`, this file, `docs/tasks/README.md`, ADRs/specs, `UPSTREAM_EXTRACTION_MAP.md`, Phase 1/Phase 2 implementation plans and open GitHub issues.
+Do not restart architecture from chat memory. Read `PROJECT_CONTEXT.md`, this file, `docs/tasks/README.md`, ADRs/specs, `UPSTREAM_EXTRACTION_MAP.md`, Phase 1/Phase 2 implementation plans and the relevant open GitHub issue.
 
-Claude still starts with Issue #2. Do not jump to #8 merely because Phase 2 is documented; #8–#16 remain blocked by Phase 1 exit criteria.
+Claude still starts with Issue #2. Do not jump to #8 merely because Phase 2 is ready; #8–#16 remain blocked by Phase 1 exit criteria.
 
 Codex/Astra is a reviewer/test author unless explicitly assigned a bounded independent module.
 
