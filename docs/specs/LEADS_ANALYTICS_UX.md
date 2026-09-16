@@ -4,6 +4,8 @@
 
 The lead system is conversation-linked CRM-lite, not a separate heavyweight CRM.
 
+A conversation exists for every customer interaction. A `Lead` is created only once there is a real commercial/goal-oriented signal or when a human explicitly creates one; a greeting alone does not have to create a full lead record.
+
 ### Default pipeline
 Suggested initial stages:
 - NEW
@@ -14,7 +16,20 @@ Suggested initial stages:
 - WON
 - LOST
 
-Workspace may rename/reorder/add stages within product limits. Stable internal IDs remain separate from display labels.
+Business Profile configuration may rename/reorder/add stages within product limits. Stable internal IDs remain separate from display labels.
+
+Pipeline/qualification policy is scoped to the Business Profile, not only to the whole workspace, because different businesses in one workspace may have different sales processes and qualification criteria.
+
+### Qualification model
+`QUALIFIED` is business-defined rather than hard-coded globally.
+
+A Business Profile may define:
+- what qualifies a lead;
+- required/optional qualification fields;
+- custom fields such as budget, city, property size, car model, wedding date, company size, preferred service, etc.;
+- whether particular stage transitions may be automated or require human confirmation.
+
+AI should capture qualification information naturally from the conversation and must not ask again for information already supplied in the current/relevant history.
 
 ### Lead record
 Show:
@@ -26,9 +41,17 @@ Show:
 - last conversation/channel;
 - next action/date where used;
 - tags/notes;
-- stage history and source actor (`AI_SUGGESTED`, `HUMAN_CONFIRMED`, `HUMAN_SET`).
+- concise conversation/lead summary;
+- stage history and source actor (`AI_SUGGESTED`, `AI_SET`, `HUMAN_CONFIRMED`, `HUMAN_SET`).
 
-AI stage suggestions are advisory until policy permits an automatic stage transition. High-impact stages such as WON/LOST should remain auditable and reversible.
+AI stage suggestions are advisory unless Business Profile policy permits an automatic stage transition. High-impact stages such as WON/LOST must remain auditable and reversible; a business may require human confirmation for them.
+
+When a lead becomes QUALIFIED, the notification system may notify configured owners/managers while AUTOPILOT continues handling the conversation unless review/takeover policy says otherwise.
+
+### Contact identity / merge safety
+The same real customer may contact the business through Instagram and WhatsApp. The product may support merging channel identities into one Contact/Lead when there is reliable evidence or an explicit human merge.
+
+Never auto-merge merely because display names are similar. Ambiguous identities remain separate until a stronger identifier or human decision exists. Merges must be reversible/auditable where practical.
 
 ### Views
 - kanban pipeline;
@@ -70,6 +93,7 @@ Separate searchable audit log for material actions:
 - reviewed/edited/rejected AI drafts;
 - template-autopilot policy/allowlist changes;
 - ambiguous-send manual resolution;
-- member/role changes.
+- member/role changes;
+- lead stage/qualification policy changes and contact identity merges.
 
 Audit records are append-oriented and workspace scoped.
