@@ -18,9 +18,7 @@
 - [x] Finalize MVP auth/workspace model: Auth.js + Prisma WorkspaceMember
 - [x] Freeze initial `ChannelAdapter`, normalized event and `SendResult` contracts
 - [x] Build file-level upstream extraction map for OpenSetter and wacrm
-- [x] Create Phase 1 implementation issues with acceptance criteria
-
-**Phase 0 architecture freeze is complete enough for Phase 1 implementation.** New architectural changes require spec/ADR updates rather than silent code divergence.
+- [x] Create Phase 1 implementation issues/contracts
 
 ## Phase 1 — Skeleton (implementation entry point)
 
@@ -31,21 +29,10 @@
 - [ ] #6 channel-neutral webhook ingestion
 - [ ] #7 independent Codex/Astra regression/architecture review
 
-Phase 2 coding remains blocked until Phase 1 exit criteria are satisfied.
+## Phase 2 — Instagram + AI core (fully specified/task-contracted)
 
-## Phase 2 — Instagram + AI core (architecture ready)
-
-Design/specification complete:
-- [x] Instagram transport/onboarding architecture
-- [x] provider-neutral AI contract
-- [x] separate factual/style retrieval design
-- [x] deterministic policy engine design
-- [x] delivery coordinator + ambiguity design
-- [x] human handoff/review state design
+- [x] architecture/specs/ADRs/task contracts prepared
 - [x] configurable Instagram after-window policy: `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED`
-- [x] Phase 2 implementation backlog created
-
-Implementation backlog:
 - [ ] #8 Instagram transport adapter + fixtures
 - [ ] #9 Instagram Login onboarding/token lifecycle
 - [ ] #10 provider-neutral AI draft engine
@@ -59,32 +46,46 @@ Implementation backlog:
 
 ## Phase 3 — Productized delay & review UX
 
-Core timing/handoff logic is specified in Phase 2, then productized here:
 - [ ] human-delay settings UI (`Fast / Natural / Custom`)
 - [ ] debounce/delay observability and cancellation UI
 - [ ] unified review queue
 - [ ] Human Agent review state/expiry UI
 - [ ] manual claim/resume controls
 
-## Phase 4 — WhatsApp Cloud API
+## Phase 4 — WhatsApp Cloud API (architecture/backlog/task contracts prepared)
 
-- [ ] WABA onboarding/config
-- [ ] webhook normalization
-- [ ] free-form sends
-- [ ] templates/out-of-window handling
-- [ ] status/read events
-- [ ] typing/read UX
-- [ ] interactive/media support
-- [ ] voice-note transcription path
+Architecture:
+- [x] official Cloud API transport specification
+- [x] Embedded Signup onboarding specification + ADR-015
+- [x] 24-hour service-window / template-only platform policy captured
+- [x] voice/media processing architecture
+- [x] read/typing presence architecture
+- [x] coexistence/native-human takeover architecture (capability-gated)
+- [x] current Meta verification recorded
+- [x] Phase 4 issues #18–#25 created
+- [x] Phase 4 Claude/Codex task contracts created
+- [ ] **Product-owner decision:** accept ADR-016 choice/default for `SERVICE_WINDOW_ONLY` vs `TEMPLATE_ASSISTED`, including whether template-assisted sends require human approval or may auto-send under explicit policy
+
+Implementation:
+- [ ] #18 WhatsApp Cloud API transport adapter
+- [ ] #19 Embedded Signup/account lifecycle
+- [ ] #20 template catalog + outside-window policy
+- [ ] #21 media + voice-note processing/transcription
+- [ ] #22 read/typing presence timing
+- [ ] #23 coexistence/native-human takeover
+- [ ] #24 WhatsApp end-to-end AI vertical slice
+- [ ] #25 independent Codex/Astra WhatsApp review
 
 ## Phase 5 — Unified SaaS UX
 
-- [ ] unified inbox
+- [ ] unified Instagram + WhatsApp inbox
 - [ ] channel/account settings
 - [ ] knowledge/style configuration
 - [ ] lead stages
 - [ ] analytics/audit UI
 - [ ] cross-channel contact linking only when explicitly verified
+- [ ] WhatsApp template/catalog/review UI
+- [ ] account health/onboarding status UI
 
 ## Phase 6 — Hardening
 
