@@ -1,41 +1,52 @@
-# ADR-016: Configurable WhatsApp after-window policy options
+# ADR-016: Configurable WhatsApp after-window policy
 
-**Status:** Proposed — product-owner decision still open
+**Status:** Accepted
 
 ## Platform fact
 
-The current WhatsApp customer-service window allows supported free-form customer-care replies after a customer message for the platform-defined window (currently 24 hours). Outside that window, arbitrary free-form AI continuation is not the supported route; approved message templates are the relevant provider mechanism.
+The current WhatsApp customer-service window allows supported free-form customer-care replies after a customer message for the platform-defined window (currently 24 hours). Outside that window, arbitrary free-form AI continuation is not the supported route; approved message templates are the relevant provider mechanism. Implementation must re-verify current Meta timing, template, consent and category rules before shipping.
 
-## Proposed product options
+## Product decision
 
-Design `AutomationPolicy` so the product can support both of the following without schema redesign:
+Ship three account/workspace-selectable outside-window modes. After-window policy remains separate from `AiMode` (`OFF | DRAFT | AUTOPILOT`).
 
 1. `SERVICE_WINDOW_ONLY`
-   - when free-form service window closes, conversational AI delivery stops;
-   - AI may keep a draft/internal recommendation but does not send an outside-window template automatically;
-   - customer messaging again reopens the normal service flow.
+   - free-form automation stops when the customer-service window closes;
+   - AI may keep an internal draft/recommendation but does not send an outside-window template;
+   - a new customer message reopens normal free-form service flow.
 
-2. `TEMPLATE_ASSISTED`
-   - when window is template-only, the system may identify an eligible approved template and prepare validated variable values;
-   - a separate configuration determines whether an eligible template requires human approval or may be auto-scheduled under explicit business policy/consent;
-   - the LLM cannot invent an unapproved template or rewrite approved provider text arbitrarily.
+2. `TEMPLATE_REVIEW`
+   - when the window is template-only, the system may identify an eligible current approved template and prepare validated variable values;
+   - a real authorized workspace user must review/approve the selected template and variables before send;
+   - final send revalidates template status, language, variables, consent/policy and account health.
 
-## Not decided yet
+3. `TEMPLATE_AUTOPILOT`
+   - when the window is template-only, deterministic policy may select/schedule an eligible current approved template without per-message human approval;
+   - only templates/use-cases explicitly enabled for automation by account/workspace configuration are eligible;
+   - the LLM may classify/rank an eligible approved template but cannot invent a template, rewrite approved provider text arbitrarily, or override policy/consent;
+   - final pre-send revalidation is mandatory and STOP/unsubscribe/account-health restrictions always win.
 
-The product owner has not yet chosen:
+## Configuration rule
 
-- whether both modes ship in MVP;
-- default mode;
-- whether `TEMPLATE_ASSISTED` can auto-send or must initially be human-approved;
-- which template categories/use cases should ever be eligible for automation.
+The product exposes all three modes. Do not silently infer a workspace's preferred mode. Onboarding/settings must make the mode an explicit account/workspace choice before outside-window automation is enabled. Existing/migrated accounts without a stored choice behave conservatively as `SERVICE_WINDOW_ONLY` until explicitly configured.
 
-Until decided, implementation must not silently default to aggressive outside-window template automation.
+`TEMPLATE_AUTOPILOT` also requires an explicit automation allowlist/policy for eligible templates or template use-cases. An empty allowlist means no unattended outside-window template send.
 
-## Required invariants regardless of choice
+## Required invariants
 
-- current template status/language/category is checked;
+- only current provider-approved/eligible templates may send;
+- current template status, language/category/components and provider policy are checked;
 - provider/user opt-in and current WhatsApp policy remain authoritative;
 - deterministic policy, not model preference, decides eligibility;
-- template parameters are validated against the approved template shape;
-- unsubscribe/stop signals and account-health restrictions override automation;
-- audit trail records why/which template was selected and who/what authorized send.
+- template parameters are runtime-validated against the approved template shape;
+- unsubscribe/STOP signals, legal/compliance restrictions and account-health restrictions override automation;
+- every outside-window send records mode, template/version/language, variables, selection reason and authorizing actor/system policy;
+- provider ambiguity is quarantined and never blindly retried.
+
+## Consequences
+
+- `AutomationPolicy` gains a WhatsApp after-window mode: `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT`;
+- template automation allowlist/config is stored separately from the generic AI mode;
+- shared policy engine must return review vs schedule distinctly;
+- dashboard/onboarding must expose the three choices clearly;
+- Issue #20 may implement all three behaviors and is no longer blocked on the product-owner decision.
