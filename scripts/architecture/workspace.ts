@@ -216,7 +216,94 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
   };
   collectLoaders(sourceFile);
 
+  // Loader functions may only be invoked directly (`load(x)`, `load.resolve(x)`). Any other use —
+  // aliasing, storing in an object, passing as an argument, extracting `.resolve`, `.call`/`.apply`/
+  // `.bind` — cannot be followed without an evaluator, so it is reported instead (fail closed).
+  // Matching is by name within the file; reusing a loader's name for something else is reported too.
+  const loaderFunctionNames = new Set(["require", ...loaderNames, ...createRequireNames]);
+  const outermostWrapper = (node: ts.Node): ts.Node => {
+    let current = node;
+    while (
+      ts.isParenthesizedExpression(current.parent) ||
+      ts.isAsExpression(current.parent) ||
+      ts.isNonNullExpression(current.parent) ||
+      ts.isSatisfiesExpression(current.parent)
+    ) {
+      current = current.parent;
+    }
+    return current;
+  };
+  const isDirectCallee = (node: ts.Node): boolean => {
+    const wrapped = outermostWrapper(node);
+    return ts.isCallExpression(wrapped.parent) && wrapped.parent.expression === wrapped;
+  };
+  const isDeclarationName = (identifier: ts.Identifier): boolean => {
+    const parent = identifier.parent;
+    return (
+      ((ts.isVariableDeclaration(parent) ||
+        ts.isParameter(parent) ||
+        ts.isFunctionDeclaration(parent) ||
+        ts.isFunctionExpression(parent) ||
+        ts.isClassDeclaration(parent) ||
+        ts.isBindingElement(parent) ||
+        ts.isImportSpecifier(parent) ||
+        ts.isImportClause(parent) ||
+        ts.isNamespaceImport(parent) ||
+        ts.isImportEqualsDeclaration(parent) ||
+        ts.isPropertyAssignment(parent) ||
+        ts.isPropertyDeclaration(parent) ||
+        ts.isPropertySignature(parent) ||
+        ts.isMethodDeclaration(parent) ||
+        ts.isMethodSignature(parent) ||
+        ts.isInterfaceDeclaration(parent) ||
+        ts.isTypeAliasDeclaration(parent)) &&
+        parent.name === identifier) ||
+      (ts.isPropertyAccessExpression(parent) && parent.name === identifier) ||
+      (ts.isImportSpecifier(parent) && parent.propertyName === identifier) ||
+      // `export { local as exported }`: only `exported` is a new name; `export { x } from "m"` references no local.
+      (ts.isExportSpecifier(parent) &&
+        ((parent.propertyName !== undefined && parent.name === identifier) || parent.parent.parent.moduleSpecifier !== undefined)) ||
+      ts.isQualifiedName(parent) ||
+      ts.isTypeQueryNode(parent) ||
+      ts.isTypeReferenceNode(parent)
+    );
+  };
+  const reportEscape = (node: ts.Node, what: string) => {
+    const context = outermostWrapper(node).parent;
+    unresolvedModuleLoads.push(`${what} used as a value: ${(context ?? node).getText(sourceFile).slice(0, 100)}`);
+  };
+  const checkLoaderReference = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && loaderFunctionNames.has(node.text) && !isDeclarationName(node)) {
+      const parent = outermostWrapper(node).parent;
+      if (ts.isTypeOfExpression(parent)) {
+        return;
+      }
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === outermostWrapper(node)) {
+        const member = parent.name.text;
+        if (["call", "apply", "bind"].includes(member) || (member === "resolve" && !isDirectCallee(parent))) {
+          reportEscape(parent, `${node.text}.${member}`);
+        }
+        return;
+      }
+      if (!isDirectCallee(node)) {
+        reportEscape(node, node.text);
+      }
+      return;
+    }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ((ts.isIdentifier(node.expression) &&
+        ((node.expression.text === "module" && node.name.text === "require") ||
+          (node.expression.text === "process" && node.name.text === "getBuiltinModule"))) ||
+        node.name.text === "createRequire") &&
+      !isDirectCallee(node)
+    ) {
+      reportEscape(node, node.getText(sourceFile));
+    }
+  };
+
   const visit = (node: ts.Node): void => {
+    checkLoaderReference(node);
     if (isCreateRequireCall(node) && !trackedLoaderCalls.has(node)) {
       unresolvedModuleLoads.push(node.getText(sourceFile).slice(0, 120));
     }

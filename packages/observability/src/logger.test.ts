@@ -210,6 +210,43 @@ describe("createLogger", () => {
     });
   });
 
+  it("passes the property key to a non-error toJSON, like JSON.stringify (R1-04 follow-up)", () => {
+    const secret = "R1-SYNTHETIC-keyed-redaction";
+    const seenKeys: string[] = [];
+    const redactor = {
+      toJSON(key: string) {
+        seenKeys.push(key);
+        return key === "credential" || key === "0" ? "[REDACTED]" : secret;
+      },
+    };
+    const fields = {
+      credential: redactor,
+      nested: { credential: redactor },
+      list: [redactor],
+    };
+    const { logger, lines } = captureLogger("info");
+
+    logger.child({ credential: redactor }).info("test", fields);
+    const loggedKeys = [...seenKeys];
+
+    expect(loggedKeys).toEqual(["credential", "credential", "credential", "0"]);
+    expect(JSON.stringify(lines)).not.toContain(secret);
+    expect(lines[0]?.entry).toMatchObject({ credential: "[REDACTED]", nested: { credential: "[REDACTED]" }, list: ["[REDACTED]"] });
+    expect(JSON.stringify({ credential: redactor })).toBe('{"credential":"[REDACTED]"}');
+  });
+
+  it("does not ask a toJSON result for toJSON again, matching JSON.stringify", () => {
+    const { logger, lines } = captureLogger("info");
+    const inner = { toJSON: () => "inner-called" };
+    const outer = { toJSON: () => ({ inner: "plain", wrapped: inner }) };
+    const direct = { toJSON: () => inner };
+
+    logger.info("nested", { outer, direct });
+
+    expect(JSON.parse(JSON.stringify({ outer, direct }))).toEqual({ outer: { inner: "plain", wrapped: "inner-called" }, direct: {} });
+    expect(lines[0]?.entry).toMatchObject({ outer: { inner: "plain", wrapped: "inner-called" }, direct: {} });
+  });
+
   it("keeps bindings and other fields when message and stack are logged as plain fields", () => {
     const { logger, lines } = captureLogger("info");
     const failure = new Error("OAuth token exchange failed");

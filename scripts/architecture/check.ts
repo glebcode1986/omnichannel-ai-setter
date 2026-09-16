@@ -626,8 +626,9 @@ function checkSourceImports(
     for (const call of sourceFile.unresolvedModuleLoads ?? []) {
       report(
         "unresolvable-module-load",
-        `${call} loads a module whose target is not a compile-time constant, so architecture rules cannot be ` +
-          "checked; use a static import or a string-literal specifier.",
+        `${call} — a module load that cannot be followed statically (computed target or a loader used other ` +
+          "than by direct call), so architecture rules cannot be checked; use a static import or call the loader " +
+          "directly with a string-literal specifier.",
       );
     }
 

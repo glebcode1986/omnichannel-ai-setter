@@ -131,7 +131,7 @@ function buildEntry(
       // on its own: the entry itself is never classified (a `message` + `stack` pair is just fields).
       if (!CORE_FIELDS.has(key) && key !== "toJSON") {
         const read = readProperty(source, key);
-        const converted = read.ok ? toJsonSafe(read.value, context, 1) : UNSERIALIZABLE;
+        const converted = read.ok ? toJsonSafe(read.value, context, 1, key) : UNSERIALIZABLE;
         if (converted !== undefined) {
           entry[key] = converted;
         }
@@ -237,15 +237,15 @@ function serializeError(error: Error, context: SerializationContext, depth: numb
     if (!read.ok) {
       serialized[field] = UNSERIALIZABLE;
     } else if (read.value !== undefined) {
-      serialized[field] = isError(read.value) ? toJsonSafe(read.value, context, depth + 1) : describeNonError(read.value);
+      serialized[field] = isError(read.value) ? toJsonSafe(read.value, context, depth + 1, field) : describeNonError(read.value);
     }
   }
   const errors = readProperty(error, "errors");
   if (!errors.ok) {
     serialized.errors = UNSERIALIZABLE;
   } else if (Array.isArray(errors.value)) {
-    serialized.errors = copyArray(errors.value, (entry) =>
-      isError(entry) ? toJsonSafe(entry, context, depth + 1) : describeNonError(entry),
+    serialized.errors = copyArray(errors.value, (entry, index) =>
+      isError(entry) ? toJsonSafe(entry, context, depth + 1, index) : describeNonError(entry),
     );
   }
   return serialized;
@@ -255,7 +255,7 @@ function serializeError(error: Error, context: SerializationContext, depth: numb
  * Index loop into a fresh array: `Array.prototype.map` follows `Symbol.species`, which lets a caller
  * substitute an arbitrary object (even an error with a toJSON) for the sanitized copy.
  */
-function copyArray(source: readonly unknown[], convert: (entry: unknown) => unknown): unknown[] {
+function copyArray(source: readonly unknown[], convert: (entry: unknown, index: string) => unknown): unknown[] {
   const lengthRead = readProperty(source, "length");
   const length =
     lengthRead.ok && typeof lengthRead.value === "number" && Number.isFinite(lengthRead.value)
@@ -264,7 +264,7 @@ function copyArray(source: readonly unknown[], convert: (entry: unknown) => unkn
   const result: unknown[] = [];
   for (let index = 0; index < length; index += 1) {
     const entry = readProperty(source, index);
-    result.push(entry.ok ? (convert(entry.value) ?? null) : UNSERIALIZABLE);
+    result.push(entry.ok ? (convert(entry.value, String(index)) ?? null) : UNSERIALIZABLE);
   }
   if (lengthRead.ok && typeof lengthRead.value === "number" && lengthRead.value > MAX_ARRAY_ITEMS) {
     result.push("[Truncated]");
@@ -277,9 +277,16 @@ function copyArray(source: readonly unknown[], convert: (entry: unknown) => unkn
  * neither throw nor run code on errors: bigints become strings, cycles become "[Circular]", errors
  * go through the allowlist, throwing getters/toJSON become "[unserializable]", and depth, array size
  * and the total number of objects per entry are bounded. Non-error `toJSON` (Date, redacting
- * wrappers, …) is honoured, as JSON.stringify would.
+ * wrappers, …) is honoured as JSON.stringify would: called once with the containing property name
+ * (or array index string) as its argument, and its result is not asked for toJSON again.
  */
-function toJsonSafe(value: unknown, context: SerializationContext, depth: number): unknown {
+function toJsonSafe(
+  value: unknown,
+  context: SerializationContext,
+  depth: number,
+  key: string,
+  invokeToJSON = true,
+): unknown {
   switch (typeof value) {
     case "string":
     case "boolean":
@@ -315,26 +322,29 @@ function toJsonSafe(value: unknown, context: SerializationContext, depth: number
       return UNSERIALIZABLE;
     }
     // Same order as JSON.stringify: a non-error value's own toJSON (arrays included) wins.
-    const toJSON = readProperty(value, "toJSON");
-    if (!toJSON.ok) {
-      return UNSERIALIZABLE;
-    }
-    if (typeof toJSON.value === "function") {
-      try {
-        return toJsonSafe((toJSON.value as () => unknown).call(value), context, depth + 1);
-      } catch {
+    if (invokeToJSON) {
+      const toJSON = readProperty(value, "toJSON");
+      if (!toJSON.ok) {
         return UNSERIALIZABLE;
+      }
+      if (typeof toJSON.value === "function") {
+        try {
+          const replacement = (toJSON.value as (key: string) => unknown).call(value, key);
+          return toJsonSafe(replacement, context, depth + 1, key, false);
+        } catch {
+          return UNSERIALIZABLE;
+        }
       }
     }
     if (Array.isArray(value)) {
-      return copyArray(value, (entry) => toJsonSafe(entry, context, depth + 1));
+      return copyArray(value, (entry, index) => toJsonSafe(entry, context, depth + 1, index));
     }
     const result = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value)) {
-      const read = readProperty(value, key);
-      const converted = read.ok ? toJsonSafe(read.value, context, depth + 1) : UNSERIALIZABLE;
+    for (const property of Object.keys(value)) {
+      const read = readProperty(value, property);
+      const converted = read.ok ? toJsonSafe(read.value, context, depth + 1, property) : UNSERIALIZABLE;
       if (converted !== undefined) {
-        result[key] = converted;
+        result[property] = converted;
       }
     }
     return result;

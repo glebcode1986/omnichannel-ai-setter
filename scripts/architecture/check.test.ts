@@ -554,6 +554,71 @@ describe("checkWorkspace: source imports", () => {
     });
   });
 
+  it("reports loaders that escape direct invocation: aliases, objects, arguments, extracted members (R1-01 follow-up)", () => {
+    const source = `
+      import { createRequire } from "node:module";
+      import * as nodeModule from "node:module";
+      const load = createRequire(import.meta.url);
+      const forwarded = load;
+      forwarded("../../channel-whatsapp/src/index.ts");
+      const holder = { load };
+      const named = { loader: load };
+      register(load);
+      const resolveModule = load.resolve;
+      load.call(undefined, "zod");
+      const plainRequire = require;
+      const factory = createRequire;
+      const nsFactory = nodeModule.createRequire;
+      const moduleRequire = module.require;
+      const builtin = process.getBuiltinModule;
+      export const ok = [load("zod"), load.resolve("zod"), typeof load, require("zod"), require.resolve("zod")];
+      function register(fn: unknown): unknown { return fn; }
+      const { resolve } = load;
+      export { load, load as exportedLoader };
+      export { createRequire as reexported } from "node:module";
+    `;
+
+    const { imports, unresolvedModuleLoads } = extractModuleReferences(source);
+
+    expect(imports).toEqual(expect.arrayContaining(["zod"]));
+    expect(unresolvedModuleLoads).toEqual([
+      "load used as a value: forwarded = load",
+      "load used as a value: load",
+      "load used as a value: loader: load",
+      "load used as a value: register(load)",
+      "load.resolve used as a value: resolveModule = load.resolve",
+      'load.call used as a value: load.call(undefined, "zod")',
+      "require used as a value: plainRequire = require",
+      "createRequire used as a value: factory = createRequire",
+      "nodeModule.createRequire used as a value: nsFactory = nodeModule.createRequire",
+      "module.require used as a value: moduleRequire = module.require",
+      "process.getBuiltinModule used as a value: builtin = process.getBuiltinModule",
+      "load used as a value: { resolve } = load",
+      "load used as a value: load",
+      "load used as a value: load as exportedLoader",
+    ]);
+  });
+
+  it("rejects the reviewer's forwarded-loader fixture through the real workspace (R1-01 follow-up)", async () => {
+    const rootDir = path.resolve(import.meta.dirname, "../..");
+    const source = `
+      import { createRequire } from "node:module";
+      const load = createRequire(import.meta.url);
+      const forwarded = load;
+      forwarded("../../channel-whatsapp/src/index.ts");
+    `;
+    const { packages, root } = await loadWorkspace(rootDir);
+    const modified = packages.map((candidate) =>
+      candidate.name === scoped("ai")
+        ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-alias-review.ts", ...extractModuleReferences(source) }] }
+        : candidate,
+    );
+
+    expect(kindsAndFiles(checkWorkspace(modified, { root }))).toEqual([
+      ["unresolvable-module-load", "packages/ai/src/r1-alias-review.ts"],
+    ]);
+  });
+
   it("fails closed on computed module loads in any package file (R1-01)", () => {
     const refs = extractModuleReferences('export async function probe(): Promise<void> { await import("node:" + "fs"); }');
     const computed = extractModuleReferences("export const load = (target: string) => import(target);");
