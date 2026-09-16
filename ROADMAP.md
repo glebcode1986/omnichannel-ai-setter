@@ -22,12 +22,13 @@
 
 ## Phase 1 — Skeleton (implementation entry point)
 
-- [ ] #2 project/monorepo scaffolding
+- [ ] #2 project/monorepo scaffolding — PR #26 under architecture review
 - [ ] #3 domain types/interfaces + channel contracts
 - [ ] #4 PostgreSQL/Prisma + Auth.js/workspace isolation
 - [ ] #5 BullMQ queue/delay primitives
 - [ ] #6 channel-neutral webhook ingestion
 - [ ] #7 independent Codex/Astra regression/architecture review
+- [ ] #37 GitHub Actions `pnpm verify` CI gate (early follow-up after #2)
 
 ## Phase 2 — Instagram + AI core (fully specified/task-contracted)
 
@@ -46,7 +47,7 @@
 
 ## Phase 3 — Productized delay & review UX
 
-Phase 3 concerns are now represented as reusable backend behavior in Phase 2 and concrete product surfaces in Phase 5. Keep this phase as a tracking bridge rather than a second implementation of the same logic.
+Phase 3 concerns are represented as reusable backend behavior in Phase 2 and concrete product surfaces in Phase 5. Keep this as a tracking bridge rather than re-implementing the same logic.
 
 - [x] timing/review UX requirements incorporated into Phase 5 specs
 - [x] manual claim/resume and Human Agent review state incorporated into P5-03/P5-04
@@ -63,7 +64,7 @@ Architecture:
 - [x] current Meta verification recorded
 - [x] Phase 4 issues #18–#25 created
 - [x] Phase 4 Claude/Codex task contracts created
-- [x] ADR-016 accepted with three modes: `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT`
+- [x] ADR-016 accepted with `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT`
 
 Implementation:
 - [ ] #18 WhatsApp Cloud API transport adapter
@@ -100,14 +101,45 @@ Implementation:
 - [ ] #35 SaaS UX E2E/responsive/accessibility pass
 - [ ] #36 independent Codex/Astra Phase 5 review
 
-Phase 5 may begin incrementally as its backend dependencies stabilize; it does not need to wait for every WhatsApp feature. Channel capability differences should render conditionally inside one product rather than fork the product into separate Instagram/WhatsApp dashboards.
+Phase 5 may begin incrementally as backend dependencies stabilize; it does not need to wait for every WhatsApp feature.
 
-## Phase 6 — Hardening
+## Phase 6 — Commercial SaaS / billing / usage (architecture/backlog/task contracts prepared)
+
+Architecture:
+- [x] provider-neutral billing/entitlement boundary — ADR-017
+- [x] logical-operation usage ledger — ADR-018
+- [x] usage/quota reservation specification
+- [x] Starter/Growth/Scale packaging model
+- [x] downgrade/cancel/trial/grace invariants
+- [x] Phase 6 issues #38–#45 created
+- [x] Phase 6 Claude/Codex task contracts created
+
+Implementation:
+- [ ] #38 plan/subscription/entitlement domain + persistence
+- [ ] #39 idempotent usage ledger + quota reservation
+- [ ] #40 entitlement enforcement across AI/channels/delayed delivery
+- [ ] #41 billing provider adapter + verified webhook lifecycle — blocked until provider/jurisdiction decision
+- [ ] #42 billing/plan/usage settings UI
+- [ ] #43 versioned Starter/Growth/Scale plan catalog — production values blocked on owner pricing decisions
+- [ ] #44 commercial billing/quota E2E slice
+- [ ] #45 independent Codex/Astra billing/entitlement review
+
+Open owner decisions before production billing:
+- billing provider + merchant/legal/payment jurisdiction strategy;
+- monthly/annual prices + currencies;
+- quotas per plan;
+- trial duration/card requirement;
+- overage model + annual discount;
+- which advanced features, if any, are commercially gated beyond capacity/usage.
+
+## Phase 7 — Hardening / launch readiness
 
 - [ ] evaluation suite expansion
-- [ ] rate limits/quotas
-- [ ] reconciliation
+- [ ] platform/provider rate limits and quotas
+- [ ] reconciliation expansion
 - [ ] security review
 - [ ] load/failure testing
 - [ ] deployment/runbooks
 - [ ] privacy/data-retention controls
+- [ ] backup/restore/disaster recovery
+- [ ] operational alerts/SLOs
