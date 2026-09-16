@@ -50,6 +50,10 @@ export interface WorkspacePackage {
   readonly aliases?: readonly ModuleAlias[];
   /** Package-relative paths of symbolic links found inside the package tree. */
   readonly symlinks?: readonly string[];
+  /** Package-relative paths of package.json files below the package root. */
+  readonly nestedManifests?: readonly string[];
+  /** Every target string in the package's own package.json `exports`. */
+  readonly exportTargets?: readonly string[];
 }
 
 export interface RootWorkspace {
@@ -80,7 +84,9 @@ export type ViolationKind =
   | "invalid-import-specifier"
   | "unresolvable-module-load"
   | "javascript-runtime-file"
-  | "symlink-in-package";
+  | "symlink-in-package"
+  | "nested-package-manifest"
+  | "invalid-package-export";
 
 export interface Violation {
   readonly kind: ViolationKind;
@@ -123,6 +129,7 @@ export function isWorkspacePackageName(name: string): boolean {
 export const TOP_LEVEL_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set(["dist", "out", "build", "coverage"]);
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+const JAVASCRIPT_FILE = /\.(?:[cm]?js|jsx)$/;
 
 const TEST_FILE_NAME = /\.(?:test|spec|test-d|spec-d|bench)\.[cm]?[jt]sx?$/;
 const TEST_SUPPORT_FILE_NAME = /^(?:vitest\.setup|test-utils|test-helpers)\.[cm]?[jt]sx?$/;
@@ -363,6 +370,28 @@ function checkPackageConfiguration(workspacePackage: WorkspacePackage, rule: Pac
     });
   }
 
+  for (const manifestPath of workspacePackage.nestedManifests ?? []) {
+    violations.push({
+      kind: "nested-package-manifest",
+      packageName: from,
+      file: path.posix.join(workspacePackage.dir, manifestPath),
+      message: "A package.json below the package root creates a hidden module entry point (main/exports); remove it.",
+    });
+  }
+
+  const knownFiles = new Set(workspacePackage.sourceFiles.map((sourceFile) => sourceFile.path));
+  for (const target of workspacePackage.exportTargets ?? []) {
+    const exported = target.startsWith("./") ? resolveLocalModule(path.posix.normalize(target), knownFiles) : undefined;
+    if (!exported || !isRuntimeSourceFile(exported) || JAVASCRIPT_FILE.test(exported)) {
+      violations.push({
+        kind: "invalid-package-export",
+        packageName: from,
+        file: path.posix.join(workspacePackage.dir, "package.json"),
+        message: `package.json exports "${target}", which is not a TypeScript runtime file under src/ of ${from}.`,
+      });
+    }
+  }
+
   if (rule.pure && workspacePackage.tsconfigTypes?.some(loadsNodeTypes)) {
     violations.push({
       kind: "node-types-in-pure-package",
@@ -445,7 +474,14 @@ function checkSourceImports(
     const report = (kind: ViolationKind, message: string) =>
       violations.push({ kind, packageName: from, file, message });
 
-    const checkLocalPath = (specifier: string, packageRelativeTarget: string) => {
+    const checkLocalPath = (specifier: string, rawTarget: string) => {
+      // Bundlers ignore `?query`/`#fragment` suffixes and decode escapes when locating the file.
+      let packageRelativeTarget = rawTarget.replace(/[?#].*$/, "");
+      try {
+        packageRelativeTarget = decodeURIComponent(packageRelativeTarget);
+      } catch {
+        // Keep the raw text; an undecodable path cannot hide a known file.
+      }
       const resolved = path.posix.normalize(packageRelativeTarget);
       if (packageRelativeTarget.startsWith("/") || resolved === ".." || resolved.startsWith("../")) {
         report(
@@ -464,6 +500,16 @@ function checkSourceImports(
           "runtime-import-of-non-runtime-code",
           `"${specifier}" resolves to ${localFile ?? resolved}, which is test, tooling or unscanned code; ` +
             "runtime code may only import runtime files under src/.",
+        );
+        return;
+      }
+      const lastSegment = resolved.split("/").at(-1) ?? "";
+      const looksLikeModule = !lastSegment.includes(".") || SOURCE_EXTENSIONS.some((extension) => lastSegment.endsWith(extension));
+      if (!localFile && looksLikeModule) {
+        // Fail closed: e.g. a directory whose own package.json points somewhere else.
+        report(
+          "runtime-import-of-non-runtime-code",
+          `"${specifier}" does not resolve to a scanned source file of ${from}; runtime imports must name source files directly.`,
         );
       }
     };
@@ -525,6 +571,10 @@ function checkSourceImports(
 
       if (isWorkspacePackageName(name)) {
         if (name === from) {
+          report(
+            "unresolved-alias-import",
+            `"${specifier}" refers to ${from} itself but matches none of its package.json exports.`,
+          );
           return;
         }
         if (!isAllowedWorkspaceEdge(rule, name, rules)) {
@@ -581,7 +631,7 @@ function checkSourceImports(
       );
     }
 
-    if (runtime && /\.(?:[cm]?js|jsx)$/.test(sourceFile.path)) {
+    if (runtime && JAVASCRIPT_FILE.test(sourceFile.path)) {
       report(
         "javascript-runtime-file",
         "Runtime code must be TypeScript: JavaScript files are not strictly type-checked and escape pure-package typing.",

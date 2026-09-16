@@ -46,6 +46,7 @@ export class EnvValidationError extends Error {
 
 const MESSAGE_WITHHELD = "Invalid value (validation details withheld; they may contain the value)";
 const NESTED_SUFFIX = " (in a nested value)";
+const SCHEMA_THREW = "Validation threw an exception (details withheld; they may contain values)";
 
 /**
  * Issue kinds whose built-in message is assembled only from schema-owned metadata (expected type,
@@ -64,9 +65,38 @@ const SCHEMA_OWNED_ISSUE_CODES: ReadonlySet<string> = new Set([
   "invalid_key",
   "invalid_element",
 ]);
-const SCHEMA_THREW = "Validation threw an exception (details withheld; they may contain values)";
 
-/** A value of the same primitive type, so regenerated messages never see the real input. */
+/**
+ * Built-in Zod schema types and checks that raise issues from their own definition. Issues raised by
+ * schema code — refine/superRefine/check callbacks, transforms, preprocess and codecs — come from
+ * `custom`/`transform` instances or have no instance, so their metadata (and message) is untrusted.
+ */
+const BUILT_IN_SCHEMA_TYPES: ReadonlySet<string> = new Set([
+  "string", "number", "bigint", "boolean", "date", "symbol", "null", "undefined", "void", "never", "nan",
+  "enum", "literal", "object", "array", "tuple", "record", "map", "set", "union", "intersection",
+  "template_literal", "file",
+]);
+const BUILT_IN_CHECKS: ReadonlySet<string> = new Set([
+  "min_length", "max_length", "length_equals", "min_size", "max_size", "size_equals",
+  "greater_than", "less_than", "multiple_of", "string_format", "number_format", "bigint_format", "mime_type",
+]);
+
+interface RawIssueSource {
+  _zod?: { def?: { type?: unknown; check?: unknown } };
+}
+
+function isRaisedByBuiltInSchema(inst: RawIssueSource | undefined): boolean {
+  const def = inst?._zod?.def;
+  if (!def || def.type === "custom" || def.check === "custom" || def.type === "transform" || def.type === "pipe") {
+    return false;
+  }
+  return (
+    (typeof def.check === "string" && BUILT_IN_CHECKS.has(def.check)) ||
+    (def.check === undefined && typeof def.type === "string" && BUILT_IN_SCHEMA_TYPES.has(def.type))
+  );
+}
+
+/** A value of the same primitive type, so the locale message never sees the real input. */
 function typeStandIn(value: unknown): unknown {
   switch (typeof value) {
     case "string":
@@ -86,22 +116,9 @@ function typeStandIn(value: unknown): unknown {
   }
 }
 
-/**
- * True when the issue kind carries only schema-owned metadata and `issue.message` is exactly what
- * Zod's locale produces for it without seeing the input — i.e. a built-in message, not one authored
- * by the schema (which could embed the value).
- */
-function isSafeBuiltInMessage(issue: z.core.$ZodIssue, rawInput: unknown): boolean {
-  if (!SCHEMA_OWNED_ISSUE_CODES.has(issue.code)) {
-    return false;
-  }
-  // Resolved after parsing: Zod installs its default locale lazily.
-  const localeError = z.config().localeError ?? z.locales.en().localeError;
-  const regenerated = localeError?.({ ...issue, input: typeStandIn(rawInput) } as unknown as Parameters<
-    NonNullable<typeof localeError>
-  >[0]);
-  const text = typeof regenerated === "string" ? regenerated : regenerated?.message;
-  return text !== undefined && text === issue.message;
+/** Unpredictable per call, so schema-authored messages cannot imitate a trusted one. */
+function createTrustMarker(): string {
+  return `\u0000trusted:${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}\u0000`;
 }
 
 /**
@@ -125,10 +142,32 @@ export function parseEnv<TShape extends z.ZodRawShape>(
     input[key] = emptyStringAsUndefined && value === "" ? undefined : value;
   }
 
+  // Trust is decided while parsing, when Zod still exposes which schema raised each issue. Only
+  // issues from built-in schemas/checks get a locale message (built from a type stand-in, without
+  // the path) carrying the marker; issues with explicit or schema-defined messages never reach this
+  // hook, and issues raised by schema code are left unmarked — both end up withheld.
+  const marker = createTrustMarker();
+  const trustedMessage = (issue: z.core.$ZodRawIssue): string | undefined => {
+    const inst = (issue as { inst?: RawIssueSource }).inst;
+    if (!SCHEMA_OWNED_ISSUE_CODES.has(issue.code ?? "") || !isRaisedByBuiltInSchema(inst)) {
+      return undefined;
+    }
+    // Resolved lazily: Zod installs its default locale on first use.
+    const localeError = z.config().localeError ?? z.locales.en().localeError;
+    const localized = localeError?.({ ...issue, input: typeStandIn(issue.input), path: [] } as Parameters<
+      NonNullable<typeof localeError>
+    >[0]);
+    const text = typeof localized === "string" ? localized : localized?.message;
+    return text === undefined ? undefined : `${marker}${text}`;
+  };
+
   let result: ReturnType<typeof schema.safeParse>;
+  let issues: readonly z.core.$ZodIssue[];
   try {
-    // `reportInput` stays off so issues never carry the raw (possibly secret) value.
-    result = schema.safeParse(input);
+    // `reportInput` stays off so issues never carry the raw (possibly secret) value. Issues are
+    // finalized lazily, so read them inside the try: a throwing error map must not escape either.
+    result = schema.safeParse(input, { error: trustedMessage });
+    issues = result.success ? [] : result.error.issues;
   } catch {
     // e.g. a transform calling JSON.parse/new URL on a malformed secret: the error may quote it.
     throw new EnvValidationError([{ key: "(schema)", message: SCHEMA_THREW }]);
@@ -137,12 +176,10 @@ export function parseEnv<TShape extends z.ZodRawShape>(
   if (!result.success) {
     const declaredKeys = new Set(Object.keys(schema.shape));
     throw new EnvValidationError(
-      result.error.issues.map((issue) => {
+      issues.map((issue) => {
         const firstSegment = issue.path[0];
         const variable = typeof firstSegment === "string" && declaredKeys.has(firstSegment) ? firstSegment : undefined;
-        const message = isSafeBuiltInMessage(issue, variable === undefined ? undefined : input[variable])
-          ? issue.message
-          : MESSAGE_WITHHELD;
+        const message = issue.message.startsWith(marker) ? issue.message.slice(marker.length) : MESSAGE_WITHHELD;
         return {
           key: variable ?? "(root)",
           message: issue.path.length > 1 ? `${message}${NESTED_SUFFIX}` : message,

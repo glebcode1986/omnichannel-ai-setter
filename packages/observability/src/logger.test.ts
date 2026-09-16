@@ -163,6 +163,53 @@ describe("createLogger", () => {
     });
   });
 
+  it("honours an array's own toJSON and ignores Symbol.species tricks (R1-04 follow-up)", () => {
+    const secret = "r104-fake-secret-DO-NOT-LOG";
+    const { logger, lines } = captureLogger("info");
+    const apiKeys = Object.assign([secret], { toJSON: () => "[1 key redacted]" });
+    const leakyError = Object.assign(new Error("species"), { toJSON: () => ({ config: secret }) });
+    const speciesArray = Object.defineProperty([1], "constructor", {
+      value: { [Symbol.species]: function Species() { return leakyError; } },
+    });
+    const aggregate = new AggregateError([], "many");
+    (aggregate as AggregateError & { errors: unknown[] }).errors = Object.defineProperty([new Error("inner")], "constructor", {
+      value: { [Symbol.species]: function Species() { return leakyError; } },
+    });
+
+    logger.info("arrays", { apiKeys, list: speciesArray, aggregate });
+
+    expect(JSON.stringify(lines)).not.toContain(secret);
+    expect(lines[0]?.entry).toMatchObject({
+      apiKeys: "[1 key redacted]",
+      list: [1],
+      aggregate: { errors: [{ message: "inner" }] },
+    });
+  });
+
+  it("treats cross-realm tagged errors and proxied errors as errors, never calling their toJSON (R1-04 follow-up)", async () => {
+    const { runInNewContext } = await import("node:vm");
+    const secret = "r104-fake-secret-DO-NOT-LOG";
+    const { logger, lines } = captureLogger("info");
+    const tagged = runInNewContext(
+      `class HttpClientError extends Error {
+         get [Symbol.toStringTag]() { return "HttpClientError"; }
+         constructor(message, token) { super(message); this.config = { headers: { Authorization: "Bearer " + token } }; }
+         toJSON() { return { message: this.message, config: this.config }; }
+       }
+       new HttpClientError("Request failed with status code 401", secret);`,
+      { secret },
+    ) as object;
+    const proxied = new Proxy(runInNewContext('Object.assign(new Error("proxied"), { toJSON: () => ({ leak: secret }) })', { secret }) as object, {});
+
+    logger.error("cross.realm", { tagged, proxied });
+
+    expect(JSON.stringify(lines)).not.toContain(secret);
+    expect(lines[0]?.entry).toMatchObject({
+      tagged: { message: "Request failed with status code 401" },
+      proxied: { message: "proxied" },
+    });
+  });
+
   it("uses fixed text when the entry cannot be serialized at all", () => {
     const { logger, lines } = captureLogger("info");
     const hostileKeys = new Proxy(

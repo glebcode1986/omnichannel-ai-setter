@@ -20,6 +20,7 @@ const GENERATED_FILES = new Set(["next-env.d.ts"]);
 interface RawManifest {
   name?: string;
   imports?: Record<string, unknown>;
+  exports?: unknown;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
@@ -195,10 +196,11 @@ async function collectSourceFiles(
   baseDir: string,
   options: { topLevelSkip: ReadonlySet<string> },
   relativeDir = "",
-): Promise<{ files: SourceFile[]; symlinks: string[] }> {
+): Promise<{ files: SourceFile[]; symlinks: string[]; nestedManifests: string[] }> {
   const entries = await readdir(path.join(baseDir, relativeDir), { withFileTypes: true });
   const files: SourceFile[] = [];
   const symlinks: string[] = [];
+  const nestedManifests: string[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
     // Before any name-based skip: a symlink called node_modules/dist/.shared is still a symlink.
@@ -213,12 +215,16 @@ async function collectSourceFiles(
       const nested = await collectSourceFiles(baseDir, options, relativePath);
       files.push(...nested.files);
       symlinks.push(...nested.symlinks);
+      nestedManifests.push(...nested.nestedManifests);
+    } else if (entry.isFile() && entry.name === "package.json" && relativeDir !== "") {
+      // A nested manifest turns a directory into a package with its own `main`/`exports`.
+      nestedManifests.push(relativePath);
     } else if (entry.isFile() && SOURCE_FILE.test(entry.name) && !(relativeDir === "" && GENERATED_FILES.has(entry.name))) {
       const text = await readFile(path.join(baseDir, relativePath), "utf8");
       files.push({ path: relativePath, ...extractModuleReferences(text, entry.name) });
     }
   }
-  return { files, symlinks };
+  return { files, symlinks, nestedManifests };
 }
 
 function toPackageRelative(packageDir: string, absoluteTarget: string): string {
@@ -248,15 +254,33 @@ function readTsconfig(packageDir: string): { types?: string[]; aliases: ModuleAl
   return { ...(options.types ? { types: options.types } : {}), aliases };
 }
 
+/** String leaves of a conditional package.json target (`null` exclusions are dropped). */
+function targetLeaves(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(targetLeaves);
+  if (value && typeof value === "object") return Object.values(value).flatMap(targetLeaves);
+  return [];
+}
+
 /** package.json `imports` (subpath imports), flattening conditional targets. */
 function readSubpathImports(manifest: RawManifest): ModuleAlias[] {
-  const leaves = (value: unknown): string[] => {
-    if (typeof value === "string") return [value];
-    if (Array.isArray(value)) return value.flatMap(leaves);
-    if (value && typeof value === "object") return Object.values(value).flatMap(leaves);
-    return [];
-  };
-  return Object.entries(manifest.imports ?? {}).map(([pattern, value]) => ({ pattern, targets: leaves(value) }));
+  return Object.entries(manifest.imports ?? {}).map(([pattern, value]) => ({ pattern, targets: targetLeaves(value) }));
+}
+
+/** package.json `exports` as self-reference aliases (`@scope/pkg/sub` -> target) plus every target. */
+function readExports(manifest: RawManifest & { name: string }): { aliases: ModuleAlias[]; targets: string[] } {
+  const exportsField = manifest.exports;
+  if (exportsField === undefined || exportsField === null) {
+    return { aliases: [], targets: [] };
+  }
+  const isSubpathMap =
+    typeof exportsField === "object" && !Array.isArray(exportsField) && Object.keys(exportsField).some((key) => key.startsWith("."));
+  const entries: [string, unknown][] = isSubpathMap ? Object.entries(exportsField) : [[".", exportsField]];
+  const aliases = entries.map(([subpath, value]) => ({
+    pattern: subpath === "." ? manifest.name : `${manifest.name}/${subpath.replace(/^\.\//, "")}`,
+    targets: targetLeaves(value),
+  }));
+  return { aliases, targets: aliases.flatMap((alias) => alias.targets) };
 }
 
 export async function loadWorkspace(rootDir: string): Promise<{ packages: WorkspacePackage[]; root: RootWorkspace }> {
@@ -289,15 +313,20 @@ export async function loadWorkspace(rootDir: string): Promise<{ packages: Worksp
         throw new Error(`${dir}/package.json has no "name".`);
       }
       const tsconfig = readTsconfig(packageDir);
-      const { files, symlinks } = await collectSourceFiles(packageDir, { topLevelSkip: TOP_LEVEL_OUTPUT_DIRECTORIES });
+      const exportsInfo = readExports({ ...manifest, name: manifest.name });
+      const { files, symlinks, nestedManifests } = await collectSourceFiles(packageDir, {
+        topLevelSkip: TOP_LEVEL_OUTPUT_DIRECTORIES,
+      });
       packages.push({
         name: manifest.name,
         dir,
         manifest: dependencyFields(manifest),
         sourceFiles: files,
         symlinks,
+        nestedManifests,
+        exportTargets: exportsInfo.targets,
         ...(tsconfig.types ? { tsconfigTypes: tsconfig.types } : {}),
-        aliases: [...readSubpathImports(manifest), ...tsconfig.aliases],
+        aliases: [...readSubpathImports(manifest), ...exportsInfo.aliases, ...tsconfig.aliases],
       });
     }
   }

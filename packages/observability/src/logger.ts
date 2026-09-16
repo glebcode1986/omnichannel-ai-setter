@@ -140,9 +140,40 @@ function buildEntry(
   return entry;
 }
 
+const nativeIsError = (Error as { isError?: (value: unknown) => boolean }).isError;
+
+/**
+ * Error detection that also covers other realms (vm contexts), subclasses with a custom
+ * `Symbol.toStringTag` and proxies: anything branded as an error or exposing string
+ * `message` + `stack` is serialized through the error allowlist, never through its own toJSON.
+ */
 function isError(value: unknown): value is Error {
-  // Cross-realm safe (errors from vm contexts or worker threads are not `instanceof Error` here).
-  return value instanceof Error || Object.prototype.toString.call(value) === "[object Error]";
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  try {
+    if (value instanceof Error || nativeIsError?.(value) === true || Object.prototype.toString.call(value) === "[object Error]") {
+      return true;
+    }
+  } catch {
+    // A revoked proxy or hostile getPrototypeOf trap: fall through to the structural check.
+  }
+  // Prototype chain of another realm (or seen through a proxy): look for an `Error` constructor.
+  try {
+    let prototype: unknown = Object.getPrototypeOf(value);
+    for (let hops = 0; prototype !== null && typeof prototype === "object" && hops < 16; hops += 1) {
+      const constructor = readProperty(prototype, "constructor");
+      if (constructor.ok && typeof constructor.value === "function" && constructor.value.name === "Error") {
+        return true;
+      }
+      prototype = Object.getPrototypeOf(prototype);
+    }
+  } catch {
+    // Hostile getPrototypeOf trap: fall through to the structural check.
+  }
+  const message = readProperty(value, "message");
+  const stack = readProperty(value, "stack");
+  return message.ok && stack.ok && typeof message.value === "string" && typeof stack.value === "string";
 }
 
 function isPrimitive(value: unknown): value is string | number | boolean {
@@ -184,11 +215,26 @@ function serializeError(error: Error, ancestors: unknown[], depth: number): Reco
   if (!errors.ok) {
     serialized.errors = UNSERIALIZABLE;
   } else if (Array.isArray(errors.value)) {
-    serialized.errors = errors.value.map((entry: unknown) =>
+    serialized.errors = copyArray(errors.value, (entry) =>
       isError(entry) ? toJsonSafe(entry, ancestors, depth + 1) : describeNonError(entry),
     );
   }
   return serialized;
+}
+
+/**
+ * Index loop into a fresh array: `Array.prototype.map` follows `Symbol.species`, which lets a caller
+ * substitute an arbitrary object (even an error with a toJSON) for the sanitized copy.
+ */
+function copyArray(source: readonly unknown[], convert: (entry: unknown) => unknown): unknown[] {
+  const lengthRead = readProperty(source, "length");
+  const length = lengthRead.ok && typeof lengthRead.value === "number" ? Math.min(lengthRead.value, 10_000) : 0;
+  const result: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const entry = readProperty(source, index);
+    result.push(entry.ok ? (convert(entry.value) ?? null) : UNSERIALIZABLE);
+  }
+  return result;
 }
 
 function describeNonError(value: unknown): unknown {
@@ -231,9 +277,7 @@ function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknow
     if (isError(value)) {
       return serializeError(value, ancestors, depth);
     }
-    if (Array.isArray(value)) {
-      return value.map((entry: unknown) => toJsonSafe(entry, ancestors, depth + 1) ?? null);
-    }
+    // Same order as JSON.stringify: a non-error value's own toJSON (arrays included) wins.
     const toJSON = readProperty(value, "toJSON");
     if (!toJSON.ok) {
       return UNSERIALIZABLE;
@@ -244,6 +288,9 @@ function toJsonSafe(value: unknown, ancestors: unknown[], depth: number): unknow
       } catch {
         return UNSERIALIZABLE;
       }
+    }
+    if (Array.isArray(value)) {
+      return copyArray(value, (entry) => toJsonSafe(entry, ancestors, depth + 1));
     }
     const result = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value)) {

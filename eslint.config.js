@@ -62,7 +62,7 @@ export default defineConfig(
   {
     // Only JavaScript *config* files skip type-aware linting. Any other JavaScript is not part of a
     // tsconfig project, so the project service rejects it and `pnpm lint` fails closed.
-    files: ["eslint.config.js", "**/*.config.{js,mjs,cjs}"],
+    files: ["*.config.{js,mjs,cjs}", "{apps,packages}/*/*.config.{js,mjs,cjs}"],
     extends: [tseslint.configs.disableTypeChecked],
   },
 

@@ -146,6 +146,70 @@ describe("parseEnv", () => {
     expect(error.message).not.toContain(secret);
   });
 
+  it("does not trust allowlisted issue kinds that schema code raises with the value in their metadata (R1-03 follow-up)", () => {
+    const secret = "SYNTH-SECRET-r103-follow-up";
+    const schema = z.object({
+      SUPER_VALUE: z.string().superRefine((value, ctx) => {
+        ctx.addIssue({ code: "invalid_value", values: [value] });
+      }),
+      SUPER_TYPE: z.string().superRefine((value, ctx) => {
+        ctx.addIssue({ code: "invalid_type", expected: value as never });
+      }),
+      SUPER_FORMAT: z.string().superRefine((value, ctx) => {
+        ctx.addIssue({ code: "invalid_format", format: value as never });
+      }),
+      CHECK: z.string().check((ctx) => {
+        ctx.issues.push({ code: "too_big", origin: ctx.value as never, maximum: 1, input: ctx.value, inclusive: true });
+      }),
+      TRANSFORM: z.string().transform((value, ctx) => {
+        ctx.addIssue({ code: "invalid_value", values: [value] });
+        return value;
+      }),
+      PREPROCESS: z.preprocess((value, ctx) => {
+        ctx.addIssue({ code: "not_multiple_of", divisor: value as number, input: value as number });
+        return value;
+      }, z.string()),
+      CODEC: z.codec(z.string(), z.number(), {
+        decode: (value, ctx) => {
+          ctx.issues.push({ code: "invalid_type", expected: value as never, input: value });
+          return 0;
+        },
+        encode: (value) => String(value),
+      }),
+    });
+    const values = Object.fromEntries(Object.keys(schema.shape).map((key) => [key, secret]));
+
+    const error = captureError(() => parseEnv(schema, values));
+
+    expect(error.issues.length).toBeGreaterThanOrEqual(7);
+    for (const issue of error.issues) {
+      expect(issue.message).toMatch(/withheld/);
+    }
+    expect(JSON.stringify(error.issues)).not.toContain(secret);
+    expect(error.message).not.toContain(secret);
+  });
+
+  it("keeps trusted built-in messages independent of a path-printing global locale", () => {
+    const secret = "SYNTH-SECRET-locale-path";
+    const previous = z.config();
+    z.config({ localeError: (issue) => `${issue.path?.join(".") ?? ""}: invalid (${issue.code})` });
+    try {
+      const schema = z.object({
+        RECORD_JSON: z
+          .string()
+          .transform((value) => JSON.parse(value) as unknown)
+          .pipe(z.record(z.string(), z.number())),
+      });
+
+      const error = captureError(() => parseEnv(schema, { RECORD_JSON: JSON.stringify({ [secret]: "x" }) }));
+
+      expect(error.issues).toEqual([{ key: "RECORD_JSON", message: ": invalid (invalid_type) (in a nested value)" }]);
+      expect(error.message).not.toContain(secret);
+    } finally {
+      z.config({ localeError: previous.localeError ?? z.locales.en().localeError });
+    }
+  });
+
   it("converts exceptions thrown by transforms into a fixed, value-free EnvValidationError", () => {
     const secret = "not-json-app-secret-value";
     class SecretBearingError extends Error {

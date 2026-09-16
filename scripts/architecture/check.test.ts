@@ -24,7 +24,7 @@ function workspacePackage(
   name: string,
   manifest: Manifest = {},
   sourceFiles: SourceFile[] = [],
-  extra: Partial<Pick<WorkspacePackage, "tsconfigTypes" | "aliases" | "symlinks">> = {},
+  extra: Partial<Pick<WorkspacePackage, "tsconfigTypes" | "aliases" | "symlinks" | "nestedManifests" | "exportTargets">> = {},
 ): WorkspacePackage {
   const shortName = name.replace(WORKSPACE_SCOPE, "");
   const dir = shortName === "web" || shortName === "worker" ? `apps/${shortName}` : `packages/${shortName}`;
@@ -474,6 +474,7 @@ describe("checkWorkspace: source imports", () => {
       baselineWorkspace([
         workspacePackage(scoped("application"), {}, [
           file("src/a/b.ts", ["../c", "../../package.json", "../../../db/src/index"]),
+          file("src/c.ts", []),
           file("src/d.ts", ["/abs/path"]),
           file("src/e.ts", ["..\\..\\db\\src\\index"]),
         ]),
@@ -497,7 +498,9 @@ describe("checkWorkspace: source imports", () => {
     const violations = checkWorkspace(
       baselineWorkspace([
         workspacePackage(scoped("domain"), {}, [
-          file("src/index.ts", ["#internal/ids", "#db/index", "#schema", "@/model", "#missing", scoped("domain")]),
+          file("src/index.ts", ["#internal/ids", "#db/index", "#schema", "@/model", "#missing"]),
+          file("src/internal/ids.ts", []),
+          file("src/model.ts", []),
         ], { aliases }),
       ]),
     );
@@ -512,7 +515,7 @@ describe("checkWorkspace: source imports", () => {
   it("checks every matching alias, so a broad alias declared first cannot hide a specific one", () => {
     const violations = checkWorkspace(
       baselineWorkspace([
-        workspacePackage(scoped("domain"), {}, [file("src/index.ts", ["@/infra/index", "#lib/store"])], {
+        workspacePackage(scoped("domain"), {}, [file("src/index.ts", ["@/infra/index", "#lib/store"]), file("src/infra/index.ts", []), file("src/store.ts", [])], {
           aliases: [
             { pattern: "#lib/*", targets: ["./src/*"] },
             { pattern: "#lib/store", targets: ["pg", "./src/store.ts"] },
@@ -565,6 +568,61 @@ describe("checkWorkspace: source imports", () => {
     expect(kindsAndFiles(violations)).toEqual([
       ["javascript-runtime-file", "packages/application/src/r1-io.js"],
       ["javascript-runtime-file", "packages/application/src/legacy.mjs"],
+    ]);
+  });
+
+  it("resolves self-imports through package.json exports and fails closed otherwise (R1-02 follow-up)", () => {
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(
+          scoped("application"),
+          {},
+          [
+            file("src/index.ts", [scoped("application"), `${scoped("application")}/io`, `${scoped("application")}/hidden`]),
+            file("src/__tests__/io.config.js", []),
+          ],
+          {
+            aliases: [
+              { pattern: scoped("application"), targets: ["./src/index.ts"] },
+              { pattern: `${scoped("application")}/io`, targets: ["./src/__tests__/io.config.js"] },
+            ],
+            exportTargets: ["./src/index.ts", "./src/__tests__/io.config.js"],
+          },
+        ),
+      ]),
+    );
+
+    expect(violations.map((violation) => [violation.kind, violation.message.split('"')[1]])).toEqual([
+      ["invalid-package-export", "./src/__tests__/io.config.js"],
+      ["runtime-import-of-non-runtime-code", `${scoped("application")}/io`],
+      ["unresolved-alias-import", `${scoped("application")}/hidden`],
+    ]);
+  });
+
+  it("rejects nested manifests, query-suffixed hops and local module paths that resolve to no source file", () => {
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(
+          scoped("application"),
+          {},
+          [
+            file("src/index.ts", ["./shim", "./__tests__/io.config.js?v=1", "./model%2Ets", "./styles.css", "./data.json"]),
+            file("src/model.ts", []),
+            file("src/__tests__/io.config.js", []),
+          ],
+          { nestedManifests: ["src/shim/package.json"] },
+        ),
+      ]),
+    );
+
+    expect(violations.map((violation) => [violation.kind, violation.file])).toEqual([
+      ["nested-package-manifest", "packages/application/src/shim/package.json"],
+      ["runtime-import-of-non-runtime-code", "packages/application/src/index.ts"],
+      ["runtime-import-of-non-runtime-code", "packages/application/src/index.ts"],
+    ]);
+    expect(violations.slice(1).map((violation) => violation.message.split('"')[1])).toEqual([
+      "./shim",
+      "./__tests__/io.config.js?v=1",
     ]);
   });
 
@@ -786,6 +844,31 @@ describe("loadWorkspace", () => {
     expect(kindsAndFiles(violations)).toEqual([
       ["node-builtin-in-pure-package", "packages/application/src/r1-computed.ts"],
       ["javascript-runtime-file", "packages/application/src/r1-io.js"],
+    ]);
+  });
+
+  it("rejects the exports self-import bypass end to end through the real loader (R1-02 follow-up)", async () => {
+    const rootDir = await scaffold({
+      "package.json": JSON.stringify({ name: "root" }),
+      "pnpm-workspace.yaml": "packages:\n  - packages/*\n",
+      "packages/application/package.json": JSON.stringify({
+        name: "@omnichannel/application",
+        exports: { ".": "./src/index.ts", "./io": "./src/__tests__/io.config.js" },
+      }),
+      "packages/application/tsconfig.json": JSON.stringify({ compilerOptions: { types: [] }, include: ["src"] }),
+      "packages/application/src/index.ts": 'export * from "./j1";\n',
+      "packages/application/src/j1.ts": 'import { readSecret } from "@omnichannel/application/io";\nexport const j1 = () => readSecret();\n',
+      "packages/application/src/__tests__/io.config.js": "export function readSecret() { return process.env.SYNTH_SECRET; }\n",
+      "packages/application/src/shim/package.json": JSON.stringify({ main: "../__tests__/io.config.js" }),
+    });
+
+    const { packages, root } = await loadWorkspace(rootDir);
+    const violations = checkWorkspace(packages, { root }).filter((violation) => violation.kind !== "missing-package");
+
+    expect(kinds(violations).sort()).toEqual([
+      "invalid-package-export",
+      "nested-package-manifest",
+      "runtime-import-of-non-runtime-code",
     ]);
   });
 
