@@ -547,7 +547,7 @@ describe("checkWorkspace: source imports", () => {
       export const escaped = { loader: makeRequire(import.meta.url) };
     `;
 
-    expect(extractModuleReferences(source)).toEqual({
+    expect(extractModuleReferences(source)).toMatchObject({
       imports: ["node:module", "node:module", "puppeteer", "baileys", "./fixtures/helper", "left-pad", "zod"],
       typeReferences: [],
       unresolvedModuleLoads: ["load(name)", "makeRequire(...) used as a value: loader: makeRequire(import.meta.url)"],
@@ -627,7 +627,7 @@ describe("checkWorkspace: source imports", () => {
       Reflect.get(globalThis, "process");
     `;
 
-    expect(extractModuleReferences(source)).toEqual({
+    expect(extractModuleReferences(source)).toMatchObject({
       imports: [
         "node:module",
         "node:module",
@@ -652,6 +652,67 @@ describe("checkWorkspace: source imports", () => {
         'globalThis used as a value: Reflect.get(globalThis, "process")',
       ],
     });
+  });
+
+  it("tracks global self-references and dynamic code evaluation (R1-01 follow-up 3)", () => {
+    const source = `
+      globalThis.globalThis.process.getBuiltinModule("fs");
+      globalThis["self"]["global"].process["getBuiltinModule"]("net");
+      const name = "dns";
+      globalThis.window.process.getBuiltinModule(name);
+      const { globalThis: again } = globalThis;
+      Function("return process")();
+      new Function("return require");
+      const F = Function;
+      eval("require('fs')");
+      (() => undefined).constructor("return process")();
+      Object.getPrototypeOf(async () => undefined)["constructor"]("return process");
+      export const fine = [typeof Function, typeof eval, globalThis.crypto];
+      function annotated(callback: Function): Function { return callback; }
+    `;
+
+    const references = extractModuleReferences(source);
+
+    expect(references.imports).toEqual(["node:fs", "node:net"]);
+    expect(references.runtimeGlobals).toEqual(["globalThis"]);
+    expect(references.unresolvedModuleLoads).toEqual([
+      "globalThis.window.process.getBuiltinModule(name)",
+      "globalThis used as a value: { globalThis: again } = globalThis",
+      'dynamic code evaluation (Function): Function("return process")',
+      'dynamic code evaluation (Function): new Function("return require")',
+      "dynamic code evaluation (Function): F = Function",
+      "dynamic code evaluation (eval): eval(\"require('fs')\")",
+      'dynamic code evaluation (constructor call): (() => undefined).constructor("return process")',
+      'dynamic code evaluation (constructor call): Object.getPrototypeOf(async () => undefined)["constructor"]("return process")',
+    ]);
+  });
+
+  it("rejects the reviewer's global self-reference fixture in a pure package through the real workspace (R1-01 follow-up 3)", async () => {
+    const rootDir = path.resolve(import.meta.dirname, "../..");
+    const source = `
+      const builtin = (
+        globalThis as unknown as {
+          globalThis: {
+            process: {
+              getBuiltinModule(name: string): unknown;
+            };
+          };
+        }
+      ).globalThis.process.getBuiltinModule("fs");
+
+      void builtin;
+    `;
+    const { packages, root } = await loadWorkspace(rootDir);
+    const modified = packages.map((candidate) =>
+      candidate.name === scoped("application")
+        ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-global-self.ts", ...extractModuleReferences(source) }] }
+        : candidate,
+    );
+
+    expect(checkWorkspace(modified, { root }).map((violation) => [violation.kind, violation.file, violation.message.split('"')[1]])).toEqual([
+      ["node-builtin-in-pure-package", "packages/application/src/r1-global-self.ts", "node:fs"],
+      ["node-builtin-in-pure-package", "packages/application/src/r1-global-self.ts", "globalThis"],
+    ]);
   });
 
   it("rejects the reviewer's bracket-access loader fixture through the real workspace (R1-01 follow-up 2)", async () => {
@@ -867,7 +928,7 @@ describe("helpers", () => {
       const text = 'import fake from "not-an-import"';
     `;
 
-    expect(extractModuleReferences(source)).toEqual({
+    expect(extractModuleReferences(source)).toMatchObject({
       imports: [
         "../../db/src/types.d.ts",
         "a",
@@ -904,7 +965,7 @@ describe("helpers", () => {
       }
     `;
 
-    expect(extractModuleReferences(source)).toEqual({
+    expect(extractModuleReferences(source)).toMatchObject({
       imports: ["node:fs", "node:child_process", "../../queue/src", "node:net"],
       typeReferences: [],
       unresolvedModuleLoads: [
@@ -972,7 +1033,7 @@ describe("loadWorkspace", () => {
       { pattern: "@/*", targets: ["./src/*"] },
     ]);
     expect(root.sourceFiles).toEqual([
-      { path: "scripts/tool.ts", imports: ["whatsapp-web.js"], typeReferences: [], unresolvedModuleLoads: [] },
+      { path: "scripts/tool.ts", imports: ["whatsapp-web.js"], typeReferences: [], unresolvedModuleLoads: [], runtimeGlobals: [] },
     ]);
   });
 
@@ -1016,6 +1077,7 @@ describe("loadWorkspace", () => {
 
     expect(kindsAndFiles(violations)).toEqual([
       ["node-builtin-in-pure-package", "packages/application/src/r1-computed.ts"],
+      ["node-builtin-in-pure-package", "packages/application/src/r1-io.js"],
       ["javascript-runtime-file", "packages/application/src/r1-io.js"],
     ]);
   });

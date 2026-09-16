@@ -41,6 +41,8 @@ export default defineConfig(
     },
     rules: {
       eqeqeq: ["error", "always"],
+      "no-eval": "error",
+      "no-new-func": "error",
       "no-console": "error",
       "@typescript-eslint/consistent-type-imports": [
         "error",
@@ -73,7 +75,7 @@ export default defineConfig(
     rules: {
       "no-restricted-globals": [
         "error",
-        ...["process", "Buffer", "global", "require", "module", "__dirname", "__filename", "setImmediate"].map(
+        ...["process", "Buffer", "global", "globalThis", "require", "module", "__dirname", "__filename", "setImmediate"].map(
           (name) => ({ name, message: `${name} is a Node.js runtime global; pure packages must stay runtime-agnostic.` }),
         ),
       ],

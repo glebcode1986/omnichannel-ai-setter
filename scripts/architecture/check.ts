@@ -29,6 +29,8 @@ export interface SourceFile {
   readonly typeReferences?: readonly string[];
   /** Module-loading calls (`import()`, `require()`, …) whose target could not be folded to a constant. */
   readonly unresolvedModuleLoads?: readonly string[];
+  /** Node.js/global runtime objects (`process`, `globalThis`, `require`, …) referenced as values. */
+  readonly runtimeGlobals?: readonly string[];
 }
 
 /** A module alias from package.json `imports` or tsconfig `paths`. */
@@ -623,12 +625,21 @@ function checkSourceImports(
       checkSpecifier(specifier, 0);
     }
 
+    if (rule.pure && runtime) {
+      for (const name of sourceFile.runtimeGlobals ?? []) {
+        report(
+          "node-builtin-in-pure-package",
+          `"${name}" gives access to the Node.js/global runtime; ${from} is pure and must not reference it.`,
+        );
+      }
+    }
+
     for (const call of sourceFile.unresolvedModuleLoads ?? []) {
       report(
         "unresolvable-module-load",
-        `${call} — a module load that cannot be followed statically (computed target or a loader used other ` +
-          "than by direct call), so architecture rules cannot be checked; use a static import or call the loader " +
-          "directly with a string-literal specifier.",
+        `${call} — a module load or code evaluation that cannot be followed statically (computed target, a ` +
+          "loader used other than by direct call, or eval/Function), so architecture rules cannot be checked; use " +
+          "a static import or call the loader directly with a string-literal specifier.",
       );
     }
 

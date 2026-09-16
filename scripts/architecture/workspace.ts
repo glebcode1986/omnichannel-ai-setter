@@ -123,7 +123,24 @@ export interface ModuleReferences {
   typeReferences: string[];
   /** Source text of module-loading calls whose target is not a compile-time constant. */
   unresolvedModuleLoads: string[];
+  /** Node.js/global runtime objects referenced as values (checked against pure packages). */
+  runtimeGlobals: string[];
 }
+
+/** Global names that give access to the Node.js runtime; pure packages may not reference them at all. */
+const RUNTIME_GLOBAL_NAMES: ReadonlySet<string> = new Set([
+  "process",
+  "module",
+  "require",
+  "globalThis",
+  "global",
+  "Buffer",
+  "__dirname",
+  "__filename",
+]);
+
+/** Members of the global object that are the global object again (`globalThis.globalThis`, …). */
+const GLOBAL_SELF_NAMES: ReadonlySet<string> = new Set(["globalThis", "global", "self", "window", "frames", "parent", "top"]);
 
 /**
  * Well-known module-loading objects, tracked through aliases the analysis can follow:
@@ -148,7 +165,7 @@ const SENSITIVE_MEMBERS: Readonly<Record<KnownObject, ReadonlySet<string>>> = {
   process: new Set(["getBuiltinModule"]),
   module: new Set(["require", "createRequire"]),
   moduleNamespace: new Set(["createRequire", "default"]),
-  global: new Set(["process", "module", "require"]),
+  global: new Set(["process", "module", "require", ...GLOBAL_SELF_NAMES]),
 };
 
 /** Kinds whose direct invocation loads (or resolves) a module named by the first argument. */
@@ -260,6 +277,7 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
       if (name === "createRequire") return "createRequire";
       const object = known(node.expression);
       if (object === "global" && (name === "process" || name === "module" || name === "require")) return name;
+      if (object === "global" && name !== undefined && GLOBAL_SELF_NAMES.has(name)) return "global";
       if (object === "process" && name === "getBuiltinModule") return "builtin";
       if (object === "module" && name === "require") return "require";
       if (object === "moduleNamespace" && name === "default") return "moduleNamespace";
@@ -391,11 +409,21 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
     reportEscape(node, label);
   };
 
+  const runtimeGlobals = new Set<string>();
+
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && !isDeclarationName(node)) {
+      if (RUNTIME_GLOBAL_NAMES.has(node.text)) runtimeGlobals.add(node.text);
+      // Evaluating source text defeats every static rule (`eval`, `Function`, `x.constructor("...")`).
+      if ((node.text === "eval" || node.text === "Function") && !ts.isTypeOfExpression(outermost(node).parent)) {
+        unresolvedModuleLoads.push(`dynamic code evaluation (${node.text}): ${snippet(outermost(node).parent ?? node)}`);
+      }
       const kind = known(node);
       if (kind !== undefined) checkKnownUse(node, kind);
     } else if (isMemberAccess(node)) {
+      if (memberName(node) === "constructor" && ts.isCallExpression(outermost(node).parent) && (outermost(node).parent as ts.CallExpression).expression === outermost(node)) {
+        unresolvedModuleLoads.push(`dynamic code evaluation (constructor call): ${snippet(outermost(node).parent)}`);
+      }
       const kind = known(node);
       if (kind !== undefined) checkKnownUse(node, kind);
     }
@@ -424,7 +452,7 @@ export function extractModuleReferences(sourceText: string, fileName = "file.ts"
   };
   visit(sourceFile);
 
-  return { imports, typeReferences, unresolvedModuleLoads };
+  return { imports, typeReferences, unresolvedModuleLoads, runtimeGlobals: [...runtimeGlobals].sort() };
 }
 
 async function collectSourceFiles(
