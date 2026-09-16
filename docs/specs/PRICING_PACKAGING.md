@@ -1,4 +1,4 @@
-# Pricing & Packaging Specification — v0.3
+# Pricing & Packaging Specification — v0.4
 
 ## Principle
 
@@ -138,6 +138,44 @@ Scale retains **24 months** and adds cross-Business-Profile rollups/comparison p
 
 Exact metric names and export formats remain implementation-level product design, but the retention/depth tiers above are accepted commercial behavior.
 
+## Accepted trial policy
+
+Initial self-serve trial behavior:
+
+- **14 days**;
+- **no payment card required** to start;
+- trial starts when the workspace successfully connects its **first Business Profile**, not merely when the user creates an account;
+- trial should expose the real product value rather than a crippled demo;
+- trial allowance direction: **1 Business Profile**, up to **3 team seats**, all core AI/Knowledge/Style/DRAFT/AUTOPILOT/Review/Leads features, and **100 voice-transcription minutes**;
+- the product clearly shows trial days and relevant allowance remaining.
+
+At trial expiry without a paid subscription:
+- customer data is not deleted;
+- Inbox/history, Knowledge, Style and Leads remain stored/readable according to the workspace-access policy;
+- paid AI generation/automation/transcription actions stop until entitlement becomes active again;
+- the user can still enter the product, inspect retained data and select a paid plan;
+- after payment/activation the workspace resumes from the retained state rather than forcing a new setup.
+
+The user does **not** need to choose Starter/Growth/Scale before experiencing the trial. Preferred funnel is: create account -> connect first Business Profile -> trial -> choose a paid plan before/at expiry.
+
+## Accepted annual billing policy
+
+All public paid tiers should support monthly and annual billing.
+
+Initial annual pricing principle: **pay for 10 months and receive 12 months of service** (approximately 16.7% effective discount).
+
+At the current non-final monthly price hypothesis this would display as:
+
+| Plan | Monthly hypothesis | 12 monthly payments | Annual hypothesis |
+|---|---:|---:|---:|
+| Starter | €49 | €588 | **€490/year** |
+| Growth | €99 | €1,188 | **€990/year** |
+| Scale | €249 | €2,988 | **€2,490/year** |
+
+Public UX may market this as **"2 months free with annual billing"** rather than exposing a fractional discount percentage. Final euro prices still require explicit product-owner acceptance before production catalog creation.
+
+Annual subscriptions use immutable plan/version/provider price references just like monthly subscriptions; changing future prices does not rewrite historical subscription meaning.
+
 ## Plan definition model
 
 A versioned plan definition includes:
@@ -166,19 +204,6 @@ Architecture should support later:
 - temporary/manual sales overrides.
 
 Overrides must be explicit, scoped, time-bounded where appropriate and audited.
-
-## Trial product direction
-
-Support trialing as a first-class subscription state. Trial length/card requirement are configuration.
-
-Recommended UX behavior:
-- trial activation is visible with days/allowances remaining;
-- trial does not silently convert feature semantics;
-- before expiry show clear upgrade/expiry consequences;
-- expired trial does not delete inbox/history;
-- automation stops according to effective entitlement while stored conversations remain available according to workspace-access policy.
-
-A specific trial length/card rule is **not accepted yet** and requires product-owner decision.
 
 ## Usage / fair-use UX
 
@@ -223,8 +248,6 @@ Checkout uses immutable provider price references tied to a plan version. Updati
 ## Open product-owner decisions
 
 Before launch choose:
-- actual monthly/annual prices and supported currencies;
-- trial length and card requirement;
-- annual discount policy;
+- final monthly prices and supported currencies (the €49 / €99 / €249 figures remain hypotheses until explicitly accepted);
 - exact extra Business Profile / extra seat / transcription top-up pricing;
 - tax/invoice/payment-provider jurisdiction strategy.
