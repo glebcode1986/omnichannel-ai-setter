@@ -10,6 +10,8 @@ Build a commercial SaaS product that handles inbound conversations across Instag
 
 One shared conversation/AI/policy/delivery/handoff core with channel adapters. MVP channels: Instagram Messaging API and official WhatsApp Business Cloud API. Threads remains future-only because no supported public Threads DM API was identified in the 2026-09-16 verification.
 
+The SaaS UX is **Inbox-first**: one unified operational inbox is the primary daily workspace, with Review, Leads, Knowledge, Style, Analytics and Settings as supporting surfaces. Instagram and WhatsApp render through the same product shell with capability-specific states rather than separate dashboards.
+
 ## Verified platform constraints — 2026-09-16 baseline
 
 ### Instagram
@@ -44,6 +46,20 @@ ADR-016 is Accepted. Expose all three account/workspace-selectable modes:
 - `TEMPLATE_AUTOPILOT` — deterministic policy may auto-send only current approved templates/use-cases explicitly allowlisted for automation.
 
 No explicit stored choice means conservative `SERVICE_WINDOW_ONLY` behavior until configured. `TEMPLATE_AUTOPILOT` with an empty allowlist sends nothing unattended. Current consent/template/account-health/STOP rules remain authoritative and are revalidated immediately before send.
+
+## SaaS UX architecture — Prepared
+
+Phase 5 specs/issues/contracts are prepared for:
+- app shell + resumable onboarding;
+- unified Instagram/WhatsApp Inbox;
+- first-class Review queue and conversation operations;
+- AI settings/presets + no-send simulation playground;
+- separate versioned Knowledge and verified Style management;
+- conversation-linked Leads pipeline;
+- operational Analytics + append-oriented Audit;
+- responsive/accessibility/E2E hardening.
+
+Knowledge answers what is true; Style answers how the business sounds. They remain separate storage/retrieval/UI domains. Review actions and optimistic UI never bypass server-side policy, delivery revalidation or workspace authorization.
 
 ## Open-source references
 
@@ -97,11 +113,11 @@ After-window policies are separate from AiMode.
 ## Current execution state
 
 - Phase 0 complete.
-- Claude is currently working on Phase 1 Issue #2 / P1-01; no open PR was visible when this context was updated.
-- P1-02 / Issue #3 is fully prepared and may start only after #2 is reviewed/accepted/merged into `main`.
+- Claude is currently working on Phase 1 Issue #2 / P1-01; P1-02 / Issue #3 is prepared and starts only after #2 is reviewed/accepted/merged.
 - Phase 1 issues #2–#6 + review #7 remain the current coding path.
 - Phase 2 Instagram/shared-AI architecture, issues #8–#17 and task contracts are fully prepared but coding waits for Phase 1 exit criteria.
 - Phase 4 WhatsApp architecture, current Meta verification, issues #18–#25 and task contracts are prepared; ADR-016 is Accepted with all three outside-window modes.
+- Phase 5 SaaS UX architecture, issues #27–#36 and task contracts are prepared. Phase 5 features may begin incrementally when their backend dependencies stabilize; they do not need to wait for every WhatsApp feature.
 
 ## Continuity rule
 
