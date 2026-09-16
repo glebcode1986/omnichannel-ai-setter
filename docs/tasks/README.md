@@ -8,7 +8,8 @@ Supervisor shortcut: use [`CLAUDE_EXECUTION_QUEUE.md`](./CLAUDE_EXECUTION_QUEUE.
 
 | Step | Issue | Executor | Contract | Start condition |
 |---|---:|---|---|---|
-| P1-01 | #2 | Claude | `P1-01_CLAUDE_TASK_CONTRACT.md` | running now |
+| P1-01 | #2 | Claude | `P1-01_CLAUDE_TASK_CONTRACT.md` | PR #26 under review/fix |
+| P1-CI | #37 | Claude/infra agent | issue contract | after #2; before substantial implementation accumulation |
 | P1-02 | #3 | Claude | `P1-02_CLAUDE_TASK_CONTRACT.md` | #2 accepted/merged |
 | P1-03 | #4 | Claude | `P1-03_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; may run alongside P1-04 |
 | P1-04 | #5 | Claude | `P1-04_CLAUDE_TASK_CONTRACT.md` | #2/#3 accepted; shared IDs stable |
@@ -34,7 +35,7 @@ Starts only after Phase 1 exit criteria unless the architecture plan is explicit
 
 ## Phase 4 execution order — WhatsApp Cloud API
 
-Implementation reuses the stable shared AI/policy/delivery/handoff core. See `docs/specs/PHASE4_WHATSAPP_IMPLEMENTATION_PLAN.md`.
+Implementation reuses the stable shared AI/policy/delivery/handoff core.
 
 | Step | Issue | Executor | Contract |
 |---|---:|---|---|
@@ -49,7 +50,7 @@ Implementation reuses the stable shared AI/policy/delivery/handoff core. See `do
 
 ## Phase 5 execution order — SaaS product UX
 
-Phase 5 can start incrementally once each feature's backend dependencies are stable; it does not require every WhatsApp feature to be finished first.
+Phase 5 can start incrementally once each feature's backend dependencies are stable.
 
 | Step | Issue | Executor | Contract |
 |---|---:|---|---|
@@ -64,20 +65,34 @@ Phase 5 can start incrementally once each feature's backend dependencies are sta
 | P5-09 | #35 | Claude | `P5-09_CLAUDE_TASK_CONTRACT.md` |
 | R5 | #36 | Codex/Astra | `R5_CODEX_ASTRA_REVIEW_CONTRACT.md` |
 
+## Phase 6 execution order — Commercial SaaS / billing / usage
+
+Commercial architecture can be prepared early, but implementation starts only when each listed backend dependency is stable. Concrete billing-provider work is explicitly blocked until the product owner selects the provider/merchant-jurisdiction strategy.
+
+| Step | Issue | Executor | Contract |
+|---|---:|---|---|
+| P6-01 | #38 | Claude | `P6-01_CLAUDE_TASK_CONTRACT.md` |
+| P6-02 | #39 | Claude | `P6-02_CLAUDE_TASK_CONTRACT.md` |
+| P6-03 | #40 | Claude | `P6-03_CLAUDE_TASK_CONTRACT.md` |
+| P6-04 | #41 | Claude | `P6-04_CLAUDE_TASK_CONTRACT.md` — provider decision required |
+| P6-05 | #42 | Claude | `P6-05_CLAUDE_TASK_CONTRACT.md` |
+| P6-06 | #43 | Claude | `P6-06_CLAUDE_TASK_CONTRACT.md` — concrete pricing decisions required |
+| P6-07 | #44 | Claude | `P6-07_CLAUDE_TASK_CONTRACT.md` |
+| R6 | #45 | Codex/Astra | `R6_CODEX_ASTRA_REVIEW_CONTRACT.md` |
+
 ## Agent operating rule
 
 Claude executes one contract/issue at a time on its specified branch and does not opportunistically implement the next contract. Codex/Astra independently reviews/tests by default and reads specs before diffs. ChatGPT maintains product architecture, task contracts, durable memory and architecture review.
 
-## Instagram after-window choice — Accepted
+## Accepted channel choices
 
-Both `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED` are supported. See ADR-014. Extended mode is an explicit real-human review/send path under currently permitted Human Agent eligibility, not an unattended AI worker pretending to be human.
+Instagram: `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED` (ADR-014). Extended mode is explicit real-human review/send, not unattended HUMAN_AGENT impersonation.
 
-## WhatsApp after-window choice — Accepted
+WhatsApp: `SERVICE_WINDOW_ONLY | TEMPLATE_REVIEW | TEMPLATE_AUTOPILOT` (ADR-016). No stored choice means `SERVICE_WINDOW_ONLY`; autopilot requires an explicit allowlist.
 
-ADR-016 supports all three account/workspace-selectable modes:
+## Accepted commercial architecture choices
 
-- `SERVICE_WINDOW_ONLY`
-- `TEMPLATE_REVIEW`
-- `TEMPLATE_AUTOPILOT`
-
-No stored choice means `SERVICE_WINDOW_ONLY` until configured. `TEMPLATE_AUTOPILOT` requires an explicit automation allowlist; an empty allowlist sends nothing unattended. Current provider consent/template/account-health/STOP rules and final pre-send revalidation always win.
+- billing provider is an adapter behind application-owned ports (ADR-017);
+- server-side entitlement state is authoritative;
+- customer AI usage is metered by logical generation operations, not raw provider requests/tokens (ADR-018);
+- Starter/Growth/Scale are the initial packaging shape, but actual prices/quotas/trial/overage/provider remain explicit owner decisions before production billing.
