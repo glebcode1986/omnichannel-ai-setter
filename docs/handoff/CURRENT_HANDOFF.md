@@ -22,7 +22,7 @@
 - ADRs 010–014 added for provider-neutral AI, hybrid retrieval, atomic/ambiguous delivery, echo-based takeover and configurable Instagram after-window policy.
 - Product owner explicitly chose two Instagram after-window modes: `STANDARD_ONLY` and `HUMAN_ASSISTED_EXTENDED`.
 - Phase 2 backlog open as #8–#16 with #17 independent Codex/Astra review.
-- First executable Claude task contract created at `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` for Issue #2.
+- Complete Phase 1 executable task-contract set created under `docs/tasks/` for Claude (#2–#6) and Codex/Astra (#7), with `docs/tasks/README.md` as the execution index.
 
 ## Important Instagram after-window rule
 
@@ -37,11 +37,12 @@ The current architecture does **not** authorize a background AI worker to silent
 
 ### Phase 1 — start here
 
-1. #2 — scaffold pnpm workspace/tooling (Claude). Task contract: `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md`.
-2. #3 — domain + channel contracts (Claude).
-3. #4 and #5 — DB/auth and queue/delay can proceed in parallel after #3 stabilizes.
-4. #6 — webhook ingestion after #3/#4/#5.
-5. #7 — Codex/Astra independently reviews/test-adds throughout Phase 1.
+1. #2 — scaffold pnpm workspace/tooling (Claude). Contract: `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md`.
+2. #3 — domain + channel contracts (Claude). Contract: `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`.
+3. #4 — Prisma/Auth.js/workspace isolation (Claude). Contract: `docs/tasks/P1-03_CLAUDE_TASK_CONTRACT.md`.
+4. #5 — BullMQ durable queues/delay primitives (Claude). Contract: `docs/tasks/P1-04_CLAUDE_TASK_CONTRACT.md`. #4 and #5 may proceed in parallel only after #3/shared IDs stabilize and on separate modules/branches.
+5. #6 — webhook ingestion after #3/#4/#5 (Claude). Contract: `docs/tasks/P1-05_CLAUDE_TASK_CONTRACT.md`.
+6. #7 — independent Codex/Astra review throughout Phase 1. Contract: `docs/tasks/R1_CODEX_ASTRA_REVIEW_CONTRACT.md`.
 
 ### Phase 2 — prepared but blocked until Phase 1 exit
 
@@ -60,12 +61,12 @@ See `docs/specs/PHASE2_IMPLEMENTATION_PLAN.md`.
 
 ## Coding rule for next session
 
-Do not restart architecture from chat memory. Read `PROJECT_CONTEXT.md`, this file, ADRs/specs, `UPSTREAM_EXTRACTION_MAP.md`, Phase 1/Phase 2 implementation plans and open GitHub issues.
+Do not restart architecture from chat memory. Read `PROJECT_CONTEXT.md`, this file, `docs/tasks/README.md`, ADRs/specs, `UPSTREAM_EXTRACTION_MAP.md`, Phase 1/Phase 2 implementation plans and open GitHub issues.
 
-Claude still starts with issue #2. Do not jump to #8 just because Phase 2 is documented; #8–#16 are blocked by Phase 1 exit criteria.
+Claude still starts with Issue #2. Do not jump to #8 merely because Phase 2 is documented; #8–#16 remain blocked by Phase 1 exit criteria.
 
 Codex/Astra is a reviewer/test author unless explicitly assigned a bounded independent module.
 
 ## Immediate next action
 
-Run `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` in Claude Code. Claude should create branch `feat/p1-01-project-skeleton`, implement only Issue #2, run required checks, and open a PR without merging. Then review that PR against #2 acceptance criteria and run the #7 independent review track before/alongside merge.
+Run `docs/tasks/P1-01_CLAUDE_TASK_CONTRACT.md` in Claude Code. Claude should create branch `feat/p1-01-project-skeleton`, implement only Issue #2, run required checks and open a PR without merging. Then perform ChatGPT architecture review and the #7 independent Codex/Astra review against that PR before/alongside merge.
