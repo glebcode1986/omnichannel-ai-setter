@@ -50,7 +50,7 @@ Phase 1 (skeleton). The pnpm workspace, toolchain and runnable web/worker entryp
 
 ### Prerequisites
 
-- Node.js 24 (`nvm use` reads `.nvmrc`); `pnpm install` refuses other major versions.
+- Node.js 24 (`nvm use` reads `.nvmrc`); `pnpm install` refuses other versions (`devEngines.runtime`).
 - pnpm 12 via Corepack: `corepack enable` (the exact version is pinned by `packageManager` in `package.json`).
 
 No database, Redis, Meta credentials or LLM keys are needed for the current scaffold.
@@ -105,7 +105,7 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 
 ### Environment variables
 
-Each app validates its environment once at startup through `@omnichannel/env`; invalid configuration fails with a message naming the variable, never its value.
+Each app validates its environment once at startup through `@omnichannel/env`; invalid configuration fails with a message naming the variable and Zod's built-in rule description (custom schema messages are replaced with a placeholder, so values are not echoed).
 
 - `apps/web/.env.example` → copy to `apps/web/.env.local` (loaded by Next.js).
 - `apps/worker/.env.example` → copy to `apps/worker/.env` (loaded by `pnpm dev:worker`; `start` reads only the real process environment). Without that file Node prints `.env not found. Continuing without it.` — harmless.

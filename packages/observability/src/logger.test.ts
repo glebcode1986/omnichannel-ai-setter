@@ -94,6 +94,44 @@ describe("createLogger", () => {
     expect(JSON.stringify(entry)).not.toContain("should-not-be-logged");
   });
 
+  it("never trusts an error's own toJSON or non-error causes, codes and aggregate members", () => {
+    const { logger, lines } = captureLogger("info");
+    const secret = "Bearer should-not-be-logged";
+    class HttpClientError extends Error {
+      config = { headers: { authorization: secret } };
+      toJSON() {
+        return { message: this.message, config: this.config };
+      }
+    }
+    const plainCause = Object.assign(new Error("send failed"), { cause: { status: 401, config: { headers: { authorization: secret } } } });
+    const objectCode = Object.assign(new Error("weird"), { code: { token: secret } });
+    const aggregate = new AggregateError([{ request: { headers: { authorization: secret } } }, new Error("real")], "many");
+    const wrapped = new Error("outer", { cause: new HttpClientError("http 401") });
+
+    logger.error("failure", { direct: new HttpClientError("http 401"), plainCause, objectCode, aggregate, wrapped });
+
+    const entry = lines[0]?.entry;
+    expect(JSON.stringify(entry)).not.toContain("should-not-be-logged");
+    expect(entry).toMatchObject({
+      direct: { name: "Error", message: "http 401" },
+      plainCause: { message: "send failed", cause: "[non-error object]" },
+      aggregate: { errors: ["[non-error object]", { message: "real" }] },
+      wrapped: { cause: { message: "http 401" } },
+    });
+    expect(entry?.objectCode).not.toHaveProperty("code");
+  });
+
+  it("serializes errors created in another realm", async () => {
+    const { runInNewContext } = await import("node:vm");
+    const { logger, lines } = captureLogger("info");
+    const foreign = runInNewContext('Object.assign(new Error("from vm"), { config: { secret: "vm-secret" } })') as unknown;
+
+    logger.error("failure", { error: foreign });
+
+    expect(lines[0]?.entry).toMatchObject({ error: { name: "Error", message: "from vm" } });
+    expect(JSON.stringify(lines[0]?.entry)).not.toContain("vm-secret");
+  });
+
   it("marks self-referencing error causes as circular", () => {
     const { logger, lines } = captureLogger("info");
     const error = new Error("loop");

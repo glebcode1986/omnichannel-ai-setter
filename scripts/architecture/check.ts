@@ -61,6 +61,7 @@ export type ViolationKind =
   | "missing-package"
   | "non-workspace-protocol"
   | "aliased-dependency"
+  | "non-registry-dependency"
   | "disallowed-workspace-dependency"
   | "dependency-cycle"
   | "forbidden-dependency"
@@ -72,6 +73,7 @@ export type ViolationKind =
   | "node-builtin-in-pure-package"
   | "node-types-in-pure-package"
   | "cross-package-relative-import"
+  | "runtime-import-of-non-runtime-code"
   | "unresolved-alias-import"
   | "invalid-import-specifier"
   | "symlink-in-package";
@@ -112,6 +114,11 @@ const matchesAny = (name: string, patterns: readonly string[] | undefined): bool
 export function isWorkspacePackageName(name: string): boolean {
   return name.startsWith(WORKSPACE_SCOPE);
 }
+
+/** Build/tool output directories that the workspace loader skips at the top level of a package. */
+export const TOP_LEVEL_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set(["dist", "out", "build", "coverage"]);
+
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 
 const TEST_FILE_NAME = /\.(?:test|spec|test-d|spec-d|bench)\.[cm]?[jt]sx?$/;
 const TEST_SUPPORT_FILE_NAME = /^(?:vitest\.setup|test-utils|test-helpers)\.[cm]?[jt]sx?$/;
@@ -165,13 +172,14 @@ function declaredFields(manifest: Manifest, name: string): DependencyField[] {
 }
 
 interface ResolvedDependency {
-  readonly field: DependencyField;
   readonly key: string;
   readonly spec: string;
   /** Package the entry really installs: the key, an alias target, or the package at a local path. */
   readonly target: string;
   /** Set when the entry installs something under a different name or from a local path. */
   readonly indirection?: string;
+  /** Set when the entry is not a registry range/tag, so the installed package name is unknown. */
+  readonly nonRegistry?: string;
 }
 
 const WORKSPACE_RANGE = /^(?:\*|\^|~|[\^~]?\d[\w.+-]*)$/;
@@ -184,12 +192,11 @@ function parseAliasTarget(value: string): string {
 
 function resolveDependency(
   owner: { dir: string },
-  field: DependencyField,
   key: string,
   spec: string,
   packagesByDir: ReadonlyMap<string, WorkspacePackage>,
 ): ResolvedDependency {
-  const base = { field, key, spec };
+  const base = { key, spec };
   const resolveLocalPath = (localPath: string): string => {
     const resolved = path.posix.normalize(path.posix.join(owner.dir, localPath.replaceAll("\\", "/")));
     return packagesByDir.get(resolved)?.name ?? `(path ${resolved})`;
@@ -213,7 +220,30 @@ function resolveDependency(
   if (spec.startsWith("npm:")) {
     return { ...base, target: parseAliasTarget(spec.slice("npm:".length)), indirection: "npm: alias" };
   }
+  // Registry ranges and dist-tags contain neither ":" nor "/". Everything else — git/tarball URLs,
+  // github:/jsr:/catalog: protocols, user/repo shorthands — can install any package under this key.
+  if (spec.includes(":") || spec.includes("/")) {
+    const protocol = /^([a-z+]+):/.exec(spec)?.[1];
+    return { ...base, target: key, nonRegistry: protocol ? `${protocol}: specifier` : "git/path shorthand" };
+  }
   return { ...base, target: key };
+}
+
+function reportResolution(dependency: ResolvedDependency, where: string, report: (kind: ViolationKind, message: string) => void) {
+  if (dependency.indirection) {
+    report(
+      "aliased-dependency",
+      `${where} uses a ${dependency.indirection} ("${dependency.spec}"). Aliases and local-path protocols ` +
+        "hide architecture edges; depend on registry packages or @omnichannel/* packages via workspace:* by name.",
+    );
+  }
+  if (dependency.nonRegistry) {
+    report(
+      "non-registry-dependency",
+      `${where} uses a ${dependency.nonRegistry} ("${dependency.spec}"); the installed package cannot be checked. ` +
+        "Use a registry version range (extend scripts/architecture before adopting catalogs or git dependencies).",
+    );
+  }
 }
 
 export function checkWorkspace(packages: readonly WorkspacePackage[], options: CheckOptions = {}): Violation[] {
@@ -251,7 +281,7 @@ export function checkWorkspace(packages: readonly WorkspacePackage[], options: C
   }
 
   if (root) {
-    violations.push(...checkRoot(root));
+    violations.push(...checkRoot(root, packagesByDir));
   }
   violations.push(...findInconsistentVersions(packages, root));
   violations.push(...findDependencyCycles(packages));
@@ -271,17 +301,10 @@ function checkManifest(
 
   for (const field of DEPENDENCY_FIELDS) {
     for (const [key, spec] of Object.entries(workspacePackage.manifest[field] ?? {})) {
-      const dependency = resolveDependency(workspacePackage, field, key, spec, packagesByDir);
+      const dependency = resolveDependency(workspacePackage, key, spec, packagesByDir);
       const { target } = dependency;
       const shown = target === key ? key : `${key} (-> ${target})`;
-
-      if (dependency.indirection) {
-        report(
-          "aliased-dependency",
-          `${from} ${field}.${key} uses a ${dependency.indirection} ("${spec}"). Aliases and local-path protocols ` +
-            "hide architecture edges; depend on registry packages or @omnichannel/* packages via workspace:* by name.",
-        );
-      }
+      reportResolution(dependency, `${from} ${field}.${key}`, report);
 
       if (matchesAny(target, GLOBALLY_FORBIDDEN_DEPENDENCIES) || matchesAny(key, GLOBALLY_FORBIDDEN_DEPENDENCIES)) {
         report(
@@ -336,23 +359,34 @@ function checkPackageConfiguration(workspacePackage: WorkspacePackage, rule: Pac
     });
   }
 
-  if (rule.pure && workspacePackage.tsconfigTypes?.some((type) => type === "node" || type === "@types/node")) {
+  if (rule.pure && workspacePackage.tsconfigTypes?.some(loadsNodeTypes)) {
     violations.push({
       kind: "node-types-in-pure-package",
       packageName: from,
       file: path.posix.join(workspacePackage.dir, "tsconfig.json"),
-      message: `${from} is pure; its tsconfig must not load Node.js types (compilerOptions.types includes "node").`,
+      message: `${from} is pure; its tsconfig must not load Node.js types (compilerOptions.types: ${JSON.stringify(workspacePackage.tsconfigTypes)}).`,
     });
   }
   return violations;
 }
 
-function matchAlias(specifier: string, aliases: readonly ModuleAlias[]): string[] | undefined {
+/** `node`, `node/`, `@types/node` or the TypeScript 6 wildcard `*` (all visible @types). */
+export function loadsNodeTypes(typeEntry: string): boolean {
+  const normalized = typeEntry.replace(/\/+$/, "").replace(/^@types\//, "");
+  return normalized === "*" || normalized === "node";
+}
+
+/**
+ * Targets of every alias matching `specifier`. Resolvers pick one (exact key, then longest prefix),
+ * but checking all matches means declaration order can never hide a forbidden target.
+ */
+function matchAliases(specifier: string, aliases: readonly ModuleAlias[]): string[] | undefined {
+  const targets: string[] = [];
   for (const alias of aliases) {
     const star = alias.pattern.indexOf("*");
     if (star === -1) {
       if (alias.pattern === specifier) {
-        return [...alias.targets];
+        targets.push(...alias.targets);
       }
       continue;
     }
@@ -360,10 +394,34 @@ function matchAlias(specifier: string, aliases: readonly ModuleAlias[]): string[
     const suffix = alias.pattern.slice(star + 1);
     if (specifier.length >= prefix.length + suffix.length && specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
       const captured = specifier.slice(prefix.length, specifier.length - suffix.length);
-      return alias.targets.map((target) => target.replace("*", captured));
+      targets.push(...alias.targets.map((target) => target.replace("*", captured)));
     }
   }
-  return undefined;
+  return targets.length > 0 ? targets : undefined;
+}
+
+/** Package-relative source file a local module path refers to, following TS/bundler lookup rules. */
+function resolveLocalModule(target: string, knownFiles: ReadonlySet<string>): string | undefined {
+  const candidates = [target];
+  const jsExtension = /\.([cm]?)jsx?$/.exec(target);
+  if (jsExtension) {
+    const stem = target.slice(0, -jsExtension[0].length);
+    candidates.push(`${stem}.${jsExtension[1] ?? ""}ts`, `${stem}.tsx`);
+  }
+  for (const extension of SOURCE_EXTENSIONS) {
+    candidates.push(`${target}${extension}`, `${target}/index${extension}`);
+  }
+  return candidates.find((candidate) => knownFiles.has(candidate));
+}
+
+function isUnscannedLocation(packageRelativePath: string): boolean {
+  const segments = packageRelativePath.split("/");
+  const first = segments[0] ?? "";
+  return (
+    (first.startsWith(".") && first !== "." && first !== "..") ||
+    TOP_LEVEL_OUTPUT_DIRECTORIES.has(first) ||
+    segments.includes("node_modules")
+  );
 }
 
 function checkSourceImports(
@@ -375,6 +433,7 @@ function checkSourceImports(
   const violations: Violation[] = [];
   const from = workspacePackage.name;
   const rootDevDependencies = rootManifest?.devDependencies ?? {};
+  const knownFiles = new Set(workspacePackage.sourceFiles.map((sourceFile) => sourceFile.path));
 
   for (const sourceFile of workspacePackage.sourceFiles) {
     const file = path.posix.join(workspacePackage.dir, sourceFile.path);
@@ -389,6 +448,19 @@ function checkSourceImports(
           "cross-package-relative-import",
           `"${specifier}" escapes ${workspacePackage.dir}; import other packages by name through their public entrypoint.`,
         );
+        return;
+      }
+      if (!runtime) {
+        return;
+      }
+      // Runtime-only rules must not be bypassable by one local hop into test/tooling/unscanned code.
+      const localFile = resolveLocalModule(resolved, knownFiles);
+      if (localFile ? !isRuntimeSourceFile(localFile) : isUnscannedLocation(resolved)) {
+        report(
+          "runtime-import-of-non-runtime-code",
+          `"${specifier}" resolves to ${localFile ?? resolved}, which is test, tooling or unscanned code; ` +
+            "runtime code may only import runtime files under src/.",
+        );
       }
     };
 
@@ -398,7 +470,7 @@ function checkSourceImports(
         return;
       }
 
-      const aliasTargets = depth === 0 ? matchAlias(specifier, workspacePackage.aliases ?? []) : undefined;
+      const aliasTargets = depth === 0 ? matchAliases(specifier, workspacePackage.aliases ?? []) : undefined;
       if (aliasTargets) {
         for (const target of aliasTargets) {
           if (target.startsWith(".") || target.startsWith("/")) {
@@ -498,11 +570,12 @@ function checkSourceImports(
     }
 
     for (const typeReference of new Set(sourceFile.typeReferences ?? [])) {
-      if (typeReference === "node") {
-        if (rule.pure && runtime) {
+      if (loadsNodeTypes(typeReference)) {
+        // Any file in the package program (tests included) widens the globals for runtime code too.
+        if (rule.pure) {
           report(
             "node-types-in-pure-package",
-            `/// <reference types="node" /> loads Node.js globals into ${from}, which is pure.`,
+            `/// <reference types="${typeReference}" /> loads Node.js globals into ${from}, which is pure.`,
           );
         }
         continue;
@@ -513,11 +586,14 @@ function checkSourceImports(
   return violations;
 }
 
-function checkRoot(root: RootWorkspace): Violation[] {
+function checkRoot(root: RootWorkspace, packagesByDir: ReadonlyMap<string, WorkspacePackage>): Violation[] {
   const violations: Violation[] = [];
+  const report = (kind: ViolationKind, message: string) => violations.push({ kind, packageName: ROOT_PACKAGE, message });
   for (const field of DEPENDENCY_FIELDS) {
     for (const [key, spec] of Object.entries(root.manifest[field] ?? {})) {
-      const target = spec.startsWith("npm:") ? parseAliasTarget(spec.slice("npm:".length)) : key;
+      const dependency = resolveDependency({ dir: "." }, key, spec, packagesByDir);
+      reportResolution(dependency, `Root package.json ${field}.${key}`, report);
+      const { target } = dependency;
       if (matchesAny(key, GLOBALLY_FORBIDDEN_DEPENDENCIES) || matchesAny(target, GLOBALLY_FORBIDDEN_DEPENDENCIES)) {
         violations.push({
           kind: "forbidden-dependency",
@@ -597,7 +673,7 @@ export function findDependencyCycles(packages: readonly WorkspacePackage[]): Vio
     const targets = new Set<string>();
     for (const field of DEPENDENCY_FIELDS) {
       for (const [key, spec] of Object.entries(workspacePackage.manifest[field] ?? {})) {
-        const { target } = resolveDependency(workspacePackage, field, key, spec, packagesByDir);
+        const { target } = resolveDependency(workspacePackage, key, spec, packagesByDir);
         if (names.has(target)) {
           targets.add(target);
         }

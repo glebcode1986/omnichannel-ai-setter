@@ -30,18 +30,40 @@ const SEVERITY: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, erro
 const CORE_FIELDS = new Set(["time", "level", "event"]);
 
 /**
- * Diagnostic properties copied from errors in addition to name/message/stack. Deliberately an
- * allowlist: HTTP/DB client errors often carry request config, headers or credentials.
+ * Primitive diagnostic properties copied from errors in addition to name/message/stack. Deliberately
+ * an allowlist: HTTP/DB client errors often carry request config, headers or credentials.
  */
-const ERROR_DIAGNOSTIC_FIELDS = ["code", "errno", "syscall", "address", "port", "cause", "errors"] as const;
+const ERROR_PRIMITIVE_FIELDS = ["code", "errno", "syscall", "address", "port"] as const;
 
 export function isLogLevel(value: unknown): value is LogLevel {
   return typeof value === "string" && (LOG_LEVELS as readonly string[]).includes(value);
 }
 
+const guardedStreams = new WeakSet<NodeJS.WriteStream>();
+
+/**
+ * A closed pipe (log collector restarted, `| head`) is reported asynchronously through the stream's
+ * 'error' event, which would otherwise crash the process. Losing log output must not stop the
+ * worker from finishing its jobs; any other stream error still surfaces.
+ */
+function guardStream(stream: NodeJS.WriteStream): void {
+  if (guardedStreams.has(stream)) {
+    return;
+  }
+  guardedStreams.add(stream);
+  stream.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") {
+      throw error;
+    }
+  });
+}
+
 const defaultSink = (line: string, level: LogLevel): void => {
   const stream = SEVERITY[level] >= SEVERITY.warn ? process.stderr : process.stdout;
-  stream.write(`${line}\n`);
+  guardStream(stream);
+  if (!stream.destroyed && stream.writable) {
+    stream.write(`${line}\n`);
+  }
 };
 
 /**
@@ -72,7 +94,7 @@ export function createLogger(options: LoggerOptions): Logger {
     try {
       sink(line, level);
     } catch {
-      // A broken sink (e.g. closed stdout pipe) must not take business code down with it.
+      // A sink that throws synchronously must not take business code down with it.
     }
   };
 
@@ -108,40 +130,71 @@ function buildEntry(
   return entry;
 }
 
+function isError(value: unknown): value is Error {
+  // Cross-realm safe (errors from vm contexts or worker threads are not `instanceof Error` here).
+  return value instanceof Error || Object.prototype.toString.call(value) === "[object Error]";
+}
+
+function isPrimitive(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function describeNonError(value: unknown): unknown {
+  return isPrimitive(value) ? value : `[non-error ${value === null ? "null" : typeof value}]`;
+}
+
+/**
+ * Only name/message/stack, primitive diagnostic codes, and error-valued `cause`/`errors` are kept.
+ * An error's own `toJSON` is ignored because it is where HTTP clients expose request config.
+ */
 function serializeError(error: Error): Record<string, unknown> {
-  const serialized: Record<string, unknown> = { name: error.name, message: error.message, stack: error.stack };
   const record = error as unknown as Record<string, unknown>;
-  for (const field of ERROR_DIAGNOSTIC_FIELDS) {
-    if (record[field] !== undefined) {
+  const serialized: Record<string, unknown> = {
+    name: typeof record.name === "string" ? record.name : "Error",
+    message: typeof record.message === "string" ? record.message : "",
+    stack: typeof record.stack === "string" ? record.stack : undefined,
+  };
+  for (const field of ERROR_PRIMITIVE_FIELDS) {
+    if (isPrimitive(record[field])) {
       serialized[field] = record[field];
     }
+  }
+  if (record.cause !== undefined) {
+    serialized.cause = isError(record.cause) ? record.cause : describeNonError(record.cause);
+  }
+  if (Array.isArray(record.errors)) {
+    serialized.errors = record.errors.map((entry: unknown) => (isError(entry) ? entry : describeNonError(entry)));
   }
   return serialized;
 }
 
 function jsonReplacer(): (key: string, value: unknown) => unknown {
   const ancestors: unknown[] = [];
-  return function (this: unknown, _key: string, value: unknown): unknown {
-    if (typeof value === "bigint") {
-      return value.toString();
+  return function (this: unknown, key: string, value: unknown): unknown {
+    // JSON.stringify applies `toJSON` before calling the replacer; classify the raw property instead.
+    const raw = key === "" || this === null || typeof this !== "object" ? value : (this as Record<string, unknown>)[key];
+    const current = isError(raw) ? raw : value;
+
+    if (typeof current === "bigint") {
+      return current.toString();
     }
-    if (typeof value !== "object" || value === null) {
-      return value;
+    if (typeof current !== "object" || current === null) {
+      return current;
     }
     // `this` is the object containing the current key; trim ancestors that are no longer on the path.
     while (ancestors.length > 0 && ancestors.at(-1) !== this) {
       ancestors.pop();
     }
-    if (ancestors.includes(value)) {
+    if (ancestors.includes(current)) {
       return "[Circular]";
     }
-    ancestors.push(value);
-    if (value instanceof Error) {
+    ancestors.push(current);
+    if (isError(current)) {
       // Its children are visited with the serialized object as `this`, so track both.
-      const serialized = serializeError(value);
+      const serialized = serializeError(current);
       ancestors.push(serialized);
       return serialized;
     }
-    return value;
+    return current;
   };
 }

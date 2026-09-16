@@ -5,6 +5,7 @@ import ts from "typescript";
 
 import {
   DEPENDENCY_FIELDS,
+  TOP_LEVEL_OUTPUT_DIRECTORIES,
   type Manifest,
   type ModuleAlias,
   type RootWorkspace,
@@ -13,8 +14,6 @@ import {
 } from "./check.ts";
 
 const SOURCE_FILE = /\.(?:[cm]?ts|tsx|[cm]?js|jsx)$/;
-/** Build/tool output directories, skipped only at the top level of a package. */
-const TOP_LEVEL_OUTPUT_DIRECTORIES = new Set(["dist", "out", "build", "coverage"]);
 /** Generated declaration files that are not hand-written source. */
 const GENERATED_FILES = new Set(["next-env.d.ts"]);
 
@@ -147,12 +146,15 @@ async function collectSourceFiles(
   const symlinks: string[] = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    // Before any name-based skip: a symlink called node_modules/dist/.shared is still a symlink.
+    if (entry.isSymbolicLink()) {
+      symlinks.push(relativePath);
+      continue;
+    }
     if (entry.name === "node_modules" || (relativeDir === "" && (entry.name.startsWith(".") || options.topLevelSkip.has(entry.name)))) {
       continue;
     }
-    if (entry.isSymbolicLink()) {
-      symlinks.push(relativePath);
-    } else if (entry.isDirectory()) {
+    if (entry.isDirectory()) {
       const nested = await collectSourceFiles(baseDir, options, relativePath);
       files.push(...nested.files);
       symlinks.push(...nested.symlinks);
@@ -182,7 +184,8 @@ function readTsconfig(packageDir: string): { types?: string[]; aliases: ModuleAl
   const config: unknown = result.config;
   const parsed = ts.parseJsonConfigFileContent(config, ts.sys, packageDir, undefined, configFile);
   const options = parsed.options as ts.CompilerOptions & { pathsBasePath?: string };
-  const basePath = options.pathsBasePath ?? packageDir;
+  // TypeScript resolves `paths` against `baseUrl` when set, otherwise against the config declaring them.
+  const basePath = options.baseUrl ?? options.pathsBasePath ?? packageDir;
   const aliases = Object.entries(options.paths ?? {}).map(([pattern, targets]) => ({
     pattern,
     targets: targets.map((target) => toPackageRelative(packageDir, path.resolve(basePath, target))),

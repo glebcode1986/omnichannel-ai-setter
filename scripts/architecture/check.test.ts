@@ -211,6 +211,45 @@ describe("checkWorkspace: manifest rules", () => {
     expect(violations.slice(1)[0]?.message).toContain(target);
   });
 
+  it.each([
+    ["git URL", "git+https://github.com/WhiskeySockets/Baileys.git"],
+    ["github shorthand protocol", "github:WhiskeySockets/Baileys"],
+    ["user/repo shorthand", "WhiskeySockets/Baileys#main"],
+    ["tarball URL", "https://registry.npmjs.org/baileys/-/baileys-6.7.18.tgz"],
+    ["catalog", "catalog:"],
+    ["jsr", "jsr:@std/path@^1.0.0"],
+  ])("rejects a %s dependency whose installed package cannot be checked", (_label, spec) => {
+    const violations = checkWorkspace(
+      baselineWorkspace([workspacePackage(scoped("channel-whatsapp"), { dependencies: { "harmless-name": spec } })]),
+    );
+
+    expect(kinds(violations)).toEqual(["non-registry-dependency"]);
+  });
+
+  it("applies alias and non-registry checks to the root manifest", () => {
+    const violations = checkWorkspace(baselineWorkspace(), {
+      root: {
+        manifest: {
+          devDependencies: {
+            "wa-local": "link:./vendor/baileys",
+            "wa-file": "file:./vendor/whatsapp-web.js-1.0.0.tgz",
+            "wa-git": "github:WhiskeySockets/Baileys",
+            "wa-npm": "npm:baileys@^6.7.18",
+          },
+        },
+        sourceFiles: [],
+      },
+    });
+
+    expect(kinds(violations)).toEqual([
+      "aliased-dependency",
+      "aliased-dependency",
+      "non-registry-dependency",
+      "aliased-dependency",
+      "forbidden-dependency",
+    ]);
+  });
+
   it("rejects the same third-party package declared with different ranges", () => {
     const violations = checkWorkspace(
       baselineWorkspace([
@@ -344,20 +383,58 @@ describe("checkWorkspace: source imports", () => {
     ]);
   });
 
-  it("rejects Node.js type definitions in pure packages via tsconfig or triple-slash references", () => {
+  it("rejects Node.js type definitions in pure packages via tsconfig or triple-slash references (tests included)", () => {
     const violations = checkWorkspace(
       baselineWorkspace([
-        workspacePackage(scoped("channel-core"), {}, [], { tsconfigTypes: ["node"] }),
-        workspacePackage(scoped("domain"), {}, [file("src/clock.ts", [], ["node"]), file("src/clock.test.ts", [], ["node"])], {
-          tsconfigTypes: [],
+        workspacePackage(scoped("channel-core"), {}, [], { tsconfigTypes: ["*"] }),
+        workspacePackage(scoped("domain"), {}, [file("src/clock.ts", [], ["node"]), file("src/clock.test.ts", [], ["node/"])], {
+          tsconfigTypes: ["@types/node/"],
         }),
         workspacePackage(scoped("queue"), {}, [file("src/index.ts", [], ["node"])], { tsconfigTypes: ["node"] }),
       ]),
     );
 
     expect(kindsAndFiles(violations)).toEqual([
+      ["node-types-in-pure-package", "packages/domain/tsconfig.json"],
       ["node-types-in-pure-package", "packages/domain/src/clock.ts"],
+      ["node-types-in-pure-package", "packages/domain/src/clock.test.ts"],
       ["node-types-in-pure-package", "packages/channel-core/tsconfig.json"],
+    ]);
+  });
+
+  it("rejects runtime code reaching test, tooling or unscanned code through a local hop", () => {
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(scoped("domain"), {}, [
+          file("src/index.ts", [
+            "./model.js",
+            "../package.json",
+            "./fixtures/ids",
+            "./__tests__/proc",
+            "./test-utils",
+            "../lib/http",
+            "../build/bridge",
+            "../.internal/bridge",
+            "./node_modules/index",
+          ]),
+          file("src/model.ts", []),
+          file("src/fixtures/ids.ts", ["node:crypto"]),
+          file("src/__tests__/proc.ts", []),
+          file("src/test-utils.ts", []),
+          file("lib/http.ts", []),
+          file("src/index.test.ts", ["./fixtures/ids", "./test-utils"]),
+        ]),
+      ]),
+    );
+
+    expect(violations.map((violation) => [violation.kind, violation.message.split('"')[1]])).toEqual([
+      ["runtime-import-of-non-runtime-code", "./fixtures/ids"],
+      ["runtime-import-of-non-runtime-code", "./__tests__/proc"],
+      ["runtime-import-of-non-runtime-code", "./test-utils"],
+      ["runtime-import-of-non-runtime-code", "../lib/http"],
+      ["runtime-import-of-non-runtime-code", "../build/bridge"],
+      ["runtime-import-of-non-runtime-code", "../.internal/bridge"],
+      ["runtime-import-of-non-runtime-code", "./node_modules/index"],
     ]);
   });
 
@@ -428,6 +505,26 @@ describe("checkWorkspace: source imports", () => {
       ["cross-package-relative-import", "#db/index"],
       ["undeclared-import", "zod"],
       ["unresolved-alias-import", "#missing"],
+    ]);
+  });
+
+  it("checks every matching alias, so a broad alias declared first cannot hide a specific one", () => {
+    const violations = checkWorkspace(
+      baselineWorkspace([
+        workspacePackage(scoped("domain"), {}, [file("src/index.ts", ["@/infra/index", "#lib/store"])], {
+          aliases: [
+            { pattern: "#lib/*", targets: ["./src/*"] },
+            { pattern: "#lib/store", targets: ["pg", "./src/store.ts"] },
+            { pattern: "@/*", targets: ["./src/*"] },
+            { pattern: "@/infra/*", targets: ["../db/src/*"] },
+          ],
+        }),
+      ]),
+    );
+
+    expect(violations.map((violation) => [violation.kind, violation.message.split('"')[1]])).toEqual([
+      ["cross-package-relative-import", "@/infra/index"],
+      ["forbidden-import", "pg"],
     ]);
   });
 
@@ -574,6 +671,30 @@ describe("loadWorkspace", () => {
       { pattern: "@/*", targets: ["./src/*"] },
     ]);
     expect(root.sourceFiles).toEqual([{ path: "scripts/tool.ts", imports: ["whatsapp-web.js"], typeReferences: [] }]);
+  });
+
+  it("reports symlinks even when they use names the scanner otherwise skips, and honours tsconfig baseUrl", async () => {
+    const rootDir = await scaffold({
+      "package.json": JSON.stringify({ name: "root" }),
+      "pnpm-workspace.yaml": "packages:\n  - packages/*\n",
+      "packages/a/package.json": JSON.stringify({ name: "@x/a" }),
+      "packages/a/tsconfig.json": JSON.stringify({
+        compilerOptions: { ignoreDeprecations: "6.0", baseUrl: "..", paths: { "#infra/*": ["b/src/*"] } },
+      }),
+      "packages/a/src/index.ts": "export {};",
+      "packages/b/package.json": JSON.stringify({ name: "@x/b" }),
+      "packages/b/src/index.ts": "export {};",
+    });
+    const target = path.join(rootDir, "packages/b/src");
+    await symlink(target, path.join(rootDir, "packages/a/src/node_modules"));
+    await symlink(target, path.join(rootDir, "packages/a/dist"));
+    await symlink(target, path.join(rootDir, "packages/a/.shared"));
+
+    const { packages } = await loadWorkspace(rootDir);
+    const a = packages.find((candidate) => candidate.name === "@x/a");
+
+    expect(a?.symlinks?.slice().sort()).toEqual([".shared", "dist", "src/node_modules"]);
+    expect(a?.aliases).toEqual([{ pattern: "#infra/*", targets: ["../b/src/*"] }]);
   });
 
   it("fails loudly on a malformed package.json instead of skipping the package", async () => {

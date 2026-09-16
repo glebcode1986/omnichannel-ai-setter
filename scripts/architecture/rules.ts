@@ -105,8 +105,9 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
   },
   [pkg("application")]: {
     layer: "core",
-    // `ai`: ADR-010 / AI_ORCHESTRATION.md declare the provider-neutral ReplyModel port and the
-    // Zod draft contract in packages/ai; application orchestration consumes them.
+    // `ai`: AI_ORCHESTRATION.md says packages/ai exposes the provider-neutral ReplyModel interface,
+    // which application orchestration (P2-03) consumes. Where the Zod draft schema lives is open:
+    // ADR-010 requires domain code to consume it too, so domain (with ai -> domain) is a candidate.
     allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("ai")],
     forbiddenThirdParty: CORE_FORBIDDEN_THIRD_PARTY,
   },

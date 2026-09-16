@@ -63,33 +63,66 @@ describe("parseEnv", () => {
     expect(JSON.stringify((caught as EnvValidationError).issues)).not.toContain(secret);
   });
 
-  it("withholds custom messages that interpolate the rejected value", () => {
-    const secret = "fake-app-secret-value";
-    const schema = z.object({
-      APP_SECRET: z.string().refine(() => false, { error: (issue) => `bad secret ${String(issue.input)}` }),
-      OTHER: z.string().refine(() => false, { error: "must be something else" }),
-    });
-
-    const error = captureError(() => parseEnv(schema, { APP_SECRET: secret, OTHER: "abc" }));
+  it("keeps Zod's built-in messages, including allowed options for near-miss typos", () => {
+    const error = captureError(() => parseEnv(runtimeEnvSchema, { NODE_ENV: "prod", LOG_LEVEL: "err" }));
 
     expect(error.issues).toEqual([
-      { key: "APP_SECRET", message: expect.stringContaining("withheld") as string },
-      { key: "OTHER", message: "must be something else" },
+      { key: "NODE_ENV", message: 'Invalid option: expected one of "development"|"test"|"production"' },
+      { key: "LOG_LEVEL", message: 'Invalid option: expected one of "debug"|"info"|"warn"|"error"' },
     ]);
-    expect(error.message).not.toContain(secret);
   });
 
-  it("converts exceptions thrown by transforms into a value-free EnvValidationError", () => {
+  it("replaces every custom message, whether it echoes, escapes, truncates or never mentions the value", () => {
+    const schema = z.object({
+      VERBATIM: z.string().refine(() => false, { error: (issue) => `bad ${String(issue.input)}` }),
+      ESCAPED: z.string().refine(() => false, { error: (issue) => `got ${JSON.stringify(issue.input)}` }),
+      TRUNCATED: z.string().refine(() => false, { error: (issue) => `${String(issue.input).slice(0, 8)}...` }),
+      TRIMMED: z
+        .string()
+        .trim()
+        .min(100, { error: (issue) => `too short: ${issue.input as string}` }),
+      STATIC: z.string().refine(() => false, "must be something else"),
+    });
+    const values = {
+      VERBATIM: "verbatim-secret",
+      ESCAPED: 'esc"aped\\secret',
+      TRUNCATED: "tok_live_ABCDEFGHIJ",
+      TRIMMED: "  padded-secret  ",
+      STATIC: "static-secret",
+    };
+
+    const error = captureError(() => parseEnv(schema, values));
+
+    expect(error.issues.map((issue) => issue.key)).toEqual(["VERBATIM", "ESCAPED", "TRUNCATED", "TRIMMED", "STATIC"]);
+    for (const issue of error.issues) {
+      expect(issue.message).toMatch(/withheld/);
+    }
+    for (const fragment of ["verbatim-secret", "aped", "tok_live", "padded-secret", "static-secret"]) {
+      expect(error.message).not.toContain(fragment);
+    }
+  });
+
+  it("converts exceptions thrown by transforms into a fixed, value-free EnvValidationError", () => {
     const secret = "not-json-app-secret-value";
+    class SecretBearingError extends Error {
+      override name = `Bad(${secret})`;
+    }
     const schema = z.object({
       SECRETS_JSON: z.string().transform((value) => JSON.parse(value) as unknown),
       CALLBACK_URL: z.string().transform((value) => new URL(value)),
+      CUSTOM: z.string().transform(() => {
+        throw new SecretBearingError(secret);
+      }),
     });
 
-    for (const source of [{ SECRETS_JSON: secret, CALLBACK_URL: "https://example.test" }, { SECRETS_JSON: "{}", CALLBACK_URL: secret }]) {
+    for (const source of [
+      { SECRETS_JSON: secret, CALLBACK_URL: "https://example.test", CUSTOM: "x" },
+      { SECRETS_JSON: "{}", CALLBACK_URL: secret, CUSTOM: "x" },
+      { SECRETS_JSON: "{}", CALLBACK_URL: "https://example.test", CUSTOM: secret },
+    ]) {
       const error = captureError(() => parseEnv(schema, source));
 
-      expect(error.issues).toEqual([{ key: "(schema)", message: expect.stringMatching(/threw (SyntaxError|TypeError)/) as string }]);
+      expect(error.issues).toEqual([{ key: "(schema)", message: expect.stringMatching(/threw an exception/) as string }]);
       expect(error.message).not.toContain(secret);
       expect(error.cause).toBeUndefined();
     }

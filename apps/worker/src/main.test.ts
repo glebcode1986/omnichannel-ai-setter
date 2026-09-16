@@ -79,6 +79,27 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
   }, 30_000);
 
+  it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {
+    const result = await new Promise<ProcessResult>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+        cwd: appDir,
+        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stderr = "";
+      child.stdout.destroy();
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (code, signal) => resolve({ code, signal, stdout: "", stderr }));
+      setTimeout(() => child.kill("SIGTERM"), 2_000);
+    });
+
+    expect(result.stderr).not.toContain("worker.fatal");
+    expect(result.code).toBe(0);
+  }, 30_000);
+
   it("fails fast with exit code 1 and no value echo when the environment is invalid", async () => {
     const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish" });
 

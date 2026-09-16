@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import { z } from "zod";
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
@@ -13,13 +13,17 @@ export interface ParseEnvOptions {
 export interface EnvIssue {
   /** Variable name (or nested path) that failed validation. */
   readonly key: string;
-  /** Validation message. Messages that would reveal the offending value are replaced. */
+  /**
+   * Zod's built-in message for the failed check (these never include the input), or a fixed
+   * placeholder when the schema supplied a custom message, which could interpolate the value.
+   */
   readonly message: string;
 }
 
 /**
- * Thrown when environment validation fails. The message lists variable names and rule
- * violations only, never values, so it is safe to log even when a secret is malformed.
+ * Thrown when environment validation fails. The message lists variable names plus Zod's built-in
+ * rule descriptions; custom schema messages and exceptions thrown by transforms are replaced with
+ * fixed text, so no part of the message is derived from the environment values.
  */
 export class EnvValidationError extends Error {
   readonly issues: readonly EnvIssue[];
@@ -36,18 +40,50 @@ export class EnvValidationError extends Error {
   }
 }
 
-/** Values shorter than this are not searched for in messages (too likely to match by accident). */
-const MIN_REDACTABLE_VALUE_LENGTH = 3;
+const CUSTOM_MESSAGE_WITHHELD = "Invalid value (custom validation message withheld; it may contain the value)";
+const SCHEMA_THREW = "Validation threw an exception (details withheld; they may contain values)";
 
-const WITHHELD_MESSAGE = "Invalid value (validation message withheld because it contained the value)";
+/** A value of the same primitive type, so regenerated messages never see the real input. */
+function typeStandIn(value: unknown): unknown {
+  switch (typeof value) {
+    case "string":
+      return "";
+    case "number":
+      return 0;
+    case "bigint":
+      return 0n;
+    case "boolean":
+      return false;
+    case "undefined":
+      return undefined;
+    case "symbol":
+    case "function":
+    case "object":
+      return value === null ? null : {};
+  }
+}
+
+/**
+ * True when `issue.message` is exactly what Zod's locale produces for this issue without seeing the
+ * input — i.e. a built-in message, not one authored by the schema (which could embed the value).
+ */
+function isBuiltInMessage(issue: z.core.$ZodIssue, rawInput: unknown): boolean {
+  // Resolved after parsing: Zod installs its default locale lazily.
+  const localeError = z.config().localeError ?? z.locales.en().localeError;
+  const regenerated = localeError?.({ ...issue, input: typeStandIn(rawInput) } as unknown as Parameters<
+    NonNullable<typeof localeError>
+  >[0]);
+  const text = typeof regenerated === "string" ? regenerated : regenerated?.message;
+  return text !== undefined && text === issue.message;
+}
 
 /**
  * Validates `source` (default `process.env`) against a Zod object schema and returns the typed,
  * defaulted result. Unknown variables are ignored; only the keys declared in `schema` are read.
  *
- * Built-in Zod checks never echo input. Custom error messages and throwing transforms can, so any
- * issue message containing the variable's value is withheld and exceptions thrown by the schema are
- * converted into a value-free `EnvValidationError`.
+ * Error messages are value-free by construction: built-in Zod messages are kept, custom messages
+ * are replaced with a fixed placeholder and exceptions thrown inside the schema become a fixed
+ * `(schema)` issue.
  */
 export function parseEnv<TShape extends z.ZodRawShape>(
   schema: z.ZodObject<TShape>,
@@ -66,28 +102,19 @@ export function parseEnv<TShape extends z.ZodRawShape>(
   try {
     // `reportInput` stays off so issues never carry the raw (possibly secret) value.
     result = schema.safeParse(input);
-  } catch (error) {
-    // e.g. a transform calling JSON.parse/new URL on a malformed secret: the thrown message may quote it.
-    const errorName = error instanceof Error ? error.name : typeof error;
-    throw new EnvValidationError([
-      { key: "(schema)", message: `Validation threw ${errorName}; details withheld because they may contain values.` },
-    ]);
+  } catch {
+    // e.g. a transform calling JSON.parse/new URL on a malformed secret: the error may quote it.
+    throw new EnvValidationError([{ key: "(schema)", message: SCHEMA_THREW }]);
   }
 
   if (!result.success) {
     throw new EnvValidationError(
       result.error.issues.map((issue) => {
         const firstSegment = issue.path[0];
-        const relevantValues =
-          typeof firstSegment === "string" && firstSegment in input
-            ? [input[firstSegment]]
-            : Object.values(input);
-        const revealsValue = relevantValues.some(
-          (value) => value !== undefined && value.length >= MIN_REDACTABLE_VALUE_LENGTH && issue.message.includes(value),
-        );
+        const rawInput = typeof firstSegment === "string" ? input[firstSegment] : undefined;
         return {
           key: issue.path.length > 0 ? issue.path.map(String).join(".") : "(root)",
-          message: revealsValue ? WITHHELD_MESSAGE : issue.message,
+          message: isBuiltInMessage(issue, rawInput) ? issue.message : CUSTOM_MESSAGE_WITHHELD,
         };
       }),
     );

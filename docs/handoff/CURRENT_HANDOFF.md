@@ -39,7 +39,7 @@ No stored choice means `SERVICE_WINDOW_ONLY` until configured. Empty autopilot a
 
 Decisions for architecture review (details in the PR and `REPOSITORY_LAYOUT.md`):
 
-- `application -> ai` is allowed (ADR-010/AI_ORCHESTRATION place the ReplyModel port and draft contract in `packages/ai`); `ai -> application` and `db -> ai` are not. `application -> observability` is not allowed; if #6 needs logging inside application, amend the matrix/spec explicitly.
+- `application -> ai` is allowed (AI_ORCHESTRATION: `packages/ai` exposes the ReplyModel interface); `ai -> application` and `db -> ai` are not. Open: where the Zod draft/result schema lives — ADR-010 requires domain to consume it, which fits a domain-owned schema. `application -> observability` is not allowed; if #6 needs logging inside application, amend the matrix/spec explicitly.
 - TypeScript is pinned to 6.0 because `typescript-eslint` does not support TypeScript 7 yet.
 - Next.js `agentRules: false` keeps `next dev` from generating `apps/web/AGENTS.md`/`CLAUDE.md`.
 

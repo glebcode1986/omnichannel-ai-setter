@@ -59,11 +59,13 @@ function main(): void {
       return;
     }
 
-    if (runtime.state === "stopped" || Date.now() - firstSignalAt < DUPLICATE_SIGNAL_WINDOW_MS) {
+    if (Date.now() - firstSignalAt < DUPLICATE_SIGNAL_WINDOW_MS) {
       logger.debug("worker.duplicate_signal_ignored", { signal });
       return;
     }
-    logger.warn("worker.forced_exit", { signal });
+    // A deliberate later signal: either shutdown is slow, or it finished but a leaked handle keeps
+    // the process alive. Either way the operator asked twice, so exit now.
+    logger.warn(runtime.state === "stopped" ? "worker.lingering_after_stop" : "worker.forced_exit", { signal });
     process.exit(1);
   };
 
