@@ -37,9 +37,15 @@ Implement secure workspace onboarding, WABA/phone-number identity, webhook subsc
 
 ### P4-03 — Template catalog + outside-window policy
 
-Sync approved templates/status/languages/components; implement `TEMPLATE_ONLY` policy plumbing and product-configurable outside-window behavior without allowing arbitrary free-form sends outside the service window.
+Sync approved templates/status/languages/components and implement `TEMPLATE_ONLY` policy plumbing.
 
-**Blocked product decision:** ADR-016 remains Proposed until owner selects defaults/automation level.
+Accepted ADR-016 modes:
+
+- `SERVICE_WINDOW_ONLY` — stop outside-window customer delivery until the customer reopens the service window;
+- `TEMPLATE_REVIEW` — AI/policy may select an eligible approved template, but a human approves the send;
+- `TEMPLATE_AUTOPILOT` — deterministic policy may auto-send only current approved templates/use-cases explicitly allowlisted for unattended automation.
+
+The LLM cannot invent templates, rewrite approved provider text arbitrarily, or bypass consent/template/account-health checks. Workspaces without an explicit stored mode behave as `SERVICE_WINDOW_ONLY` until configured.
 
 ### P4-04 — Media + voice notes
 
@@ -108,7 +114,8 @@ WhatsApp packages own only provider-specific facts/capabilities/payloads. Shared
 - verified webhook ingests text and statuses idempotently;
 - inbound text can reach the same AI draft/review/autopilot core used by Instagram;
 - free-form send is blocked when current service window does not permit it;
-- approved template route is represented correctly and follows the final ADR-016 product choice;
+- all three ADR-016 after-window modes work as specified;
+- `TEMPLATE_AUTOPILOT` cannot send a template/use-case that is not explicitly allowlisted;
 - read/typing presence is best-effort and never weakens delivery safety;
 - inbound voice can be transcribed or safely escalated when transcription fails;
 - manual/native WhatsApp Business App activity pauses automation where supported/detectable;
