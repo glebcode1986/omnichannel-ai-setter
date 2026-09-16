@@ -79,54 +79,97 @@ Model behavior therefore separates three independent layers:
 
 Changing the communication persona must not silently change factual authority, qualification logic or deterministic send policy.
 
-### Style profile
-Simple instructions should support both presets and advanced controls, including:
-- tone/adjectives;
-- preferred answer length;
-- formality and register;
-- warmth / emotional softness;
-- directness / assertiveness;
-- sales pressure / persuasion intensity;
-- humor and playfulness;
-- emoji preference;
-- greeting/sign-off habits;
-- words/phrases to prefer or avoid;
-- language/register conventions;
-- optional persona presentation such as neutral, feminine, masculine or custom brand voice;
-- compliment frequency and type;
-- optional flirtation level for businesses where light relationship-oriented communication is appropriate;
-- optional intimacy ceiling so a business can allow affectionate or mildly suggestive wording without permitting explicit sexual conversation.
-
-The UI should prefer understandable presets first, then expose sliders/toggles/advanced text instructions for owners who need finer control.
-
-### Example communication archetypes
-Presets are starting points, not hard-coded business categories. Examples may include:
-- Calm Expert;
-- Friendly Consultant;
-- Premium Concierge;
-- Warm Teacher;
-- Direct Sales Closer;
-- Soft Feminine Host;
-- Playful / Light Flirt;
+### Business objective presets
+A Business Profile may choose one primary objective and optional secondary objectives. Initial presets:
+- Sales / conversion;
+- Lead qualification;
+- Booking / appointment;
+- Customer support;
+- Education / guidance;
+- Concierge / premium service;
+- Retention / relationship management;
+- Relationship-oriented engagement;
 - Custom.
 
-For example, a dating/relationship agency may configure a feminine, warm, attentive representative who uses gentle compliments, soft humor and light flirtation without vulgarity or explicit sexual language. A B2B account may instead use a concise, professional, low-emotion style while sharing the same underlying lead/knowledge infrastructure.
+Objectives influence conversational strategy and suggested next actions, not factual truth or transport eligibility.
 
-### Relationship-sensitive / flirtatious style
+### Communication archetypes
+Archetypes are editable starting presets, not rigid industries. The owner can choose one and then tune every dimension.
+
+Initial archetypes:
+- **Calm Expert** — composed, factual, confident, low-pressure;
+- **Friendly Consultant** — approachable, helpful, lightly persuasive;
+- **Premium Concierge** — polished, attentive, proactive, elegant;
+- **Warm Teacher** — patient, explanatory, encouraging;
+- **Direct Sales Closer** — concise, assertive, conversion-oriented within configured pressure limits;
+- **Soft Feminine Host** — gentle, attentive, warm, graceful, optionally lightly playful;
+- **Playful / Light Flirt** — warm, charming, tasteful, lightly flirtatious when explicitly enabled;
+- **Custom** — owner-defined.
+
+The archetype name is UX sugar. Runtime behavior is driven by the resolved Style Profile dimensions below so future archetypes can be added without changing core architecture.
+
+### Style profile dimensions
+Use discrete named levels rather than fake-precise 0–100 sliders in the default UI. Advanced settings may expose finer numeric values internally.
+
+Core dimensions:
+- **Formality:** casual / balanced / formal;
+- **Warmth:** low / medium / high;
+- **Empathy / softness:** low / medium / high;
+- **Concision:** brief / balanced / detailed;
+- **Directness:** soft / balanced / direct;
+- **Persuasion pressure:** none / light / active / strong-within-policy;
+- **Humor:** off / subtle / playful;
+- **Playfulness:** off / light / expressive;
+- **Emoji:** off / occasional / frequent;
+- **Compliments:** off / occasional / warm / frequent-within-policy;
+- **Persona presentation:** neutral / feminine / masculine / custom brand voice;
+- **Flirtation:** off / light / playful / romantic;
+- **Intimacy ceiling:** neutral / affectionate / romantic / mildly suggestive;
+- **Greeting style:** none / short / warm / custom;
+- **Sign-off style:** none / short / warm / custom.
+
+The product may also store free-text instructions such as preferred phrases, prohibited phrases, brand vocabulary and examples of what "too pushy", "too cold" or "too flirtatious" means for this business.
+
+### Relationship-sensitive / romantic communication
 Where a Business Profile intentionally enables relationship-oriented communication:
-- flirtation must be explicit configuration, never inferred merely from the customer's gender or wording;
-- the system may use warmth, playful attention, tasteful compliments and light suggestiveness within the configured boundary;
-- it must not fabricate real-world personal history, physical presence, private actions, promises or emotions as facts;
+- flirtation is explicit configuration and is never inferred merely from the customer's gender, name or wording;
+- persona presentation may be feminine, masculine, neutral or custom only when the business intentionally configures that representation;
+- the system may use warmth, playful attention, tasteful compliments, romantic tone and mild suggestiveness within the configured ceiling;
+- it may acknowledge attraction/interest conversationally without inventing real-world physical presence, private actions, relationship status, personal history, promises or genuine human emotions as facts;
 - it must not impersonate a named real employee unless that identity/representation is truthful and intentionally configured;
-- explicit sexual content should not be generated by AUTOPILOT; requests that cross the configured intimacy ceiling should be de-escalated, redirected or sent to Review according to business policy;
+- explicit sexual content is outside AUTOPILOT behavior; content crossing the configured intimacy ceiling is de-escalated, redirected or sent to Review according to policy;
 - romantic/flirtatious modes are adult-only behavior. If a conversation indicates the customer is a minor, or age is materially uncertain in a context where romantic content would be unsafe, the relationship-oriented persona is disabled for that conversation and the system uses neutral business communication / Review.
 
-The intent is to support tasteful, commercially appropriate relationship-oriented communication without turning the product into an unrestricted erotic-chat system.
+The product therefore supports dating agencies, romantic-event businesses, premium companionship-style customer communication and similar legitimate conversation-heavy use cases without turning the platform into an unrestricted erotic-chat system.
+
+### Contextual tone adaptation
+The configured profile is a ceiling and default, not a requirement to behave identically in every message.
+
+The AI may temporarily become more neutral, concise or formal when the context calls for it, for example:
+- complaint, refund or conflict;
+- customer discomfort or rejection of a playful tone;
+- legal/payment/security issue;
+- grief, distress or another sensitive topic;
+- missing factual basis or mandatory Review condition.
+
+It may reduce warmth, persuasion, humor, compliments, flirtation or intimacy automatically when appropriate. It must never increase those dimensions beyond the Business Profile's configured maximum without an explicit human change.
+
+### Conversation-level overrides
+A human may temporarily adjust style for one conversation without changing the Business Profile default, for example:
+- `More formal for this conversation`;
+- `No sales pressure`;
+- `No flirtation`;
+- `Short replies only`;
+- `Human takeover`.
+
+Conversation overrides are auditable and expire/resume according to explicit policy. A customer signal that clearly rejects a tone should result in an automatic downward adjustment for that conversation, not repeated attempts to reintroduce it.
 
 ### Example library
 Each example stores inbound context + verified human outbound response + provenance:
 - `HUMAN_TYPED`;
 - `HUMAN_EDITED_DRAFT`.
+
+Examples may optionally be tagged by archetype/dimension, language and conversation type so retrieval can prefer relevant examples.
 
 User can approve/reject suggested style examples before they become active.
 
@@ -141,7 +184,7 @@ Instead, learning is controlled through:
 - retrieval of relevant examples for the current conversation;
 - aggregate pattern suggestions derived from repeated human edits.
 
-If humans repeatedly make the same edit (for example removing formal greetings, shortening replies, softening sales pressure, adding more warmth or reducing flirtation), the system may propose a Style Profile change. The owner/admin must approve the change before it becomes active unless an explicit future policy says otherwise.
+If humans repeatedly make the same edit (for example removing formal greetings, shortening replies, softening sales pressure, adding more warmth, increasing elegance or reducing flirtation), the system may propose a Style Profile change. The owner/admin must approve the change before it becomes active unless an explicit future policy says otherwise.
 
 This prevents one bad employee response from silently retraining the product voice.
 
@@ -162,6 +205,8 @@ A useful comparison mode may show alternatives such as:
 - more concise;
 - less/more persuasive;
 - where enabled, less/more playful within the configured safe ceiling.
+
+For relationship-sensitive profiles, Test Style should include at least one boundary example showing how the AI responds when a customer pushes beyond the configured intimacy ceiling.
 
 This test must not imply that style examples validate business facts.
 
