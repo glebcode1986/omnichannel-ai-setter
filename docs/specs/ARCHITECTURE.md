@@ -1,4 +1,4 @@
-# Target Architecture — v0.3
+# Target Architecture — v0.4
 
 **Status:** Phase 0 frozen; Phase 2 design prepared while Phase 1 implementation is pending.
 
@@ -69,6 +69,18 @@ Owns delayed delivery, final revalidation, atomic claim, normalized send outcome
 
 Manual human activity always wins. A platform outbound echo that does not match a known app-originated platform message/operation is treated as a human/manual signal and pauses automation. Human-edited approved drafts may become style examples but not factual knowledge.
 
+## AUTOPILOT autonomous-runtime invariant
+
+AUTOPILOT is a server-side operating mode, not a browser-session feature.
+
+- The customer may close the dashboard, browser, laptop or phone app and AUTOPILOT must continue operating while the workspace/channel remains active and entitled.
+- WebSocket/browser presence is observational only. It may update UI in real time, but no generation, debounce, delayed send, takeover, retry, reconciliation or final-send decision may depend on an active browser connection.
+- Durable state lives in PostgreSQL; durable asynchronous timing/work lives in backend workers/queues. React state/local storage must never be authoritative for an active automation cycle.
+- Inbound provider webhooks continue to drive the conversation while the owner is offline.
+- When provider capabilities expose outbound echoes/manual native-app sends, an unmatched manual outbound is treated as human activity and moves the conversation into takeover according to `HUMAN_HANDOFF.md`.
+- The dashboard can reconnect at any time and reconstruct current state from server-authoritative records.
+- Notifications are auxiliary. Losing a notification channel must never stop or change the autonomous conversation flow.
+
 ## Instagram MVP policy
 
 - Professional Business/Creator accounts via Instagram API with Instagram Login.
@@ -89,4 +101,5 @@ Manual human activity always wins. A platform outbound echo that does not match 
 - concurrent workers cannot both claim a delivery;
 - definite provider rejection may retry only when classified retryable;
 - network ambiguity becomes `HELD_AMBIGUOUS` and reconciliation/manual review;
-- provider-specific types do not leak into domain/application packages.
+- provider-specific types do not leak into domain/application packages;
+- AUTOPILOT remains correct with zero connected dashboard/browser sessions.
