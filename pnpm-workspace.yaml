@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Fail install on an unsupported Node.js version instead of producing a half-working toolchain.
+engineStrict: true
+
+# pnpm blocks dependency lifecycle scripts unless explicitly approved here.
+allowBuilds:
+  # Verifies the platform-specific esbuild binary (used by tsx, vite and the worker bundle).
+  esbuild: true
