@@ -1,10 +1,10 @@
 # Task Contract — P1-04 Claude
 
 **Executor:** Claude Code  
-**Issue:** #5 `[P1-04] Implement BullMQ job contracts and durable delay primitives`  
+**Issue:** #5 `[P1-04] Implement Business Profile-aware BullMQ job contracts and durable delay primitives`  
 **Branch:** `feat/p1-04-bullmq-delay-primitives`  
-**Depends on:** accepted #2 and #3; may proceed alongside #4 after shared IDs/types stabilize  
-**Merge authority:** Human/project owner after review; Claude must not merge its own PR.
+**Depends on:** corrected/accepted-enough #2 and #3; may remain linearly stacked on #4  
+**Merge authority:** human/project owner after review; Claude must not merge its own PR.
 
 ## Mandatory reading order
 
@@ -15,13 +15,15 @@
 5. `docs/adr/ADR-003-durable-delayed-delivery.md`
 6. `docs/adr/ADR-005-prisma-bullmq-core-stack.md`
 7. `docs/adr/ADR-012-delivery-atomic-claim-and-ambiguity.md`
-8. `docs/specs/DELAY_ENGINE.md`
-9. `docs/specs/REPOSITORY_LAYOUT.md`
-10. GitHub Issue #5
+8. `docs/specs/DATA_MODEL.md` v0.4
+9. `docs/specs/DELAY_ENGINE.md`
+10. `docs/specs/REPOSITORY_LAYOUT.md`
+11. `docs/tasks/P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md` when correcting the existing stack
+12. GitHub Issue #5
 
 ## Objective
 
-Implement durable, channel-neutral BullMQ scheduling primitives for inbound debounce, AI-work triggers, delayed delivery and reconciliation placeholders. No webhook/request handler may sleep to create a human-like delay.
+Implement durable, channel-neutral BullMQ scheduling primitives for inbound debounce, AI-work triggers, delayed delivery and reconciliation placeholders. Queue execution must preserve Workspace + Business Profile scope. No webhook/request handler may sleep to create human-like delay.
 
 ## Owned scope
 
@@ -31,82 +33,81 @@ Implement durable, channel-neutral BullMQ scheduling primitives for inbound debo
 
 ## Required job families
 
-At minimum:
-
 - inbound debounce
 - AI draft-generation trigger
 - delayed delivery
 - reconciliation / ambiguous-send follow-up placeholder
 
-Job payloads must be runtime-validated, versionable and carry stable IDs/correlation data rather than copied full conversation content wherever possible.
+Payloads must be strict/versioned and carry stable IDs/correlation data only. Include `workspaceId` and `businessProfileId` on policy-critical work whose authorization/state belongs to a BP. Do not copy full conversation/customer content into queue payloads.
 
 ## Required semantics
 
-### Debounce
+### Identity / BP scope
+- deterministic job IDs include enough Workspace/BP/logical-operation identity to avoid collisions;
+- an identical-looking conversation/message/operation ID in a different BP cannot collide;
+- queue scope is not authorization authority; application/DB revalidation remains authoritative.
 
-- deterministic job/reply-cycle identity;
-- a newer inbound burst makes older debounce work stale/superseded;
-- stale jobs are safe if they still wake up after cancellation attempts.
+### Debounce
+- deterministic reply-cycle/job identity;
+- newer inbound makes older work stale/superseded;
+- stale jobs are harmless if they wake after best-effort cancellation.
 
 ### Delayed delivery
+- selected delay + intended schedule are durable/auditable;
+- support configured current 30–120s post-draft target;
+- no blocking timer/sleep in webhook/request lifecycle;
+- final eligibility revalidation belongs to the later delivery coordinator.
 
-- selected delay and intended schedule are durable/auditable;
-- initial product range is configurable and supports the current 30–120 second target;
-- no `sleep()`/blocking timer in webhook/request lifecycle;
-- execution re-check belongs to delivery coordinator later, but queue primitives must support stale/cancelled ownership cleanly.
-
-### Retry/ambiguity
-
-- safe transient work may retry according to explicit policy;
-- an `AMBIGUOUS` outbound-send outcome must never enter a blind resend loop;
-- reconciliation jobs are distinct from resend jobs.
+### Retry / ambiguity
+- only explicitly safe transient work retries;
+- `AMBIGUOUS` outbound outcome never enters blind resend;
+- reconciliation jobs never themselves perform a resend;
+- handler crash during potentially-side-effecting delivery is fail-safe and routed to reconciliation/unknown-outcome handling as required.
 
 ### Worker lifecycle
-
 - independent worker start/stop;
 - graceful shutdown;
-- observable enqueue/processing with correlation IDs;
-- queue names/job names are centralized and typed.
+- queue/job names centralized and typed;
+- correlation IDs in structured logs without message bodies/secrets.
 
 ## Explicitly forbidden
 
-Do not implement:
-
-- Meta/Instagram/WhatsApp business rules;
-- actual outbound provider sends;
-- webhook route orchestration (#6);
-- AI prompt/provider logic;
-- final Phase 2 policy/delivery coordinator logic beyond the queue primitives needed by this issue.
+Do not implement provider business rules, real sends, webhook orchestration (#6), AI provider/prompt logic, or Phase-2 final policy/delivery coordinator beyond primitives required here.
 
 ## Required tests
 
-Cover at least:
-
-- malformed job payload rejection;
-- deterministic duplicate enqueue behavior;
-- debounce supersession;
-- durable delayed scheduling;
-- worker restart/retry-safe job identity;
-- explicit no-auto-retry path for ambiguous send state;
-- graceful worker lifecycle where testable.
-
-Use test Redis or a documented deterministic substitute appropriate for the repo setup; do not fake away semantics that are specific to BullMQ job identity/scheduling.
+Using real Redis where queue identity/scheduling semantics matter, cover:
+- malformed/missing BP scope rejection;
+- duplicate enqueue;
+- same logical IDs in separate BPs produce independent jobs;
+- debounce supersession and late stale wake-up;
+- durable delayed scheduling across producer/worker restart;
+- explicit retryable rejection vs non-retryable rejection;
+- ambiguous outcome -> reconciliation/no resend;
+- stalled/crashed delivery fail-safe behavior;
+- graceful worker close;
+- correlation propagation.
 
 ## Acceptance checklist
 
-- [ ] typed/versioned queue contracts exist
-- [ ] payloads have runtime validation
-- [ ] duplicate enqueue cannot create duplicate policy-critical work
-- [ ] debounce supersession is tested
-- [ ] delayed scheduling is durable and non-blocking
-- [ ] no Meta-specific logic exists in queue package
-- [ ] ambiguous outcome has no blind resend path
-- [ ] worker can run independently of web app
-- [ ] correlation IDs are propagated through enqueue/process logs
-- [ ] root lint/typecheck/test pass
+- [ ] typed/versioned job contracts
+- [ ] Workspace + BP scope on policy-critical payloads
+- [ ] deterministic IDs collision-safe across BPs
+- [ ] duplicate enqueue cannot duplicate policy-critical work
+- [ ] durable non-blocking delay
+- [ ] no Meta/provider strategy in queue package
+- [ ] no blind ambiguous retry
+- [ ] worker independent of web
+- [ ] full required Redis + root verification green
+
+## Existing open stack
+
+PR #51 was implemented before Business Profile v0.4 propagation. Issue #53 governs in-place correction. First merge corrected PR #50 into the branch, then update only queue-owned scope and re-run all verification. Do not force-push/rebase published history solely to simplify the stack.
 
 ## PR requirements
 
-Open a focused PR into `main` referencing Issue #5. Include exact Redis/test setup, commands run, job naming/idempotency rules and retry policy summary.
+Keep/open a focused PR referencing Issue #5. Record Redis setup, job ID/idempotency rules, retry semantics and exact commands. Publish:
 
-Do not merge the PR.
+`CLAUDE_READY_FOR_ASTRA head=<full_sha> task=P1-04`
+
+Do not merge the PR yourself.
