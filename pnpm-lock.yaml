@@ -211,6 +211,9 @@ importers:
       '@omnichannel/channel-core':
         specifier: workspace:*
         version: link:../../packages/channel-core
+      '@omnichannel/channel-instagram':
+        specifier: workspace:*
+        version: link:../../packages/channel-instagram
       '@omnichannel/db':
         specifier: workspace:*
         version: link:../../packages/db

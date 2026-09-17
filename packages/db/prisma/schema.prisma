@@ -236,6 +236,7 @@ model User {
   takenOverConversations    Conversation[]
   createdKnowledgeDocuments KnowledgeDocument[]
   approvedStyleExamples     StyleExample[]
+  channelConnectStates      ChannelConnectState[]
 
   @@map("users")
 }
@@ -334,6 +335,7 @@ model BusinessProfile {
   styleExamples      StyleExample[]
   automationPolicies AutomationPolicy[]
   queueOutbox        QueueOutbox[]
+  connectStates      ChannelConnectState[]
 
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
@@ -367,12 +369,18 @@ model MemberBusinessProfileAccess {
 model ChannelCredential {
   id          String    @id @default(uuid(7))
   workspaceId String    @map("workspace_id")
+  /// What the ciphertext is, bound into its additional authenticated data so it cannot be reinterpreted.
+  purpose     String    @default("INSTAGRAM_ACCESS_TOKEN")
   keyId       String    @map("key_id")
   algorithm   String
   ciphertext  Bytes
   nonce       Bytes
   authTag     Bytes?    @map("auth_tag")
   expiresAt   DateTime? @map("expires_at")
+  /// When the current token was minted; Meta refuses to refresh a token younger than 24 hours.
+  refreshedAt DateTime? @map("refreshed_at")
+  /// Set on disconnect. The row stays so audit history keeps its reference; the secret is cleared.
+  revokedAt   DateTime? @map("revoked_at")
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
@@ -414,6 +422,34 @@ model ChannelAccount {
 }
 
 /// Idempotency ledger for verified provider events: one row per (channel account, source event).
+/**
+ * One in-flight Instagram Login attempt. The row is the authority for the OAuth `state`: it is single-use,
+ * expires quickly, and remembers which member of which Business Profile started the flow so the callback
+ * cannot be replayed into another tenant. The browser cookie holds only a nonce whose hash is stored here,
+ * so neither half alone completes a connection.
+ */
+model ChannelConnectState {
+  /// The opaque `state` value handed to Meta.
+  id                String      @id
+  workspaceId       String      @map("workspace_id")
+  businessProfileId String      @map("business_profile_id")
+  /// Member who started the flow; the callback must be completed by the same person.
+  userId            String      @map("user_id")
+  channel           ChannelType
+  /// SHA-256 of the cookie nonce. The nonce itself is never stored.
+  nonceHash         Bytes       @map("nonce_hash")
+  requestedScopes   String[]    @map("requested_scopes")
+  expiresAt         DateTime    @map("expires_at")
+  consumedAt        DateTime?   @map("consumed_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([expiresAt])
+  @@map("channel_connect_states")
+}
+
 model InboundEvent {
   id                String           @id @default(uuid(7))
   workspaceId       String           @map("workspace_id")

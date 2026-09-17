@@ -59,6 +59,8 @@ Inbound:
 
 Store provider secrets/tokens through the encrypted credential abstraction referenced by `ChannelAccount`, not plaintext business fields. Persist connection state such as CONNECTED / NEEDS_REAUTH / DISCONNECTED and fail closed when credentials are invalid.
 
+Implemented in P2-02: tokens are AES-256-GCM ciphertext in `channel_credentials`, with the key held outside the database and identified by `key_id` so it can be rotated. The ciphertext's additional authenticated data binds it to its Workspace, its credential row and its purpose, so a row copied into another tenant fails to decrypt rather than working. Connect state for an in-flight login is a single-use, short-lived `channel_connect_states` row paired with a `__Host-` cookie nonce whose hash is stored on the row; neither half alone completes a connection. A reconnect updates the existing account and credential rows in place, so conversation history survives; disconnect marks the account DISCONNECTED, frees the live-account slots and destroys the stored secret while keeping the row for audit.
+
 ## Required fixture tests
 
 - webhook challenge/verification success and failure;

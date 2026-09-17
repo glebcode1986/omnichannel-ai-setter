@@ -60,6 +60,12 @@ export class DbInputError extends Error {
 
 const RECORD_NOT_FOUND = "P2025";
 const FOREIGN_KEY_VIOLATION = "P2003";
+const UNIQUE_VIOLATION = "P2002";
+
+/** A uniqueness conflict, e.g. a provider account that is already connected somewhere. */
+export function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === UNIQUE_VIOLATION;
+}
 
 /**
  * Converts "no row matched the workspace-scoped filter" and "referenced row is not in this workspace"

@@ -14,6 +14,7 @@ export { createDbClient, type DbClient, type DbClientOptions, type DbExecutor } 
 export {
   BusinessProfileAccessDeniedError,
   DbInputError,
+  isUniqueViolation,
   TenantRecordNotFoundError,
   WorkspaceAccessDeniedError,
   WorkspacePermissionError,
@@ -33,6 +34,19 @@ export {
   type WorkspaceContext,
 } from "./tenancy";
 export { createIngestionStore } from "./ingestion-store";
+export {
+  createCredentialCipher,
+  CREDENTIAL_ALGORITHM,
+  CredentialCryptoError,
+  type CredentialCipher,
+  type CredentialCipherOptions,
+  type CredentialPurpose,
+  type CredentialScope,
+  type EncryptedCredential,
+} from "./credentials";
+export * from "./repositories/channel-connect-states";
+export { createInstagramOnboardingStore, type ConnectedAccountRef, type InstagramOnboardingStore } from "./onboarding-store";
+export * from "./repositories/channel-credentials";
 export * from "./repositories/channel-accounts";
 export * from "./repositories/contacts";
 export * from "./repositories/conversations";

@@ -7,11 +7,22 @@ const required = {
   DATABASE_URL: "postgresql://user:fake-password@localhost:5432/omnichannel",
   AUTH_SECRET: "fake-auth-secret-for-tests-0123456789",
   REDIS_URL: "redis://127.0.0.1:6379",
+  CHANNEL_CREDENTIAL_KEY_ID: "test-key-1",
+  CHANNEL_CREDENTIAL_KEY: Buffer.alloc(32, 3).toString("base64"),
+  INSTAGRAM_APP_ID: "1234567890",
+  INSTAGRAM_APP_SECRET: "fake-instagram-app-secret",
+  INSTAGRAM_REDIRECT_URI: "https://app.example.test/api/channels/instagram/callback",
 };
 
 describe("loadWebEnv", () => {
   it("applies defaults", () => {
-    expect(loadWebEnv(required)).toEqual({ NODE_ENV: "development", LOG_LEVEL: "info", ...required });
+    expect(loadWebEnv(required)).toEqual({
+      NODE_ENV: "development",
+      LOG_LEVEL: "info",
+      // No API reports Human Agent approval, so it starts closed and an operator opts in.
+      INSTAGRAM_HUMAN_AGENT_APPROVAL: "UNKNOWN",
+      ...required,
+    });
   });
 
   it("rejects invalid values", () => {
@@ -25,6 +36,16 @@ describe("loadWebEnv", () => {
       ["AUTH_SECRET", { DATABASE_URL: required.DATABASE_URL }],
       ["AUTH_SECRET", { ...required, AUTH_SECRET: "short-secret" }],
       ["REDIS_URL", { ...required, REDIS_URL: "http://user:fake-password@localhost:6379" }],
+      // The credential key must be exactly 32 bytes of base64, or AES-256-GCM cannot be keyed.
+      ["CHANNEL_CREDENTIAL_KEY", { ...required, CHANNEL_CREDENTIAL_KEY: Buffer.alloc(16, 3).toString("base64") }],
+      ["CHANNEL_CREDENTIAL_KEY", { ...required, CHANNEL_CREDENTIAL_KEY: "fake-password-not-base64!!" }],
+      ["CHANNEL_CREDENTIAL_KEY_ID", { ...required, CHANNEL_CREDENTIAL_KEY_ID: "" }],
+      ["INSTAGRAM_APP_ID", { ...required, INSTAGRAM_APP_ID: "" }],
+      ["INSTAGRAM_APP_SECRET", { ...required, INSTAGRAM_APP_SECRET: "" }],
+      // Meta requires HTTPS, and an http redirect would expose the code in transit.
+      ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "http://app.example.test/callback" }],
+      ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "not-a-url" }],
+      ["INSTAGRAM_HUMAN_AGENT_APPROVAL", { ...required, INSTAGRAM_HUMAN_AGENT_APPROVAL: "MAYBE" }],
     ] as const) {
       let error: unknown;
       try {
@@ -34,7 +55,7 @@ describe("loadWebEnv", () => {
       }
       expect(error).toBeInstanceOf(EnvValidationError);
       expect((error as EnvValidationError).issues.map((issue) => issue.key)).toContain(key);
-      expect((error as EnvValidationError).message).not.toMatch(/fake-password|short-secret/);
+      expect((error as EnvValidationError).message).not.toMatch(/fake-password|short-secret|fake-instagram-app-secret/);
     }
   });
 });

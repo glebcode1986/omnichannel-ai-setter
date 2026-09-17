@@ -1,0 +1,283 @@
+/**
+ * Instagram Login onboarding: start a connect, complete the callback, disconnect.
+ *
+ * The security of this flow rests on four things, all enforced here rather than in the route handlers:
+ *
+ * 1. **Two halves.** The OAuth `state` is a database row (single-use, short-lived, remembering who started
+ *    the flow and for which Business Profile) *and* a cookie nonce whose hash is on that row. One half alone
+ *    completes nothing, so neither a stolen link nor a forged cookie is enough.
+ * 2. **Re-authorization at the callback.** Membership, role and profile access are re-read when the callback
+ *    returns, so access revoked mid-flow takes effect immediately.
+ * 3. **Least privilege, verified.** Meta reports which scopes the person actually granted; a missing one
+ *    refuses the connection instead of storing a credential that cannot send.
+ * 4. **No secret leaves memory.** Codes, tokens, the state value and the nonce never reach a log, a redirect
+ *    target, an error message or a response body — only fixed reason codes do.
+ *
+ * Dependencies are injected so this can be tested without Meta, a database or a browser.
+ */
+import { createHash, timingSafeEqual } from "node:crypto";
+
+import {
+  buildAuthorizeUrl,
+  exchangeCode,
+  exchangeForLongLivedToken,
+  fetchIdentity,
+  INSTAGRAM_CAPABILITIES,
+  INSTAGRAM_MESSAGING_SCOPES,
+  isRefreshEligible,
+  missingScopes,
+  refreshLongLivedToken,
+  type InstagramOAuthConfig,
+} from "@omnichannel/channel-instagram";
+import { ChannelConnectError, type BusinessProfileContext, type InstagramOnboardingStore } from "@omnichannel/db";
+import type { Logger } from "@omnichannel/observability";
+
+/** How long a person has to finish the Instagram login before the state expires. */
+export const CONNECT_STATE_TTL_MS = 10 * 60 * 1000;
+export const STATE_COOKIE_NAME = "__Host-ig_oauth_state";
+const CREDENTIAL_PURPOSE = "INSTAGRAM_ACCESS_TOKEN" as const;
+
+export type ConnectFailureReason =
+  | "invalid_state"
+  | "denied"
+  | "provider_rejected"
+  | "provider_unavailable"
+  | "missing_scope"
+  | "already_connected"
+  | "different_account";
+
+export interface OnboardingDependencies {
+  readonly store: InstagramOnboardingStore;
+  readonly oauth: InstagramOAuthConfig;
+  readonly logger: Logger;
+  readonly now: () => Date;
+  /** Opaque, unguessable values for the state ID and the cookie nonce. */
+  readonly newId: () => string;
+  readonly humanAgentApproval: "APPROVED" | "NOT_APPROVED" | "UNKNOWN";
+}
+
+export interface StartedConnect {
+  /** Where the browser must be sent. Contains no secret of ours. */
+  readonly authorizeUrl: string;
+  /** Value for the state cookie; only its hash is stored. */
+  readonly cookieNonce: string;
+  readonly cookieMaxAgeSeconds: number;
+}
+
+export interface CallbackInput {
+  readonly state: string | undefined;
+  readonly code: string | undefined;
+  readonly error: string | undefined;
+  readonly cookieNonce: string | undefined;
+}
+
+export type CallbackResult =
+  | { readonly ok: true; readonly workspaceId: string; readonly businessProfileId: string; readonly channelAccountId: string }
+  | { readonly ok: false; readonly reason: ConnectFailureReason };
+
+export async function startInstagramConnect(
+  dependencies: OnboardingDependencies,
+  context: BusinessProfileContext,
+): Promise<StartedConnect> {
+  const stateId = dependencies.newId();
+  const cookieNonce = dependencies.newId();
+  await dependencies.store.createConnectState(context, {
+    stateId,
+    nonceHash: hashNonce(cookieNonce),
+    channel: "INSTAGRAM",
+    requestedScopes: [...INSTAGRAM_MESSAGING_SCOPES],
+    expiresAt: new Date(dependencies.now().getTime() + CONNECT_STATE_TTL_MS),
+  });
+  dependencies.logger.info("instagram.connect_started", {
+    workspaceId: context.workspaceId,
+    businessProfileId: context.businessProfileId,
+  });
+  return {
+    authorizeUrl: buildAuthorizeUrl(dependencies.oauth, stateId),
+    cookieNonce,
+    cookieMaxAgeSeconds: Math.floor(CONNECT_STATE_TTL_MS / 1000),
+  };
+}
+
+/**
+ * Completes a callback. `authorize` re-checks the session against the state row; it is passed in so the
+ * route can use the real request context while tests can supply a fake.
+ */
+export async function completeInstagramConnect(
+  dependencies: OnboardingDependencies,
+  input: CallbackInput,
+  authorize: (workspaceId: string, businessProfileId: string) => Promise<BusinessProfileContext>,
+): Promise<CallbackResult> {
+  const now = dependencies.now();
+  if (input.error !== undefined) {
+    // The person said no, or Meta refused. Their message is untrusted text and is never echoed back.
+    dependencies.logger.info("instagram.connect_denied", {});
+    return fail(dependencies, "denied");
+  }
+  if (input.state === undefined || input.code === undefined || input.cookieNonce === undefined) {
+    return fail(dependencies, "invalid_state");
+  }
+
+  const state = await dependencies.store.consumeConnectState({ stateId: input.state, now });
+  if (state === undefined || state.channel !== "INSTAGRAM" || !nonceMatches(input.cookieNonce, state.nonceHash)) {
+    // Unknown, replayed, expired and cookie-mismatched all fail identically.
+    return fail(dependencies, "invalid_state");
+  }
+
+  // Re-authorized now, not when the flow started: a revoked membership or role must stop the connection.
+  const context = await authorize(state.workspaceId, state.businessProfileId);
+  if (context.userId !== state.userId) {
+    return fail(dependencies, "invalid_state");
+  }
+
+  const exchanged = await exchangeCode(dependencies.oauth, input.code);
+  if (!exchanged.ok) {
+    return fail(dependencies, exchanged.reason === "unavailable" ? "provider_unavailable" : "provider_rejected", context);
+  }
+  const declined = missingScopes(exchanged.value.grantedScopes);
+  if (declined.length > 0) {
+    // Storing a credential that cannot read messages would create an account that looks connected and is not.
+    dependencies.logger.warn("instagram.connect_missing_scope", {
+      workspaceId: context.workspaceId,
+      businessProfileId: context.businessProfileId,
+      missing: declined,
+    });
+    return { ok: false, reason: "missing_scope" };
+  }
+
+  const longLived = await exchangeForLongLivedToken(dependencies.oauth, exchanged.value.accessToken);
+  if (!longLived.ok) {
+    return fail(dependencies, longLived.reason === "unavailable" ? "provider_unavailable" : "provider_rejected", context);
+  }
+  const identity = await fetchIdentity(dependencies.oauth, longLived.value.accessToken);
+  if (!identity.ok) {
+    return fail(dependencies, identity.reason === "unavailable" ? "provider_unavailable" : "provider_rejected", context);
+  }
+  if (identity.value.userId !== exchanged.value.userId) {
+    // The token must belong to the account the exchange named; anything else is a mix-up we refuse.
+    return fail(dependencies, "provider_rejected", context);
+  }
+
+  const expiresAt = new Date(now.getTime() + longLived.value.expiresInSeconds * 1000);
+  try {
+    const { channelAccountId } = await dependencies.store.connectAccount(context, {
+      channel: "INSTAGRAM",
+      // The messaging ID, never the app-scoped `id`: sends address /<IG_ID>/messages.
+      externalAccountId: identity.value.userId,
+      ...(identity.value.username === undefined ? {} : { displayName: identity.value.username }),
+      capabilities: INSTAGRAM_CAPABILITIES,
+      purpose: CREDENTIAL_PURPOSE,
+      token: longLived.value.accessToken,
+      expiresAt,
+      now,
+    });
+    dependencies.logger.info("instagram.connected", {
+      workspaceId: context.workspaceId,
+      businessProfileId: context.businessProfileId,
+      channelAccountId,
+    });
+    return { ok: true, workspaceId: context.workspaceId, businessProfileId: context.businessProfileId, channelAccountId };
+  } catch (error) {
+    if (error instanceof ChannelConnectError) {
+      // "already_connected" deliberately does not say where; that would disclose another Workspace.
+      return fail(dependencies, error.reason, context);
+    }
+    throw error;
+  }
+}
+
+export async function disconnectInstagramAccount(
+  dependencies: OnboardingDependencies,
+  context: BusinessProfileContext,
+  channelAccountId: string,
+): Promise<void> {
+  const account = await dependencies.store.findAccountById(context, channelAccountId);
+  // Status first: it frees the live-account slots even if the credential write then fails.
+  await dependencies.store.setAccountStatus(context, channelAccountId, "DISCONNECTED");
+  if (account?.credentialId !== undefined) {
+    await dependencies.store.revokeCredential(context, {
+      credentialId: account.credentialId,
+      purpose: CREDENTIAL_PURPOSE,
+      now: dependencies.now(),
+    });
+  }
+  dependencies.logger.info("instagram.disconnected", {
+    workspaceId: context.workspaceId,
+    businessProfileId: context.businessProfileId,
+    channelAccountId,
+  });
+}
+
+export type RefreshOutcome = "REFRESHED" | "NOT_DUE" | "NEEDS_REAUTH" | "UNAVAILABLE" | "NO_CREDENTIAL";
+
+/**
+ * Keeps a long-lived token alive. Meta refuses to refresh a token younger than 24 hours or already expired,
+ * so this checks both before calling: an expired token is not an error to retry, it is a re-authorization.
+ */
+export async function refreshInstagramCredential(
+  dependencies: OnboardingDependencies,
+  context: BusinessProfileContext,
+  channelAccountId: string,
+): Promise<RefreshOutcome> {
+  const now = dependencies.now();
+  const account = await dependencies.store.findAccountById(context, channelAccountId);
+  if (account?.credentialId === undefined) {
+    return "NO_CREDENTIAL";
+  }
+  const stored = await dependencies.store.readCredential(context, { credentialId: account.credentialId, purpose: CREDENTIAL_PURPOSE });
+  if (stored === undefined || stored.expiresAt === null) {
+    return "NO_CREDENTIAL";
+  }
+  if (stored.expiresAt.getTime() <= now.getTime()) {
+    await dependencies.store.setAccountStatus(context, channelAccountId, "NEEDS_REAUTH");
+    return "NEEDS_REAUTH";
+  }
+  if (!isRefreshEligible(stored.mintedAt, stored.expiresAt, now)) {
+    // A token minted minutes ago (a fresh connect) must not be sent to Meta only to be rejected.
+    return "NOT_DUE";
+  }
+
+  const refreshed = await refreshLongLivedToken(dependencies.oauth, stored.token);
+  if (!refreshed.ok) {
+    if (refreshed.reason === "unavailable") {
+      return "UNAVAILABLE";
+    }
+    await dependencies.store.setAccountStatus(context, channelAccountId, "NEEDS_REAUTH");
+    dependencies.logger.warn("instagram.refresh_rejected", {
+      workspaceId: context.workspaceId,
+      businessProfileId: context.businessProfileId,
+      channelAccountId,
+      ...(refreshed.code === undefined ? {} : { code: refreshed.code }),
+    });
+    return "NEEDS_REAUTH";
+  }
+  await dependencies.store.rotateCredential(context, {
+    credentialId: stored.credentialId,
+    purpose: CREDENTIAL_PURPOSE,
+    token: refreshed.value.accessToken,
+    expiresAt: new Date(now.getTime() + refreshed.value.expiresInSeconds * 1000),
+    refreshedAt: now,
+  });
+  return "REFRESHED";
+}
+
+function fail(
+  dependencies: OnboardingDependencies,
+  reason: ConnectFailureReason,
+  context?: BusinessProfileContext,
+): { readonly ok: false; readonly reason: ConnectFailureReason } {
+  dependencies.logger.warn("instagram.connect_failed", {
+    reason,
+    ...(context === undefined ? {} : { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId }),
+  });
+  return { ok: false, reason };
+}
+
+function hashNonce(nonce: string): Uint8Array {
+  return createHash("sha256").update(nonce, "utf8").digest();
+}
+
+function nonceMatches(nonce: string, expected: Uint8Array): boolean {
+  const actual = hashNonce(nonce);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
