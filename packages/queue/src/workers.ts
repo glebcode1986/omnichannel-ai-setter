@@ -27,7 +27,7 @@ export interface JobContext {
   readonly jobId: string;
   /** 1-based attempt number of this run. */
   readonly attempt: number;
-  /** Logger bound to queue, job, workspace and correlation identifiers. */
+  /** Logger bound to queue, job, workspace, Business Profile and correlation identifiers. */
   readonly logger: Logger;
 }
 

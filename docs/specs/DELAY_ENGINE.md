@@ -98,7 +98,7 @@ Any of the following is treated as an unknown outcome, quarantined for reconcili
 Delivery workers run with `maxStalledCount: 0`. A delivery whose worker died or lost its lock mid-run is failed instead of re-run, and a reconciliation job is enqueued with reason `DELIVERY_STALLED`.
 
 **Worker lifecycle.**
-- `apps/worker` validates `REDIS_URL`, starts one BullMQ worker per queue and logs enqueue and processing events with the queue name, job ID, workspace ID and correlation ID.
+- `apps/worker` validates `REDIS_URL`, starts one BullMQ worker per queue and logs enqueue and processing events with the queue name, job ID, workspace ID, Business Profile ID and correlation ID.
 - On `SIGINT`/`SIGTERM` it closes gracefully and waits for running jobs.
 - Redis outages are logged once, without the URL.
 - Until the real handlers exist, jobs fail visibly without retries and delivery returns `NOT_CLAIMED`, so nothing is sent.
