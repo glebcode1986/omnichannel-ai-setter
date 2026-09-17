@@ -54,3 +54,32 @@ Review state should preserve why human action is needed. For Instagram Human Age
 - one completed outbound send per AI draft/action;
 - human-agent sends require a human action/audit actor identity;
 - foreign keys favor preserving audit history over destructive cascades.
+
+## Implementation notes (P1-03)
+
+The initial Prisma schema (`packages/db/prisma/schema.prisma`, migration `20260917140000_init`) implements this model with the following decisions and deviations:
+
+- **Tenancy in the database.** Every customer-owned table has `workspace_id`. References between tenant tables are composite foreign keys that include `workspace_id` (for example `messages(workspace_id, channel_account_id, conversation_id) -> conversations`), so a row can never point at another workspace's data. Tenant unique keys lead with `workspace_id`. All foreign keys use `ON UPDATE RESTRICT`, so ownership cannot be moved.
+- **Delete behaviour.** Everything uses `ON DELETE RESTRICT` except Auth.js `auth_accounts`/`auth_sessions`, which cascade from `users`. Records are archived rather than deleted.
+- **Repositories.** Tenant repository functions require a `WorkspaceContext` issued by `authorizeWorkspaceAccess(userId, explicit workspaceId)`. Contexts that are forged or copied are rejected. Cross-workspace records are reported as not found.
+- **`ChannelAccount.encrypted_credentials_ref`.** This is `credential_id`, pointing at `channel_credentials` (`key_id`, `algorithm`, `ciphertext`, `nonce`, `auth_tag`, `expires_at`). No plaintext token columns exist. Encryption and the Meta token lifecycle belong to the onboarding tasks.
+- **ChannelAccount uniqueness.** A platform account (`channel`, `external_account_id`) can be live (not `DISCONNECTED`) in only one workspace, so webhooks route unambiguously.
+- **Inbound events.** An added `inbound_events` table is the idempotency ledger, unique per (`workspace_id`, `channel_account_id`, `source_event_id`).
+- **Conversation.** There is one conversation per contact identity per channel account, matching platform DM threads.
+  - `human_takeover_at` is complemented by `takeover_state`, `takeover_reason`, `takeover_review_mode`, `takeover_paused_until`, `takeover_actor_kind` and `takeover_actor_user_id`, which mirror the domain `HumanTakeoverState`. A CHECK constraint keeps these fields consistent with the state.
+  - `review_eligibility_snapshot` stores the Human Agent review snapshot.
+  - Added `last_message_at` (not null) for inbox ordering.
+- **Message.**
+  - `type` is named `kind`.
+  - Platform IDs are unique per channel account.
+  - Adds `operation_id` (unique), `ai_draft_id` (at most one message per draft), `transport_path` and `sent_by_user_id`.
+  - CHECK constraints tie inbound rows to `PARTICIPANT` and require a human actor for `HUMAN_AGENT` sends.
+- **AiDraft.** Model metadata is stored as columns (`model_provider`, `model_name`, `prompt_version`, `schema_version`, `provider_request_id`, `latency_ms`). `confidence` must be in [0, 1].
+- **DeliveryJobRecord** (table `delivery_jobs`). There is one job per draft, and `operation_id` is unique. A `SENT` job must have `sent_at` and `platform_message_id`. Together with the one-message-per-draft rule, this keeps one logical draft from becoming several sends.
+- **Knowledge / style.** `knowledge_documents` carry source, version, status, content hash and an optional channel-account scope. `knowledge_chunks` are unique per document version and position and carry an `embedding_profile`. The pgvector and full-text columns and indexes are added by the retrieval task (ADR-011, RETRIEVAL.md). `style_examples` record provenance, and a `HUMAN_EDITED_DRAFT` example must reference its source draft.
+- **AutomationPolicy.**
+  - Timing ranges and quiet hours are stored as columns with the documented defaults.
+  - Reason codes and the template allowlist are text arrays validated by the domain.
+  - There is one workspace default (partial unique index) and at most one override per channel account.
+- **Auth.js.** Tables are `users`, `auth_accounts`, `auth_sessions` and `auth_verification_tokens`, with database sessions. Linked accounts keep only the provider link: OAuth access, refresh and ID tokens are not persisted. No sign-in provider is enabled yet; that choice belongs to the app-shell task.
+- **CHECK constraints.** Constraints Prisma cannot express live in the migration SQL. `db:check-drift` confirms that migrations and schema stay in sync.

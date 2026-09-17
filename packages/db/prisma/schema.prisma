@@ -1,0 +1,668 @@
+// PostgreSQL persistence model (docs/specs/DATA_MODEL.md, ADR-005, ADR-009).
+//
+// Conventions:
+// - tables/columns are snake_case; Prisma models/fields are PascalCase/camelCase;
+// - every customer-owned table carries `workspace_id`, and references between tenant tables are composite
+//   foreign keys that include `workspace_id`, so the database itself rejects cross-workspace references;
+// - uniqueness on tenant tables leads with `workspace_id`, so a write from one workspace can never collide
+//   with (and thereby reveal) another workspace's rows;
+// - history/audit rows use ON DELETE RESTRICT (no destructive cascades); only Auth.js login plumbing cascades;
+// - ON UPDATE RESTRICT everywhere: tenant ownership (workspace_id) and identifiers are immutable;
+// - enum values mirror the literal sets in @omnichannel/domain (checked by schema tests);
+// - CHECK constraints that Prisma cannot express live in the migration SQL (see prisma/migrations).
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Enums (mirrors of @omnichannel/domain literal sets)
+// ---------------------------------------------------------------------------------------------------------
+
+enum ChannelType {
+  INSTAGRAM
+  WHATSAPP
+}
+
+enum AiMode {
+  OFF
+  DRAFT
+  AUTOPILOT
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
+enum ChannelAccountStatus {
+  CONNECTED
+  NEEDS_REAUTH
+  DISCONNECTED
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum LeadStage {
+  NEW
+  ENGAGED
+  QUALIFYING
+  QUALIFIED
+  BOOKED
+  WON
+  LOST
+}
+
+enum TakeoverState {
+  NONE
+  REVIEW_REQUIRED
+  HUMAN_ACTIVE
+}
+
+enum TakeoverReason {
+  HUMAN_SENT_FROM_INBOX
+  UNMATCHED_OUTBOUND_ECHO
+  HUMAN_CLAIMED
+  MANDATORY_REVIEW
+  LOW_CONFIDENCE_REVIEW
+  DRAFT_MODE_REVIEW
+  HUMAN_AGENT_REVIEW
+  AMBIGUOUS_DELIVERY
+}
+
+enum ReviewMode {
+  NORMAL
+  HUMAN_AGENT
+}
+
+enum ActorKind {
+  USER
+  NATIVE_APP
+  SYSTEM
+}
+
+enum MessageDirection {
+  IN
+  OUT
+}
+
+enum MessageSource {
+  PARTICIPANT
+  AI
+  HUMAN
+  AUTOMATION
+  SYSTEM
+}
+
+enum MessageKind {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  INTERACTIVE
+  TEMPLATE
+  REACTION
+  UNKNOWN
+}
+
+enum MessageDeliveryStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum OutboundTransportPath {
+  STANDARD
+  HUMAN_AGENT
+}
+
+enum ChannelEventType {
+  INBOUND_MESSAGE
+  OUTBOUND_ECHO
+  DELIVERY_STATUS
+  READ_STATUS
+  REACTION
+  POSTBACK
+  CONVERSATION_POLICY
+}
+
+enum AiDraftStatus {
+  PENDING
+  HELD
+  SCHEDULED
+  CLAIMED
+  SENT
+  FAILED
+  HELD_AMBIGUOUS
+  CANCELLED_SUPERSEDED
+  DISMISSED
+}
+
+enum DeliveryJobStatus {
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELLED_SUPERSEDED
+  CANCELLED_HUMAN_TAKEOVER
+  CANCELLED_POLICY
+  HELD_REVIEW
+  HELD_AMBIGUOUS
+  FAILED_RETRYABLE_EXHAUSTED
+}
+
+enum KnowledgeSourceType {
+  MANUAL
+  FILE
+  URL
+}
+
+enum KnowledgeDocumentStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum StyleExampleProvenance {
+  HUMAN_TYPED
+  HUMAN_EDITED_DRAFT
+}
+
+enum StyleExampleStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum InstagramAfterWindowPolicy {
+  STANDARD_ONLY
+  HUMAN_ASSISTED_EXTENDED
+}
+
+enum WhatsAppAfterWindowPolicy {
+  SERVICE_WINDOW_ONLY
+  TEMPLATE_REVIEW
+  TEMPLATE_AUTOPILOT
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Auth.js persistence (@auth/prisma-adapter). Login identity only; workspace authorization is separate.
+// OAuth access/refresh/id tokens are deliberately not persisted (the web adapter strips them).
+// ---------------------------------------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid(7))
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  accounts                  Account[]
+  sessions                  Session[]
+  memberships               WorkspaceMember[]
+  sentMessages              Message[]
+  takenOverConversations    Conversation[]
+  createdKnowledgeDocuments KnowledgeDocument[]
+  approvedStyleExamples     StyleExample[]
+
+  @@map("users")
+}
+
+model Account {
+  userId            String   @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String   @map("provider_account_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@id([provider, providerAccountId])
+  @@index([userId])
+  @@map("auth_accounts")
+}
+
+model Session {
+  sessionToken String   @id @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+  @@map("auth_verification_tokens")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------------------------------------
+
+model Workspace {
+  id        String   @id @default(uuid(7))
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members            WorkspaceMember[]
+  channelCredentials ChannelCredential[]
+  channelAccounts    ChannelAccount[]
+  contacts           Contact[]
+  knowledgeDocuments KnowledgeDocument[]
+  styleExamples      StyleExample[]
+  automationPolicies AutomationPolicy[]
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid(7))
+  workspaceId String        @map("workspace_id")
+  userId      String        @map("user_id")
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------------------------------------
+
+/// Encrypted credential placeholder. Plaintext tokens are never stored; encryption/key management and the
+/// Meta token lifecycle are implemented by the onboarding tasks. `keyId` names the encryption key version.
+model ChannelCredential {
+  id          String    @id @default(uuid(7))
+  workspaceId String    @map("workspace_id")
+  keyId       String    @map("key_id")
+  algorithm   String
+  ciphertext  Bytes
+  nonce       Bytes
+  authTag     Bytes?    @map("auth_tag")
+  expiresAt   DateTime? @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount?
+
+  @@unique([workspaceId, id])
+  @@map("channel_credentials")
+}
+
+model ChannelAccount {
+  id                String               @id @default(uuid(7))
+  workspaceId       String               @map("workspace_id")
+  channel           ChannelType
+  externalAccountId String               @map("external_account_id")
+  displayName       String?              @map("display_name")
+  credentialId      String?              @map("credential_id")
+  status            ChannelAccountStatus @default(CONNECTED)
+  capabilities      Json                 @default("{}")
+  defaultAiMode     AiMode               @default(OFF) @map("default_ai_mode")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  credential         ChannelCredential?  @relation(fields: [workspaceId, credentialId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  contactIdentities  ContactIdentity[]
+  inboundEvents      InboundEvent[]
+  knowledgeDocuments KnowledgeDocument[]
+  styleExamples      StyleExample[]
+  automationPolicies AutomationPolicy[]
+
+  @@unique([workspaceId, id])
+  @@unique([workspaceId, credentialId])
+  /// One live connection per platform account, so webhooks route to exactly one workspace.
+  @@unique([channel, externalAccountId], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_external_account_key")
+  @@index([channel, externalAccountId])
+  @@map("channel_accounts")
+}
+
+/// Idempotency ledger for verified provider events: one row per (channel account, source event).
+model InboundEvent {
+  id               String           @id @default(uuid(7))
+  workspaceId      String           @map("workspace_id")
+  channelAccountId String           @map("channel_account_id")
+  sourceEventId    String           @map("source_event_id")
+  eventType        ChannelEventType @map("event_type")
+  occurredAt       DateTime         @map("occurred_at")
+  receivedAt       DateTime         @default(now()) @map("received_at")
+  processedAt      DateTime?        @map("processed_at")
+
+  channelAccount ChannelAccount @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, channelAccountId, sourceEventId], map: "inbound_events_source_event_key")
+  @@index([workspaceId, receivedAt])
+  @@map("inbound_events")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Contacts and conversations
+// ---------------------------------------------------------------------------------------------------------
+
+model Contact {
+  id          String   @id @default(uuid(7))
+  workspaceId String   @map("workspace_id")
+  displayName String?  @map("display_name")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  identities ContactIdentity[]
+
+  @@unique([workspaceId, id])
+  @@map("contacts")
+}
+
+model ContactIdentity {
+  id               String   @id @default(uuid(7))
+  workspaceId      String   @map("workspace_id")
+  contactId        String   @map("contact_id")
+  channelAccountId String   @map("channel_account_id")
+  externalUserId   String   @map("external_user_id")
+  displayName      String?  @map("display_name")
+  username         String?
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  contact        Contact        @relation(fields: [workspaceId, contactId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  conversations  Conversation[]
+
+  @@unique([workspaceId, channelAccountId, id])
+  /// External identity lookup: a platform user maps to one identity per channel account.
+  @@unique([workspaceId, channelAccountId, externalUserId], map: "contact_identities_external_user_key")
+  @@index([workspaceId, contactId])
+  @@map("contact_identities")
+}
+
+model Conversation {
+  id                        String             @id @default(uuid(7))
+  workspaceId               String             @map("workspace_id")
+  channelAccountId          String             @map("channel_account_id")
+  contactIdentityId         String             @map("contact_identity_id")
+  modeOverride              AiMode?            @map("mode_override")
+  aiEnabled                 Boolean            @default(true) @map("ai_enabled")
+  takeoverState             TakeoverState      @default(NONE) @map("takeover_state")
+  takeoverReason            TakeoverReason?    @map("takeover_reason")
+  takeoverReviewMode        ReviewMode?        @map("takeover_review_mode")
+  humanTakeoverAt           DateTime?          @map("human_takeover_at")
+  takeoverPausedUntil       DateTime?          @map("takeover_paused_until")
+  takeoverActorKind         ActorKind?         @map("takeover_actor_kind")
+  takeoverActorUserId       String?            @map("takeover_actor_user_id")
+  /// Window/eligibility snapshot kept for Human Agent review audit; re-evaluated before any final send.
+  reviewEligibilitySnapshot Json?              @map("review_eligibility_snapshot")
+  leadStage                 LeadStage          @default(NEW) @map("lead_stage")
+  status                    ConversationStatus @default(OPEN)
+  lastInboundAt             DateTime?          @map("last_inbound_at")
+  lastOutboundAt            DateTime?          @map("last_outbound_at")
+  /// Inbox ordering: latest message activity (creation time until the first message).
+  lastMessageAt             DateTime           @default(now()) @map("last_message_at")
+  createdAt                 DateTime           @default(now()) @map("created_at")
+  updatedAt                 DateTime           @updatedAt @map("updated_at")
+
+  contactIdentity   ContactIdentity @relation(fields: [workspaceId, channelAccountId, contactIdentityId], references: [workspaceId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
+  takeoverActorUser User?           @relation(fields: [takeoverActorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  messages          Message[]
+  aiDrafts          AiDraft[]
+
+  @@unique([workspaceId, id])
+  @@unique([workspaceId, channelAccountId, id])
+  /// One thread per platform participant per channel account (platform DM threads are 1:1).
+  @@unique([workspaceId, channelAccountId, contactIdentityId], map: "conversations_contact_identity_key")
+  @@index([workspaceId, status, lastMessageAt(sort: Desc)])
+  @@index([channelAccountId, lastInboundAt])
+  @@map("conversations")
+}
+
+model Message {
+  id                      String                 @id @default(uuid(7))
+  workspaceId             String                 @map("workspace_id")
+  channelAccountId        String                 @map("channel_account_id")
+  conversationId          String                 @map("conversation_id")
+  /// Platform message ID once known (inbound mid/wamid, or the ID returned by an accepted send).
+  channelMessageId        String?                @map("channel_message_id")
+  direction               MessageDirection
+  source                  MessageSource
+  kind                    MessageKind
+  text                    String?
+  media                   Json                   @default("[]")
+  replyToChannelMessageId String?                @map("reply_to_channel_message_id")
+  occurredAt              DateTime               @map("occurred_at")
+  deliveryStatus          MessageDeliveryStatus? @map("delivery_status")
+  deliveredAt             DateTime?              @map("delivered_at")
+  readAt                  DateTime?              @map("read_at")
+  transportPath           OutboundTransportPath? @map("transport_path")
+  operationId             String?                @unique @map("operation_id")
+  aiDraftId               String?                @map("ai_draft_id")
+  sentByUserId            String?                @map("sent_by_user_id")
+  createdAt               DateTime               @default(now()) @map("created_at")
+  updatedAt               DateTime               @updatedAt @map("updated_at")
+
+  conversation   Conversation   @relation(fields: [workspaceId, channelAccountId, conversationId], references: [workspaceId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
+  aiDraft        AiDraft?       @relation("DraftSend", fields: [workspaceId, aiDraftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  sentByUser     User?          @relation(fields: [sentByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  anchoredDrafts AiDraft[]      @relation("DraftAnchor")
+  styleExamples  StyleExample[]
+
+  @@unique([workspaceId, id])
+  @@unique([workspaceId, conversationId, id])
+  @@unique([workspaceId, channelAccountId, channelMessageId], map: "messages_channel_message_key")
+  /// At most one outbound message per AI draft.
+  @@unique([workspaceId, aiDraftId])
+  @@index([conversationId, occurredAt])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// AI drafts and delivery
+// ---------------------------------------------------------------------------------------------------------
+
+model AiDraft {
+  id                 String        @id @default(uuid(7))
+  workspaceId        String        @map("workspace_id")
+  conversationId     String        @map("conversation_id")
+  anchorMessageId    String        @map("anchor_message_id")
+  text               String
+  structuredOutput   Json          @map("structured_output")
+  confidence         Float
+  modelSuggestsSend  Boolean       @map("model_suggests_send")
+  needsReview        Boolean       @map("needs_review")
+  reasonCodes        String[]      @default([]) @map("reason_codes")
+  intent             String?
+  suggestedLeadStage LeadStage?    @map("suggested_lead_stage")
+  suggestedAction    String?       @map("suggested_action")
+  factualSourceIds   String[]      @default([]) @map("factual_source_ids")
+  status             AiDraftStatus @default(PENDING)
+  modelProvider      String        @map("model_provider")
+  modelName          String        @map("model_name")
+  promptVersion      String        @map("prompt_version")
+  schemaVersion      String        @map("schema_version")
+  providerRequestId  String?       @map("provider_request_id")
+  latencyMs          Int?          @map("latency_ms")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  conversation  Conversation       @relation(fields: [workspaceId, conversationId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  anchorMessage Message            @relation("DraftAnchor", fields: [workspaceId, conversationId, anchorMessageId], references: [workspaceId, conversationId, id], onDelete: Restrict, onUpdate: Restrict)
+  sentMessage   Message?           @relation("DraftSend")
+  deliveryJob   DeliveryJobRecord?
+  styleExamples StyleExample[]
+
+  @@unique([workspaceId, id])
+  @@index([conversationId, createdAt])
+  @@index([workspaceId, status])
+  @@map("ai_drafts")
+}
+
+model DeliveryJobRecord {
+  id                String            @id @default(uuid(7))
+  workspaceId       String            @map("workspace_id")
+  draftId           String            @map("draft_id")
+  /// One logical outbound action; stable across queue retries (ADR-012).
+  operationId       String            @unique @map("operation_id")
+  correlationId     String            @map("correlation_id")
+  status            DeliveryJobStatus @default(SCHEDULED)
+  scheduledFor      DateTime          @map("scheduled_for")
+  selectedDelayMs   Int               @map("selected_delay_ms")
+  attemptCount      Int               @default(0) @map("attempt_count")
+  claimedAt         DateTime?         @map("claimed_at")
+  sentAt            DateTime?         @map("sent_at")
+  cancelledAt       DateTime?         @map("cancelled_at")
+  cancelReason      String?           @map("cancel_reason")
+  platformMessageId String?           @map("platform_message_id")
+  providerRequestId String?           @map("provider_request_id")
+  lastErrorCode     String?           @map("last_error_code")
+  lastErrorMessage  String?           @map("last_error_message")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  draft AiDraft @relation(fields: [workspaceId, draftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One delivery job per draft, so a draft can never become more than one send.
+  @@unique([workspaceId, draftId])
+  @@index([status, scheduledFor])
+  @@index([workspaceId, status])
+  @@map("delivery_jobs")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Knowledge and style (separate retrieval domains, ADR-011). Vector/full-text columns arrive with retrieval.
+// ---------------------------------------------------------------------------------------------------------
+
+model KnowledgeDocument {
+  id               String                  @id @default(uuid(7))
+  workspaceId      String                  @map("workspace_id")
+  /// Absent for workspace-wide knowledge; set to scope a document to one channel account.
+  channelAccountId String?                 @map("channel_account_id")
+  title            String
+  sourceType       KnowledgeSourceType     @map("source_type")
+  sourceUri        String?                 @map("source_uri")
+  version          Int                     @default(1)
+  status           KnowledgeDocumentStatus @default(DRAFT)
+  contentHash      String?                 @map("content_hash")
+  createdByUserId  String?                 @map("created_by_user_id")
+  createdAt        DateTime                @default(now()) @map("created_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount?  @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  createdByUser  User?            @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  chunks         KnowledgeChunk[]
+
+  @@unique([workspaceId, id])
+  @@index([workspaceId, status])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeChunk {
+  id               String   @id @default(uuid(7))
+  workspaceId      String   @map("workspace_id")
+  documentId       String   @map("document_id")
+  documentVersion  Int      @map("document_version")
+  ordinal          Int
+  content          String
+  tokenCount       Int?     @map("token_count")
+  /// Embedding profile/version once embedded; the vector column is added with retrieval (ADR-011).
+  embeddingProfile String?  @map("embedding_profile")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  document KnowledgeDocument @relation(fields: [workspaceId, documentId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, documentId, documentVersion, ordinal], map: "knowledge_chunks_position_key")
+  @@map("knowledge_chunks")
+}
+
+model StyleExample {
+  id               String                 @id @default(uuid(7))
+  workspaceId      String                 @map("workspace_id")
+  channelAccountId String?                @map("channel_account_id")
+  inboundContext   String                 @map("inbound_context")
+  outboundText     String                 @map("outbound_text")
+  provenance       StyleExampleProvenance
+  sourceMessageId  String?                @map("source_message_id")
+  sourceDraftId    String?                @map("source_draft_id")
+  approvedByUserId String?                @map("approved_by_user_id")
+  status           StyleExampleStatus     @default(ACTIVE)
+  embeddingProfile String?                @map("embedding_profile")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount? @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  sourceMessage  Message?        @relation(fields: [workspaceId, sourceMessageId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  sourceDraft    AiDraft?        @relation(fields: [workspaceId, sourceDraftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  approvedByUser User?           @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([workspaceId, status])
+  @@map("style_examples")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Automation policy
+// ---------------------------------------------------------------------------------------------------------
+
+model AutomationPolicy {
+  id                                  String                     @id @default(uuid(7))
+  workspaceId                         String                     @map("workspace_id")
+  /// Absent for the workspace default; set for a channel-account override.
+  channelAccountId                    String?                    @map("channel_account_id")
+  mode                                AiMode                     @default(OFF)
+  confidenceThreshold                 Float                      @default(0.8) @map("confidence_threshold")
+  mandatoryReviewReasons              String[]                   @map("mandatory_review_reasons")
+  debounceMinMs                       Int                        @default(7000) @map("debounce_min_ms")
+  debounceMaxMs                       Int                        @default(12000) @map("debounce_max_ms")
+  deliveryDelayMinMs                  Int                        @default(30000) @map("delivery_delay_min_ms")
+  deliveryDelayMaxMs                  Int                        @default(120000) @map("delivery_delay_max_ms")
+  quietHoursTimeZone                  String?                    @map("quiet_hours_time_zone")
+  quietHoursStart                     String?                    @map("quiet_hours_start")
+  quietHoursEnd                       String?                    @map("quiet_hours_end")
+  takeoverPauseMs                     Int                        @default(21600000) @map("takeover_pause_ms")
+  instagramAfterWindowPolicy          InstagramAfterWindowPolicy @default(STANDARD_ONLY) @map("instagram_after_window_policy")
+  whatsappAfterWindowPolicy           WhatsAppAfterWindowPolicy  @default(SERVICE_WINDOW_ONLY) @map("whatsapp_after_window_policy")
+  whatsappTemplateAutomationAllowlist String[]                   @default([]) @map("whatsapp_template_automation_allowlist")
+  createdAt                           DateTime                   @default(now()) @map("created_at")
+  updatedAt                           DateTime                   @updatedAt @map("updated_at")
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount? @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One workspace default (channel_account_id IS NULL) per workspace.
+  @@unique([workspaceId], where: raw("channel_account_id IS NULL"), map: "automation_policies_workspace_default_key")
+  @@unique([workspaceId, channelAccountId])
+  @@map("automation_policies")
+}
