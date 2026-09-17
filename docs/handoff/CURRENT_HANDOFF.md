@@ -91,7 +91,7 @@ Implemented as stacked PRs awaiting independent review, in dependency order:
 2. #49 (#3): domain + channel contracts.
 3. #50 (#4): Prisma/Auth.js/workspace isolation.
 4. #51 (#5): BullMQ delay primitives.
-5. The P1-05 PR (#6): channel-neutral webhook ingestion with a transactional outbox (see `docs/specs/ARCHITECTURE.md` implementation notes).
+5. #52 (#6): channel-neutral webhook ingestion with a transactional outbox, scoped to the Business Profile resolved from the channel account (see `docs/specs/ARCHITECTURE.md` implementation notes).
 
 Nothing is merged yet. Phase 2 stays gated on Phase 1 acceptance.
 

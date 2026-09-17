@@ -23,6 +23,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@omnichannel/channel-core": "workspace:*",
+    "@omnichannel/domain": "workspace:*",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.13"
   }

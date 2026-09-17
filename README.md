@@ -117,6 +117,7 @@ docker compose up -d --wait
 export DATABASE_URL=postgresql://omnichannel:omnichannel-local-only@127.0.0.1:54329/omnichannel
 pnpm --filter @omnichannel/db db:migrate:deploy                  # apply migrations
 TEST_DATABASE_URL=$DATABASE_URL pnpm test:db                     # isolation + constraint integration tests
+TEST_DATABASE_URL=$DATABASE_URL TEST_REDIS_URL=redis://127.0.0.1:63799 pnpm test:e2e   # webhook → DB → outbox → BullMQ
 pnpm --filter @omnichannel/db db:migrate:dev --name <change>     # author a new migration (needs SHADOW_DATABASE_URL)
 pnpm --filter @omnichannel/db db:check-drift                     # migrations == schema.prisma (needs SHADOW_DATABASE_URL)
 ```
