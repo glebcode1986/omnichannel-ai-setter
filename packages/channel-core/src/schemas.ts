@@ -3,7 +3,7 @@
  * channel-neutral code. Objects are strict: provider-specific fields cannot leak past normalization except
  * inside the retention-controlled `rawMeta`.
  */
-import { CHANNEL_TYPES, MESSAGE_KINDS } from "@omnichannel/domain";
+import { CHANNEL_TYPES, isValidIdentifier, MESSAGE_KINDS } from "@omnichannel/domain";
 import { z } from "zod";
 
 import {
@@ -15,14 +15,18 @@ import {
   type WindowDecision,
 } from "./contracts";
 
+/** Provider-assigned identifiers (event, message, user IDs): opaque, possibly long. */
 const identifier = z.string().min(1).max(512);
+/** Internal scope identifiers (Workspace, Business Profile, channel account, ...): domain identifier rules. */
+const scopeIdentifier = z.string().refine(isValidIdentifier);
 const text = z.string().max(65_536);
 const validDate = z.date();
 
 const eventBase = {
-  workspaceId: identifier,
+  workspaceId: scopeIdentifier,
+  businessProfileId: scopeIdentifier,
   channel: z.enum(CHANNEL_TYPES),
-  channelAccountId: identifier,
+  channelAccountId: scopeIdentifier,
   sourceEventId: identifier,
   occurredAt: validDate,
   rawMeta: z.unknown().optional(),
@@ -119,11 +123,12 @@ export const outboundContentSchema = z.discriminatedUnion("type", [
 ]);
 
 export const outboundMessageCommandSchema = z.strictObject({
-  workspaceId: identifier,
-  channelAccountId: identifier,
-  conversationId: identifier,
+  workspaceId: scopeIdentifier,
+  businessProfileId: scopeIdentifier,
+  channelAccountId: scopeIdentifier,
+  conversationId: scopeIdentifier,
   recipientExternalId: identifier,
-  operationId: identifier,
+  operationId: scopeIdentifier,
   replyToExternalMessageId: identifier.optional(),
   content: outboundContentSchema,
 }) satisfies z.ZodType<OutboundMessageCommand>;

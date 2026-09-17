@@ -161,6 +161,11 @@ Each channel adapter must ship fixture-driven tests covering duplicate webhook d
 These notes resolve points the v0.1 text left open; they do not change the semantics above.
 
 - `ChannelType`, `AiMode`, `MessageKind` and `ChannelCapabilities` are defined once in `@omnichannel/domain` and re-exported by `@omnichannel/channel-core`, so domain entities and adapters share one definition.
+- **Business Profile scope (DATA_MODEL.md v0.4, Issue #53).** `EventBase` and `OutboundMessageCommand` carry a required `businessProfileId` next to `workspaceId` and `channelAccountId`.
+  - Adapters take all three from their trusted account binding, never from the provider payload. The application compares them with the channel account it resolved itself, so an event forged for another Workspace or Business Profile is rejected.
+  - Internal scope identifiers (`workspaceId`, `businessProfileId`, `channelAccountId`, plus `conversationId` and `operationId` on commands) follow the domain identifier rules: non-empty, at most 255 characters, no whitespace or control characters. Provider-assigned identifiers keep the looser opaque rule.
+  - `ConversationPolicyContext` is unchanged, because window evaluation needs no Business Profile scope.
+  - The v0.1 snippets above predate this refinement.
 - `RawWebhook` is `{ method, headers (lower-cased names), query, rawBody: Uint8Array, receivedAt }`; signatures are verified against the raw bytes. `VerificationResult` is `VERIFIED | CHALLENGE { responseBody } | REJECTED { reason }`; only `VERIFIED` input may be normalized.
 - `ConversationPolicyContext` is `{ workspaceId, channelAccountId, conversationId, participantExternalId, lastInboundAt?, now }`. `WindowDecision` is a platform fact: only `OPEN_FREEFORM` (not yet expired) permits free-form sends, `UNKNOWN` fails closed, and after-window product policy (ADR-014/ADR-016) stays in the application layer.
 - Status events: `DeliveryStatusEvent.status` is `SENT | DELIVERED | FAILED` with an optional provider `{ code, message }`; reads are always `ReadStatusEvent` with the read `platformMessageId`.

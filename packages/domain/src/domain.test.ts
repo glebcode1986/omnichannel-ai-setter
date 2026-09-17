@@ -4,6 +4,8 @@ import {
   AI_DRAFT_STATUSES,
   allowsAutomatedSend,
   assertNever,
+  BUSINESS_PROFILE_ACCESS_SCOPES,
+  BUSINESS_PROFILE_STATUSES,
   CHANNEL_CAPABILITY_KEYS,
   createAutomationPolicy,
   DEFAULT_DEBOUNCE_WINDOW_MS,
@@ -11,24 +13,37 @@ import {
   DELIVERY_JOB_STATUSES,
   DomainValidationError,
   FINAL_DELIVERY_JOB_STATUSES,
+  hasBusinessProfileAccess,
   HUMAN_TAKEOVER_STATES,
   isAiMode,
+  isBusinessProfileAccessScope,
+  isBusinessProfileStatus,
   isChannelType,
+  isContactPointStatus,
+  isContactPointType,
   isDeliveryJobStatus,
   isFinalDeliveryJobStatus,
   isLeadStage,
   isMessageKind,
   isReasonCode,
+  isSameChannelIdentity,
+  isStaleAnchor,
   isValidIdentifier,
   MANDATORY_REVIEW_REASON_CODES,
   NO_CAPABILITIES,
   toAutomationPolicyId,
+  toBusinessProfileId,
+  toChannelAccountId,
   toConfidence,
   toConversationId,
+  toConversationStateVersion,
   toDurationRangeMs,
   toQuietHours,
   toWorkspaceId,
+  type BusinessProfileId,
   type ChannelCapabilities,
+  type ChannelIdentity,
+  type Contact,
   type ConversationId,
   type HumanTakeoverState,
   type Message,
@@ -60,6 +75,97 @@ describe("identifiers", () => {
     // @ts-expect-error a workspace id is not a conversation id
     const wrong: ConversationId = workspaceId;
     expect(wrong).toBe("same");
+    // @ts-expect-error a workspace id is not a Business Profile id
+    const notProfile: BusinessProfileId = workspaceId;
+    // @ts-expect-error a Business Profile id is not a workspace id
+    const notWorkspace: WorkspaceId = toBusinessProfileId("same");
+    expect([notProfile, notWorkspace]).toEqual(["same", "same"]);
+  });
+
+  it("validates Business Profile identifiers without echoing the value", () => {
+    expect(toBusinessProfileId("bp_1")).toBe("bp_1");
+    for (const invalid of ["", "   ", "bp 1", `bp${NUL}`]) {
+      expect(() => toBusinessProfileId(invalid)).toThrow(DomainValidationError);
+    }
+    expect(captureDomainError(() => toBusinessProfileId("secret bp")).message).toBe(
+      "businessProfileId: must be a non-empty identifier of at most 255 characters without whitespace",
+    );
+  });
+});
+
+describe("Business Profile scope", () => {
+  const workspaceId = toWorkspaceId("ws_1");
+  const bp1 = toBusinessProfileId("bp_1");
+  const bp2 = toBusinessProfileId("bp_2");
+  const now = new Date("2026-09-17T10:00:00.000Z");
+
+  it("keeps contacts and channel identities with the same provider user ID independent per Business Profile", () => {
+    const identity = (businessProfileId: BusinessProfileId, channelAccountId: string, username?: string): ChannelIdentity => ({
+      id: `${businessProfileId}-identity` as ChannelIdentity["id"],
+      workspaceId,
+      businessProfileId,
+      contactId: `${businessProfileId}-contact` as ChannelIdentity["contactId"],
+      channelAccountId: toChannelAccountId(channelAccountId),
+      channel: "INSTAGRAM",
+      externalUserId: "igsid-shared",
+      ...(username === undefined ? {} : { username }),
+      createdAt: now,
+      updatedAt: now,
+    });
+    const inBp1 = identity(bp1, "ca_bp1");
+    const inBp2 = identity(bp2, "ca_bp2");
+
+    expect(isSameChannelIdentity(inBp1, inBp2)).toBe(false);
+    expect(isSameChannelIdentity(inBp1, { ...inBp1, channelAccountId: inBp2.channelAccountId, businessProfileId: bp1 })).toBe(false);
+    expect(isSameChannelIdentity(inBp1, identity(bp1, "ca_bp1", "renamed_handle"))).toBe(true);
+    expect(inBp1.contactId).not.toBe(inBp2.contactId);
+  });
+
+  it("requires Business Profile scope on BP-owned contracts", () => {
+    // @ts-expect-error a contact without a Business Profile is not a valid contract
+    const unscoped: Contact = { id: "c" as Contact["id"], workspaceId, createdAt: now, updatedAt: now };
+    expect(unscoped.workspaceId).toBe(workspaceId);
+    expectTypeOf<ChannelIdentity["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+  });
+
+  it("guards Business Profile statuses and access scopes", () => {
+    expect([...BUSINESS_PROFILE_STATUSES]).toEqual(["SETUP", "ACTIVE", "INACTIVE"]);
+    expect(isBusinessProfileStatus("ACTIVE")).toBe(true);
+    expect(isBusinessProfileStatus("DELETED")).toBe(false);
+    expect([...BUSINESS_PROFILE_ACCESS_SCOPES]).toEqual(["ALL", "SELECTED"]);
+    expect(isBusinessProfileAccessScope("SELECTED")).toBe(true);
+    expect(isBusinessProfileAccessScope("NONE")).toBe(false);
+  });
+
+  it("grants Business Profile access by role and scope, never by default", () => {
+    expect(hasBusinessProfileAccess({ role: "OWNER", businessProfileScope: "SELECTED", grantedBusinessProfileIds: [] }, bp2)).toBe(true);
+    expect(hasBusinessProfileAccess({ role: "ADMIN", businessProfileScope: "ALL", grantedBusinessProfileIds: [] }, bp2)).toBe(true);
+    expect(hasBusinessProfileAccess({ role: "ADMIN", businessProfileScope: "SELECTED", grantedBusinessProfileIds: [bp1] }, bp2)).toBe(false);
+    expect(hasBusinessProfileAccess({ role: "AGENT", businessProfileScope: "SELECTED", grantedBusinessProfileIds: [bp1] }, bp1)).toBe(true);
+    expect(hasBusinessProfileAccess({ role: "AGENT", businessProfileScope: "SELECTED", grantedBusinessProfileIds: [] }, bp1)).toBe(false);
+  });
+
+  it("guards contact point types and statuses", () => {
+    expect(isContactPointType("PHONE")).toBe(true);
+    expect(isContactPointType("USERNAME")).toBe(false);
+    expect(isContactPointStatus("SUPERSEDED")).toBe(true);
+    expect(isContactPointStatus("MATCHED")).toBe(false);
+  });
+});
+
+describe("conversation state version", () => {
+  it("accepts only non-negative integers", () => {
+    expect(toConversationStateVersion(0)).toBe(0);
+    expect(toConversationStateVersion(42)).toBe(42);
+    for (const invalid of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => toConversationStateVersion(invalid)).toThrow(DomainValidationError);
+    }
+  });
+
+  it("marks anchored actions stale once the conversation state moves on", () => {
+    const anchor = toConversationStateVersion(3);
+    expect(isStaleAnchor(anchor, toConversationStateVersion(3))).toBe(false);
+    expect(isStaleAnchor(anchor, toConversationStateVersion(4))).toBe(true);
   });
 });
 
@@ -164,7 +270,11 @@ describe("messages", () => {
 });
 
 describe("createAutomationPolicy", () => {
-  const base = { id: toAutomationPolicyId("policy_1"), workspaceId: toWorkspaceId("ws_1") };
+  const base = {
+    id: toAutomationPolicyId("policy_1"),
+    workspaceId: toWorkspaceId("ws_1"),
+    businessProfileId: toBusinessProfileId("bp_1"),
+  };
 
   it("applies conservative defaults", () => {
     const policy = createAutomationPolicy(base);
@@ -180,6 +290,7 @@ describe("createAutomationPolicy", () => {
       whatsappTemplateAutomationAllowlist: [],
     });
     expect(policy.mandatoryReviewReasons).toEqual(expect.arrayContaining([...MANDATORY_REVIEW_REASON_CODES]));
+    expect(policy).toMatchObject({ workspaceId: "ws_1", businessProfileId: "bp_1" });
     expect(policy).not.toHaveProperty("channelAccountId");
   });
 
