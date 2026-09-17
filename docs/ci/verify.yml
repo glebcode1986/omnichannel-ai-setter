@@ -1,0 +1,58 @@
+# GitHub Actions verify gate (Issue #37).
+#
+# THIS FILE IS NOT ACTIVE HERE. GitHub refuses pushes that create or update files under
+# .github/workflows/ from an OAuth app without the `workflow` scope, which the implementation agent's
+# credential does not have (see the PR description). To activate it, from a checkout with a credential
+# that has the `workflow` scope (or from the GitHub web editor):
+#
+#   mkdir -p .github/workflows && git mv docs/ci/verify.yml .github/workflows/verify.yml
+#   git commit -m "Activate GitHub Actions verify gate (#37)"
+#
+# Nothing else needs to change; the file below is the workflow, unmodified.
+
+name: verify
+
+on:
+  push:
+    branches: [main]
+  # Every pull request, not only those targeting main: Phase 1 is developed as a stacked chain whose PRs
+  # target their parent branch, and those need the same gate.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  verify:
+    name: pnpm verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      # pnpm comes from the repository's "packageManager" field, so CI uses the pinned version.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # typecheck + eslint + lint:boundaries + vitest + build, exactly the local gate. No database, Redis or
+      # provider credentials: the PostgreSQL and Redis suites skip themselves unless TEST_DATABASE_URL and
+      # TEST_REDIS_URL are set, so CI needs no secrets.
+      - name: Verify
+        run: pnpm verify

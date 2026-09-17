@@ -102,6 +102,12 @@ Package names use the `@omnichannel/*` scope. Internal packages export TypeScrip
 
 Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain typecheck` or `pnpm --filter @omnichannel/worker test`.
 
+### Continuous integration
+
+`docs/ci/verify.yml` is the GitHub Actions gate (Issue #37): on every pull request, on pushes to `main` and on manual dispatch it runs Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile` and `pnpm verify` (typecheck, ESLint, `lint:boundaries`, tests, build). It needs no secrets: the PostgreSQL and Redis suites skip themselves unless `TEST_DATABASE_URL` and `TEST_REDIS_URL` are set, so CI covers everything except the infrastructure suites, which stay a local/manual step.
+
+The file is not active yet: it must live at `.github/workflows/verify.yml`, and pushing that path requires a credential with the GitHub `workflow` scope. Activate it with `git mv docs/ci/verify.yml .github/workflows/verify.yml` from such a checkout.
+
 ### Running the apps
 
 - Web: `pnpm dev:web`, then `GET http://localhost:3000/api/health` returns `{"status":"ok","service":"web"}`. Production: `pnpm --filter @omnichannel/web build && pnpm --filter @omnichannel/web start`.
