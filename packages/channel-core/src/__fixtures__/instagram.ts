@@ -96,6 +96,7 @@ export function createInstagramFixtureAdapter(config: FixtureAdapterConfig): Cha
 function normalizeItem(item: InstagramMessagingItem, config: FixtureAdapterConfig): NormalizedChannelEvent[] {
   const base = {
     workspaceId: config.workspaceId,
+    businessProfileId: config.businessProfileId,
     channel: "INSTAGRAM",
     channelAccountId: config.channelAccountId,
     occurredAt: new Date(item.timestamp),

@@ -1,5 +1,6 @@
 import { literalGuard } from "./enum";
-import type { AiDraftId, ConversationId, MessageId, WorkspaceId } from "./ids";
+import type { ConversationStateVersion } from "./conversation";
+import type { AiDraftId, BusinessProfileId, ConversationId, MessageId, WorkspaceId } from "./ids";
 import type { LeadStage } from "./lead";
 import type { ReasonCode } from "./reason-codes";
 import type { Confidence } from "./values";
@@ -36,9 +37,12 @@ export interface ModelMetadata {
 export interface AiDraft {
   readonly id: AiDraftId;
   readonly workspaceId: WorkspaceId;
+  readonly businessProfileId: BusinessProfileId;
   readonly conversationId: ConversationId;
   /** Newest inbound message the draft answers; a newer inbound supersedes it. */
   readonly anchorMessageId: MessageId;
+  /** Conversation state the draft was generated for; the draft is stale once the conversation moves on. */
+  readonly anchorStateVersion: ConversationStateVersion;
   readonly text: string;
   readonly confidence: Confidence;
   /** Advisory only: the model can never bypass the deterministic policy engine. */

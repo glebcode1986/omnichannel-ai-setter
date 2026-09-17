@@ -1,8 +1,24 @@
-import { isValidIdentifier, toWorkspaceId, type WorkspaceId, type WorkspaceRole } from "@omnichannel/domain";
+import {
+  isValidIdentifier,
+  toBusinessProfileId,
+  toWorkspaceId,
+  toWorkspaceMemberId,
+  type BusinessProfileId,
+  type BusinessProfileStatus,
+  type WorkspaceId,
+  type WorkspaceMemberId,
+  type WorkspaceRole,
+} from "@omnichannel/domain";
 
-import type { DbExecutor } from "../client";
-import { DbInputError, WorkspacePermissionError } from "../errors";
-import { requireWorkspaceRole, WORKSPACE_ADMIN_ROLES, type WorkspaceContext } from "../tenancy";
+import type { DbClient, DbExecutor } from "../client";
+import { DbInputError, rethrowAsTenantNotFound, WorkspacePermissionError } from "../errors";
+import {
+  authorizedBusinessProfileFilter,
+  requireRole,
+  scopeOf,
+  WORKSPACE_ADMIN_ROLES,
+  type WorkspaceContext,
+} from "../tenancy";
 
 const MAX_NAME_LENGTH = 200;
 
@@ -12,7 +28,27 @@ export interface WorkspaceMembershipSummary {
   readonly role: WorkspaceRole;
 }
 
-/** Creates a workspace and makes the authenticated creator its OWNER in one statement. */
+export interface BusinessProfileSummary {
+  readonly businessProfileId: BusinessProfileId;
+  readonly name: string;
+  readonly status: BusinessProfileStatus;
+}
+
+/** Scope granted to a new member: every Business Profile, or an explicit list (possibly empty). */
+export type BusinessProfileScopeGrant = "ALL" | { readonly selected: readonly string[] };
+
+function normalizeName(field: string, value: string): string {
+  const name = value.trim();
+  if (name.length === 0 || name.length > MAX_NAME_LENGTH) {
+    throw new DbInputError(field, `must be 1-${MAX_NAME_LENGTH} characters`);
+  }
+  return name;
+}
+
+/**
+ * Creates a workspace and makes the authenticated creator its OWNER (scope ALL) in one statement. No Business
+ * Profile is created implicitly; the owner creates profiles explicitly.
+ */
 export async function createWorkspaceWithOwner(
   db: DbExecutor,
   input: { readonly name: string; readonly ownerUserId: string },
@@ -20,21 +56,19 @@ export async function createWorkspaceWithOwner(
   if (!isValidIdentifier(input.ownerUserId)) {
     throw new DbInputError("ownerUserId", "must be a valid identifier");
   }
-  const name = input.name.trim();
-  if (name.length === 0 || name.length > MAX_NAME_LENGTH) {
-    throw new DbInputError("name", `must be 1-${MAX_NAME_LENGTH} characters`);
-  }
-
   const workspace = await db.workspace.create({
-    data: { name, members: { create: { userId: input.ownerUserId, role: "OWNER" } } },
+    data: {
+      name: normalizeName("name", input.name),
+      members: { create: { userId: input.ownerUserId, role: "OWNER", businessProfileScope: "ALL" } },
+    },
     select: { id: true, name: true },
   });
   return { workspaceId: toWorkspaceId(workspace.id), name: workspace.name, role: "OWNER" };
 }
 
 /**
- * Workspaces the user may select. Used to offer an explicit choice; it does not authorize anything —
- * each request still calls `authorizeWorkspaceAccess` for the workspace it names.
+ * Workspaces the user may select. Used to offer an explicit choice; it does not authorize anything — each
+ * request still authorizes the Workspace/Business Profile it names.
  */
 export async function listWorkspacesForUser(db: DbExecutor, userId: string): Promise<WorkspaceMembershipSummary[]> {
   if (!isValidIdentifier(userId)) {
@@ -52,18 +86,91 @@ export async function listWorkspacesForUser(db: DbExecutor, userId: string): Pro
   }));
 }
 
-/** OWNER/ADMIN may add members; only an OWNER may grant OWNER. */
-export async function addWorkspaceMember(
+/**
+ * Creates a Business Profile (status SETUP). Allowed for OWNER and for an ADMIN whose scope is ALL, because
+ * a new profile is automatically visible to every ALL-scoped member. Provisional rule until team/billing
+ * tasks define profile-slot permissions.
+ */
+export async function createBusinessProfile(
   db: DbExecutor,
   context: WorkspaceContext,
-  input: { readonly userId: string; readonly role: WorkspaceRole },
-): Promise<void> {
-  const workspaceId = requireWorkspaceRole(context, WORKSPACE_ADMIN_ROLES, "adding members");
+  input: { readonly name: string },
+): Promise<BusinessProfileSummary> {
+  const workspaceId = scopeOf(context);
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "creating Business Profiles");
+  if (context.businessProfileScope.kind !== "ALL") {
+    throw new WorkspacePermissionError("creating Business Profiles");
+  }
+  const profile = await db.businessProfile.create({
+    data: { workspaceId, name: normalizeName("name", input.name) },
+    select: { id: true, name: true, status: true },
+  });
+  return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
+}
+
+/** Business Profiles the member may see; unauthorized profiles are not listed. */
+export async function listAuthorizedBusinessProfiles(db: DbExecutor, context: WorkspaceContext): Promise<BusinessProfileSummary[]> {
+  const workspaceId = scopeOf(context);
+  const filter = authorizedBusinessProfileFilter(context);
+  const profiles = await db.businessProfile.findMany({
+    where: { workspaceId, ...(filter.businessProfileId === undefined ? {} : { id: filter.businessProfileId }) },
+    select: { id: true, name: true, status: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return profiles.map((profile) => ({
+    businessProfileId: toBusinessProfileId(profile.id),
+    name: profile.name,
+    status: profile.status,
+  }));
+}
+
+/**
+ * Adds a member with an explicit Business Profile scope. OWNER/ADMIN may add members; only an OWNER may grant
+ * OWNER (always scope ALL). Grants are bounded by the granting member's own scope: an ADMIN with SELECTED
+ * scope can neither grant ALL nor a profile outside its own grants.
+ */
+export async function addWorkspaceMember(
+  db: DbClient,
+  context: WorkspaceContext,
+  input: { readonly userId: string; readonly role: WorkspaceRole; readonly businessProfileScope: BusinessProfileScopeGrant },
+): Promise<{ readonly workspaceMemberId: WorkspaceMemberId }> {
+  const workspaceId = scopeOf(context);
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "adding members");
   if (input.role === "OWNER" && context.role !== "OWNER") {
     throw new WorkspacePermissionError("granting OWNER");
   }
   if (!isValidIdentifier(input.userId)) {
     throw new DbInputError("userId", "must be a valid identifier");
   }
-  await db.workspaceMember.create({ data: { workspaceId, userId: input.userId, role: input.role } });
+
+  const grantsAll = input.role === "OWNER" || input.businessProfileScope === "ALL";
+  const selected = input.businessProfileScope === "ALL" || grantsAll ? [] : [...new Set(input.businessProfileScope.selected)];
+  if (selected.some((id) => !isValidIdentifier(id))) {
+    throw new DbInputError("businessProfileScope", "must list valid Business Profile identifiers");
+  }
+  const granterScope = context.businessProfileScope;
+  if (granterScope.kind === "SELECTED") {
+    const own = new Set<string>(granterScope.businessProfileIds);
+    if (grantsAll || selected.some((id) => !own.has(id))) {
+      throw new WorkspacePermissionError("granting Business Profile access outside the granting member's scope");
+    }
+  }
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const member = await tx.workspaceMember.create({
+        data: { workspaceId, userId: input.userId, role: input.role, businessProfileScope: grantsAll ? "ALL" : "SELECTED" },
+        select: { id: true },
+      });
+      if (selected.length > 0) {
+        await tx.memberBusinessProfileAccess.createMany({
+          data: selected.map((businessProfileId) => ({ workspaceId, workspaceMemberId: member.id, businessProfileId })),
+        });
+      }
+      return { workspaceMemberId: toWorkspaceMemberId(member.id) };
+    });
+  } catch (error) {
+    // A listed profile outside this Workspace fails the composite FK and is reported like a missing one.
+    return rethrowAsTenantNotFound(error, "BusinessProfile");
+  }
 }

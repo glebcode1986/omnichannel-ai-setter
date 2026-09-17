@@ -8,6 +8,12 @@ CREATE TYPE "AiMode" AS ENUM ('OFF', 'DRAFT', 'AUTOPILOT');
 CREATE TYPE "WorkspaceRole" AS ENUM ('OWNER', 'ADMIN', 'AGENT');
 
 -- CreateEnum
+CREATE TYPE "BusinessProfileAccessScope" AS ENUM ('ALL', 'SELECTED');
+
+-- CreateEnum
+CREATE TYPE "BusinessProfileStatus" AS ENUM ('SETUP', 'ACTIVE', 'INACTIVE');
+
+-- CreateEnum
 CREATE TYPE "ChannelAccountStatus" AS ENUM ('CONNECTED', 'NEEDS_REAUTH', 'DISCONNECTED');
 
 -- CreateEnum
@@ -131,10 +137,34 @@ CREATE TABLE "workspace_members" (
     "workspace_id" TEXT NOT NULL,
     "user_id" TEXT NOT NULL,
     "role" "WorkspaceRole" NOT NULL,
+    "business_profile_scope" "BusinessProfileAccessScope" NOT NULL DEFAULT 'SELECTED',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "workspace_members_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "business_profiles" (
+    "id" TEXT NOT NULL,
+    "workspace_id" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "status" "BusinessProfileStatus" NOT NULL DEFAULT 'SETUP',
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "business_profiles_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "member_business_profile_access" (
+    "id" TEXT NOT NULL,
+    "workspace_id" TEXT NOT NULL,
+    "workspace_member_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "member_business_profile_access_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -157,6 +187,7 @@ CREATE TABLE "channel_credentials" (
 CREATE TABLE "channel_accounts" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "channel" "ChannelType" NOT NULL,
     "external_account_id" TEXT NOT NULL,
     "display_name" TEXT,
@@ -174,6 +205,7 @@ CREATE TABLE "channel_accounts" (
 CREATE TABLE "inbound_events" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "channel_account_id" TEXT NOT NULL,
     "source_event_id" TEXT NOT NULL,
     "event_type" "ChannelEventType" NOT NULL,
@@ -188,6 +220,7 @@ CREATE TABLE "inbound_events" (
 CREATE TABLE "contacts" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "display_name" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -196,9 +229,10 @@ CREATE TABLE "contacts" (
 );
 
 -- CreateTable
-CREATE TABLE "contact_identities" (
+CREATE TABLE "channel_identities" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "contact_id" TEXT NOT NULL,
     "channel_account_id" TEXT NOT NULL,
     "external_user_id" TEXT NOT NULL,
@@ -208,15 +242,17 @@ CREATE TABLE "contact_identities" (
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "contact_identities_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "channel_identities_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
 CREATE TABLE "conversations" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "channel_account_id" TEXT NOT NULL,
-    "contact_identity_id" TEXT NOT NULL,
+    "contact_id" TEXT NOT NULL,
+    "channel_identity_id" TEXT NOT NULL,
     "mode_override" "AiMode",
     "ai_enabled" BOOLEAN NOT NULL DEFAULT true,
     "takeover_state" "TakeoverState" NOT NULL DEFAULT 'NONE',
@@ -229,6 +265,7 @@ CREATE TABLE "conversations" (
     "review_eligibility_snapshot" JSONB,
     "lead_stage" "LeadStage" NOT NULL DEFAULT 'NEW',
     "status" "ConversationStatus" NOT NULL DEFAULT 'OPEN',
+    "state_version" INTEGER NOT NULL DEFAULT 0,
     "last_inbound_at" TIMESTAMP(3),
     "last_outbound_at" TIMESTAMP(3),
     "last_message_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -242,6 +279,7 @@ CREATE TABLE "conversations" (
 CREATE TABLE "messages" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "channel_account_id" TEXT NOT NULL,
     "conversation_id" TEXT NOT NULL,
     "channel_message_id" TEXT,
@@ -269,8 +307,10 @@ CREATE TABLE "messages" (
 CREATE TABLE "ai_drafts" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "conversation_id" TEXT NOT NULL,
     "anchor_message_id" TEXT NOT NULL,
+    "anchor_state_version" INTEGER NOT NULL,
     "text" TEXT NOT NULL,
     "structured_output" JSONB NOT NULL,
     "confidence" DOUBLE PRECISION NOT NULL,
@@ -298,6 +338,7 @@ CREATE TABLE "ai_drafts" (
 CREATE TABLE "delivery_jobs" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "draft_id" TEXT NOT NULL,
     "operation_id" TEXT NOT NULL,
     "correlation_id" TEXT NOT NULL,
@@ -323,7 +364,7 @@ CREATE TABLE "delivery_jobs" (
 CREATE TABLE "knowledge_documents" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
-    "channel_account_id" TEXT,
+    "business_profile_id" TEXT,
     "title" TEXT NOT NULL,
     "source_type" "KnowledgeSourceType" NOT NULL,
     "source_uri" TEXT,
@@ -357,7 +398,7 @@ CREATE TABLE "knowledge_chunks" (
 CREATE TABLE "style_examples" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
-    "channel_account_id" TEXT,
+    "business_profile_id" TEXT,
     "inbound_context" TEXT NOT NULL,
     "outbound_text" TEXT NOT NULL,
     "provenance" "StyleExampleProvenance" NOT NULL,
@@ -376,6 +417,7 @@ CREATE TABLE "style_examples" (
 CREATE TABLE "automation_policies" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "channel_account_id" TEXT,
     "mode" "AiMode" NOT NULL DEFAULT 'OFF',
     "confidence_threshold" DOUBLE PRECISION NOT NULL DEFAULT 0.8,
@@ -413,13 +455,28 @@ CREATE INDEX "workspace_members_user_id_idx" ON "workspace_members"("user_id");
 CREATE UNIQUE INDEX "workspace_members_workspace_id_user_id_key" ON "workspace_members"("workspace_id", "user_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "workspace_members_workspace_id_id_key" ON "workspace_members"("workspace_id", "id");
+
+-- CreateIndex
+CREATE INDEX "business_profiles_workspace_id_status_idx" ON "business_profiles"("workspace_id", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "business_profiles_workspace_id_id_key" ON "business_profiles"("workspace_id", "id");
+
+-- CreateIndex
+CREATE INDEX "member_business_profile_access_workspace_id_business_profil_idx" ON "member_business_profile_access"("workspace_id", "business_profile_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "member_business_profile_access_workspace_member_id_business_key" ON "member_business_profile_access"("workspace_member_id", "business_profile_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "channel_credentials_workspace_id_id_key" ON "channel_credentials"("workspace_id", "id");
 
 -- CreateIndex
 CREATE INDEX "channel_accounts_channel_external_account_id_idx" ON "channel_accounts"("channel", "external_account_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "channel_accounts_workspace_id_id_key" ON "channel_accounts"("workspace_id", "id");
+CREATE UNIQUE INDEX "channel_accounts_workspace_id_business_profile_id_id_key" ON "channel_accounts"("workspace_id", "business_profile_id", "id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "channel_accounts_workspace_id_credential_id_key" ON "channel_accounts"("workspace_id", "credential_id");
@@ -428,37 +485,40 @@ CREATE UNIQUE INDEX "channel_accounts_workspace_id_credential_id_key" ON "channe
 CREATE UNIQUE INDEX "channel_accounts_live_external_account_key" ON "channel_accounts"("channel", "external_account_id") WHERE (status <> 'DISCONNECTED');
 
 -- CreateIndex
+CREATE UNIQUE INDEX "channel_accounts_live_profile_channel_key" ON "channel_accounts"("workspace_id", "business_profile_id", "channel") WHERE (status <> 'DISCONNECTED');
+
+-- CreateIndex
 CREATE INDEX "inbound_events_workspace_id_received_at_idx" ON "inbound_events"("workspace_id", "received_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "inbound_events_source_event_key" ON "inbound_events"("workspace_id", "channel_account_id", "source_event_id");
+CREATE UNIQUE INDEX "inbound_events_source_event_key" ON "inbound_events"("workspace_id", "business_profile_id", "channel_account_id", "source_event_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "contacts_workspace_id_id_key" ON "contacts"("workspace_id", "id");
+CREATE UNIQUE INDEX "contacts_workspace_id_business_profile_id_id_key" ON "contacts"("workspace_id", "business_profile_id", "id");
 
 -- CreateIndex
-CREATE INDEX "contact_identities_workspace_id_contact_id_idx" ON "contact_identities"("workspace_id", "contact_id");
+CREATE INDEX "channel_identities_workspace_id_business_profile_id_contact_idx" ON "channel_identities"("workspace_id", "business_profile_id", "contact_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "contact_identities_workspace_id_channel_account_id_id_key" ON "contact_identities"("workspace_id", "channel_account_id", "id");
+CREATE UNIQUE INDEX "channel_identities_workspace_id_business_profile_id_channel_key" ON "channel_identities"("workspace_id", "business_profile_id", "channel_account_id", "id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "contact_identities_external_user_key" ON "contact_identities"("workspace_id", "channel_account_id", "external_user_id");
+CREATE UNIQUE INDEX "channel_identities_external_user_key" ON "channel_identities"("workspace_id", "business_profile_id", "channel_account_id", "external_user_id");
 
 -- CreateIndex
-CREATE INDEX "conversations_workspace_id_status_last_message_at_idx" ON "conversations"("workspace_id", "status", "last_message_at" DESC);
+CREATE INDEX "conversations_profile_inbox_idx" ON "conversations"("workspace_id", "business_profile_id", "status", "last_message_at" DESC);
 
 -- CreateIndex
 CREATE INDEX "conversations_channel_account_id_last_inbound_at_idx" ON "conversations"("channel_account_id", "last_inbound_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "conversations_workspace_id_id_key" ON "conversations"("workspace_id", "id");
+CREATE UNIQUE INDEX "conversations_workspace_id_business_profile_id_id_key" ON "conversations"("workspace_id", "business_profile_id", "id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "conversations_workspace_id_channel_account_id_id_key" ON "conversations"("workspace_id", "channel_account_id", "id");
+CREATE UNIQUE INDEX "conversations_workspace_id_business_profile_id_channel_acco_key" ON "conversations"("workspace_id", "business_profile_id", "channel_account_id", "id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "conversations_contact_identity_key" ON "conversations"("workspace_id", "channel_account_id", "contact_identity_id");
+CREATE UNIQUE INDEX "conversations_channel_identity_key" ON "conversations"("workspace_id", "business_profile_id", "channel_account_id", "channel_identity_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "messages_operation_id_key" ON "messages"("operation_id");
@@ -467,25 +527,25 @@ CREATE UNIQUE INDEX "messages_operation_id_key" ON "messages"("operation_id");
 CREATE INDEX "messages_conversation_id_occurred_at_idx" ON "messages"("conversation_id", "occurred_at");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "messages_workspace_id_id_key" ON "messages"("workspace_id", "id");
+CREATE UNIQUE INDEX "messages_workspace_id_business_profile_id_id_key" ON "messages"("workspace_id", "business_profile_id", "id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "messages_workspace_id_conversation_id_id_key" ON "messages"("workspace_id", "conversation_id", "id");
+CREATE UNIQUE INDEX "messages_workspace_id_business_profile_id_conversation_id_i_key" ON "messages"("workspace_id", "business_profile_id", "conversation_id", "id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "messages_channel_message_key" ON "messages"("workspace_id", "channel_account_id", "channel_message_id");
+CREATE UNIQUE INDEX "messages_channel_message_key" ON "messages"("workspace_id", "business_profile_id", "channel_account_id", "channel_message_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "messages_workspace_id_ai_draft_id_key" ON "messages"("workspace_id", "ai_draft_id");
+CREATE UNIQUE INDEX "messages_ai_draft_key" ON "messages"("workspace_id", "business_profile_id", "ai_draft_id");
 
 -- CreateIndex
 CREATE INDEX "ai_drafts_conversation_id_created_at_idx" ON "ai_drafts"("conversation_id", "created_at");
 
 -- CreateIndex
-CREATE INDEX "ai_drafts_workspace_id_status_idx" ON "ai_drafts"("workspace_id", "status");
+CREATE INDEX "ai_drafts_workspace_id_business_profile_id_status_idx" ON "ai_drafts"("workspace_id", "business_profile_id", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "ai_drafts_workspace_id_id_key" ON "ai_drafts"("workspace_id", "id");
+CREATE UNIQUE INDEX "ai_drafts_workspace_id_business_profile_id_id_key" ON "ai_drafts"("workspace_id", "business_profile_id", "id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "delivery_jobs_operation_id_key" ON "delivery_jobs"("operation_id");
@@ -494,13 +554,13 @@ CREATE UNIQUE INDEX "delivery_jobs_operation_id_key" ON "delivery_jobs"("operati
 CREATE INDEX "delivery_jobs_status_scheduled_for_idx" ON "delivery_jobs"("status", "scheduled_for");
 
 -- CreateIndex
-CREATE INDEX "delivery_jobs_workspace_id_status_idx" ON "delivery_jobs"("workspace_id", "status");
+CREATE INDEX "delivery_jobs_workspace_id_business_profile_id_status_idx" ON "delivery_jobs"("workspace_id", "business_profile_id", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "delivery_jobs_workspace_id_draft_id_key" ON "delivery_jobs"("workspace_id", "draft_id");
+CREATE UNIQUE INDEX "delivery_jobs_draft_key" ON "delivery_jobs"("workspace_id", "business_profile_id", "draft_id");
 
 -- CreateIndex
-CREATE INDEX "knowledge_documents_workspace_id_status_idx" ON "knowledge_documents"("workspace_id", "status");
+CREATE INDEX "knowledge_documents_workspace_id_business_profile_id_status_idx" ON "knowledge_documents"("workspace_id", "business_profile_id", "status");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "knowledge_documents_workspace_id_id_key" ON "knowledge_documents"("workspace_id", "id");
@@ -509,13 +569,13 @@ CREATE UNIQUE INDEX "knowledge_documents_workspace_id_id_key" ON "knowledge_docu
 CREATE UNIQUE INDEX "knowledge_chunks_position_key" ON "knowledge_chunks"("workspace_id", "document_id", "document_version", "ordinal");
 
 -- CreateIndex
-CREATE INDEX "style_examples_workspace_id_status_idx" ON "style_examples"("workspace_id", "status");
+CREATE INDEX "style_examples_workspace_id_business_profile_id_status_idx" ON "style_examples"("workspace_id", "business_profile_id", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "automation_policies_workspace_default_key" ON "automation_policies"("workspace_id") WHERE (channel_account_id IS NULL);
+CREATE UNIQUE INDEX "automation_policies_profile_default_key" ON "automation_policies"("workspace_id", "business_profile_id") WHERE (channel_account_id IS NULL);
 
 -- CreateIndex
-CREATE UNIQUE INDEX "automation_policies_workspace_id_channel_account_id_key" ON "automation_policies"("workspace_id", "channel_account_id");
+CREATE UNIQUE INDEX "automation_policies_channel_override_key" ON "automation_policies"("workspace_id", "business_profile_id", "channel_account_id");
 
 -- AddForeignKey
 ALTER TABLE "auth_accounts" ADD CONSTRAINT "auth_accounts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE RESTRICT;
@@ -530,55 +590,67 @@ ALTER TABLE "workspace_members" ADD CONSTRAINT "workspace_members_workspace_id_f
 ALTER TABLE "workspace_members" ADD CONSTRAINT "workspace_members_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
+ALTER TABLE "business_profiles" ADD CONSTRAINT "business_profiles_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE "member_business_profile_access" ADD CONSTRAINT "member_business_profile_access_workspace_id_workspace_memb_fkey" FOREIGN KEY ("workspace_id", "workspace_member_id") REFERENCES "workspace_members"("workspace_id", "id") ON DELETE CASCADE ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE "member_business_profile_access" ADD CONSTRAINT "member_business_profile_access_workspace_id_business_profi_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
 ALTER TABLE "channel_credentials" ADD CONSTRAINT "channel_credentials_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "channel_accounts" ADD CONSTRAINT "channel_accounts_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "channel_accounts" ADD CONSTRAINT "channel_accounts_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "channel_accounts" ADD CONSTRAINT "channel_accounts_workspace_id_credential_id_fkey" FOREIGN KEY ("workspace_id", "credential_id") REFERENCES "channel_credentials"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "inbound_events" ADD CONSTRAINT "inbound_events_workspace_id_channel_account_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "inbound_events" ADD CONSTRAINT "inbound_events_workspace_id_business_profile_id_channel_ac_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "contacts" ADD CONSTRAINT "contacts_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "contacts" ADD CONSTRAINT "contacts_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "contact_identities" ADD CONSTRAINT "contact_identities_workspace_id_contact_id_fkey" FOREIGN KEY ("workspace_id", "contact_id") REFERENCES "contacts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "channel_identities" ADD CONSTRAINT "channel_identities_workspace_id_business_profile_id_contac_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "contact_id") REFERENCES "contacts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "contact_identities" ADD CONSTRAINT "contact_identities_workspace_id_channel_account_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "channel_identities" ADD CONSTRAINT "channel_identities_workspace_id_business_profile_id_channe_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "conversations" ADD CONSTRAINT "conversations_workspace_id_channel_account_id_contact_iden_fkey" FOREIGN KEY ("workspace_id", "channel_account_id", "contact_identity_id") REFERENCES "contact_identities"("workspace_id", "channel_account_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_workspace_id_business_profile_id_channel_acc_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "channel_account_id", "channel_identity_id") REFERENCES "channel_identities"("workspace_id", "business_profile_id", "channel_account_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+-- AddForeignKey
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_workspace_id_business_profile_id_contact_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "contact_id") REFERENCES "contacts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_takeover_actor_user_id_fkey" FOREIGN KEY ("takeover_actor_user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "messages" ADD CONSTRAINT "messages_workspace_id_channel_account_id_conversation_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id", "conversation_id") REFERENCES "conversations"("workspace_id", "channel_account_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "messages" ADD CONSTRAINT "messages_workspace_id_business_profile_id_channel_account__fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "channel_account_id", "conversation_id") REFERENCES "conversations"("workspace_id", "business_profile_id", "channel_account_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "messages" ADD CONSTRAINT "messages_workspace_id_ai_draft_id_fkey" FOREIGN KEY ("workspace_id", "ai_draft_id") REFERENCES "ai_drafts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "messages" ADD CONSTRAINT "messages_workspace_id_business_profile_id_ai_draft_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "ai_draft_id") REFERENCES "ai_drafts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "messages" ADD CONSTRAINT "messages_sent_by_user_id_fkey" FOREIGN KEY ("sent_by_user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "ai_drafts" ADD CONSTRAINT "ai_drafts_workspace_id_conversation_id_fkey" FOREIGN KEY ("workspace_id", "conversation_id") REFERENCES "conversations"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "ai_drafts" ADD CONSTRAINT "ai_drafts_conversation_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "conversation_id") REFERENCES "conversations"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "ai_drafts" ADD CONSTRAINT "ai_drafts_workspace_id_conversation_id_anchor_message_id_fkey" FOREIGN KEY ("workspace_id", "conversation_id", "anchor_message_id") REFERENCES "messages"("workspace_id", "conversation_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "ai_drafts" ADD CONSTRAINT "ai_drafts_anchor_message_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "conversation_id", "anchor_message_id") REFERENCES "messages"("workspace_id", "business_profile_id", "conversation_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "delivery_jobs" ADD CONSTRAINT "delivery_jobs_workspace_id_draft_id_fkey" FOREIGN KEY ("workspace_id", "draft_id") REFERENCES "ai_drafts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "delivery_jobs" ADD CONSTRAINT "delivery_jobs_workspace_id_business_profile_id_draft_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "draft_id") REFERENCES "ai_drafts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "knowledge_documents" ADD CONSTRAINT "knowledge_documents_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "knowledge_documents" ADD CONSTRAINT "knowledge_documents_workspace_id_channel_account_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "knowledge_documents" ADD CONSTRAINT "knowledge_documents_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "knowledge_documents" ADD CONSTRAINT "knowledge_documents_created_by_user_id_fkey" FOREIGN KEY ("created_by_user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
@@ -590,22 +662,22 @@ ALTER TABLE "knowledge_chunks" ADD CONSTRAINT "knowledge_chunks_workspace_id_doc
 ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_channel_account_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_source_message_id_fkey" FOREIGN KEY ("workspace_id", "source_message_id") REFERENCES "messages"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_business_profile_id_source_mes_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "source_message_id") REFERENCES "messages"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_source_draft_id_fkey" FOREIGN KEY ("workspace_id", "source_draft_id") REFERENCES "ai_drafts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_workspace_id_business_profile_id_source_dra_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "source_draft_id") REFERENCES "ai_drafts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
 ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_approved_by_user_id_fkey" FOREIGN KEY ("approved_by_user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "automation_policies" ADD CONSTRAINT "automation_policies_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "automation_policies" ADD CONSTRAINT "automation_policies_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 -- AddForeignKey
-ALTER TABLE "automation_policies" ADD CONSTRAINT "automation_policies_workspace_id_channel_account_id_fkey" FOREIGN KEY ("workspace_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "automation_policies" ADD CONSTRAINT "automation_policies_workspace_id_business_profile_id_chann_fkey" FOREIGN KEY ("workspace_id", "business_profile_id", "channel_account_id") REFERENCES "channel_accounts"("workspace_id", "business_profile_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 
 -- ---------------------------------------------------------------------------------------------------------
@@ -683,4 +755,21 @@ ALTER TABLE "knowledge_documents" ADD CONSTRAINT "knowledge_documents_version_ch
 
 ALTER TABLE "knowledge_chunks" ADD CONSTRAINT "knowledge_chunks_position_check" CHECK (
   "document_version" >= 1 AND "ordinal" >= 0
+);
+
+-- Business Profile scope (DATA_MODEL.md v0.4, Issue #53) --------------------------------------------------
+
+-- OWNER has full Workspace authority and therefore every Business Profile.
+ALTER TABLE "workspace_members" ADD CONSTRAINT "workspace_members_owner_scope_check" CHECK (
+  "role" <> 'OWNER' OR "business_profile_scope" = 'ALL'
+);
+
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_state_version_check" CHECK ("state_version" >= 0);
+
+ALTER TABLE "ai_drafts" ADD CONSTRAINT "ai_drafts_anchor_state_version_check" CHECK ("anchor_state_version" >= 0);
+
+-- Style learned from a conversation belongs to that conversation's Business Profile. With a NULL profile the
+-- composite source FKs would not be checked (MATCH SIMPLE), so sources require the profile to be set.
+ALTER TABLE "style_examples" ADD CONSTRAINT "style_examples_source_profile_check" CHECK (
+  ("source_message_id" IS NULL AND "source_draft_id" IS NULL) OR "business_profile_id" IS NOT NULL
 );

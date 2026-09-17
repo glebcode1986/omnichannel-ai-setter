@@ -1,12 +1,12 @@
 import type { MessageKind } from "./channel";
 import { literalGuard } from "./enum";
-import type { ConversationId, MessageId, OperationId, UserId, WorkspaceId } from "./ids";
+import type { BusinessProfileId, ChannelAccountId, ConversationId, MessageId, OperationId, UserId, WorkspaceId } from "./ids";
 
 export const MESSAGE_DIRECTIONS = ["IN", "OUT"] as const;
 export type MessageDirection = (typeof MESSAGE_DIRECTIONS)[number];
 export const isMessageDirection = literalGuard(MESSAGE_DIRECTIONS);
 
-/** Who produced the message. PARTICIPANT is the customer; HUMAN is a workspace member or native-app reply. */
+/** Who produced the message. PARTICIPANT is the customer; HUMAN is a workspace member or a native-app reply. */
 export const MESSAGE_SOURCES = ["PARTICIPANT", "AI", "HUMAN", "AUTOMATION", "SYSTEM"] as const;
 export type MessageSource = (typeof MESSAGE_SOURCES)[number];
 export const isMessageSource = literalGuard(MESSAGE_SOURCES);
@@ -35,6 +35,8 @@ export interface MediaReference {
 interface MessageBase {
   readonly id: MessageId;
   readonly workspaceId: WorkspaceId;
+  readonly businessProfileId: BusinessProfileId;
+  readonly channelAccountId: ChannelAccountId;
   readonly conversationId: ConversationId;
   /** Stable platform message ID when the provider supplies one (unique per channel account). */
   readonly channelMessageId?: string;

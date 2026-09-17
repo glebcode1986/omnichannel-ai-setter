@@ -94,6 +94,7 @@ export function createWhatsappFixtureAdapter(config: FixtureAdapterConfig): Chan
 function normalizeValue(value: WhatsappChangeValue, config: FixtureAdapterConfig): NormalizedChannelEvent[] {
   const base = {
     workspaceId: config.workspaceId,
+    businessProfileId: config.businessProfileId,
     channel: "WHATSAPP",
     channelAccountId: config.channelAccountId,
   } as const;
