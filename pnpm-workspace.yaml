@@ -13,3 +13,5 @@ allowBuilds:
   # Prisma (ADR-005): fetches the schema-engine binary used by `prisma migrate` from Prisma's CDN.
   "@prisma/engines": true
   prisma: true
+  # Optional native speed-up for msgpackr (pulled in by BullMQ); the pure-JS fallback is used instead.
+  msgpackr-extract: false

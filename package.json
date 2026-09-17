@@ -25,6 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:db": "REQUIRE_DB_TESTS=1 vitest run --project @omnichannel/db",
+    "test:redis": "REQUIRE_REDIS_TESTS=1 vitest run --project @omnichannel/queue",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "devDependencies": {

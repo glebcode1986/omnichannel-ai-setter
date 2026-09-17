@@ -1,0 +1,161 @@
+import { DEFAULT_DEBOUNCE_WINDOW_MS, DEFAULT_DELIVERY_DELAY_MS } from "@omnichannel/domain";
+import { describe, expect, it } from "vitest";
+
+import {
+  AI_DRAFT_GENERATION,
+  aiDraftGenerationJobSchema,
+  buildJobId,
+  DELIVERY,
+  deliveryJobSchema,
+  INBOUND_DEBOUNCE,
+  inboundDebounceJobSchema,
+  JOB_FAMILIES,
+  JobPayloadValidationError,
+  planDelay,
+  RECONCILIATION,
+  reconciliationJobSchema,
+  type DeliveryJob,
+} from "./index";
+import { parsePayload } from "./payloads";
+
+const delivery: DeliveryJob = {
+  schemaVersion: 1,
+  workspaceId: "ws_1",
+  correlationId: "corr_1",
+  conversationId: "conv_1",
+  draftId: "draft_1",
+  deliveryJobId: "djob_1",
+  operationId: "op_1",
+  scheduledFor: "2026-09-17T10:01:00.000Z",
+  selectedDelayMs: 60_000,
+};
+
+describe("job payload schemas", () => {
+  it("accept identifier-only payloads for every job family", () => {
+    expect(parsePayload(DELIVERY.schema, DELIVERY.jobName, delivery)).toEqual(delivery);
+    expect(
+      inboundDebounceJobSchema.parse({
+        schemaVersion: 1,
+        workspaceId: "ws_1",
+        correlationId: "corr_1",
+        channelAccountId: "ca_1",
+        conversationId: "conv_1",
+        anchorMessageId: "msg_1",
+        anchorInboundAt: "2026-09-17T10:00:00.000Z",
+      }),
+    ).toBeDefined();
+    expect(
+      aiDraftGenerationJobSchema.parse({
+        schemaVersion: 1,
+        workspaceId: "ws_1",
+        correlationId: "corr_1",
+        conversationId: "conv_1",
+        anchorMessageId: "msg_1",
+        trigger: "MANUAL_REQUEST",
+        requestId: "req_1",
+      }),
+    ).toBeDefined();
+    expect(
+      reconciliationJobSchema.parse({
+        schemaVersion: 1,
+        workspaceId: "ws_1",
+        correlationId: "corr_1",
+        conversationId: "conv_1",
+        deliveryJobId: "djob_1",
+        operationId: "op_1",
+        reason: "AMBIGUOUS_SEND_RESULT",
+        detectedAt: "2026-09-17T10:02:00.000Z",
+      }),
+    ).toBeDefined();
+  });
+
+  it.each<[string, unknown]>([
+    ["unknown schema version", { ...delivery, schemaVersion: 2 }],
+    ["missing operation id", { ...delivery, operationId: undefined }],
+    ["identifier with whitespace", { ...delivery, workspaceId: "ws 1" }],
+    ["copied message text", { ...delivery, text: "customer message" }],
+    ["non-ISO schedule", { ...delivery, scheduledFor: "tomorrow" }],
+    ["negative delay", { ...delivery, selectedDelayMs: -1 }],
+    ["fractional delay", { ...delivery, selectedDelayMs: 1.5 }],
+    ["non-object payload", "op_1"],
+  ])("rejects %s", (_name, input) => {
+    expect(() => parsePayload(deliveryJobSchema, DELIVERY.jobName, input)).toThrow(JobPayloadValidationError);
+  });
+
+  it("requires a request id exactly for manual AI draft requests", () => {
+    const base = {
+      schemaVersion: 1,
+      workspaceId: "ws_1",
+      correlationId: "corr_1",
+      conversationId: "conv_1",
+      anchorMessageId: "msg_1",
+    };
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "MANUAL_REQUEST" }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "DEBOUNCE_ELAPSED", requestId: "r" }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "DEBOUNCE_ELAPSED" }).success).toBe(true);
+  });
+
+  it("reports paths and codes without echoing values", () => {
+    const secret = "customer-secret-value";
+    let error: unknown;
+    try {
+      parsePayload(deliveryJobSchema, DELIVERY.jobName, { ...delivery, workspaceId: `${secret} x`, text: secret });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(JobPayloadValidationError);
+    expect((error as JobPayloadValidationError).message).not.toContain(secret);
+    expect(JSON.stringify((error as JobPayloadValidationError).issues)).not.toContain(secret);
+  });
+});
+
+describe("job identity", () => {
+  it("is deterministic per logical action and valid for BullMQ", () => {
+    expect(DELIVERY.jobId(delivery)).toBe(DELIVERY.jobId({ ...delivery, correlationId: "other", selectedDelayMs: 1 }));
+    expect(DELIVERY.jobId(delivery)).not.toBe(DELIVERY.jobId({ ...delivery, operationId: "op_2" }));
+    expect(DELIVERY.jobId(delivery)).not.toBe(DELIVERY.jobId({ ...delivery, workspaceId: "ws_2" }));
+
+    for (const id of [DELIVERY.jobId(delivery), buildJobId("x", 1, "a:b", "123")]) {
+      expect(id).not.toContain(":");
+      expect(`${Number.parseInt(id, 10)}`).not.toBe(id);
+    }
+  });
+
+  it("cannot collide through separator characters inside identifiers", () => {
+    expect(buildJobId("f", 1, "a|b", "c")).not.toBe(buildJobId("f", 1, "a", "b|c"));
+  });
+
+  it("keeps queues and versioned job names unique", () => {
+    expect(new Set(JOB_FAMILIES.map((family) => family.queueName)).size).toBe(JOB_FAMILIES.length);
+    expect(JOB_FAMILIES.map((family) => family.jobName)).toEqual([
+      INBOUND_DEBOUNCE.jobName,
+      AI_DRAFT_GENERATION.jobName,
+      DELIVERY.jobName,
+      RECONCILIATION.jobName,
+    ]);
+    for (const family of JOB_FAMILIES) {
+      expect(family.jobName).toMatch(/\.v\d+$/);
+      expect(family.jobOptions.removeOnComplete).toBeTruthy();
+    }
+  });
+});
+
+describe("planDelay", () => {
+  const now = new Date("2026-09-17T10:00:00.000Z");
+
+  it("selects an auditable delay inside the configured range", () => {
+    expect(planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => 0)).toEqual({
+      selectedDelayMs: 30_000,
+      scheduledFor: new Date("2026-09-17T10:00:30.000Z"),
+    });
+    expect(planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => 0.999_999_9).selectedDelayMs).toBe(120_000);
+    expect(planDelay(DEFAULT_DEBOUNCE_WINDOW_MS, now, () => 0.5).selectedDelayMs).toBe(9_500);
+  });
+
+  it("rejects invalid ranges and random sources", () => {
+    expect(() => planDelay({ minMs: 10, maxMs: 5 }, now)).toThrow();
+    expect(() => planDelay({ minMs: 0, maxMs: 8 * 24 * 60 * 60 * 1000 }, now)).toThrow(RangeError);
+    expect(() => planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => 1)).toThrow(RangeError);
+    expect(() => planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => Number.NaN)).toThrow(RangeError);
+  });
+});
