@@ -1,10 +1,23 @@
 /**
  * @omnichannel/domain
  *
- * Pure channel-neutral entities, value objects, enums, policies and ports.
- * Must stay pure TypeScript: no React/Next, Prisma, BullMQ/Redis, Meta SDK/API, LLM provider or Node.js runtime imports.
- *
- * Placeholder module created by the Phase 1 scaffold (issue #2); implementation lands in #3.
- * Allowed workspace dependencies are enforced by `pnpm lint:boundaries` (see docs/specs/REPOSITORY_LAYOUT.md).
+ * Pure channel-neutral entities, value objects, enums and invariants. Pure TypeScript: no React/Next,
+ * Prisma, BullMQ/Redis, Meta SDK/API, LLM provider or Node.js runtime access (enforced by
+ * `pnpm lint:boundaries` and ESLint; see docs/specs/REPOSITORY_LAYOUT.md).
  */
-export {};
+export * from "./ai-draft";
+export * from "./automation-policy";
+export * from "./channel";
+export * from "./channel-account";
+export * from "./contact";
+export * from "./conversation";
+export * from "./delivery";
+export { literalGuard } from "./enum";
+export * from "./errors";
+export * from "./human-takeover";
+export * from "./ids";
+export * from "./lead";
+export * from "./message";
+export * from "./reason-codes";
+export * from "./values";
+export * from "./workspace";
