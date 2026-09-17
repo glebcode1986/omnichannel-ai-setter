@@ -8,6 +8,9 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
+# generated Prisma client (`prisma generate` runs on install/typecheck)
+packages/db/src/generated/
+
 # test output
 coverage/
 
