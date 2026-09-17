@@ -155,3 +155,15 @@ export interface ChannelAdapter {
 ## Testing contract
 
 Each channel adapter must ship fixture-driven tests covering duplicate webhook delivery, malformed/unknown events, text inbound, status events, own outbound echo, human/manual outbound signal where detectable, rejected send, ambiguous send and current channel-window decisions.
+
+## Implementation notes (P1-02)
+
+These notes resolve points the v0.1 text left open; they do not change the semantics above.
+
+- `ChannelType`, `AiMode`, `MessageKind` and `ChannelCapabilities` are defined once in `@omnichannel/domain` and re-exported by `@omnichannel/channel-core`, so domain entities and adapters share one definition.
+- `RawWebhook` is `{ method, headers (lower-cased names), query, rawBody: Uint8Array, receivedAt }`; signatures are verified against the raw bytes. `VerificationResult` is `VERIFIED | CHALLENGE { responseBody } | REJECTED { reason }`; only `VERIFIED` input may be normalized.
+- `ConversationPolicyContext` is `{ workspaceId, channelAccountId, conversationId, participantExternalId, lastInboundAt?, now }`. `WindowDecision` is a platform fact: only `OPEN_FREEFORM` (not yet expired) permits free-form sends, `UNKNOWN` fails closed, and after-window product policy (ADR-014/ADR-016) stays in the application layer.
+- Status events: `DeliveryStatusEvent.status` is `SENT | DELIVERED | FAILED` with an optional provider `{ code, message }`; reads are always `ReadStatusEvent` with the read `platformMessageId`.
+- `OutboundEchoEvent` carries `platformMessageId`, `recipientExternalId` and, when the platform exposes it, `sendingApplicationId`. Own-echo versus human classification is done by the application from stored send results (ADR-013), never by text.
+- `sendDisposition(result)` maps `ACCEPTED -> COMPLETED`, `REJECTED -> RETRY_ALLOWED | FAILED` by `retryable`, and `AMBIGUOUS -> QUARANTINE_NO_RETRY` (ADR-012). The `AMBIGUOUS` variant has no `retryable` field at the type or schema level.
+- Normalized payloads are validated with strict Zod schemas (`parseNormalizedChannelEvents`, `parseWindowDecision`, `parseOutboundMessageCommand`, `parseSendResult`). Unknown keys are rejected, so provider fields cannot leak past normalization except inside `rawMeta`. `ContractValidationError` reports paths and issue codes only, never payload values.
