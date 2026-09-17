@@ -205,6 +205,12 @@ importers:
       '@auth/prisma-adapter':
         specifier: 2.11.3
         version: 2.11.3(@prisma/client@7.10.0(prisma@7.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3))
+      '@omnichannel/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@omnichannel/channel-core':
+        specifier: workspace:*
+        version: link:../../packages/channel-core
       '@omnichannel/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -217,6 +223,15 @@ importers:
       '@omnichannel/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@omnichannel/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
+      bullmq:
+        specifier: 5.81.5
+        version: 5.81.5
+      ioredis:
+        specifier: 5.11.1
+        version: 5.11.1
       next:
         specifier: ^16.3.5
         version: 16.3.5(@babel/core@7.29.7)(@types/node@24.13.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -242,6 +257,12 @@ importers:
 
   apps/worker:
     dependencies:
+      '@omnichannel/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@omnichannel/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@omnichannel/env':
         specifier: workspace:*
         version: link:../../packages/env
@@ -251,6 +272,12 @@ importers:
       '@omnichannel/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@prisma/adapter-pg':
+        specifier: 7.10.0
+        version: 7.10.0
+      '@prisma/client':
+        specifier: 7.10.0
+        version: 7.10.0(prisma@7.10.0(typescript@6.0.3))(typescript@6.0.3)
       bullmq:
         specifier: 5.81.5
         version: 5.81.5
@@ -270,7 +297,14 @@ importers:
 
   packages/ai: {}
 
-  packages/application: {}
+  packages/application:
+    dependencies:
+      '@omnichannel/channel-core':
+        specifier: workspace:*
+        version: link:../channel-core
+      '@omnichannel/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/channel-core:
     dependencies:
@@ -287,6 +321,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@omnichannel/application':
+        specifier: workspace:*
+        version: link:../application
       '@omnichannel/domain':
         specifier: workspace:*
         version: link:../domain
@@ -2553,7 +2590,7 @@ snapshots:
   '@auth/prisma-adapter@2.11.3(@prisma/client@7.10.0(prisma@7.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3))':
     dependencies:
       '@auth/core': 0.41.3
-      '@prisma/client': 7.10.0(prisma@7.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3)
+      '@prisma/client': 7.10.0(prisma@7.10.0(typescript@6.0.3))(typescript@6.0.3)
     transitivePeerDependencies:
       - '@simplewebauthn/browser'
       - '@simplewebauthn/server'
@@ -3034,6 +3071,13 @@ snapshots:
   '@prisma/client-runtime-utils@7.10.0': {}
 
   '@prisma/client@7.10.0(prisma@7.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3))(typescript@6.0.3)':
+    dependencies:
+      '@prisma/client-runtime-utils': 7.10.0
+    optionalDependencies:
+      prisma: 7.10.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(typescript@6.0.3)
+      typescript: 6.0.3
+
+  '@prisma/client@7.10.0(prisma@7.10.0(typescript@6.0.3))(typescript@6.0.3)':
     dependencies:
       '@prisma/client-runtime-utils': 7.10.0
     optionalDependencies:
