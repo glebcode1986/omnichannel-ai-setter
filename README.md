@@ -104,7 +104,7 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 
 ### Continuous integration
 
-`docs/ci/verify.yml` is the GitHub Actions gate (Issue #37): on every pull request, on pushes to `main` and on manual dispatch it runs Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile` and `pnpm verify` (typecheck, ESLint, `lint:boundaries`, tests, build). It needs no secrets: the PostgreSQL and Redis suites skip themselves unless `TEST_DATABASE_URL` and `TEST_REDIS_URL` are set, so CI covers everything except the infrastructure suites, which stay a local/manual step.
+`docs/ci/verify.yml` is the GitHub Actions gate (Issue #37): on every pull request, on pushes to `main` and on manual dispatch it runs Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile` and `pnpm verify` (typecheck, ESLint, `lint:boundaries`, tests, build). A second job runs the infrastructure suites (`pnpm test:db`, `pnpm test:redis`, `pnpm test:e2e`) and the migration drift check against throwaway PostgreSQL and Redis service containers. Neither job needs a secret: the service containers are local to the runner, and without `TEST_DATABASE_URL`/`TEST_REDIS_URL` those suites skip themselves anyway.
 
 The file is not active yet: it must live at `.github/workflows/verify.yml`, and pushing that path requires a credential with the GitHub `workflow` scope. Activate it with `git mv docs/ci/verify.yml .github/workflows/verify.yml` from such a checkout.
 

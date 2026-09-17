@@ -56,3 +56,66 @@ jobs:
       # TEST_REDIS_URL are set, so CI needs no secrets.
       - name: Verify
         run: pnpm verify
+
+  # The infrastructure suites (tenancy/constraint isolation, queue primitives, webhook-to-queue end to end)
+  # run against throwaway service containers. These are local to the runner and need no secrets, so an
+  # independent reviewer can reproduce the DB/Redis evidence that cannot run in a sandbox without them.
+  infrastructure:
+    name: infrastructure suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: omnichannel
+          POSTGRES_PASSWORD: omnichannel-ci-only
+          POSTGRES_DB: omnichannel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U omnichannel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel
+      SHADOW_DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel_shadow
+      TEST_DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel
+      TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create the shadow database Prisma needs for drift checks
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE omnichannel_shadow'
+
+      - name: Migrations match the schema
+        run: pnpm --filter @omnichannel/db db:check-drift
+
+      # REQUIRE_* turns a missing service into a failure instead of a silent skip.
+      - name: PostgreSQL suites
+        run: pnpm test:db
+
+      - name: Redis suites
+        run: pnpm test:redis
+
+      - name: Webhook to queue, end to end
+        run: pnpm test:e2e
