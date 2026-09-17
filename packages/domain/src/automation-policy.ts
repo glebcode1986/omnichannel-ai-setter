@@ -1,7 +1,7 @@
 import { isAiMode, type AiMode } from "./channel";
 import { literalGuard } from "./enum";
 import { DomainValidationError } from "./errors";
-import type { AutomationPolicyId, ChannelAccountId, WorkspaceId } from "./ids";
+import type { AutomationPolicyId, BusinessProfileId, ChannelAccountId, WorkspaceId } from "./ids";
 import { isReasonCode, MANDATORY_REVIEW_REASON_CODES, type ReasonCode } from "./reason-codes";
 import {
   DEFAULT_DEBOUNCE_WINDOW_MS,
@@ -26,11 +26,15 @@ export const isWhatsAppAfterWindowPolicy = literalGuard(WHATSAPP_AFTER_WINDOW_PO
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.8;
 export const DEFAULT_TAKEOVER_PAUSE_MS = 6 * 60 * 60 * 1000;
 
-/** Workspace default or channel-account override of automation settings (DATA_MODEL.md). */
+/**
+ * Automation settings of a Business Profile (DATA_MODEL.md v0.4 §15): the profile default when
+ * `channelAccountId` is absent, or an override for one channel account of the same profile.
+ */
 export interface AutomationPolicy {
   readonly id: AutomationPolicyId;
   readonly workspaceId: WorkspaceId;
-  /** Absent for the workspace default; set for a channel-account override. */
+  readonly businessProfileId: BusinessProfileId;
+  /** Absent for the Business Profile default; set for a channel-account override. */
   readonly channelAccountId?: ChannelAccountId;
   readonly mode: AiMode;
   readonly confidenceThreshold: Confidence;
@@ -48,6 +52,7 @@ export interface AutomationPolicy {
 export interface AutomationPolicyInput {
   readonly id: AutomationPolicyId;
   readonly workspaceId: WorkspaceId;
+  readonly businessProfileId: BusinessProfileId;
   readonly channelAccountId?: ChannelAccountId;
   readonly mode?: AiMode;
   readonly confidenceThreshold?: number;
@@ -102,6 +107,7 @@ export function createAutomationPolicy(input: AutomationPolicyInput): Automation
   return {
     id: input.id,
     workspaceId: input.workspaceId,
+    businessProfileId: input.businessProfileId,
     ...(input.channelAccountId !== undefined ? { channelAccountId: input.channelAccountId } : {}),
     mode,
     confidenceThreshold: toConfidence(input.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD, "confidenceThreshold"),

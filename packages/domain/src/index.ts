@@ -7,6 +7,7 @@
  */
 export * from "./ai-draft";
 export * from "./automation-policy";
+export * from "./business-profile";
 export * from "./channel";
 export * from "./channel-account";
 export * from "./contact";

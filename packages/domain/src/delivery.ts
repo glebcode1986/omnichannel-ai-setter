@@ -1,5 +1,5 @@
 import { literalGuard } from "./enum";
-import type { AiDraftId, CorrelationId, DeliveryJobId, OperationId, WorkspaceId } from "./ids";
+import type { AiDraftId, BusinessProfileId, CorrelationId, DeliveryJobId, OperationId, WorkspaceId } from "./ids";
 
 /** Durable delivery states (DELIVERY_COORDINATOR.md, ADR-012). */
 export const DELIVERY_JOB_STATUSES = [
@@ -35,6 +35,7 @@ export interface DeliveryError {
 export interface DeliveryJobRecord {
   readonly id: DeliveryJobId;
   readonly workspaceId: WorkspaceId;
+  readonly businessProfileId: BusinessProfileId;
   readonly draftId: AiDraftId;
   /** One logical outbound action per draft; stable across queue retries (ADR-012). */
   readonly operationId: OperationId;

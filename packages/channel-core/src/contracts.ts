@@ -2,6 +2,10 @@
  * Channel boundary contracts (docs/specs/CHANNEL_CONTRACTS.md). Channel adapters implement
  * `ChannelAdapter`; channel-neutral core code only sees these normalized shapes. Identifiers here are plain
  * strings because they come from the transport boundary; the application converts them to branded domain IDs.
+ *
+ * Scope (DATA_MODEL.md v0.4): every event and command names the Workspace, Business Profile and channel
+ * account it belongs to. Adapters take that scope from their trusted account binding, never from the
+ * provider payload, and the application checks it against the channel account it resolved itself.
  */
 import type { ChannelCapabilities, ChannelType, MessageKind } from "@omnichannel/domain";
 
@@ -36,6 +40,8 @@ export type VerificationResult =
 
 export interface EventBase {
   readonly workspaceId: string;
+  /** Business Profile owning the channel account; the customer-data boundary for everything the event touches. */
+  readonly businessProfileId: string;
   readonly channel: ChannelType;
   readonly channelAccountId: string;
   /** Provider event identity; unique per channel account and used for idempotent ingestion. */
@@ -218,6 +224,7 @@ export const OUTBOUND_CONTENT_TYPES = ["TEXT", "TEMPLATE"] as const satisfies re
 
 export interface OutboundMessageCommand {
   readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly channelAccountId: string;
   readonly conversationId: string;
   readonly recipientExternalId: string;
