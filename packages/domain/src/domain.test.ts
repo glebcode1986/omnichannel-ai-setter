@@ -40,11 +40,25 @@ import {
   toDurationRangeMs,
   toQuietHours,
   toWorkspaceId,
+  type AiDraft,
+  type AutomationPolicy,
+  type AutomationPolicyInput,
   type BusinessProfileId,
+  type ChannelAccount,
+  type ChannelAccountId,
   type ChannelCapabilities,
   type ChannelIdentity,
+  type ChannelIdentityId,
   type Contact,
+  type ContactId,
+  type ContactPoint,
+  type Conversation,
   type ConversationId,
+  type ConversationStateVersion,
+  type DeliveryJobRecord,
+  type InboundMessage,
+  type MemberBusinessProfileAccess,
+  type OutboundMessage,
   type HumanTakeoverState,
   type Message,
   type WorkspaceId,
@@ -116,16 +130,37 @@ describe("Business Profile scope", () => {
     const inBp2 = identity(bp2, "ca_bp2");
 
     expect(isSameChannelIdentity(inBp1, inBp2)).toBe(false);
-    expect(isSameChannelIdentity(inBp1, { ...inBp1, channelAccountId: inBp2.channelAccountId, businessProfileId: bp1 })).toBe(false);
+    // Each scope field alone keeps identities apart, even with the same account and provider user ID.
+    expect(isSameChannelIdentity(inBp1, { ...inBp1, businessProfileId: bp2 })).toBe(false);
+    expect(isSameChannelIdentity(inBp1, { ...inBp1, workspaceId: toWorkspaceId("ws_2") })).toBe(false);
+    expect(isSameChannelIdentity(inBp1, { ...inBp1, channelAccountId: inBp2.channelAccountId })).toBe(false);
+    expect(isSameChannelIdentity(inBp1, { ...inBp1, externalUserId: "igsid-other" })).toBe(false);
+    // Mutable attributes are not identity.
     expect(isSameChannelIdentity(inBp1, identity(bp1, "ca_bp1", "renamed_handle"))).toBe(true);
-    expect(inBp1.contactId).not.toBe(inBp2.contactId);
   });
 
   it("requires Business Profile scope on BP-owned contracts", () => {
     // @ts-expect-error a contact without a Business Profile is not a valid contract
     const unscoped: Contact = { id: "c" as Contact["id"], workspaceId, createdAt: now, updatedAt: now };
     expect(unscoped.workspaceId).toBe(workspaceId);
+    expectTypeOf<Contact["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
     expectTypeOf<ChannelIdentity["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<ChannelAccount["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<Conversation["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<InboundMessage["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<OutboundMessage["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<AiDraft["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<DeliveryJobRecord["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<AutomationPolicy["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<AutomationPolicyInput["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<ContactPoint["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    expectTypeOf<MemberBusinessProfileAccess["businessProfileId"]>().toEqualTypeOf<BusinessProfileId>();
+    // A conversation names its whole scope, and anchors are typed state versions.
+    expectTypeOf<Conversation["contactId"]>().toEqualTypeOf<ContactId>();
+    expectTypeOf<Conversation["channelIdentityId"]>().toEqualTypeOf<ChannelIdentityId>();
+    expectTypeOf<Conversation["channelAccountId"]>().toEqualTypeOf<ChannelAccountId>();
+    expectTypeOf<Conversation["stateVersion"]>().toEqualTypeOf<ConversationStateVersion>();
+    expectTypeOf<AiDraft["anchorStateVersion"]>().toEqualTypeOf<ConversationStateVersion>();
   });
 
   it("guards Business Profile statuses and access scopes", () => {
