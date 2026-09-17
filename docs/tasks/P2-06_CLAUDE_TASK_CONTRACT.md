@@ -12,8 +12,11 @@
 Create the single outbound delivery coordinator used by AUTOPILOT and human-approved drafts. No other path may send AI/customer replies directly through a channel adapter.
 
 ## Required behavior
-- choose/persist natural delay and schedule using configured timing policy (initial target 30–120s);
-- immediately before send re-evaluate reply-cycle ownership, newer inbound, human takeover, mode, draft status, account health, channel window/policy and idempotency;
+- choose/persist a provider-aware timing plan rather than blindly applying one global delay profile;
+- for channels without a stricter provider cap, preserve the current fallback natural-delay target (initial 30–120s post-draft, with the debounce policy defined in `DELAY_ENGINE.md`);
+- for Instagram automated replies, obey the currently verified Meta automated-response deadline: the entire debounce + generation + post-draft scheduling plan must fit the provider budget; while the current verified cap is 30s, target dispatch with an internal safety margin (initially about 25s from the latest triggering inbound), shortening/eliminating artificial delay as necessary;
+- if the provider-compliant deadline is already missed, do not knowingly send as ordinary Instagram AUTOPILOT merely to preserve the old delay behavior; hold/review/re-evaluate safely;
+- immediately before send re-evaluate reply-cycle ownership, newer inbound, human takeover, mode, draft status, account health, channel window/policy, provider timing eligibility and idempotency;
 - atomically claim the logical delivery;
 - use stable operation IDs/correlation IDs;
 - map `ACCEPTED`, definite `REJECTED` and `AMBIGUOUS` correctly;
@@ -23,10 +26,19 @@ Create the single outbound delivery coordinator used by AUTOPILOT and human-appr
 - newer inbound, manual human activity or changed policy cancels/stales pending delivery.
 
 ## Human Agent boundary
+Keep Human Agent as an Instagram-specific explicitly-human capability/path rather than widening the shared automated `ChannelAdapter` send contract.
+
 Automated delayed-delivery jobs must not silently add `HUMAN_AGENT`. An explicitly human-approved extended-window action may enter this coordinator carrying audited human actor/action context and must still revalidate eligibility immediately before send.
 
+Human Agent may not be used to bypass the automated-response timing policy for an AUTOPILOT send.
+
+## Provider-policy precedence
+Provider/channel limits are hard bounds. Product “human-like” timing is a preference inside those bounds. Business Profile configuration may shorten an allowed delay but may not extend an automated send beyond the provider limit.
+
+Provider policy/version facts must be re-verifiable/configurable so a Meta policy change does not require changing domain semantics.
+
 ## Tests
-Two workers racing one delivery, duplicate jobs, retryable rejection, non-retryable rejection, timeout ambiguity, stale claim/restart, newer-message supersession, human takeover during delay, policy/window change during delay and human-assisted extended-window eligibility expiry.
+Two workers racing one delivery, duplicate jobs, retryable rejection, non-retryable rejection, timeout ambiguity, stale claim/restart, newer-message supersession, human takeover during delay, policy/window change during delay, human-assisted extended-window eligibility expiry, Instagram deadline clamping, near-deadline zero-artificial-delay behavior, missed-deadline hold/review behavior, and proof that Human Agent is never attached by background AUTOPILOT.
 
 ## PR requirements
-Document atomic claim transaction/constraint strategy and ambiguous-outcome recovery. Run concurrency/integration/root tests. Do not merge.
+Document atomic claim transaction/constraint strategy, provider timing-plan calculation and ambiguous-outcome recovery. Run concurrency/integration/root tests. Re-verify the current Instagram timing policy during implementation/App Review; if the verified Meta limit differs from the present 30s baseline, update the provider policy/configuration and evidence rather than hardcoding stale assumptions. Do not merge.
