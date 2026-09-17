@@ -81,19 +81,26 @@ export async function createEndToEndInfrastructure(): Promise<EndToEndInfrastruc
       return connection;
     },
     async dispose() {
-      await Promise.all(connections.map((connection) => connection.quit().catch(() => connection.disconnect())));
-      const cleaner = createRedisConnection(redisUrl, "producer", logger);
-      let cursor = "0";
-      do {
-        const [next, keys] = await cleaner.scan(cursor, "MATCH", `${prefix}:*`, "COUNT", 500);
-        cursor = next;
-        if (keys.length > 0) {
-          await cleaner.del(...keys);
+      // The scratch database is dropped even when Redis cleanup fails, so a failed run leaks nothing.
+      try {
+        await Promise.all(connections.map((connection) => connection.quit().catch(() => connection.disconnect())));
+        const cleaner = createRedisConnection(redisUrl, "producer", logger);
+        try {
+          let cursor = "0";
+          do {
+            const [next, keys] = await cleaner.scan(cursor, "MATCH", `${prefix}:*`, "COUNT", 500);
+            cursor = next;
+            if (keys.length > 0) {
+              await cleaner.del(...keys);
+            }
+          } while (cursor !== "0");
+        } finally {
+          await cleaner.quit().catch(() => cleaner.disconnect());
         }
-      } while (cursor !== "0");
-      await cleaner.quit();
-      await db.$disconnect();
-      await dropDatabase();
+      } finally {
+        await db.$disconnect().catch(() => undefined);
+        await dropDatabase();
+      }
     },
   };
 }

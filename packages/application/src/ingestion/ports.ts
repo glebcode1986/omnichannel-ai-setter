@@ -174,6 +174,10 @@ export interface IngestionTransaction {
     input: ProfileScope & { readonly conversationId: string; readonly since: Date; readonly pausedUntil: Date },
   ): Promise<void>;
 
+  /**
+   * Finds the message by platform message ID and locks it until the transaction ends, so concurrent status
+   * events for the same message are applied one after another against the latest committed status.
+   */
   findMessageByPlatformId(
     input: ProfileScope & { readonly channelAccountId: string; readonly platformMessageId: string },
   ): Promise<StoredMessageStatus | undefined>;

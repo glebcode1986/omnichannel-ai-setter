@@ -4,6 +4,7 @@ import {
   type DebounceScheduler,
   type InboundDebouncePayload,
   type IngestionDependencies,
+  type IngestionStore,
   type LogPort,
   type WebhookIngestionResult,
 } from "@omnichannel/application";
@@ -485,6 +486,86 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     expect(outcomes.slice(-4).map((row) => row.outcome)).toEqual(["STATUS_APPLIED", "STATUS_APPLIED", "STATUS_UNCHANGED", "STATUS_UNCHANGED"]);
   });
 
+  it.each([
+    ["delivered", "read", "READ"],
+    ["failed", "delivered", "DELIVERED"],
+  ] as const)(
+    "serializes overlapping status webhooks for one message (%s held open while %s arrives) so status never moves backwards",
+    async (first, second, expected) => {
+      const mid = unique("mid-status-race");
+      const message = await db().message.create({
+        data: {
+          ...scope(main),
+          channelAccountId: main.channelAccount.id,
+          conversationId: main.conversationId,
+          channelMessageId: mid,
+          direction: "OUT",
+          source: "AI",
+          kind: "TEXT",
+          transportPath: "STANDARD",
+          operationId: unique("op"),
+          deliveryStatus: "SENT",
+          occurredAt: new Date(),
+        },
+      });
+      const statusEvent = (kind: "delivered" | "read" | "failed"): FakeEventFixture =>
+        kind === "read"
+          ? { kind, id: unique("evt"), mid, reader: "ig-user-ingest", at: new Date().toISOString() }
+          : { kind, id: unique("evt"), mid, at: new Date().toISOString() };
+
+      // The first event pauses inside its transaction right after reading the stored status.
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let markRead!: () => void;
+      const firstHasRead = new Promise<void>((resolve) => (markRead = resolve));
+      const base = createIngestionStore(db());
+      const pausingStore: IngestionStore = {
+        ...base,
+        transaction: (work) =>
+          base.transaction((tx) =>
+            work({
+              ...tx,
+              findMessageByPlatformId: async (input) => {
+                const found = await tx.findMessageByPlatformId(input);
+                markRead();
+                await gate;
+                return found;
+              },
+            }),
+          ),
+      };
+      const firstEvent = statusEvent(first);
+      const firstResult = ingestWebhook(
+        { ...dependencies(), store: pausingStore },
+        { channel: "INSTAGRAM", channelAccountId: main.channelAccount.id, webhook: fakeWebhook([firstEvent]), correlationId: unique("corr") },
+      );
+      await firstHasRead;
+
+      let secondFinished = false;
+      const secondEvent = statusEvent(second);
+      const secondResult = ingest([secondEvent]).then((result) => {
+        secondFinished = true;
+        return result;
+      });
+      // The second event must wait for the first transaction instead of overwriting it afterwards.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(secondFinished).toBe(false);
+      release();
+
+      expect(await firstResult).toMatchObject({ summary: { processed: 1 } });
+      expect(await secondResult).toMatchObject({ summary: { processed: 1 } });
+      expect((await db().message.findUniqueOrThrow({ where: { id: message.id } })).deliveryStatus).toBe(expected);
+      const outcomes = await db().inboundEvent.findMany({
+        where: { sourceEventId: { in: [firstEvent.id, secondEvent.id] } },
+        select: { sourceEventId: true, outcome: true },
+      });
+      expect(Object.fromEntries(outcomes.map((row) => [row.sourceEventId, row.outcome]))).toEqual({
+        [firstEvent.id]: "STATUS_APPLIED",
+        [secondEvent.id]: "STATUS_APPLIED",
+      });
+    },
+  );
+
   it("keeps own echoes quiet and turns unmatched echoes, including sends from a sibling profile, into a human takeover", async () => {
     const appSend = (profile: SeededProfile, channelMessageId: string) =>
       db().message.create({
@@ -654,6 +735,102 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     expect(claims.flat()).toEqual([
       expect.objectContaining({ id: entry.id, ...scope(second), correlationId: "corr-lease", payload: expect.objectContaining(scope(second)) as unknown }),
     ]);
+  });
+
+  it("scopes every ingestion store port by Business Profile, even when handed IDs from another profile", async () => {
+    const store = createIngestionStore(db());
+    const occurredAt = new Date();
+    // Rows of the sibling profile addressed with this profile's scope (a bug or forged caller, not a webhook).
+    const crossed = { ...scope(main), channelAccountId: second.channelAccount.id };
+    const snapshot = async () => ({
+      counts: await counts(),
+      versions: await stateVersions(),
+      second: await db().conversation.findUniqueOrThrow({ where: { id: second.conversationId } }),
+      message: await db().message.findUniqueOrThrow({ where: { id: second.messageId } }),
+    });
+    const before = await snapshot();
+    const inTransaction = <T>(work: Parameters<typeof store.transaction<T>>[0]) => store.transaction(work);
+
+    await expect(
+      inTransaction((tx) => tx.recordActivity({ ...scope(main), conversationId: second.conversationId, direction: "IN", occurredAt })),
+    ).rejects.toThrow(/expected one conversation/);
+    await expect(
+      inTransaction((tx) => tx.recordActivity({ ...scope(main), conversationId: second.conversationId, direction: "OUT", occurredAt })),
+    ).rejects.toThrow(/expected one conversation/);
+    await expect(
+      inTransaction((tx) =>
+        tx.startHumanTakeover({ ...scope(main), conversationId: second.conversationId, since: occurredAt, pausedUntil: new Date(occurredAt.getTime() + 60_000) }),
+      ),
+    ).rejects.toThrow(/expected one conversation/);
+    await expect(
+      inTransaction((tx) =>
+        tx.updateMessageDeliveryStatus({ ...scope(main), messageId: second.messageId, deliveryStatus: "READ", occurredAt }),
+      ),
+    ).rejects.toThrow();
+    expect(
+      await inTransaction((tx) =>
+        tx.findMessageByPlatformId({ ...scope(main), channelAccountId: second.channelAccount.id, platformMessageId: "mid-ingest-second-1" }),
+      ),
+    ).toBeUndefined();
+    expect(
+      await inTransaction((tx) =>
+        tx.findMessageByPlatformId({ ...scope(second), channelAccountId: second.channelAccount.id, platformMessageId: "mid-ingest-second-1" }),
+      ),
+    ).toEqual({ messageId: second.messageId, deliveryStatus: null });
+
+    // An app send of the sibling profile is not "ours", even when its account is named.
+    expect(
+      await inTransaction((tx) =>
+        tx.isAppOriginatedMessage({ ...scope(main), channelAccountId: second.channelAccount.id, platformMessageId: "mid-sibling-send" }),
+      ),
+    ).toBe(false);
+    expect(
+      await inTransaction((tx) =>
+        tx.isAppOriginatedMessage({ ...scope(second), channelAccountId: second.channelAccount.id, platformMessageId: "mid-sibling-send" }),
+      ),
+    ).toBe(true);
+    expect(
+      await inTransaction((tx) =>
+        tx.isAppOriginatedMessage({ ...scope(main), channelAccountId: second.channelAccount.id, platformMessageId: "mid-sibling-job" }),
+      ),
+    ).toBe(false);
+
+    // Writes that would attach rows to an account, identity or contact of another profile fail in the database.
+    await expect(
+      inTransaction((tx) =>
+        tx.claimSourceEvent({ ...crossed, sourceEventId: unique("evt"), eventType: "INBOUND_MESSAGE", occurredAt, correlationId: "corr-crossed" }),
+      ),
+    ).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
+    await expect(inTransaction((tx) => tx.ensureChannelIdentity({ ...crossed, externalUserId: "ig-user-crossed" }))).rejects.toMatchObject(
+      FOREIGN_KEY_VIOLATION,
+    );
+    await expect(
+      inTransaction((tx) =>
+        tx.ensureConversation({
+          ...scope(main),
+          channelAccountId: main.channelAccount.id,
+          channelIdentityId: second.channelIdentityId,
+          contactId: second.contactId,
+        }),
+      ),
+    ).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
+    await expect(
+      inTransaction((tx) =>
+        tx.insertMessage({
+          ...scope(main),
+          channelAccountId: main.channelAccount.id,
+          conversationId: second.conversationId,
+          direction: "IN",
+          source: "PARTICIPANT",
+          channelMessageId: unique("mid"),
+          kind: "TEXT",
+          media: [],
+          occurredAt,
+        }),
+      ),
+    ).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
+
+    expect(await snapshot()).toEqual(before);
   });
 
   it("refuses raw outbox and inbound event rows whose Business Profile scope does not line up", async () => {

@@ -13,6 +13,8 @@ import type {
   WebhookAccount,
 } from "@omnichannel/application";
 
+import { isMessageDeliveryStatus } from "@omnichannel/domain";
+
 import type { DbClient } from "./client";
 import type { Prisma } from "./generated/prisma/client";
 
@@ -301,18 +303,25 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
     },
 
     async findMessageByPlatformId({ workspaceId, businessProfileId, channelAccountId, platformMessageId }) {
-      const message = await tx.message.findUnique({
-        where: {
-          workspaceId_businessProfileId_channelAccountId_channelMessageId: {
-            workspaceId,
-            businessProfileId,
-            channelAccountId,
-            channelMessageId: platformMessageId,
-          },
-        },
-        select: { id: true, deliveryStatus: true },
-      });
-      return message === null ? undefined : { messageId: message.id, deliveryStatus: message.deliveryStatus };
+      // Row lock: a concurrent status event for the same message waits and then reads this one's result, so
+      // statuses only move forward (READ is never overwritten by a DELIVERED computed from an older read).
+      const rows = await tx.$queryRaw<{ id: string; delivery_status: string | null }[]>`
+        SELECT "id", "delivery_status"::text AS "delivery_status"
+        FROM "messages"
+        WHERE "workspace_id" = ${workspaceId}
+          AND "business_profile_id" = ${businessProfileId}
+          AND "channel_account_id" = ${channelAccountId}
+          AND "channel_message_id" = ${platformMessageId}
+        FOR UPDATE`;
+      const message = rows[0];
+      if (message === undefined) {
+        return undefined;
+      }
+      const deliveryStatus = message.delivery_status;
+      if (deliveryStatus !== null && !isMessageDeliveryStatus(deliveryStatus)) {
+        throw new Error("unexpected message delivery status");
+      }
+      return { messageId: message.id, deliveryStatus };
     },
 
     async updateMessageDeliveryStatus({ workspaceId, businessProfileId, messageId, deliveryStatus, occurredAt }) {
