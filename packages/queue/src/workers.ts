@@ -119,6 +119,7 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
       await reconciliation.enqueueReconciliation({
         schemaVersion: 1,
         workspaceId: job.workspaceId,
+        businessProfileId: job.businessProfileId,
         correlationId: job.correlationId,
         conversationId: job.conversationId,
         deliveryJobId: job.deliveryJobId,
@@ -244,7 +245,7 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
     }),
   ];
 
-  function worker<Payload extends { readonly workspaceId: string; readonly correlationId: string }>(
+  function worker<Payload extends { readonly workspaceId: string; readonly businessProfileId: string; readonly correlationId: string }>(
     family: JobFamily<Payload>,
     handle: (payload: Payload, context: JobContext) => Promise<JobOutcome>,
     extra: {
@@ -331,12 +332,17 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
   };
 }
 
-function bindingsFor(family: JobFamily<unknown>, job: Job, payload: { readonly workspaceId: string; readonly correlationId: string }) {
+function bindingsFor(
+  family: JobFamily<unknown>,
+  job: Job,
+  payload: { readonly workspaceId: string; readonly businessProfileId: string; readonly correlationId: string },
+) {
   return {
     queue: family.queueName,
     jobName: family.jobName,
     jobId: job.id,
     workspaceId: payload.workspaceId,
+    businessProfileId: payload.businessProfileId,
     correlationId: payload.correlationId,
   };
 }

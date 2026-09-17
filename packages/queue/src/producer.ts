@@ -64,7 +64,7 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
     return queue;
   };
 
-  async function add<Payload extends { readonly workspaceId: string; readonly correlationId: string }>(
+  async function add<Payload extends { readonly workspaceId: string; readonly businessProfileId: string; readonly correlationId: string }>(
     family: JobFamily<Payload>,
     payload: Payload,
     delayMs: number,
@@ -80,6 +80,7 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
       jobId,
       delayMs,
       workspaceId: payload.workspaceId,
+      businessProfileId: payload.businessProfileId,
       correlationId: payload.correlationId,
     });
     return { queueName: family.queueName, jobId, delayMs };
@@ -93,7 +94,12 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
       const job = await add(INBOUND_DEBOUNCE, payload, delayMs);
       const claim = await replyCycles.claim(payload);
       const queue = queueFor(INBOUND_DEBOUNCE);
-      const logFields = { jobId: job.jobId, workspaceId: payload.workspaceId, correlationId: payload.correlationId };
+      const logFields = {
+        jobId: job.jobId,
+        workspaceId: payload.workspaceId,
+        businessProfileId: payload.businessProfileId,
+        correlationId: payload.correlationId,
+      };
 
       if (claim.status === "STALE") {
         await queue.remove(job.jobId);

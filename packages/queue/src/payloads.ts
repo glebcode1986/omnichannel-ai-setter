@@ -10,9 +10,14 @@ export const MAX_SCHEDULE_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
 const identifier = z.string().max(255).refine(isValidIdentifier, { message: "invalid identifier" });
 const timestamp = z.iso.datetime();
 
+/**
+ * Every payload names its Workspace and Business Profile (DATA_MODEL.md v0.4): execution scope and job
+ * identity depend on both. The queue does not authorize anything; workers revalidate against PostgreSQL.
+ */
 const envelope = {
   schemaVersion: z.literal(1),
   workspaceId: identifier,
+  businessProfileId: identifier,
   /** Propagated through enqueue/process logs and downstream work (observability). */
   correlationId: identifier,
 };

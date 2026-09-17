@@ -1,5 +1,6 @@
 import { DEFAULT_DEBOUNCE_WINDOW_MS, DEFAULT_DELIVERY_DELAY_MS } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
+import type { z } from "zod";
 
 import {
   AI_DRAFT_GENERATION,
@@ -21,6 +22,7 @@ import { parsePayload } from "./payloads";
 const delivery: DeliveryJob = {
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId: "bp_1",
   correlationId: "corr_1",
   conversationId: "conv_1",
   draftId: "draft_1",
@@ -37,6 +39,7 @@ describe("job payload schemas", () => {
       inboundDebounceJobSchema.parse({
         schemaVersion: 1,
         workspaceId: "ws_1",
+        businessProfileId: "bp_1",
         correlationId: "corr_1",
         channelAccountId: "ca_1",
         conversationId: "conv_1",
@@ -48,6 +51,7 @@ describe("job payload schemas", () => {
       aiDraftGenerationJobSchema.parse({
         schemaVersion: 1,
         workspaceId: "ws_1",
+        businessProfileId: "bp_1",
         correlationId: "corr_1",
         conversationId: "conv_1",
         anchorMessageId: "msg_1",
@@ -59,6 +63,7 @@ describe("job payload schemas", () => {
       reconciliationJobSchema.parse({
         schemaVersion: 1,
         workspaceId: "ws_1",
+        businessProfileId: "bp_1",
         correlationId: "corr_1",
         conversationId: "conv_1",
         deliveryJobId: "djob_1",
@@ -82,10 +87,73 @@ describe("job payload schemas", () => {
     expect(() => parsePayload(deliveryJobSchema, DELIVERY.jobName, input)).toThrow(JobPayloadValidationError);
   });
 
+  it("rejects missing or malformed Business Profile scope for every job family", () => {
+    const valid: [string, z.ZodType<unknown>, Record<string, unknown>][] = [
+      [
+        INBOUND_DEBOUNCE.jobName,
+        inboundDebounceJobSchema,
+        {
+          schemaVersion: 1,
+          workspaceId: "ws_1",
+          businessProfileId: "bp_1",
+          correlationId: "corr_1",
+          channelAccountId: "ca_1",
+          conversationId: "conv_1",
+          anchorMessageId: "msg_1",
+          anchorInboundAt: "2026-09-17T10:00:00.000Z",
+        },
+      ],
+      [
+        AI_DRAFT_GENERATION.jobName,
+        aiDraftGenerationJobSchema,
+        {
+          schemaVersion: 1,
+          workspaceId: "ws_1",
+          businessProfileId: "bp_1",
+          correlationId: "corr_1",
+          conversationId: "conv_1",
+          anchorMessageId: "msg_1",
+          trigger: "DEBOUNCE_ELAPSED",
+        },
+      ],
+      [DELIVERY.jobName, deliveryJobSchema, { ...delivery }],
+      [
+        RECONCILIATION.jobName,
+        reconciliationJobSchema,
+        {
+          schemaVersion: 1,
+          workspaceId: "ws_1",
+          businessProfileId: "bp_1",
+          correlationId: "corr_1",
+          conversationId: "conv_1",
+          deliveryJobId: "djob_1",
+          operationId: "op_1",
+          reason: "AMBIGUOUS_SEND_RESULT",
+          detectedAt: "2026-09-17T10:02:00.000Z",
+        },
+      ],
+    ];
+    for (const [jobName, schema, payload] of valid) {
+      expect(parsePayload(schema, jobName, payload)).toEqual(payload);
+      const { businessProfileId: _omitted, ...withoutProfile } = payload;
+      for (const invalid of [withoutProfile, { ...payload, businessProfileId: "" }, { ...payload, businessProfileId: "  " }, { ...payload, businessProfileId: "bp 1" }, { ...payload, businessProfileId: 7 }]) {
+        let error: unknown;
+        try {
+          parsePayload(schema, jobName, invalid);
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error, jobName).toBeInstanceOf(JobPayloadValidationError);
+        expect((error as JobPayloadValidationError).issues.map((issue) => issue.path)).toContain("businessProfileId");
+      }
+    }
+  });
+
   it("requires a request id exactly for manual AI draft requests", () => {
     const base = {
       schemaVersion: 1,
       workspaceId: "ws_1",
+      businessProfileId: "bp_1",
       correlationId: "corr_1",
       conversationId: "conv_1",
       anchorMessageId: "msg_1",
@@ -119,6 +187,30 @@ describe("job identity", () => {
       expect(id).not.toContain(":");
       expect(`${Number.parseInt(id, 10)}`).not.toBe(id);
     }
+  });
+
+  it("keeps identical IDs in different Business Profiles distinct for every job family", () => {
+    const bp2 = { businessProfileId: "bp_2" };
+    const debounce = {
+      schemaVersion: 1 as const,
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      correlationId: "corr_1",
+      channelAccountId: "ca_1",
+      conversationId: "conv_1",
+      anchorMessageId: "msg_1",
+      anchorInboundAt: "2026-09-17T10:00:00.000Z",
+    };
+    const draft = { ...debounce, trigger: "DEBOUNCE_ELAPSED" as const };
+    const reconciliation = {
+      ...delivery,
+      reason: "AMBIGUOUS_SEND_RESULT" as const,
+      detectedAt: "2026-09-17T10:02:00.000Z",
+    };
+    expect(INBOUND_DEBOUNCE.jobId(debounce)).not.toBe(INBOUND_DEBOUNCE.jobId({ ...debounce, ...bp2 }));
+    expect(AI_DRAFT_GENERATION.jobId(draft)).not.toBe(AI_DRAFT_GENERATION.jobId({ ...draft, ...bp2 }));
+    expect(DELIVERY.jobId(delivery)).not.toBe(DELIVERY.jobId({ ...delivery, ...bp2 }));
+    expect(RECONCILIATION.jobId(reconciliation)).not.toBe(RECONCILIATION.jobId({ ...reconciliation, ...bp2 }));
   });
 
   it("cannot collide through separator characters inside identifiers", () => {

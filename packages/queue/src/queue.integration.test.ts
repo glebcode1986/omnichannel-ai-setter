@@ -20,9 +20,10 @@ import {
 } from "./index";
 import { createTestQueueEnvironment, redisTestsEnabled, waitFor, type TestQueueEnvironment } from "./testing/redis";
 
-const debounce = (anchorMessageId: string, anchorInboundAt: string): InboundDebounceJob => ({
+const debounce = (anchorMessageId: string, anchorInboundAt: string, businessProfileId = "bp_1"): InboundDebounceJob => ({
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId,
   correlationId: `corr-${anchorMessageId}`,
   channelAccountId: "ca_1",
   conversationId: "conv_1",
@@ -33,15 +34,17 @@ const debounce = (anchorMessageId: string, anchorInboundAt: string): InboundDebo
 const aiDraft: AiDraftGenerationJob = {
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId: "bp_1",
   correlationId: "corr-draft",
   conversationId: "conv_1",
   anchorMessageId: "msg_2",
   trigger: "DEBOUNCE_ELAPSED",
 };
 
-const delivery = (operationId: string, scheduledFor = new Date(), selectedDelayMs = 0): DeliveryJob => ({
+const delivery = (operationId: string, scheduledFor = new Date(), selectedDelayMs = 0, businessProfileId = "bp_1"): DeliveryJob => ({
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId,
   correlationId: `corr-${operationId}`,
   conversationId: "conv_1",
   draftId: `draft-${operationId}`,
@@ -143,6 +146,36 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
     expect(await inspect(AI_DRAFT_GENERATION.queueName).getJobCounts("waiting")).toMatchObject({ waiting: 1 });
     expect(await inspect(INBOUND_DEBOUNCE.queueName).getJobCounts("delayed")).toMatchObject({ delayed: 1 });
     expect(again).toEqual(first);
+  });
+
+  it("keeps identical conversation, anchor and operation IDs in different Business Profiles independent", async () => {
+    const scheduledFor = new Date(Date.now() + 60_000);
+    const deliveries = await Promise.all(["bp_1", "bp_2"].map((bp) => producer.scheduleDelivery(delivery("op-shared", scheduledFor, 60_000, bp))));
+    const drafts = await Promise.all(["bp_1", "bp_2"].map((bp) => producer.enqueueAiDraftGeneration({ ...aiDraft, businessProfileId: bp })));
+    expect(new Set(deliveries.map((job) => job.jobId)).size).toBe(2);
+    expect(new Set(drafts.map((job) => job.jobId)).size).toBe(2);
+    expect(await inspect(DELIVERY.queueName).getJobCounts("delayed")).toMatchObject({ delayed: 2 });
+    expect(await inspect(AI_DRAFT_GENERATION.queueName).getJobCounts("waiting")).toMatchObject({ waiting: 2 });
+
+    // A newer inbound in BP2 for the same conversation ID must not supersede BP1's reply cycle.
+    const inBp1 = await producer.scheduleInboundDebounce(debounce("msg_1", "2026-09-17T10:00:00.000Z", "bp_1"), { delayMs: 0 });
+    const inBp2 = await producer.scheduleInboundDebounce(debounce("msg_1", "2026-09-17T10:00:05.000Z", "bp_2"), { delayMs: 0 });
+    expect(inBp1).toMatchObject({ status: "SCHEDULED" });
+    expect(inBp2).toMatchObject({ status: "SCHEDULED" });
+    expect(inBp2).not.toHaveProperty("supersededJobId");
+
+    const handledProfiles: string[] = [];
+    const onInboundDebounceElapsed = vi.fn((job: InboundDebounceJob) => {
+      handledProfiles.push(job.businessProfileId);
+      return Promise.resolve();
+    });
+    startWorkers(handlers({ onInboundDebounceElapsed }));
+    const debounceQueue = inspect(INBOUND_DEBOUNCE.queueName);
+    for (const result of [inBp1, inBp2]) {
+      const jobId = result.status === "SCHEDULED" ? result.job.jobId : "";
+      expect((await settled(debounceQueue, jobId)).returnvalue).toEqual({ outcome: "HANDLED" });
+    }
+    expect(handledProfiles.sort()).toEqual(["bp_1", "bp_2"]);
   });
 
   it("supersedes older debounce work, ignores late older inbound and neutralises stale wake-ups", async () => {
@@ -249,6 +282,9 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
       await settled(reconciliationQueue, id);
     }
     expect((await reconciliationQueue.getJob(reconciliationIds[0] ?? ""))?.data).toMatchObject({
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      correlationId: "corr-op-ambiguous",
       reason: "AMBIGUOUS_SEND_RESULT",
       providerRequestId: "req-1",
       providerCode: "ETIMEDOUT",
@@ -338,6 +374,7 @@ function reconciliationFor(operationId: string) {
   return {
     schemaVersion: 1 as const,
     workspaceId: "ws_1",
+    businessProfileId: "bp_1",
     correlationId: `corr-${operationId}`,
     conversationId: "conv_1",
     deliveryJobId: `djob-${operationId}`,

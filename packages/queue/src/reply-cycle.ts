@@ -57,7 +57,7 @@ export function createReplyCycleRegistry(connection: Redis, prefix: string): Rep
   }
   const commands = connection as unknown as ReplyCycleCommands;
   const keyOf = (job: InboundDebounceJob) =>
-    `${prefix}:reply-cycle:${encodeURIComponent(job.workspaceId)}:${encodeURIComponent(job.conversationId)}`;
+    `${prefix}:reply-cycle:${encodeURIComponent(job.workspaceId)}:${encodeURIComponent(job.businessProfileId)}:${encodeURIComponent(job.conversationId)}`;
 
   return {
     async claim(job) {
