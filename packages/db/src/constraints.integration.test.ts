@@ -92,6 +92,24 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     await outbound();
     await outbound();
 
+    // Platform message IDs are unique per channel account, not globally: other profiles and Workspaces may reuse them.
+    for (const profile of [a2, b1]) {
+      await expect(
+        db().message.create({
+          data: {
+            ...scope(profile),
+            channelAccountId: profile.channelAccount.id,
+            conversationId: profile.conversationId,
+            channelMessageId: "mid-a-p1-1",
+            direction: "IN",
+            source: "PARTICIPANT",
+            kind: "TEXT",
+            occurredAt: new Date(),
+          },
+        }),
+      ).resolves.toBeDefined();
+    }
+
     await expect(
       createContactWithChannelIdentity(db(), a1.context, { channelAccountId: a1.channelAccount.id, externalUserId: "ig-user-a" }),
     ).rejects.toMatchObject(UNIQUE_VIOLATION);
@@ -131,6 +149,29 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     await expect(job("op-draft-1-retry")).rejects.toMatchObject(UNIQUE_VIOLATION);
     await send("op-draft-1");
     await expect(send("op-draft-1-again")).rejects.toMatchObject(UNIQUE_VIOLATION);
+
+    // One logical operation is one job and one outbound message, even without a draft link.
+    const secondDraft = await newDraft(a1);
+    await expect(
+      db().deliveryJobRecord.create({
+        data: { ...scope(a1), draftId: secondDraft.id, operationId: "op-draft-1", correlationId: "c", scheduledFor: new Date(), selectedDelayMs: 0 },
+      }),
+    ).rejects.toMatchObject(UNIQUE_VIOLATION);
+    await expect(
+      db().message.create({
+        data: {
+          ...scope(a1),
+          channelAccountId: a1.channelAccount.id,
+          conversationId: a1.conversationId,
+          direction: "OUT",
+          source: "HUMAN",
+          kind: "TEXT",
+          transportPath: "STANDARD",
+          operationId: "op-draft-1",
+          occurredAt: new Date(),
+        },
+      }),
+    ).rejects.toMatchObject(UNIQUE_VIOLATION);
 
     await expectCheckViolation(
       db().deliveryJobRecord.update({ where: { id: first.id }, data: { status: "SENT", sentAt: new Date() } }),
@@ -245,6 +286,28 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
 
   it("rejects cross-Business-Profile and cross-Workspace references even when repositories are bypassed", async () => {
     const draftInA2 = await newDraft(a2);
+    const credentialInB = await db().channelCredential.create({
+      data: { workspaceId: b.workspaceId, keyId: "fake-key", algorithm: "fake", ciphertext: Buffer.from("fake"), nonce: Buffer.from("fake") },
+    });
+    const memberOfB = await db().workspaceMember.findFirstOrThrow({ where: { workspaceId: b.workspaceId } });
+    const documentInB = await db().knowledgeDocument.create({ data: { workspaceId: b.workspaceId, title: "t", sourceType: "MANUAL" } });
+    // Same profile, second account on another channel: channel/account consistency inside one profile.
+    const whatsappInA1 = await db().channelAccount.create({
+      // Disconnected, so it does not compete for the profile's live WhatsApp slot used by other tests.
+      data: { ...scope(a1), channel: "WHATSAPP", externalAccountId: unique("wa-a1"), status: "DISCONNECTED" },
+    });
+    const secondIdentityInA1 = await createContactWithChannelIdentity(db(), a1.context, {
+      channelAccountId: a1.channelAccount.id,
+      externalUserId: unique("ig-user-second"),
+    });
+    const secondConversationInA1 = await db().conversation.create({
+      data: {
+        ...scope(a1),
+        channelAccountId: a1.channelAccount.id,
+        channelIdentityId: secondIdentityInA1.channelIdentityId,
+        contactId: secondIdentityInA1.contactId,
+      },
+    });
     // A fresh identity without a conversation, so thread uniqueness cannot mask the foreign-key check.
     const freshInA1 = await createContactWithChannelIdentity(db(), a1.context, {
       channelAccountId: a1.channelAccount.id,
@@ -397,32 +460,126 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
         "contact -> Business Profile of another Workspace",
         () => db().contact.create({ data: { workspaceId: a.workspaceId, businessProfileId: b1.businessProfileId } }),
       ],
+      [
+        "channel account -> Business Profile of another Workspace",
+        () =>
+          db().channelAccount.create({
+            data: { workspaceId: a.workspaceId, businessProfileId: b1.businessProfileId, channel: "WHATSAPP", externalAccountId: unique("x") },
+          }),
+      ],
+      [
+        "channel account -> encrypted credential of another Workspace",
+        () =>
+          db().channelAccount.create({
+            data: { ...scope(a2), channel: "WHATSAPP", externalAccountId: unique("x"), credentialId: credentialInB.id },
+          }),
+      ],
+      [
+        "automation policy -> Business Profile of another Workspace",
+        () => db().automationPolicy.create({ data: { workspaceId: a.workspaceId, businessProfileId: b1.businessProfileId, mandatoryReviewReasons: [] } }),
+      ],
+      [
+        "member access -> member of another Workspace",
+        () =>
+          db().memberBusinessProfileAccess.create({
+            data: { workspaceId: a.workspaceId, workspaceMemberId: memberOfB.id, businessProfileId: a1.businessProfileId },
+          }),
+      ],
+      [
+        "style example -> source draft of another profile",
+        () =>
+          db().styleExample.create({
+            data: { ...scope(a1), inboundContext: "q", outboundText: "a", provenance: "HUMAN_EDITED_DRAFT", sourceDraftId: draftInA2.id },
+          }),
+      ],
+      [
+        "knowledge chunk -> document of another Workspace",
+        () =>
+          db().knowledgeChunk.create({
+            data: { workspaceId: a.workspaceId, documentId: documentInB.id, documentVersion: 1, ordinal: 0, content: "fact" },
+          }),
+      ],
+      [
+        "conversation -> identity of another channel account in the same profile",
+        () =>
+          db().conversation.create({
+            data: {
+              ...scope(a1),
+              channelAccountId: whatsappInA1.id,
+              channelIdentityId: secondIdentityInA1.channelIdentityId,
+              contactId: secondIdentityInA1.contactId,
+            },
+          }),
+      ],
+      [
+        "message -> conversation on another channel account in the same profile",
+        () =>
+          db().message.create({
+            data: {
+              ...scope(a1),
+              channelAccountId: whatsappInA1.id,
+              conversationId: a1.conversationId,
+              direction: "IN",
+              source: "PARTICIPANT",
+              kind: "TEXT",
+              occurredAt: new Date(),
+            },
+          }),
+      ],
+      [
+        "AI draft -> anchor message of another conversation in the same profile",
+        () =>
+          db().aiDraft.create({
+            data: {
+              ...scope(a1),
+              conversationId: secondConversationInA1.id,
+              anchorMessageId: a1.messageId,
+              anchorStateVersion: 0,
+              text: "x",
+              structuredOutput: {},
+              confidence: 0.5,
+              modelSuggestsSend: false,
+              needsReview: true,
+              modelProvider: "fake",
+              modelName: "fake",
+              promptVersion: "p",
+              schemaVersion: "s",
+            },
+          }),
+      ],
     ];
 
     for (const [name, attempt] of attempts) {
       await expect(attempt(), name).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
     }
 
-    // Style learned from a conversation must name its profile, or the composite source FK would be skipped.
+    // Style learned from a conversation must name its profile, or the composite source FKs would be skipped.
     await expectCheckViolation(
       db().styleExample.create({
         data: { workspaceId: a.workspaceId, inboundContext: "q", outboundText: "a", provenance: "HUMAN_TYPED", sourceMessageId: a2.messageId },
       }),
       "style_examples_source_profile_check",
     );
+    await expectCheckViolation(
+      db().styleExample.create({
+        data: { workspaceId: a.workspaceId, inboundContext: "q", outboundText: "a", provenance: "HUMAN_EDITED_DRAFT", sourceDraftId: draftInA2.id },
+      }),
+      "style_examples_source_profile_check",
+    );
 
-    // Business Profile ownership cannot be moved.
+    // Rows that other rows reference cannot move to another Business Profile (ON UPDATE RESTRICT + composite FKs).
     await expect(db().conversation.update({ where: { id: a2.conversationId }, data: { businessProfileId: a1.businessProfileId } })).rejects.toThrow();
     await expect(db().contact.update({ where: { id: a2.contactId }, data: { businessProfileId: a1.businessProfileId } })).rejects.toThrow();
     expect((await db().conversation.findUniqueOrThrow({ where: { id: a2.conversationId } })).businessProfileId).toBe(a2.businessProfileId);
   });
 
   it("preserves audit history instead of cascading deletes", async () => {
+    const messagesBefore = await db().message.count({ where: { conversationId: b1.conversationId } });
     await expect(db().conversation.delete({ where: { id: b1.conversationId } })).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
     await expect(db().businessProfile.delete({ where: { id: b1.businessProfileId } })).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
     await expect(db().workspace.delete({ where: { id: b.workspaceId } })).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
     await expect(db().user.delete({ where: { id: b.ownerUserId } })).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
-    expect(await db().message.count({ where: { conversationId: b1.conversationId } })).toBe(1);
+    expect(await db().message.count({ where: { conversationId: b1.conversationId } })).toBe(messagesBefore);
 
     // Auth.js login plumbing and a member's access grants are the only rows removed with their parent.
     const userId = await createTestUser(db(), unique("login-only"));

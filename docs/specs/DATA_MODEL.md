@@ -61,7 +61,7 @@ This branch still carries the v0.3 text above; the Business Profile model it imp
 
 - **Tenancy chain.** A Workspace (tenant/billing) owns Business Profiles (`business_profiles`, status `SETUP | ACTIVE | INACTIVE`, never created implicitly).
   - Business Profile owned tables carry both `workspace_id` and `business_profile_id`: `channel_accounts`, `contacts`, `channel_identities`, `conversations`, `messages`, `ai_drafts`, `delivery_jobs`, `inbound_events`, `automation_policies`.
-  - References between them are composite foreign keys that include both columns, so cross-Workspace and cross-Business-Profile references fail in the database. Tenant uniques lead with the same scope. `ON UPDATE RESTRICT` everywhere keeps ownership immutable.
+  - References between them are composite foreign keys that include both columns, so cross-Workspace and cross-Business-Profile references fail in the database. Tenant uniques lead with the same scope. `ON UPDATE RESTRICT` everywhere pins the scope of any row that other rows reference. A row without dependents could still be re-pointed by a raw update, so repositories never write scope columns on update.
 - **Where vs what.** `workspace_members.business_profile_scope` is `ALL | SELECTED`; `member_business_profile_access` holds SELECTED grants, with composite FKs to member and profile in the same Workspace.
   - OWNER is always ALL (CHECK).
   - `authorizeBusinessProfileAccess` re-reads membership, role, scope and grants on every request. Unauthorized and nonexistent profiles fail identically.

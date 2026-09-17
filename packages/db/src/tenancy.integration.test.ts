@@ -106,6 +106,14 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
         a1.businessProfileId,
       ]);
       expect(await listAuthorizedBusinessProfiles(db(), noGrants.context)).toEqual([]);
+
+      // OWNER/ALL listings contain exactly this Workspace's profiles, never another Workspace's.
+      const inA = (await db().businessProfile.findMany({ where: { workspaceId: a.workspaceId }, select: { id: true } })).map((row) => row.id);
+      for (const context of [a.context, (await memberInA("AGENT", "ALL")).context]) {
+        const listed = (await listAuthorizedBusinessProfiles(db(), context)).map((profile) => profile.businessProfileId);
+        expect(new Set(listed)).toEqual(new Set(inA));
+        expect(listed).not.toContain(b1.businessProfileId);
+      }
     });
 
     it("extends ALL scope to Business Profiles created later, but never SELECTED scope", async () => {
@@ -201,6 +209,20 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
       );
       const granted = await grant(selectedAdmin.context, "AGENT", { selected: [a1.businessProfileId] });
       await expect(profileContext(granted.userId, a.workspaceId, a1.businessProfileId)).resolves.toBeDefined();
+      // A SELECTED grant is stored as SELECTED: it never widens to other or future profiles.
+      await expect(profileContext(granted.userId, a.workspaceId, a2.businessProfileId)).rejects.toBeInstanceOf(BusinessProfileAccessDeniedError);
+      expect((await authorizeWorkspaceAccess(db(), { userId: granted.userId, workspaceId: a.workspaceId })).businessProfileScope).toEqual({
+        kind: "SELECTED",
+        businessProfileIds: [a1.businessProfileId],
+      });
+      const ownerGranted = await grant(a.context, "ADMIN", { selected: [a2.businessProfileId, a2.businessProfileId] });
+      expect((await authorizeWorkspaceAccess(db(), { userId: ownerGranted.userId, workspaceId: a.workspaceId })).businessProfileScope).toEqual({
+        kind: "SELECTED",
+        businessProfileIds: [a2.businessProfileId],
+      });
+      await expect(profileContext(ownerGranted.userId, a.workspaceId, a1.businessProfileId)).rejects.toBeInstanceOf(
+        BusinessProfileAccessDeniedError,
+      );
 
       await expect(grant(allAdmin.context, "OWNER", "ALL")).rejects.toBeInstanceOf(WorkspacePermissionError);
       const allGranted = await grant(allAdmin.context, "AGENT", "ALL");
@@ -239,6 +261,11 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
 
       expect((await listInboxConversations(db(), context)).map((conversation) => conversation.id)).toEqual([a1.conversationId]);
       expect((await listChannelAccounts(db(), context)).map((account) => account.id)).toEqual([a1.channelAccount.id]);
+      // Channel account records never expose the credential reference.
+      for (const account of [...(await listChannelAccounts(db(), context)), await getChannelAccount(db(), context, a1.channelAccount.id)]) {
+        expect(account).not.toHaveProperty("credentialId");
+        expect(account).not.toHaveProperty("credential");
+      }
       expect(await listConversationMessages(db(), context, a1.conversationId)).toHaveLength(1);
     });
 

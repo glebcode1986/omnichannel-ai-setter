@@ -4,7 +4,10 @@
  * PostgreSQL persistence via Prisma: schema, client, tenant-scoped repositories and transactions.
  * Implements core ports; contains no business rules and no channel-specific transport code.
  *
- * Every tenant-data entry point takes a `WorkspaceContext` from `authorizeWorkspaceAccess` (ADR-009).
+ * Authorization (ADR-009, DATA_MODEL.md v0.4): Workspace-level operations (membership, Business Profile
+ * creation/listing) take a `WorkspaceContext` from `authorizeWorkspaceAccess`. Business Profile owned
+ * customer data (channel accounts, contacts, conversations, messages, ...) must take a `BusinessProfileContext`
+ * from `authorizeBusinessProfileAccess` and scope every query through `profileScopeOf`.
  * Allowed workspace dependencies are enforced by `pnpm lint:boundaries` (see docs/specs/REPOSITORY_LAYOUT.md).
  */
 export { createDbClient, type DbClient, type DbClientOptions, type DbExecutor } from "./client";

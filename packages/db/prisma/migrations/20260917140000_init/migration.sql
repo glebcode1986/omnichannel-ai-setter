@@ -485,7 +485,7 @@ CREATE UNIQUE INDEX "channel_accounts_workspace_id_credential_id_key" ON "channe
 CREATE UNIQUE INDEX "channel_accounts_live_external_account_key" ON "channel_accounts"("channel", "external_account_id") WHERE (status <> 'DISCONNECTED');
 
 -- CreateIndex
-CREATE UNIQUE INDEX "channel_accounts_live_profile_channel_key" ON "channel_accounts"("business_profile_id", "channel") WHERE (status <> 'DISCONNECTED');
+CREATE UNIQUE INDEX "channel_accounts_live_profile_channel_key" ON "channel_accounts"("workspace_id", "business_profile_id", "channel") WHERE (status <> 'DISCONNECTED');
 
 -- CreateIndex
 CREATE INDEX "inbound_events_workspace_id_received_at_idx" ON "inbound_events"("workspace_id", "received_at");

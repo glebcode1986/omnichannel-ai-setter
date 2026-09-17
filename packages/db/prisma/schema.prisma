@@ -9,7 +9,8 @@
 // - uniqueness on tenant tables leads with `workspace_id` (and `business_profile_id` where owned), so a write
 //   from one scope can never collide with (and thereby reveal) another scope's rows;
 // - history/audit rows use ON DELETE RESTRICT (no destructive cascades); only Auth.js login plumbing cascades;
-// - ON UPDATE RESTRICT everywhere: tenant ownership (workspace_id) and identifiers are immutable;
+// - ON UPDATE RESTRICT everywhere: the scope/identifier of a row that other rows reference cannot change.
+//   Rows without dependents are not pinned by the database, so repositories never update scope columns;
 // - enum values mirror the literal sets in @omnichannel/domain (checked by schema tests);
 // - CHECK constraints that Prisma cannot express live in the migration SQL (see prisma/migrations).
 
@@ -402,7 +403,7 @@ model ChannelAccount {
   /// One live connection per platform account, so webhooks route to exactly one Workspace + Business Profile.
   @@unique([channel, externalAccountId], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_external_account_key")
   /// Packaging: a Business Profile initially owns at most one live account per channel (DATA_MODEL.md v0.4 §3).
-  @@unique([businessProfileId, channel], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_profile_channel_key")
+  @@unique([workspaceId, businessProfileId, channel], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_profile_channel_key")
   @@index([channel, externalAccountId])
   @@map("channel_accounts")
 }
