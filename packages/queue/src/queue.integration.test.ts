@@ -424,8 +424,9 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       finishedHandler = true;
     });
-    const started = startWorkers(handlers({ generateAiDraft }));
+    // Enqueue before the worker starts, so the enqueue log deterministically precedes processing.
     const { jobId } = await producer.enqueueAiDraftGeneration(aiDraft);
+    const started = startWorkers(handlers({ generateAiDraft }));
     await waitFor(() => generateAiDraft.mock.calls.length === 1);
 
     await started.close();
