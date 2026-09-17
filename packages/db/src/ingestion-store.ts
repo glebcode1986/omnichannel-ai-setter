@@ -1,8 +1,9 @@
 /**
  * PostgreSQL implementation of the application's ingestion ports. Webhook ingestion is a system flow: the
- * workspace comes from the resolved channel account, and every query stays scoped to that workspace and
- * account. Idempotency relies on unique constraints with ON CONFLICT DO NOTHING (`skipDuplicates`), so
- * concurrent deliveries of the same event never abort a transaction.
+ * Workspace and Business Profile come from the resolved channel account (never from the URL or payload),
+ * and every query stays scoped to that Workspace, Business Profile and account; the composite foreign keys
+ * reject rows that would cross them. Idempotency relies on unique constraints with ON CONFLICT DO NOTHING
+ * (`skipDuplicates`), so concurrent deliveries of the same event never abort a transaction.
  */
 import type {
   InboundDebouncePayload,
@@ -24,11 +25,17 @@ export function createIngestionStore(db: DbClient): IngestionStore {
     async findWebhookAccount(channel, channelAccountId): Promise<WebhookAccount | undefined> {
       const account = await db.channelAccount.findFirst({
         where: { id: channelAccountId, channel },
-        select: { id: true, workspaceId: true, channel: true, status: true },
+        select: { id: true, workspaceId: true, businessProfileId: true, channel: true, status: true },
       });
       return account === null
         ? undefined
-        : { workspaceId: account.workspaceId, channelAccountId: account.id, channel: account.channel, status: account.status };
+        : {
+            workspaceId: account.workspaceId,
+            businessProfileId: account.businessProfileId,
+            channelAccountId: account.id,
+            channel: account.channel,
+            status: account.status,
+          };
     },
 
     transaction(work) {
@@ -61,6 +68,7 @@ export function createIngestionStore(db: DbClient): IngestionStore {
             id: entry.id,
             kind: entry.kind,
             workspaceId: entry.workspaceId,
+            businessProfileId: entry.businessProfileId,
             correlationId: entry.correlationId,
             payload: entry.payload as unknown as InboundDebouncePayload,
             delayMs: entry.delayMs,
@@ -85,6 +93,13 @@ export function createIngestionStore(db: DbClient): IngestionStore {
   };
 }
 
+/** Scoped raw updates must hit exactly the one conversation of the resolved Business Profile. */
+function expectOneConversation(count: number): void {
+  if (count !== 1) {
+    throw new Error(`expected one conversation in the resolved Business Profile, updated ${String(count)}`);
+  }
+}
+
 function createTransaction(tx: TransactionClient): IngestionTransaction {
   return {
     async claimSourceEvent(event) {
@@ -92,6 +107,7 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
         data: [
           {
             workspaceId: event.workspaceId,
+            businessProfileId: event.businessProfileId,
             channelAccountId: event.channelAccountId,
             sourceEventId: event.sourceEventId,
             eventType: event.eventType,
@@ -107,8 +123,9 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
     async completeSourceEvent(event) {
       await tx.inboundEvent.update({
         where: {
-          workspaceId_channelAccountId_sourceEventId: {
+          workspaceId_businessProfileId_channelAccountId_sourceEventId: {
             workspaceId: event.workspaceId,
+            businessProfileId: event.businessProfileId,
             channelAccountId: event.channelAccountId,
             sourceEventId: event.sourceEventId,
           },
@@ -117,32 +134,33 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
       });
     },
 
-    async ensureContactIdentity(input) {
+    async ensureChannelIdentity(input) {
+      const scope = { workspaceId: input.workspaceId, businessProfileId: input.businessProfileId };
       const key = {
-        workspaceId_channelAccountId_externalUserId: {
-          workspaceId: input.workspaceId,
+        workspaceId_businessProfileId_channelAccountId_externalUserId: {
+          ...scope,
           channelAccountId: input.channelAccountId,
           externalUserId: input.externalUserId,
         },
       };
-      const existing = await tx.contactIdentity.findUnique({ where: key, select: { id: true, displayName: true, username: true } });
+      const select = { id: true, contactId: true, displayName: true, username: true } as const;
+      const existing = await tx.channelIdentity.findUnique({ where: key, select });
       if (existing !== null) {
         const displayName = input.displayName ?? existing.displayName;
         const username = input.username ?? existing.username;
         if (displayName !== existing.displayName || username !== existing.username) {
-          await tx.contactIdentity.update({ where: { id: existing.id }, data: { displayName, username } });
+          // Profile fields are refreshed only; they never identify the participant or change conversation state.
+          await tx.channelIdentity.update({ where: key, data: { displayName, username } });
         }
-        return { contactIdentityId: existing.id };
+        return { channelIdentityId: existing.id, contactId: existing.contactId };
       }
 
-      const contact = await tx.contact.create({
-        data: { workspaceId: input.workspaceId, displayName: input.displayName },
-        select: { id: true },
-      });
-      const created = await tx.contactIdentity.createManyAndReturn({
+      // Contacts are canonical per Business Profile: the same provider user in another profile is another contact.
+      const contact = await tx.contact.create({ data: { ...scope, displayName: input.displayName }, select: { id: true } });
+      const created = await tx.channelIdentity.createManyAndReturn({
         data: [
           {
-            workspaceId: input.workspaceId,
+            ...scope,
             contactId: contact.id,
             channelAccountId: input.channelAccountId,
             externalUserId: input.externalUserId,
@@ -151,33 +169,45 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
           },
         ],
         skipDuplicates: true,
-        select: { id: true },
+        select: { id: true, contactId: true },
       });
       if (created[0] !== undefined) {
-        return { contactIdentityId: created[0].id };
+        return { channelIdentityId: created[0].id, contactId: created[0].contactId };
       }
       // A concurrent ingestion created the identity first: drop our unused contact and use theirs.
-      await tx.contact.delete({ where: { id: contact.id } });
-      const winner = await tx.contactIdentity.findUniqueOrThrow({ where: key, select: { id: true } });
-      return { contactIdentityId: winner.id };
+      await tx.contact.delete({ where: { workspaceId_businessProfileId_id: { ...scope, id: contact.id } } });
+      const winner = await tx.channelIdentity.findUniqueOrThrow({ where: key, select: { id: true, contactId: true } });
+      return { channelIdentityId: winner.id, contactId: winner.contactId };
     },
 
     async ensureConversation(input) {
+      const scope = { workspaceId: input.workspaceId, businessProfileId: input.businessProfileId };
       const key = {
-        workspaceId_channelAccountId_contactIdentityId: {
-          workspaceId: input.workspaceId,
+        workspaceId_businessProfileId_channelAccountId_channelIdentityId: {
+          ...scope,
           channelAccountId: input.channelAccountId,
-          contactIdentityId: input.contactIdentityId,
+          channelIdentityId: input.channelIdentityId,
         },
       };
-      const select = { id: true, status: true, aiEnabled: true, takeoverState: true } as const;
       await tx.conversation.createMany({
-        data: [{ workspaceId: input.workspaceId, channelAccountId: input.channelAccountId, contactIdentityId: input.contactIdentityId }],
+        data: [
+          {
+            ...scope,
+            channelAccountId: input.channelAccountId,
+            contactId: input.contactId,
+            channelIdentityId: input.channelIdentityId,
+          },
+        ],
         skipDuplicates: true,
       });
-      const conversation = await tx.conversation.findUniqueOrThrow({ where: key, select });
+      const conversation = await tx.conversation.findUniqueOrThrow({
+        where: key,
+        select: { id: true, contactId: true, stateVersion: true, status: true, aiEnabled: true, takeoverState: true },
+      });
       return {
         conversationId: conversation.id,
+        contactId: conversation.contactId,
+        stateVersion: conversation.stateVersion,
         status: conversation.status,
         aiEnabled: conversation.aiEnabled,
         takeoverState: conversation.takeoverState,
@@ -189,6 +219,7 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
         data: [
           {
             workspaceId: input.workspaceId,
+            businessProfileId: input.businessProfileId,
             channelAccountId: input.channelAccountId,
             conversationId: input.conversationId,
             channelMessageId: input.channelMessageId,
@@ -208,27 +239,37 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
       return created[0] === undefined ? undefined : { messageId: created[0].id };
     },
 
-    async recordActivity({ workspaceId, conversationId, direction, occurredAt }) {
-      if (direction === "IN") {
-        await tx.$executeRaw`
-          UPDATE "conversations"
-          SET "last_inbound_at" = GREATEST(COALESCE("last_inbound_at", ${occurredAt}), ${occurredAt}),
-              "last_message_at" = GREATEST("last_message_at", ${occurredAt}),
-              "updated_at" = now()
-          WHERE "workspace_id" = ${workspaceId} AND "id" = ${conversationId}`;
-      } else {
-        await tx.$executeRaw`
-          UPDATE "conversations"
-          SET "last_outbound_at" = GREATEST(COALESCE("last_outbound_at", ${occurredAt}), ${occurredAt}),
-              "last_message_at" = GREATEST("last_message_at", ${occurredAt}),
-              "updated_at" = now()
-          WHERE "workspace_id" = ${workspaceId} AND "id" = ${conversationId}`;
-      }
+    async recordActivity({ workspaceId, businessProfileId, conversationId, direction, occurredAt }) {
+      // A new participant or human message is a material change: anchored drafts/reviews become stale.
+      const count =
+        direction === "IN"
+          ? await tx.$executeRaw`
+              UPDATE "conversations"
+              SET "last_inbound_at" = GREATEST(COALESCE("last_inbound_at", ${occurredAt}), ${occurredAt}),
+                  "last_message_at" = GREATEST("last_message_at", ${occurredAt}),
+                  "state_version" = "state_version" + 1,
+                  "updated_at" = now()
+              WHERE "workspace_id" = ${workspaceId} AND "business_profile_id" = ${businessProfileId} AND "id" = ${conversationId}`
+          : await tx.$executeRaw`
+              UPDATE "conversations"
+              SET "last_outbound_at" = GREATEST(COALESCE("last_outbound_at", ${occurredAt}), ${occurredAt}),
+                  "last_message_at" = GREATEST("last_message_at", ${occurredAt}),
+                  "state_version" = "state_version" + 1,
+                  "updated_at" = now()
+              WHERE "workspace_id" = ${workspaceId} AND "business_profile_id" = ${businessProfileId} AND "id" = ${conversationId}`;
+      expectOneConversation(count);
     },
 
-    async isAppOriginatedMessage({ workspaceId, channelAccountId, platformMessageId }) {
+    async isAppOriginatedMessage({ workspaceId, businessProfileId, channelAccountId, platformMessageId }) {
       const message = await tx.message.findFirst({
-        where: { workspaceId, channelAccountId, channelMessageId: platformMessageId, direction: "OUT", operationId: { not: null } },
+        where: {
+          workspaceId,
+          businessProfileId,
+          channelAccountId,
+          channelMessageId: platformMessageId,
+          direction: "OUT",
+          operationId: { not: null },
+        },
         select: { id: true },
       });
       if (message !== null) {
@@ -236,15 +277,16 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
       }
       // The send result may be recorded on the delivery job before the outbound message row exists.
       const job = await tx.deliveryJobRecord.findFirst({
-        where: { workspaceId, platformMessageId, draft: { conversation: { channelAccountId } } },
+        where: { workspaceId, businessProfileId, platformMessageId, draft: { conversation: { channelAccountId } } },
         select: { id: true },
       });
       return job !== null;
     },
 
-    async startHumanTakeover({ workspaceId, conversationId, since, pausedUntil }) {
+    async startHumanTakeover({ workspaceId, businessProfileId, conversationId, since, pausedUntil }) {
       // A new manual outbound extends an existing human takeover; otherwise it starts one (HUMAN_HANDOFF.md).
-      await tx.$executeRaw`
+      // The state version was already advanced once for this message by recordActivity.
+      const count = await tx.$executeRaw`
         UPDATE "conversations"
         SET "takeover_reason" = CASE WHEN "takeover_state" = 'HUMAN_ACTIVE' THEN "takeover_reason" ELSE 'UNMATCHED_OUTBOUND_ECHO'::"TakeoverReason" END,
             "human_takeover_at" = CASE WHEN "takeover_state" = 'HUMAN_ACTIVE' THEN "human_takeover_at" ELSE ${since} END,
@@ -254,22 +296,28 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
             "takeover_review_mode" = NULL,
             "takeover_state" = 'HUMAN_ACTIVE'::"TakeoverState",
             "updated_at" = now()
-        WHERE "workspace_id" = ${workspaceId} AND "id" = ${conversationId}`;
+        WHERE "workspace_id" = ${workspaceId} AND "business_profile_id" = ${businessProfileId} AND "id" = ${conversationId}`;
+      expectOneConversation(count);
     },
 
-    async findMessageByPlatformId({ workspaceId, channelAccountId, platformMessageId }) {
+    async findMessageByPlatformId({ workspaceId, businessProfileId, channelAccountId, platformMessageId }) {
       const message = await tx.message.findUnique({
         where: {
-          workspaceId_channelAccountId_channelMessageId: { workspaceId, channelAccountId, channelMessageId: platformMessageId },
+          workspaceId_businessProfileId_channelAccountId_channelMessageId: {
+            workspaceId,
+            businessProfileId,
+            channelAccountId,
+            channelMessageId: platformMessageId,
+          },
         },
         select: { id: true, deliveryStatus: true },
       });
       return message === null ? undefined : { messageId: message.id, deliveryStatus: message.deliveryStatus };
     },
 
-    async updateMessageDeliveryStatus({ workspaceId, messageId, deliveryStatus, occurredAt }) {
+    async updateMessageDeliveryStatus({ workspaceId, businessProfileId, messageId, deliveryStatus, occurredAt }) {
       await tx.message.update({
-        where: { workspaceId_id: { workspaceId, id: messageId } },
+        where: { workspaceId_businessProfileId_id: { workspaceId, businessProfileId, id: messageId } },
         data: {
           deliveryStatus,
           ...(deliveryStatus === "DELIVERED" || deliveryStatus === "READ" ? { deliveredAt: occurredAt } : {}),
@@ -283,6 +331,7 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
         data: [
           {
             workspaceId: input.workspaceId,
+            businessProfileId: input.businessProfileId,
             kind: input.kind,
             dedupeKey: input.dedupeKey,
             correlationId: input.correlationId,

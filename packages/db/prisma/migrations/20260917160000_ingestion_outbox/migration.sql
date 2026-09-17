@@ -38,3 +38,8 @@ ALTER TABLE "queue_outbox" ADD CONSTRAINT "queue_outbox_workspace_id_business_pr
 
 -- Hand-written integrity rules (see packages/db constraint tests).
 ALTER TABLE "queue_outbox" ADD CONSTRAINT "queue_outbox_counters_check" CHECK ("delay_ms" >= 0 AND "attempts" >= 0);
+-- The queued payload must name the same Workspace + Business Profile as the row (missing keys fail).
+ALTER TABLE "queue_outbox" ADD CONSTRAINT "queue_outbox_payload_scope_check" CHECK (
+  ("payload" ->> 'workspaceId') IS NOT DISTINCT FROM "workspace_id"
+  AND ("payload" ->> 'businessProfileId') IS NOT DISTINCT FROM "business_profile_id"
+);

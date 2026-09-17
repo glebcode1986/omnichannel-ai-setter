@@ -20,9 +20,13 @@ export interface LogPort {
   error(event: string, fields?: Readonly<Record<string, unknown>>): void;
 }
 
-/** Channel account a webhook route resolves to (system lookup; no user session is involved). */
+/**
+ * Channel account a webhook route resolves to (system lookup; no user session is involved). The account
+ * belongs to exactly one Business Profile, which scopes every customer-data write of its events.
+ */
 export interface WebhookAccount {
   readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly channelAccountId: string;
   readonly channel: ChannelType;
   readonly status: ChannelAccountStatus;
@@ -37,6 +41,7 @@ export interface ChannelAdapterProvider {
 export interface InboundDebouncePayload {
   readonly schemaVersion: 1;
   readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly correlationId: string;
   readonly channelAccountId: string;
   readonly conversationId: string;
@@ -60,14 +65,21 @@ export type IngestionOutcome =
   | "STATUS_UNMATCHED"
   | "IGNORED_UNSUPPORTED";
 
-export interface SourceEventKey {
+/** Workspace + Business Profile scope carried by every ingestion write. */
+export interface ProfileScope {
   readonly workspaceId: string;
+  readonly businessProfileId: string;
+}
+
+export interface SourceEventKey extends ProfileScope {
   readonly channelAccountId: string;
   readonly sourceEventId: string;
 }
 
 export interface ConversationSnapshot {
   readonly conversationId: string;
+  readonly contactId: string;
+  readonly stateVersion: number;
   readonly status: ConversationStatus;
   readonly aiEnabled: boolean;
   readonly takeoverState: HumanTakeoverState["state"];
@@ -82,6 +94,7 @@ export interface OutboxEntry {
   readonly id: string;
   readonly kind: "INBOUND_DEBOUNCE";
   readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly correlationId: string;
   readonly payload: InboundDebouncePayload;
   /** Selected debounce delay, counted from `createdAt`. */
@@ -103,22 +116,29 @@ export interface IngestionTransaction {
   ): Promise<"NEW" | "DUPLICATE">;
   completeSourceEvent(event: SourceEventKey & { readonly outcome: IngestionOutcome }): Promise<void>;
 
-  ensureContactIdentity(input: {
-    readonly workspaceId: string;
-    readonly channelAccountId: string;
-    readonly externalUserId: string;
-    readonly displayName?: string;
-    readonly username?: string;
-  }): Promise<{ readonly contactIdentityId: string }>;
-  ensureConversation(input: {
-    readonly workspaceId: string;
-    readonly channelAccountId: string;
-    readonly contactIdentityId: string;
-  }): Promise<ConversationSnapshot>;
+  /**
+   * Finds or creates the contact + channel identity for a stable provider user ID on one channel account,
+   * inside the resolved Business Profile only. Usernames/display names are refreshed, never used as keys.
+   */
+  ensureChannelIdentity(
+    input: ProfileScope & {
+      readonly channelAccountId: string;
+      readonly externalUserId: string;
+      readonly displayName?: string;
+      readonly username?: string;
+    },
+  ): Promise<{ readonly channelIdentityId: string; readonly contactId: string }>;
+  ensureConversation(
+    input: ProfileScope & {
+      readonly channelAccountId: string;
+      readonly channelIdentityId: string;
+      readonly contactId: string;
+    },
+  ): Promise<ConversationSnapshot>;
 
   /** Returns undefined when a message with the same platform ID already exists. */
-  insertMessage(input: {
-    readonly workspaceId: string;
+  insertMessage(
+    input: ProfileScope & {
     readonly channelAccountId: string;
     readonly conversationId: string;
     readonly direction: "IN" | "OUT";
@@ -130,50 +150,51 @@ export interface IngestionTransaction {
     readonly replyToChannelMessageId?: string;
     readonly deliveryStatus?: MessageDeliveryStatus;
     readonly occurredAt: Date;
-  }): Promise<{ readonly messageId: string } | undefined>;
-  /** Advances last inbound/outbound and inbox activity timestamps monotonically. */
-  recordActivity(input: {
-    readonly workspaceId: string;
-    readonly conversationId: string;
-    readonly direction: "IN" | "OUT";
-    readonly occurredAt: Date;
-  }): Promise<void>;
+  },
+  ): Promise<{ readonly messageId: string } | undefined>;
+  /**
+   * Records a newly stored participant message or unmatched human outbound: advances last inbound/outbound
+   * and inbox timestamps monotonically and increments the conversation state version by exactly one, in the
+   * same transaction. Never called for duplicates, own echoes or status events.
+   */
+  recordActivity(
+    input: ProfileScope & {
+      readonly conversationId: string;
+      readonly direction: "IN" | "OUT";
+      readonly occurredAt: Date;
+    },
+  ): Promise<void>;
 
   /** Whether a platform message ID belongs to an app-originated send (stored operation or delivery job). */
-  isAppOriginatedMessage(input: {
-    readonly workspaceId: string;
-    readonly channelAccountId: string;
-    readonly platformMessageId: string;
-  }): Promise<boolean>;
+  isAppOriginatedMessage(
+    input: ProfileScope & { readonly channelAccountId: string; readonly platformMessageId: string },
+  ): Promise<boolean>;
   /** Sets HUMAN_ACTIVE (or extends an existing human takeover) for native/manual activity. */
-  startHumanTakeover(input: {
-    readonly workspaceId: string;
-    readonly conversationId: string;
-    readonly since: Date;
-    readonly pausedUntil: Date;
-  }): Promise<void>;
+  startHumanTakeover(
+    input: ProfileScope & { readonly conversationId: string; readonly since: Date; readonly pausedUntil: Date },
+  ): Promise<void>;
 
-  findMessageByPlatformId(input: {
-    readonly workspaceId: string;
-    readonly channelAccountId: string;
-    readonly platformMessageId: string;
-  }): Promise<StoredMessageStatus | undefined>;
-  updateMessageDeliveryStatus(input: {
-    readonly workspaceId: string;
-    readonly messageId: string;
-    readonly deliveryStatus: MessageDeliveryStatus;
-    readonly occurredAt: Date;
-  }): Promise<void>;
+  findMessageByPlatformId(
+    input: ProfileScope & { readonly channelAccountId: string; readonly platformMessageId: string },
+  ): Promise<StoredMessageStatus | undefined>;
+  updateMessageDeliveryStatus(
+    input: ProfileScope & {
+      readonly messageId: string;
+      readonly deliveryStatus: MessageDeliveryStatus;
+      readonly occurredAt: Date;
+    },
+  ): Promise<void>;
 
   /** Adds an outbox entry unless one with the same dedupe key exists (then returns undefined). */
-  addOutboxEntry(input: {
-    readonly workspaceId: string;
+  addOutboxEntry(
+    input: ProfileScope & {
     readonly kind: "INBOUND_DEBOUNCE";
     readonly dedupeKey: string;
     readonly correlationId: string;
     readonly payload: InboundDebouncePayload;
     readonly delayMs: number;
-  }): Promise<{ readonly id: string } | undefined>;
+  },
+  ): Promise<{ readonly id: string } | undefined>;
 }
 
 export interface IngestionStore {

@@ -15,8 +15,11 @@ interface FixtureBase {
   /** Provider event ID (becomes sourceEventId). */
   readonly id: string;
   readonly at: string;
-  /** Overrides the bound account's workspace, to simulate an adapter emitting foreign events. */
+  /** Override the bound account's scope, to simulate an adapter emitting foreign or forged events. */
   readonly workspaceId?: string;
+  readonly businessProfileId?: string;
+  readonly channelAccountId?: string;
+  readonly channel?: string;
 }
 
 export type FakeEventFixture =
@@ -72,8 +75,9 @@ export function createFakeChannelAdapter(account: WebhookAccount): ChannelAdapte
 function normalize(account: WebhookAccount, fixture: FakeEventFixture): NormalizedChannelEvent {
   const base = {
     workspaceId: fixture.workspaceId ?? account.workspaceId,
-    channel: account.channel,
-    channelAccountId: account.channelAccountId,
+    businessProfileId: fixture.businessProfileId ?? account.businessProfileId,
+    channel: (fixture.channel ?? account.channel) as WebhookAccount["channel"],
+    channelAccountId: fixture.channelAccountId ?? account.channelAccountId,
     sourceEventId: fixture.id,
     occurredAt: new Date(fixture.at),
   };

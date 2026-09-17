@@ -37,7 +37,12 @@ export async function dispatchOutbox(
   let dispatched = 0;
   let failed = 0;
   for (const entry of entries) {
-    const fields = { outboxEntryId: entry.id, workspaceId: entry.workspaceId, correlationId: entry.correlationId };
+    const fields = {
+      outboxEntryId: entry.id,
+      workspaceId: entry.workspaceId,
+      businessProfileId: entry.businessProfileId,
+      correlationId: entry.correlationId,
+    };
     const current = now();
     // The debounce window counts from when the message was stored, so a late dispatch fires sooner.
     const delayMs = Math.max(0, entry.createdAt.getTime() + entry.delayMs - current.getTime());

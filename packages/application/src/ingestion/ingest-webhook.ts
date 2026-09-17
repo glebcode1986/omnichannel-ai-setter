@@ -50,29 +50,32 @@ export type WebhookIngestionResult =
 
 /**
  * Channel-neutral webhook ingestion (P1-05):
- * resolve account -> verify -> normalize -> per event: validate, then in one transaction claim the source
- * event, persist messages/status/identity/conversation state and add outbox entries -> dispatch outbox.
+ * resolve channel account -> Workspace + Business Profile -> verify -> normalize -> per event: validate
+ * against the resolved scope, then in one transaction claim the source event, persist messages/status/
+ * identity/conversation state inside that Business Profile and add outbox entries -> dispatch outbox.
  * It never calls a model and never waits for a human-like delay; debounce is a scheduled job.
  */
 export async function ingestWebhook(
   dependencies: IngestionDependencies,
   request: WebhookIngestionRequest,
 ): Promise<WebhookIngestionResult> {
-  const log = withFields(dependencies.log, {
+  const routeLog = withFields(dependencies.log, {
     correlationId: request.correlationId,
     channel: request.channel,
     channelAccountId: request.channelAccountId,
   });
 
   if (!isChannelType(request.channel) || !isValidIdentifier(request.channelAccountId)) {
-    log.warn("ingestion.route_invalid");
+    routeLog.warn("ingestion.route_invalid");
     return { kind: "NOT_FOUND" };
   }
   const account = await dependencies.store.findWebhookAccount(request.channel, request.channelAccountId);
   if (account === undefined || account.status === "DISCONNECTED") {
-    log.warn("ingestion.account_not_found");
+    routeLog.warn("ingestion.account_not_found");
     return { kind: "NOT_FOUND" };
   }
+  // Everything after resolution is attributed to the account's Workspace and Business Profile.
+  const log = withFields(routeLog, { workspaceId: account.workspaceId, businessProfileId: account.businessProfileId });
   const adapter = dependencies.adapters.adapterFor(account);
   if (adapter === undefined || adapter.channel !== account.channel) {
     log.warn("ingestion.adapter_unavailable");
@@ -162,7 +165,7 @@ async function dispatchNow(dependencies: IngestionDependencies, ids: readonly st
 
 function validateEvent(
   candidate: unknown,
-  account: { readonly workspaceId: string; readonly channelAccountId: string; readonly channel: string },
+  account: { readonly workspaceId: string; readonly businessProfileId: string; readonly channelAccountId: string; readonly channel: string },
   index: number,
   log: LogPort,
 ): NormalizedChannelEvent | undefined {
@@ -178,13 +181,16 @@ function validateEvent(
     });
     return undefined;
   }
-  if (
-    event === undefined ||
-    event.workspaceId !== account.workspaceId ||
-    event.channelAccountId !== account.channelAccountId ||
-    event.channel !== account.channel
-  ) {
-    log.warn("ingestion.event_rejected", { index, reason: "ACCOUNT_MISMATCH" });
+  if (event === undefined) {
+    log.warn("ingestion.event_rejected", { index, reason: "INVALID_EVENT", issues: [] });
+    return undefined;
+  }
+  // Events must stay inside the Workspace, Business Profile, channel account and channel the route resolved.
+  const mismatched = (["workspaceId", "businessProfileId", "channelAccountId", "channel"] as const).filter(
+    (field) => event[field] !== account[field],
+  );
+  if (mismatched.length > 0) {
+    log.warn("ingestion.event_rejected", { index, reason: "SCOPE_MISMATCH", fields: mismatched });
     return undefined;
   }
   return event;

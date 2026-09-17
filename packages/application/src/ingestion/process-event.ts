@@ -32,6 +32,7 @@ export async function processEvent(
 ): Promise<EventProcessingResult> {
   const key = {
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     channelAccountId: event.channelAccountId,
     sourceEventId: event.sourceEventId,
   };
@@ -76,14 +77,14 @@ async function applyInboundMessage(
   event: InboundMessageEvent,
   context: EventProcessingContext,
 ): Promise<{ outcome: IngestionOutcome; outboxEntryId?: string }> {
-  const scope = { workspaceId: event.workspaceId, channelAccountId: event.channelAccountId };
-  const { contactIdentityId } = await tx.ensureContactIdentity({
+  const scope = { workspaceId: event.workspaceId, businessProfileId: event.businessProfileId, channelAccountId: event.channelAccountId };
+  const identity = await tx.ensureChannelIdentity({
     ...scope,
     externalUserId: event.senderExternalId,
     displayName: event.senderDisplayName,
     username: event.senderUsername,
   });
-  const conversation = await tx.ensureConversation({ ...scope, contactIdentityId });
+  const conversation = await tx.ensureConversation({ ...scope, ...identity });
   const message = await tx.insertMessage({
     ...scope,
     conversationId: conversation.conversationId,
@@ -107,6 +108,7 @@ async function applyInboundMessage(
   }
   await tx.recordActivity({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     conversationId: conversation.conversationId,
     direction: "IN",
     occurredAt: event.occurredAt,
@@ -117,13 +119,15 @@ async function applyInboundMessage(
   }
   const entry = await tx.addOutboxEntry({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     kind: "INBOUND_DEBOUNCE",
-    dedupeKey: ["inbound-debounce", event.workspaceId, conversation.conversationId, message.messageId].join(":"),
+    dedupeKey: ["inbound-debounce", event.workspaceId, event.businessProfileId, conversation.conversationId, message.messageId].join(":"),
     correlationId: context.correlationId,
     delayMs: sampleDelayMs(context.debounceWindowMs, context.random),
     payload: {
       schemaVersion: 1,
       workspaceId: event.workspaceId,
+      businessProfileId: event.businessProfileId,
       correlationId: context.correlationId,
       channelAccountId: event.channelAccountId,
       conversationId: conversation.conversationId,
@@ -143,13 +147,13 @@ async function applyOutboundEcho(
   event: OutboundEchoEvent,
   context: EventProcessingContext,
 ): Promise<IngestionOutcome> {
-  const scope = { workspaceId: event.workspaceId, channelAccountId: event.channelAccountId };
+  const scope = { workspaceId: event.workspaceId, businessProfileId: event.businessProfileId, channelAccountId: event.channelAccountId };
   if (await tx.isAppOriginatedMessage({ ...scope, platformMessageId: event.platformMessageId })) {
     return "OWN_ECHO";
   }
 
-  const { contactIdentityId } = await tx.ensureContactIdentity({ ...scope, externalUserId: event.recipientExternalId });
-  const conversation = await tx.ensureConversation({ ...scope, contactIdentityId });
+  const identity = await tx.ensureChannelIdentity({ ...scope, externalUserId: event.recipientExternalId });
+  const conversation = await tx.ensureConversation({ ...scope, ...identity });
   const message = await tx.insertMessage({
     ...scope,
     conversationId: conversation.conversationId,
@@ -167,12 +171,14 @@ async function applyOutboundEcho(
   }
   await tx.recordActivity({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     conversationId: conversation.conversationId,
     direction: "OUT",
     occurredAt: event.occurredAt,
   });
   await tx.startHumanTakeover({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     conversationId: conversation.conversationId,
     since: event.occurredAt,
     pausedUntil: new Date(event.occurredAt.getTime() + context.takeoverPauseMs),
@@ -183,6 +189,7 @@ async function applyOutboundEcho(
 async function applyStatus(tx: IngestionTransaction, event: DeliveryStatusEvent | ReadStatusEvent): Promise<IngestionOutcome> {
   const stored = await tx.findMessageByPlatformId({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     channelAccountId: event.channelAccountId,
     platformMessageId: event.platformMessageId,
   });
@@ -195,6 +202,7 @@ async function applyStatus(tx: IngestionTransaction, event: DeliveryStatusEvent 
   }
   await tx.updateMessageDeliveryStatus({
     workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
     messageId: stored.messageId,
     deliveryStatus: next,
     occurredAt: event.occurredAt,

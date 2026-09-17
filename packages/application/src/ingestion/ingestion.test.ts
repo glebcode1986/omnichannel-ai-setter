@@ -13,7 +13,13 @@ import {
   type WebhookAccount,
 } from "../index";
 
-const account: WebhookAccount = { workspaceId: "ws_1", channelAccountId: "ca_1", channel: "INSTAGRAM", status: "CONNECTED" };
+const account: WebhookAccount = {
+  workspaceId: "ws_1",
+  businessProfileId: "bp_1",
+  channelAccountId: "ca_1",
+  channel: "INSTAGRAM",
+  status: "CONNECTED",
+};
 
 const webhook: RawWebhook = { method: "POST", headers: {}, query: {}, rawBody: new Uint8Array(), receivedAt: new Date() };
 
@@ -98,43 +104,64 @@ describe("ingestWebhook early exits", () => {
     expect(broken.transaction).not.toHaveBeenCalled();
   });
 
-  it("audits invalid and foreign events without persisting them", async () => {
+  it("audits invalid events and events outside the resolved Workspace/Business Profile/account/channel", async () => {
+    const reaction = {
+      type: "REACTION",
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      channel: "INSTAGRAM",
+      channelAccountId: "ca_1",
+      sourceEventId: "evt_1",
+      occurredAt: new Date(),
+      platformMessageId: "mid_1",
+      reactorExternalId: "user_1",
+      action: "REACT",
+    };
     const { deps, transaction, log } = dependencies({
       account,
       adapter: adapter({
         normalizeWebhook: () =>
           Promise.resolve([
             { type: "TYPING", workspaceId: "ws_1" },
-            {
-              type: "REACTION",
-              workspaceId: "ws_other",
-              channel: "INSTAGRAM",
-              channelAccountId: "ca_1",
-              sourceEventId: "evt_1",
-              occurredAt: new Date(),
-              platformMessageId: "mid_1",
-              reactorExternalId: "user_1",
-              action: "REACT",
-            },
+            { ...reaction, businessProfileId: undefined },
+            { ...reaction, workspaceId: "ws_other" },
+            { ...reaction, businessProfileId: "bp_other" },
+            { ...reaction, channelAccountId: "ca_other" },
+            { ...reaction, channel: "WHATSAPP" },
+            { ...reaction, workspaceId: "ws_other", businessProfileId: "bp_other" },
           ] as never),
       }),
     });
 
     expect(await ingestWebhook(deps, request())).toEqual({
       kind: "ACCEPTED",
-      summary: { received: 2, processed: 0, duplicates: 0, rejected: 2, debounceScheduled: 0, debounceDeferred: 0 },
+      summary: { received: 7, processed: 0, duplicates: 0, rejected: 7, debounceScheduled: 0, debounceDeferred: 0 },
     });
     expect(transaction).not.toHaveBeenCalled();
-    expect(log.warn.mock.calls.map((call: unknown[]) => [call[0], (call[1] as { reason?: string } | undefined)?.reason])).toEqual([
-      ["ingestion.event_rejected", "INVALID_EVENT"],
-      ["ingestion.event_rejected", "ACCOUNT_MISMATCH"],
+    // Rejections are attributed to the resolved scope, never to the forged one.
+    for (const call of log.warn.mock.calls as unknown as [string, Record<string, unknown>][]) {
+      expect(call[1]).toMatchObject({ correlationId: "corr_1", workspaceId: "ws_1", businessProfileId: "bp_1", channelAccountId: "ca_1" });
+    }
+    expect(
+      log.warn.mock.calls.map((call: unknown[]) => {
+        const fields = call[1] as { reason?: string; fields?: string[] } | undefined;
+        return [call[0], fields?.reason, fields?.fields];
+      }),
+    ).toEqual([
+      ["ingestion.event_rejected", "INVALID_EVENT", undefined],
+      ["ingestion.event_rejected", "INVALID_EVENT", undefined],
+      ["ingestion.event_rejected", "SCOPE_MISMATCH", ["workspaceId"]],
+      ["ingestion.event_rejected", "SCOPE_MISMATCH", ["businessProfileId"]],
+      ["ingestion.event_rejected", "SCOPE_MISMATCH", ["channelAccountId"]],
+      ["ingestion.event_rejected", "SCOPE_MISMATCH", ["channel"]],
+      ["ingestion.event_rejected", "SCOPE_MISMATCH", ["workspaceId", "businessProfileId"]],
     ]);
   });
 });
 
 describe("ingestion rules", () => {
   it("starts debounce only for open, AI-enabled conversations without takeover", () => {
-    const open = { conversationId: "c", status: "OPEN", aiEnabled: true, takeoverState: "NONE" } as const;
+    const open = { conversationId: "c", contactId: "ct", stateVersion: 0, status: "OPEN", aiEnabled: true, takeoverState: "NONE" } as const;
     expect(isEligibleForInboundDebounce(open)).toBe(true);
     expect(isEligibleForInboundDebounce({ ...open, status: "CLOSED" })).toBe(false);
     expect(isEligibleForInboundDebounce({ ...open, aiEnabled: false })).toBe(false);
