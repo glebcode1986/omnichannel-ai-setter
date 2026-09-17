@@ -1,10 +1,10 @@
 # Task Contract — P1-03 Claude
 
 **Executor:** Claude Code  
-**Issue:** #4 `[P1-03] Implement Prisma schema, Auth.js persistence and workspace isolation`  
+**Issue:** #4 `[P1-03] Implement Prisma/Auth.js with Workspace + Business Profile isolation`  
 **Branch:** `feat/p1-03-prisma-auth-workspaces`  
-**Depends on:** accepted #2 and #3  
-**Merge authority:** Human/project owner after review; Claude must not merge its own PR.
+**Depends on:** corrected/accepted-enough #2 and #3  
+**Merge authority:** human/project owner after review; Claude must not merge its own PR.
 
 ## Mandatory reading order
 
@@ -14,13 +14,15 @@
 4. `CLAUDE.md`
 5. `docs/adr/ADR-005-prisma-bullmq-core-stack.md`
 6. `docs/adr/ADR-009-authjs-workspaces.md`
-7. `docs/specs/DATA_MODEL.md`
-8. `docs/specs/REPOSITORY_LAYOUT.md`
-9. GitHub Issue #4
+7. `docs/specs/DATA_MODEL.md` v0.4
+8. `docs/specs/TEAM_ROLES_UX.md`
+9. `docs/specs/REPOSITORY_LAYOUT.md`
+10. `docs/tasks/P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md` when correcting the existing stack
+11. GitHub Issue #4
 
 ## Objective
 
-Implement the initial durable PostgreSQL/Prisma model, Auth.js persistence and explicit workspace tenancy without leaking ORM concepts into pure domain packages.
+Implement PostgreSQL/Prisma persistence and Auth.js tenancy with Workspace as tenant/billing boundary and Business Profile as the operational/customer-data boundary. ORM concepts must not leak into pure domain/channel packages.
 
 ## Owned scope
 
@@ -30,85 +32,104 @@ Implement the initial durable PostgreSQL/Prisma model, Auth.js persistence and e
 
 ## Required persistence model
 
-Implement current-spec equivalents of:
+Implement the current Phase-1/MVP subset of Data Model v0.4:
 
 - Auth.js user/account/session/verification entities required by the selected adapter
 - Workspace
 - WorkspaceMember with roles `OWNER | ADMIN | AGENT`
-- ChannelAccount
-- Contact
-- ContactIdentity
-- Conversation
-- Message
+- BusinessProfile
+- MemberBusinessProfileAccess or an equivalent explicit BP-scope representation
+- ChannelAccount scoped to Business Profile
+- Contact scoped to Business Profile
+- ChannelIdentity scoped to Contact/BP/channel account
+- Conversation scoped to Workspace + BP with state/version support
+- Message scoped consistently to Workspace + BP + conversation/account
 - AiDraft
 - DeliveryJobRecord
-- KnowledgeDocument / KnowledgeChunk
+- KnowledgeDocument / KnowledgeChunk at minimal Phase-1 scope
 - StyleExample
 - AutomationPolicy
-- any small supporting event/idempotency table needed to enforce source-event uniqueness cleanly
+- source-event/idempotency table(s)
+- encrypted credential/reference abstraction placeholder
 
-## Tenancy requirements
+Do not implement every future conceptual model just because it appears in `DATA_MODEL.md`.
 
-- every customer-owned aggregate is workspace-scoped directly or transitively;
-- repository/service entry points for tenant data require explicit workspace context;
-- a user may belong to multiple workspaces;
-- active workspace authorization is explicit and testable;
-- representative cross-workspace read/write attempts are rejected by application/repository scoping;
-- do not rely on UI hiding or guessed current workspace.
+## Tenancy and authorization requirements
 
-## Required constraints/indexes
+- every BP-owned aggregate is Workspace + Business Profile scoped;
+- prefer direct `workspace_id` + `business_profile_id` on BP-owned tables where it materially strengthens composite FK integrity and common queries;
+- a user may belong to multiple Workspaces;
+- role answers what a member may do; BP scope answers where;
+- active Workspace and BP authorization are explicit; never guess a default tenant/BP for protected data access;
+- representative cross-Workspace **and cross-BP** reads/writes are rejected through repository/application access paths;
+- unauthorized BP records are non-discoverable;
+- member/BP-scope revocation is authoritative immediately;
+- UI hiding is never an authorization control.
+
+## Constraints/indexes
 
 At minimum:
 
-- stable unique inbound source-event identity per channel account;
+- source-event uniqueness per authoritative channel account;
 - stable/unique platform message identity where the provider guarantees it;
-- external identity lookup index;
-- conversation inbox/recency indexes;
-- last-inbound/scheduled-delivery indexes used by expected queries;
-- constraint/state design that prevents one logical draft/action from becoming multiple completed sends;
-- audit-preserving FK/delete behavior rather than destructive cascades for message/history data.
+- external/channel identity lookup scoped so separate BPs do not collide;
+- BP-aware inbox/recency indexes;
+- scheduled-delivery indexes;
+- state/constraints preventing one logical operation/draft from becoming multiple completed sends;
+- composite FKs preventing cross-Workspace and cross-BP reference mixing;
+- audit-preserving FK/delete behavior rather than destructive cascades for conversation/history data.
+
+Initial packaging invariant: at most one active Instagram and one active WhatsApp channel account per Business Profile unless a future accepted product change says otherwise.
 
 ## Credentials and secrets
 
-Do not create plaintext long-lived credential fields as the final design. Store an encrypted value/reference abstraction placeholder suitable for later Meta token implementation. Tests/seed data must use fake values only.
+Do not create plaintext long-lived credential fields. Use encrypted value/reference abstraction suitable for later Meta onboarding. Test/seed data must be fake.
 
 ## Explicitly forbidden
 
 Do not implement:
 
 - Redis/BullMQ behavior (#5)
-- webhook ingestion orchestration (#6)
-- concrete Instagram/WhatsApp APIs
-- AI draft/retrieval/policy logic
-- production secrets or real account data
+- webhook application orchestration (#6)
+- real Instagram/WhatsApp APIs
+- AI retrieval/policy/delivery logic
+- full future memory/booking/billing models beyond small compatibility fields genuinely required by this task
 
-Do not import Prisma into `packages/domain` or `packages/channel-core`.
+Do not import Prisma into `packages/domain`, `packages/channel-core`, or pure `packages/application` contracts.
 
 ## Required verification
 
-- Prisma schema validation/generation succeeds;
-- initial migration applies to an empty PostgreSQL database;
-- test/seed helpers can create two independent workspaces;
-- automated isolation tests demonstrate representative cross-workspace reads/writes cannot succeed through repository/application access paths;
-- indexes/uniques required above are covered by schema assertions or integration tests where practical;
-- root lint/typecheck/test pass.
+- Prisma schema validate/generate succeeds;
+- migration applies to an empty PostgreSQL DB;
+- drift check is clean;
+- test helpers create at least two Workspaces and multiple BPs;
+- repository tests prove cross-Workspace and cross-BP reads/writes cannot succeed;
+- raw Prisma bypass tests demonstrate composite FK protection;
+- BP role/scope authorization and revocation are covered;
+- required indexes/uniques/check constraints are exercised where practical;
+- root verification passes with DB tests required rather than silently skipped.
 
 ## Acceptance checklist
 
-- [ ] empty DB migration succeeds
-- [ ] Prisma generate succeeds
-- [ ] Auth.js persistence is wired minimally and safely
-- [ ] `OWNER | ADMIN | AGENT` membership exists
-- [ ] multi-workspace membership is supported
-- [ ] tenant-scoped repository/service access is explicit
-- [ ] cross-workspace access regression tests exist
+- [ ] BusinessProfile persistence exists
+- [ ] WorkspaceMember + BP scope exists
+- [ ] ChannelAccount/Contact/ChannelIdentity/Conversation are BP-aware
+- [ ] direct Workspace + BP integrity is enforced where specified
+- [ ] same external identity can exist independently in separate BPs when provider/account semantics allow it
+- [ ] cross-BP repository and raw-DB attacks are tested
+- [ ] Auth.js persistence is minimally safe
 - [ ] no plaintext production credential design
-- [ ] audit history is not casually cascade-deleted
 - [ ] no queue/Meta/AI feature creep
-- [ ] deviations from `DATA_MODEL.md` are documented before merge
+- [ ] deviations from Data Model v0.4 are documented before merge
+
+## Existing open stack
+
+PR #50 was originally implemented against an earlier Workspace-only operational shape. Issue #53 and `P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md` govern the in-place correction. Propagate corrected PR #49 with a normal merge, then update/verify PR #50. Do not replace the branch or force-push published history merely to simplify the stack.
 
 ## PR requirements
 
-Open a focused PR into `main` referencing Issue #4. Include the migration summary, exact verification commands, tenancy test evidence, indexes/constraints introduced and any schema deviation with rationale.
+Keep/open a focused PR referencing Issue #4. Include migration summary, exact verification commands, Workspace/BP isolation evidence, indexes/constraints and any genuine model deviation. Publish:
 
-Do not merge the PR.
+`CLAUDE_READY_FOR_ASTRA head=<full_sha> task=P1-03`
+
+Do not merge the PR yourself.
