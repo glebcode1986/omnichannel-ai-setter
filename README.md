@@ -44,7 +44,7 @@ Future channels should be addable through the same `ChannelAdapter` contract wit
 
 ## Current status
 
-Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2), domain/channel contracts (issue #3) and the PostgreSQL/Prisma model with Auth.js persistence and workspace-scoped repositories (issue #4). BullMQ job contracts and durable delay primitives with a worker that runs them (issue #5), and channel-neutral webhook ingestion with a transactional outbox (issue #6). No channel adapter is registered yet (Instagram arrives in Phase 2), so webhook routes answer 404 until then.
+Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2), domain/channel contracts (issue #3) and the PostgreSQL/Prisma model with Auth.js persistence and Workspace/Business Profile scoped repositories (issue #4). BullMQ job contracts and durable delay primitives with a worker that runs them (issue #5), and channel-neutral, Business Profile scoped webhook ingestion with a transactional outbox (issue #6). No channel adapter is registered yet (Instagram arrives in Phase 2), so webhook routes answer 404 until then.
 
 ## Development
 
@@ -122,7 +122,7 @@ pnpm --filter @omnichannel/db db:migrate:dev --name <change>     # author a new 
 pnpm --filter @omnichannel/db db:check-drift                     # migrations == schema.prisma (needs SHADOW_DATABASE_URL)
 ```
 
-Tenant data is only reachable through repository functions that take a `WorkspaceContext` from `authorizeWorkspaceAccess` (explicit workspace + membership check, ADR-009); composite foreign keys that include `workspace_id` reject cross-workspace references in the database as well.
+Workspace-level operations (members, Business Profile creation and listing) take a `WorkspaceContext` from `authorizeWorkspaceAccess`. Customer data (channel accounts, contacts, conversations, messages, …) is only reachable through repository functions that take a `BusinessProfileContext` from `authorizeBusinessProfileAccess`: an explicitly selected Workspace + Business Profile, checked against membership, role and profile grants on every request (ADR-009, `docs/specs/DATA_MODEL.md` v0.4). Composite foreign keys that include `workspace_id` and `business_profile_id` reject cross-Workspace and cross-Business Profile references in the database as well.
 
 ### Environment variables
 
