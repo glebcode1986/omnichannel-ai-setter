@@ -90,3 +90,51 @@ Manual human activity always wins. A platform outbound echo that does not match 
 - definite provider rejection may retry only when classified retryable;
 - network ambiguity becomes `HELD_AMBIGUOUS` and reconciliation/manual review;
 - provider-specific types do not leak into domain/application packages.
+
+## Implementation notes (P1-05): webhook ingestion
+
+**Route.** `apps/web` serves `/api/webhooks/{channel}/{channelAccountId}` (GET for the subscription challenge, POST for events). The route is thin transport: it captures method, lower-cased headers, query and raw body bytes (max 1 MiB), takes or creates a correlation ID (`X-Correlation-Id`) and calls `ingestWebhook` from `@omnichannel/application`. Results map to HTTP responses:
+
+| Result | HTTP response |
+| --- | --- |
+| `ACCEPTED` | 200 |
+| `CHALLENGE` | 200 (text body) |
+| `UNAUTHORIZED` | 401 |
+| `INVALID_PAYLOAD` | 400 |
+| unknown account, or no adapter for the channel | 404 (the two cannot be told apart from outside) |
+| unexpected error | 500 (the provider retries; ingestion is idempotent) |
+
+The channel adapter registry is empty until the Instagram (Phase 2) and WhatsApp (Phase 4) adapters register.
+
+**Ingestion sequence** (`packages/application/src/ingestion`):
+
+1. Validate the route parameters.
+2. Resolve the channel account and its workspace (system lookup). Disconnected accounts count as not found.
+3. Pick the adapter for that account.
+4. `verifyWebhook`. Only a verified POST continues; nothing is normalized or stored before this.
+5. `normalizeWebhook`.
+6. Validate each event with the channel-core schemas and check that it belongs to the resolved workspace, account and channel. Invalid or foreign events are logged (paths and codes only) and skipped.
+7. For each event, in one PostgreSQL transaction:
+   - claim the source event (`inbound_events`, unique per workspace/account/source event, `ON CONFLICT DO NOTHING`). A duplicate stops here.
+   - apply it:
+     - **Inbound message:** ensure the contact identity and conversation exist, insert the message (unique per platform message ID), advance the activity timestamps and, if the conversation is eligible (open, AI enabled, no takeover), add an outbox entry `INBOUND_DEBOUNCE` with a deterministic dedupe key per stored message and a delay sampled from the debounce window.
+     - **Outbound echo:** if it matches a stored app-originated message (with `operation_id`) or a delivery job's platform message ID, it is our own echo. Otherwise it is stored as a HUMAN outbound message and the conversation moves to `HUMAN_ACTIVE` (`UNMATCHED_OUTBOUND_ECHO`, actor `NATIVE_APP`, paused for the takeover duration; an existing takeover is extended) (ADR-013/004).
+     - **Delivery or read status:** update the matched message's status, moving forward only; `FAILED` applies only before delivery.
+     - **Reactions, postbacks and policy events:** recorded as `IGNORED_UNSUPPORTED` for now.
+   - store the outcome and correlation ID on the source-event row.
+8. After commit, dispatch the new outbox entries to the queue (`scheduleInboundDebounce`) and return.
+
+The webhook never calls a model and never waits: the debounce is a delayed BullMQ job.
+
+**Consistency strategy: transactional outbox.**
+- **Commit together.** Queue work is written to `queue_outbox` in the same transaction as the message it belongs to, so a stored message can never lose its reply cycle and a rolled-back message never schedules one.
+- **Dispatch now, recover later.** Entries are dispatched right after commit. When enqueueing fails, the entry stays pending with backoff (`attempts`, `available_at`, `last_error_name`). The worker's outbox sweeper retries due entries every 5 s, under a lease (`locked_until`) so only one dispatcher owns an entry.
+- **Late dispatch.** The debounce delay counts from when the entry was created, so a late dispatch fires sooner rather than restarting the window.
+- **Duplicates are harmless.** A duplicate dispatch is a no-op: queue job IDs are deterministic and the reply-cycle claim is idempotent (DELAY_ENGINE.md, P1-04 notes).
+- **Duplicate webhooks never create another outbox entry or reply cycle:**
+  - source events are unique;
+  - platform message IDs are unique;
+  - outbox dedupe keys are unique;
+  - concurrent deliveries resolve through `ON CONFLICT DO NOTHING`, so no transaction aborts.
+
+**Correlation.** The route's correlation ID is attached to every ingestion log entry, stored on `inbound_events.correlation_id` and `queue_outbox.correlation_id`, carried in the debounce job payload, and logged by the queue producer and worker.

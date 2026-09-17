@@ -6,6 +6,7 @@ import { loadWebEnv } from "./env";
 const required = {
   DATABASE_URL: "postgresql://user:fake-password@localhost:5432/omnichannel",
   AUTH_SECRET: "fake-auth-secret-for-tests-0123456789",
+  REDIS_URL: "redis://127.0.0.1:6379",
 };
 
 describe("loadWebEnv", () => {
@@ -23,6 +24,7 @@ describe("loadWebEnv", () => {
       ["DATABASE_URL", { ...required, DATABASE_URL: "mysql://user:fake-password@localhost/db" }],
       ["AUTH_SECRET", { DATABASE_URL: required.DATABASE_URL }],
       ["AUTH_SECRET", { ...required, AUTH_SECRET: "short-secret" }],
+      ["REDIS_URL", { ...required, REDIS_URL: "http://user:fake-password@localhost:6379" }],
     ] as const) {
       let error: unknown;
       try {

@@ -12,7 +12,17 @@ const nextConfig: NextConfig = {
   // repository live in the root AGENTS.md/CLAUDE.md and must not be shadowed by generated files.
   agentRules: false,
   // Workspace packages export TypeScript source; Next compiles them as part of the app.
-  transpilePackages: ["@omnichannel/db", "@omnichannel/domain", "@omnichannel/env", "@omnichannel/observability"],
+  transpilePackages: [
+    "@omnichannel/application",
+    "@omnichannel/channel-core",
+    "@omnichannel/db",
+    "@omnichannel/domain",
+    "@omnichannel/env",
+    "@omnichannel/observability",
+    "@omnichannel/queue",
+  ],
+  // BullMQ loads its Redis Lua scripts at runtime; keep it (and its client) out of the server bundle.
+  serverExternalPackages: ["bullmq", "ioredis"],
   outputFileTracingRoot: monorepoRoot,
   turbopack: {
     root: monorepoRoot,
