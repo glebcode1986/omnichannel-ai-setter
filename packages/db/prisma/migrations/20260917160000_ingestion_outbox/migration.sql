@@ -9,6 +9,7 @@ ADD COLUMN     "outcome" TEXT;
 CREATE TABLE "queue_outbox" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
+    "business_profile_id" TEXT NOT NULL,
     "kind" "OutboxKind" NOT NULL,
     "dedupe_key" TEXT NOT NULL,
     "correlation_id" TEXT NOT NULL,
@@ -32,7 +33,7 @@ CREATE UNIQUE INDEX "queue_outbox_dedupe_key_key" ON "queue_outbox"("dedupe_key"
 CREATE INDEX "queue_outbox_pending_idx" ON "queue_outbox"("available_at") WHERE (dispatched_at IS NULL);
 
 -- AddForeignKey
-ALTER TABLE "queue_outbox" ADD CONSTRAINT "queue_outbox_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE RESTRICT ON UPDATE RESTRICT;
+ALTER TABLE "queue_outbox" ADD CONSTRAINT "queue_outbox_workspace_id_business_profile_id_fkey" FOREIGN KEY ("workspace_id", "business_profile_id") REFERENCES "business_profiles"("workspace_id", "id") ON DELETE RESTRICT ON UPDATE RESTRICT;
 
 
 -- Hand-written integrity rules (see packages/db constraint tests).

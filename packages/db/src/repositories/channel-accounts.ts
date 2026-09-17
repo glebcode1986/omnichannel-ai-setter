@@ -3,12 +3,13 @@ import { isValidIdentifier, type AiMode, type ChannelCapabilities, type ChannelT
 import type { DbExecutor } from "../client";
 import { DbInputError } from "../errors";
 import type { Prisma } from "../generated/prisma/client";
-import { requireWorkspaceRole, scopeOf, WORKSPACE_ADMIN_ROLES, type WorkspaceContext } from "../tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "../tenancy";
 
 /** Channel account fields safe to return to callers; credential references stay inside persistence. */
 const channelAccountSelect = {
   id: true,
   workspaceId: true,
+  businessProfileId: true,
   channel: true,
   externalAccountId: true,
   displayName: true,
@@ -29,18 +30,20 @@ export interface NewChannelAccount {
   readonly defaultAiMode?: AiMode;
 }
 
+/** Connects a channel account to the context's Business Profile (OWNER/ADMIN only). */
 export async function createChannelAccount(
   db: DbExecutor,
-  context: WorkspaceContext,
+  context: BusinessProfileContext,
   input: NewChannelAccount,
 ): Promise<ChannelAccountRecord> {
-  const workspaceId = requireWorkspaceRole(context, WORKSPACE_ADMIN_ROLES, "connecting channel accounts");
+  const scope = profileScopeOf(context);
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "connecting channel accounts");
   if (!isValidIdentifier(input.externalAccountId)) {
     throw new DbInputError("externalAccountId", "must be a valid identifier");
   }
   return db.channelAccount.create({
     data: {
-      workspaceId,
+      ...scope,
       channel: input.channel,
       externalAccountId: input.externalAccountId,
       displayName: input.displayName,
@@ -53,23 +56,23 @@ export async function createChannelAccount(
 
 export async function getChannelAccount(
   db: DbExecutor,
-  context: WorkspaceContext,
+  context: BusinessProfileContext,
   channelAccountId: string,
 ): Promise<ChannelAccountRecord | null> {
-  const workspaceId = scopeOf(context);
+  const scope = profileScopeOf(context);
   if (!isValidIdentifier(channelAccountId)) {
     return null;
   }
   return db.channelAccount.findUnique({
-    where: { workspaceId_id: { workspaceId, id: channelAccountId } },
+    where: { workspaceId_businessProfileId_id: { ...scope, id: channelAccountId } },
     select: channelAccountSelect,
   });
 }
 
-export async function listChannelAccounts(db: DbExecutor, context: WorkspaceContext): Promise<ChannelAccountRecord[]> {
-  const workspaceId = scopeOf(context);
+export async function listChannelAccounts(db: DbExecutor, context: BusinessProfileContext): Promise<ChannelAccountRecord[]> {
+  const scope = profileScopeOf(context);
   return db.channelAccount.findMany({
-    where: { workspaceId },
+    where: scope,
     select: channelAccountSelect,
     orderBy: { createdAt: "asc" },
   });

@@ -49,7 +49,7 @@ export const INBOUND_DEBOUNCE: JobFamily<InboundDebounceJob> = {
   jobName: "inbound-debounce.v1",
   schema: inboundDebounceJobSchema,
   // One job per inbound anchor: re-delivered webhooks for the same message do not add a second timer.
-  jobId: (job) => buildJobId("inbound-debounce", 1, job.workspaceId, job.conversationId, job.anchorMessageId),
+  jobId: (job) => buildJobId("inbound-debounce", 1, job.workspaceId, job.businessProfileId, job.conversationId, job.anchorMessageId),
   // Safe to retry: firing only hands the reply cycle to AI draft generation, which is itself idempotent.
   jobOptions: { ...RETENTION, attempts: 3, backoff: { type: "exponential", delay: 1_000 } },
 };
@@ -63,6 +63,7 @@ export const AI_DRAFT_GENERATION: JobFamily<AiDraftGenerationJob> = {
       "ai-draft-generation",
       1,
       job.workspaceId,
+      job.businessProfileId,
       job.conversationId,
       job.anchorMessageId,
       ...(job.requestId === undefined ? [] : [job.requestId]),
@@ -76,7 +77,7 @@ export const DELIVERY: JobFamily<DeliveryJob> = {
   jobName: "delivery.v1",
   schema: deliveryJobSchema,
   // One queue job per logical outbound action, however often scheduling is retried.
-  jobId: (job) => buildJobId("delivery", 1, job.workspaceId, job.operationId),
+  jobId: (job) => buildJobId("delivery", 1, job.workspaceId, job.businessProfileId, job.operationId),
   // Retries happen only when the processor explicitly allows them (not claimed, or a provider rejection
   // marked retryable). Ambiguous or unknown outcomes fail unrecoverably and go to reconciliation.
   jobOptions: { ...RETENTION, attempts: 3, backoff: { type: "exponential", delay: 15_000 } },
@@ -86,7 +87,7 @@ export const RECONCILIATION: JobFamily<ReconciliationJob> = {
   queueName: "delivery-reconciliation",
   jobName: "delivery-reconciliation.v1",
   schema: reconciliationJobSchema,
-  jobId: (job) => buildJobId("delivery-reconciliation", 1, job.workspaceId, job.operationId),
+  jobId: (job) => buildJobId("delivery-reconciliation", 1, job.workspaceId, job.businessProfileId, job.operationId),
   // Reconciliation only looks up platform/delivery state; it never sends, so retrying it is safe.
   jobOptions: { ...RETENTION, attempts: 5, backoff: { type: "exponential", delay: 30_000 } },
 };

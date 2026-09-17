@@ -51,14 +51,14 @@ Workspace/account may configure debounce, delay range, quiet-hours policy and ta
 
 `packages/queue` implements the channel-neutral queue primitives for this spec on BullMQ 5 with Redis. Business handlers (ingestion, AI drafts, the delivery coordinator) plug into `QueueHandlers` later.
 
-**Queues and jobs.** `families.ts` is the single registry. Every payload has `schemaVersion`, `workspaceId` and `correlationId`, is validated with strict Zod schemas when enqueued and again when processed, and carries identifiers only (no message text).
+**Queues and jobs.** `families.ts` is the single registry. Every payload has `schemaVersion`, `workspaceId`, `businessProfileId` and `correlationId`, is validated with strict Zod schemas when enqueued and again when processed, and carries identifiers only (no message text). Business Profile scope (Data Model v0.4, Issue #53) was added to the unreleased `v1` envelope in place: payloads without it are rejected. The queue does not authorize anything; workers revalidate scope against PostgreSQL.
 
 | Queue | Job name | Deterministic job ID | Retry policy |
 | --- | --- | --- | --- |
-| `inbound-debounce` | `inbound-debounce.v1` | workspace + conversation + anchor message | 3 attempts, exponential from 1 s |
-| `ai-draft-generation` | `ai-draft-generation.v1` | workspace + conversation + anchor message (+ `requestId` for manual requests) | 3 attempts, exponential from 5 s |
-| `delivery` | `delivery.v1` | workspace + `operationId` | up to 3 attempts, **only** for explicit not-sent outcomes |
-| `delivery-reconciliation` | `delivery-reconciliation.v1` | workspace + `operationId` | 5 attempts, exponential from 30 s (lookups only, never a send) |
+| `inbound-debounce` | `inbound-debounce.v1` | workspace + Business Profile + conversation + anchor message | 3 attempts, exponential from 1 s |
+| `ai-draft-generation` | `ai-draft-generation.v1` | workspace + Business Profile + conversation + anchor message (+ `requestId` for manual requests) | 3 attempts, exponential from 5 s |
+| `delivery` | `delivery.v1` | workspace + Business Profile + `operationId` | up to 3 attempts, **only** for explicit not-sent outcomes |
+| `delivery-reconciliation` | `delivery-reconciliation.v1` | workspace + Business Profile + `operationId` | 5 attempts, exponential from 30 s (lookups only, never a send) |
 
 - **Job ID format.** Job IDs join URI-encoded parts with `|`, because BullMQ rejects `:` and integer-like IDs.
 - **Duplicate enqueues.** Adding work with an existing job ID is a no-op. Completed jobs are kept for 7 days and failed jobs for 30 days, so that dedupe window lasts at least that long. PostgreSQL operation records remain the authoritative idempotency guard (ADR-012).
@@ -67,7 +67,7 @@ Workspace/account may configure debounce, delay range, quiet-hours policy and ta
 **Debounce supersession (Stage A).** `scheduleInboundDebounce` does two things:
 
 1. It enqueues the job for the new anchor.
-2. It atomically claims the conversation's reply cycle in Redis (a Lua compare-and-set on anchor time, then message ID). The outcome is one of:
+2. It atomically claims the conversation's reply cycle in Redis (a Lua compare-and-set on anchor time, then message ID), keyed by Workspace + Business Profile + conversation so identical IDs in different profiles never interact. The outcome is one of:
    - A newer anchor supersedes the previous one, whose delayed job is removed on a best-effort basis.
    - A late, older inbound message is `STALE` and its job is removed.
    - A redelivered inbound message for the same anchor is idempotent.
@@ -98,7 +98,7 @@ Any of the following is treated as an unknown outcome, quarantined for reconcili
 Delivery workers run with `maxStalledCount: 0`. A delivery whose worker died or lost its lock mid-run is failed instead of re-run, and a reconciliation job is enqueued with reason `DELIVERY_STALLED`.
 
 **Worker lifecycle.**
-- `apps/worker` validates `REDIS_URL`, starts one BullMQ worker per queue and logs enqueue and processing events with the queue name, job ID, workspace ID and correlation ID.
+- `apps/worker` validates `REDIS_URL`, starts one BullMQ worker per queue and logs enqueue and processing events with the queue name, job ID, workspace ID, Business Profile ID and correlation ID.
 - On `SIGINT`/`SIGTERM` it closes gracefully and waits for running jobs.
 - Redis outages are logged once, without the URL.
 - Until the real handlers exist, jobs fail visibly without retries and delivery returns `NOT_CLAIMED`, so nothing is sent.

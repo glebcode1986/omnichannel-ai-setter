@@ -7,7 +7,9 @@ import type { ConversationPolicyContext, OutboundMessageCommand, RawWebhook, Sen
 export const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export interface FixtureAdapterConfig {
+  /** Trusted account binding; events take their scope from here, never from the provider payload. */
   readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly channelAccountId: string;
   readonly verifyToken: string;
   /** Stand-in for the HMAC a real adapter computes over the raw body with the app secret. */

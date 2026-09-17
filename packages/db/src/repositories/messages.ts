@@ -3,7 +3,7 @@ import { isValidIdentifier, type MediaReference, type MessageKind } from "@omnic
 import type { DbClient, DbExecutor } from "../client";
 import { TenantRecordNotFoundError } from "../errors";
 import type { Message } from "../generated/prisma/client";
-import { scopeOf, type WorkspaceContext } from "../tenancy";
+import { profileScopeOf, type BusinessProfileContext } from "../tenancy";
 
 const DEFAULT_MESSAGE_LIMIT = 200;
 const MAX_MESSAGE_LIMIT = 500;
@@ -19,20 +19,24 @@ export interface NewInboundMessage {
   readonly occurredAt: Date;
 }
 
-/** Stores a participant message and advances the conversation's inbound/inbox timestamps atomically. */
+/**
+ * Stores a participant message and, in the same transaction, advances the conversation's inbound/inbox
+ * timestamps and its state version (a new customer message makes anchored drafts and reviews stale).
+ */
 export async function appendInboundMessage(
   db: DbClient,
-  context: WorkspaceContext,
+  context: BusinessProfileContext,
   input: NewInboundMessage,
 ): Promise<Message> {
-  const workspaceId = scopeOf(context);
+  const scope = profileScopeOf(context);
   if (!isValidIdentifier(input.conversationId)) {
     throw new TenantRecordNotFoundError("Conversation");
   }
 
   return db.$transaction(async (tx) => {
+    const key = { workspaceId_businessProfileId_id: { ...scope, id: input.conversationId } };
     const conversation = await tx.conversation.findUnique({
-      where: { workspaceId_id: { workspaceId, id: input.conversationId } },
+      where: key,
       select: { channelAccountId: true, lastInboundAt: true, lastMessageAt: true },
     });
     if (conversation === null) {
@@ -41,7 +45,7 @@ export async function appendInboundMessage(
 
     const message = await tx.message.create({
       data: {
-        workspaceId,
+        ...scope,
         channelAccountId: conversation.channelAccountId,
         conversationId: input.conversationId,
         channelMessageId: input.channelMessageId,
@@ -55,10 +59,11 @@ export async function appendInboundMessage(
       },
     });
     await tx.conversation.update({
-      where: { workspaceId_id: { workspaceId, id: input.conversationId } },
+      where: key,
       data: {
         lastInboundAt: latest(conversation.lastInboundAt, input.occurredAt),
         lastMessageAt: latest(conversation.lastMessageAt, input.occurredAt),
+        stateVersion: { increment: 1 },
       },
     });
     return message;
@@ -67,14 +72,14 @@ export async function appendInboundMessage(
 
 export async function listConversationMessages(
   db: DbExecutor,
-  context: WorkspaceContext,
+  context: BusinessProfileContext,
   conversationId: string,
   options: { readonly limit?: number } = {},
 ): Promise<Message[]> {
-  const workspaceId = scopeOf(context);
+  const scope = profileScopeOf(context);
   const conversation = isValidIdentifier(conversationId)
     ? await db.conversation.findUnique({
-        where: { workspaceId_id: { workspaceId, id: conversationId } },
+        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
         select: { id: true },
       })
     : null;
@@ -83,7 +88,7 @@ export async function listConversationMessages(
   }
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? DEFAULT_MESSAGE_LIMIT), 1), MAX_MESSAGE_LIMIT);
   return db.message.findMany({
-    where: { workspaceId, conversationId },
+    where: { ...scope, conversationId },
     orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
     take: limit,
   });

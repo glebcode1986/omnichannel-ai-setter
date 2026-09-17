@@ -1,28 +1,54 @@
 /**
- * Explicit workspace authorization (ADR-009). Browser/session identity says who the user is; it never
- * implies a workspace. Every tenant-data repository function takes a `WorkspaceContext`, and the only way
- * to obtain one is `authorizeWorkspaceAccess`, which checks membership for an explicitly selected workspace.
+ * Explicit Workspace and Business Profile authorization (ADR-009, DATA_MODEL.md v0.4, TEAM_ROLES_UX.md).
+ * Browser/session identity says who the user is; it never implies a Workspace or Business Profile. The role
+ * answers **what** a member may do, Business Profile scope answers **where**.
+ *
+ * Contexts are issued per request by the functions below after reading membership, role and grants from the
+ * database, so a revoked grant, role or membership is authoritative for the next request. Structurally
+ * identical objects built elsewhere are rejected.
  */
 import {
+  hasBusinessProfileAccess,
   isValidIdentifier,
+  toBusinessProfileId,
   toUserId,
   toWorkspaceId,
+  toWorkspaceMemberId,
+  type BusinessProfileId,
   type UserId,
   type WorkspaceId,
+  type WorkspaceMemberId,
   type WorkspaceRole,
 } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
-import { WorkspaceAccessDeniedError, WorkspacePermissionError } from "./errors";
+import { BusinessProfileAccessDeniedError, WorkspaceAccessDeniedError, WorkspacePermissionError } from "./errors";
 
 declare const workspaceContextBrand: unique symbol;
+declare const businessProfileContextBrand: unique symbol;
 
-export interface WorkspaceContext {
+/** Business Profiles a member may act in, as read at authorization time. */
+export type BusinessProfileScope =
+  | { readonly kind: "ALL" }
+  | { readonly kind: "SELECTED"; readonly businessProfileIds: readonly BusinessProfileId[] };
+
+interface MemberFields {
   readonly workspaceId: WorkspaceId;
   readonly userId: UserId;
-  /** Role at authorization time. Contexts are per request; authorize again for each request. */
+  readonly workspaceMemberId: WorkspaceMemberId;
   readonly role: WorkspaceRole;
+}
+
+/** Workspace-level context: membership management, Business Profile listing/creation. */
+export interface WorkspaceContext extends MemberFields {
+  readonly businessProfileScope: BusinessProfileScope;
   readonly [workspaceContextBrand]: true;
+}
+
+/** Context for one explicitly named Business Profile the member may act in. Required for customer data. */
+export interface BusinessProfileContext extends MemberFields {
+  readonly businessProfileId: BusinessProfileId;
+  readonly [businessProfileContextBrand]: true;
 }
 
 export interface WorkspaceAccessRequest {
@@ -32,44 +58,140 @@ export interface WorkspaceAccessRequest {
   readonly workspaceId: string;
 }
 
-/** Contexts issued by `authorizeWorkspaceAccess`; structurally identical objects built elsewhere are rejected. */
-const issuedContexts = new WeakSet<object>();
+export interface BusinessProfileAccessRequest extends WorkspaceAccessRequest {
+  /** Business Profile explicitly selected by the request, never defaulted to a "first" profile. */
+  readonly businessProfileId: string;
+}
+
+const issuedWorkspaceContexts = new WeakSet<object>();
+const issuedBusinessProfileContexts = new WeakSet<object>();
+
+async function loadMembership(db: DbExecutor, request: WorkspaceAccessRequest) {
+  if (!isValidIdentifier(request.userId) || !isValidIdentifier(request.workspaceId)) {
+    return null;
+  }
+  return db.workspaceMember.findUnique({
+    where: { workspaceId_userId: { workspaceId: request.workspaceId, userId: request.userId } },
+    select: {
+      id: true,
+      role: true,
+      businessProfileScope: true,
+      businessProfileAccess: { select: { businessProfileId: true } },
+    },
+  });
+}
 
 export async function authorizeWorkspaceAccess(db: DbExecutor, request: WorkspaceAccessRequest): Promise<WorkspaceContext> {
-  if (!isValidIdentifier(request.userId) || !isValidIdentifier(request.workspaceId)) {
-    throw new WorkspaceAccessDeniedError();
-  }
-  const membership = await db.workspaceMember.findUnique({
-    where: { workspaceId_userId: { workspaceId: request.workspaceId, userId: request.userId } },
-    select: { role: true },
-  });
+  const membership = await loadMembership(db, request);
   if (membership === null) {
     throw new WorkspaceAccessDeniedError();
+  }
+  const scope: BusinessProfileScope =
+    membership.role === "OWNER" || membership.businessProfileScope === "ALL"
+      ? { kind: "ALL" }
+      : {
+          kind: "SELECTED",
+          businessProfileIds: Object.freeze(membership.businessProfileAccess.map((grant) => toBusinessProfileId(grant.businessProfileId))),
+        };
+  const context = Object.freeze({
+    workspaceId: toWorkspaceId(request.workspaceId),
+    userId: toUserId(request.userId),
+    workspaceMemberId: toWorkspaceMemberId(membership.id),
+    role: membership.role,
+    businessProfileScope: Object.freeze(scope),
+  }) as WorkspaceContext;
+  issuedWorkspaceContexts.add(context);
+  return context;
+}
+
+/**
+ * Authorizes one Business Profile for this request. A profile that does not exist in the Workspace and a
+ * profile the member may not access fail identically, so unauthorized profiles are not discoverable.
+ */
+export async function authorizeBusinessProfileAccess(
+  db: DbExecutor,
+  request: BusinessProfileAccessRequest,
+): Promise<BusinessProfileContext> {
+  const membership = await loadMembership(db, request);
+  if (membership === null) {
+    throw new WorkspaceAccessDeniedError();
+  }
+  if (!isValidIdentifier(request.businessProfileId)) {
+    throw new BusinessProfileAccessDeniedError();
+  }
+  const businessProfileId = toBusinessProfileId(request.businessProfileId);
+  const granted = hasBusinessProfileAccess(
+    {
+      role: membership.role,
+      businessProfileScope: membership.businessProfileScope,
+      grantedBusinessProfileIds: membership.businessProfileAccess.map((grant) => toBusinessProfileId(grant.businessProfileId)),
+    },
+    businessProfileId,
+  );
+  const profile = granted
+    ? await db.businessProfile.findUnique({
+        where: { workspaceId_id: { workspaceId: request.workspaceId, id: businessProfileId } },
+        select: { id: true },
+      })
+    : null;
+  if (profile === null) {
+    throw new BusinessProfileAccessDeniedError();
   }
 
   const context = Object.freeze({
     workspaceId: toWorkspaceId(request.workspaceId),
     userId: toUserId(request.userId),
+    workspaceMemberId: toWorkspaceMemberId(membership.id),
     role: membership.role,
-  }) as WorkspaceContext;
-  issuedContexts.add(context);
+    businessProfileId,
+  }) as BusinessProfileContext;
+  issuedBusinessProfileContexts.add(context);
   return context;
 }
 
-/** Returns the workspace to scope queries by, rejecting contexts that did not come from authorization. */
+/** Workspace to scope queries by, rejecting contexts that did not come from authorization. */
 export function scopeOf(context: WorkspaceContext): WorkspaceId {
-  if (typeof context !== "object" || context === null || !issuedContexts.has(context)) {
+  if (typeof context !== "object" || context === null || !issuedWorkspaceContexts.has(context)) {
     throw new WorkspaceAccessDeniedError();
   }
   return context.workspaceId;
 }
 
+/** Workspace + Business Profile to scope customer-data queries by. */
+export function profileScopeOf(context: BusinessProfileContext): {
+  readonly workspaceId: WorkspaceId;
+  readonly businessProfileId: BusinessProfileId;
+} {
+  if (typeof context !== "object" || context === null || !issuedBusinessProfileContexts.has(context)) {
+    throw new BusinessProfileAccessDeniedError();
+  }
+  return { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId };
+}
+
 export const WORKSPACE_ADMIN_ROLES: readonly WorkspaceRole[] = ["OWNER", "ADMIN"];
 
-export function requireWorkspaceRole(context: WorkspaceContext, allowed: readonly WorkspaceRole[], operation: string): WorkspaceId {
-  const workspaceId = scopeOf(context);
+/** Role check for an issued context (validated first); returns nothing, throws WorkspacePermissionError. */
+export function requireRole(
+  context: WorkspaceContext | BusinessProfileContext,
+  allowed: readonly WorkspaceRole[],
+  operation: string,
+): void {
+  const issued =
+    typeof context === "object" &&
+    context !== null &&
+    (issuedWorkspaceContexts.has(context) || issuedBusinessProfileContexts.has(context));
+  if (!issued) {
+    throw new WorkspaceAccessDeniedError();
+  }
   if (!allowed.includes(context.role)) {
     throw new WorkspacePermissionError(operation);
   }
-  return workspaceId;
+}
+
+/** Prisma filter limiting Business Profile owned rows to the profiles a Workspace context may see. */
+export function authorizedBusinessProfileFilter(context: WorkspaceContext): { businessProfileId?: { in: BusinessProfileId[] } } {
+  scopeOf(context);
+  return context.businessProfileScope.kind === "ALL"
+    ? {}
+    : { businessProfileId: { in: [...context.businessProfileScope.businessProfileIds] } };
 }

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   AI_DRAFT_GENERATION,
+  JobPayloadValidationError,
+  NonRetryableJobError,
   createQueueProducer,
   createQueueWorkers,
   DELIVERY,
@@ -20,9 +22,10 @@ import {
 } from "./index";
 import { createTestQueueEnvironment, redisTestsEnabled, waitFor, type TestQueueEnvironment } from "./testing/redis";
 
-const debounce = (anchorMessageId: string, anchorInboundAt: string): InboundDebounceJob => ({
+const debounce = (anchorMessageId: string, anchorInboundAt: string, businessProfileId = "bp_1"): InboundDebounceJob => ({
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId,
   correlationId: `corr-${anchorMessageId}`,
   channelAccountId: "ca_1",
   conversationId: "conv_1",
@@ -33,15 +36,17 @@ const debounce = (anchorMessageId: string, anchorInboundAt: string): InboundDebo
 const aiDraft: AiDraftGenerationJob = {
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId: "bp_1",
   correlationId: "corr-draft",
   conversationId: "conv_1",
   anchorMessageId: "msg_2",
   trigger: "DEBOUNCE_ELAPSED",
 };
 
-const delivery = (operationId: string, scheduledFor = new Date(), selectedDelayMs = 0): DeliveryJob => ({
+const delivery = (operationId: string, scheduledFor = new Date(), selectedDelayMs = 0, businessProfileId = "bp_1"): DeliveryJob => ({
   schemaVersion: 1,
   workspaceId: "ws_1",
+  businessProfileId,
   correlationId: `corr-${operationId}`,
   conversationId: "conv_1",
   draftId: `draft-${operationId}`,
@@ -143,6 +148,41 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
     expect(await inspect(AI_DRAFT_GENERATION.queueName).getJobCounts("waiting")).toMatchObject({ waiting: 1 });
     expect(await inspect(INBOUND_DEBOUNCE.queueName).getJobCounts("delayed")).toMatchObject({ delayed: 1 });
     expect(again).toEqual(first);
+  });
+
+  it("keeps identical conversation, anchor and operation IDs in different Business Profiles independent", async () => {
+    const scheduledFor = new Date(Date.now() + 60_000);
+    const deliveries = await Promise.all(["bp_1", "bp_2"].map((bp) => producer.scheduleDelivery(delivery("op-shared", scheduledFor, 60_000, bp))));
+    const drafts = await Promise.all(["bp_1", "bp_2"].map((bp) => producer.enqueueAiDraftGeneration({ ...aiDraft, businessProfileId: bp })));
+    expect(new Set(deliveries.map((job) => job.jobId)).size).toBe(2);
+    expect(new Set(drafts.map((job) => job.jobId)).size).toBe(2);
+    expect(await inspect(DELIVERY.queueName).getJobCounts("delayed")).toMatchObject({ delayed: 2 });
+    expect(await inspect(AI_DRAFT_GENERATION.queueName).getJobCounts("waiting")).toMatchObject({ waiting: 2 });
+
+    // Same conversation ID, different anchors in other profiles: a newer inbound in BP2 must not supersede
+    // BP1's reply cycle, and an older inbound in BP3 is not stale relative to BP1 or BP2.
+    const inBp1 = await producer.scheduleInboundDebounce(debounce("msg_1", "2026-09-17T10:00:00.000Z", "bp_1"), { delayMs: 60_000 });
+    const inBp2 = await producer.scheduleInboundDebounce(debounce("msg_2", "2026-09-17T10:00:05.000Z", "bp_2"), { delayMs: 60_000 });
+    const inBp3 = await producer.scheduleInboundDebounce(debounce("msg_0", "2026-09-17T09:59:59.000Z", "bp_3"), { delayMs: 60_000 });
+    for (const result of [inBp1, inBp2, inBp3]) {
+      expect(result).toMatchObject({ status: "SCHEDULED" });
+      expect(result).not.toHaveProperty("supersededJobId");
+    }
+    const debounceQueue = inspect(INBOUND_DEBOUNCE.queueName);
+    expect(await debounceQueue.getJobCounts("delayed")).toMatchObject({ delayed: 3 });
+
+    const handledProfiles: string[] = [];
+    const onInboundDebounceElapsed = vi.fn((job: InboundDebounceJob) => {
+      handledProfiles.push(job.businessProfileId);
+      return Promise.resolve();
+    });
+    startWorkers(handlers({ onInboundDebounceElapsed }));
+    for (const result of [inBp1, inBp2, inBp3]) {
+      const jobId = result.status === "SCHEDULED" ? result.job.jobId : "";
+      await (await debounceQueue.getJob(jobId))?.promote();
+      expect((await settled(debounceQueue, jobId)).returnvalue).toEqual({ outcome: "HANDLED" });
+    }
+    expect(handledProfiles.sort()).toEqual(["bp_1", "bp_2", "bp_3"]);
   });
 
   it("supersedes older debounce work, ignores late older inbound and neutralises stale wake-ups", async () => {
@@ -249,6 +289,9 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
       await settled(reconciliationQueue, id);
     }
     expect((await reconciliationQueue.getJob(reconciliationIds[0] ?? ""))?.data).toMatchObject({
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      correlationId: "corr-op-ambiguous",
       reason: "AMBIGUOUS_SEND_RESULT",
       providerRequestId: "req-1",
       providerCode: "ETIMEDOUT",
@@ -260,6 +303,70 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(reconcile).toHaveBeenCalledTimes(2);
     expect(await deliveryQueue.getJobCounts("waiting", "delayed", "active")).toMatchObject({ waiting: 0, delayed: 0, active: 0 });
+  });
+
+  it("never retries non-retryable rejections, declined claims or non-retryable handler errors", async () => {
+    const outcomes: Record<string, DeliveryAttemptResult> = {
+      "op-permanent": { status: "SEND_RESULT", result: { outcome: "REJECTED", retryable: false, code: "INVALID_RECIPIENT", message: "no" } },
+      "op-declined": { status: "NOT_CLAIMED", retryable: false, reason: "human takeover" },
+    };
+    const deliver = vi.fn((job: DeliveryJob): Promise<DeliveryAttemptResult> => {
+      const outcome = outcomes[job.operationId];
+      return outcome === undefined ? Promise.reject(new Error("unexpected operation")) : Promise.resolve(outcome);
+    });
+    const generateAiDraft = vi.fn(() => Promise.reject(new NonRetryableJobError("not implemented")));
+    startWorkers(handlers({ deliver, generateAiDraft }));
+    const deliveryQueue = inspect(DELIVERY.queueName);
+
+    const permanent = await settled(deliveryQueue, (await producer.scheduleDelivery(delivery("op-permanent"))).jobId);
+    const declined = await settled(deliveryQueue, (await producer.scheduleDelivery(delivery("op-declined"))).jobId);
+    expect(permanent.returnvalue).toEqual({ outcome: "REJECTED" });
+    expect(declined.returnvalue).toEqual({ outcome: "NOT_CLAIMED" });
+
+    const draftQueue = inspect(AI_DRAFT_GENERATION.queueName);
+    const failedDraft = await settled(draftQueue, (await producer.enqueueAiDraftGeneration(aiDraft)).jobId);
+    expect(await failedDraft.getState()).toBe("failed");
+    expect(failedDraft.attemptsMade).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(generateAiDraft).toHaveBeenCalledTimes(1);
+    expect(await deliveryQueue.getJobCounts("delayed", "waiting")).toMatchObject({ delayed: 0, waiting: 0 });
+    expect(await draftQueue.getJobCounts("delayed", "waiting")).toMatchObject({ delayed: 0, waiting: 0 });
+  });
+
+  it("retries a delivery that was not claimed only when the coordinator marks it retryable", async () => {
+    let calls = 0;
+    const deliver = vi.fn((): Promise<DeliveryAttemptResult> => {
+      calls += 1;
+      return Promise.resolve(
+        calls === 1 ? { status: "NOT_CLAIMED", retryable: true, reason: "database busy" } : { status: "SKIPPED", reason: "superseded" },
+      );
+    });
+    startWorkers(handlers({ deliver }));
+    const deliveryQueue = inspect(DELIVERY.queueName);
+    const { jobId } = await producer.scheduleDelivery(delivery("op-not-claimed"));
+
+    await waitFor(async () => (await (await deliveryQueue.getJob(jobId))?.getState()) === "delayed");
+    await (await deliveryQueue.getJob(jobId))?.promote();
+    expect((await settled(deliveryQueue, jobId)).returnvalue).toEqual({ outcome: "SKIPPED" });
+    expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects Business Profile-less work at enqueue without creating jobs or reply cycles", async () => {
+    const connection = env.connect("producer");
+    const { businessProfileId: _debounceProfile, ...debounceWithoutProfile } = debounce("msg_no_bp", "2026-09-17T10:00:00.000Z");
+    const { businessProfileId: _draftProfile, ...draftWithoutProfile } = aiDraft;
+    const attempts: Promise<unknown>[] = [
+      producer.scheduleInboundDebounce(debounceWithoutProfile as InboundDebounceJob, { delayMs: 0 }),
+      producer.enqueueAiDraftGeneration(draftWithoutProfile as AiDraftGenerationJob),
+      producer.scheduleDelivery({ ...delivery("op-no-bp"), businessProfileId: "bp 1" }),
+      producer.enqueueReconciliation({ ...reconciliationFor("op-no-bp"), businessProfileId: "" }),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt).rejects.toBeInstanceOf(JobPayloadValidationError);
+    }
+    expect(await connection.keys(`${env.prefix}:*`)).toEqual([]);
   });
 
   it("retries only explicit not-sent outcomes", async () => {
@@ -338,6 +445,7 @@ function reconciliationFor(operationId: string) {
   return {
     schemaVersion: 1 as const,
     workspaceId: "ws_1",
+    businessProfileId: "bp_1",
     correlationId: `corr-${operationId}`,
     conversationId: "conv_1",
     deliveryJobId: `djob-${operationId}`,

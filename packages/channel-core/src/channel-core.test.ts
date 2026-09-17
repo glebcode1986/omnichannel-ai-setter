@@ -34,7 +34,13 @@ import type {
 } from "./schemas";
 
 const occurredAt = new Date("2026-09-17T10:00:00.000Z");
-const base = { workspaceId: "ws_1", channel: "INSTAGRAM", channelAccountId: "ca_1", occurredAt } as const;
+const base = {
+  workspaceId: "ws_1",
+  businessProfileId: "bp_1",
+  channel: "INSTAGRAM",
+  channelAccountId: "ca_1",
+  occurredAt,
+} as const;
 
 const sampleEvents: NormalizedChannelEvent[] = [
   {
@@ -155,6 +161,11 @@ describe("normalized channel events", () => {
     ["unknown event type", [{ ...sampleEvents[0], type: "TYPING" }], "0.type"],
     ["missing source event id", [{ ...sampleEvents[1], sourceEventId: undefined }], "0.sourceEventId"],
     ["empty channel account id", [{ ...sampleEvents[1], channelAccountId: "" }], "0.channelAccountId"],
+    ["missing Business Profile id", [{ ...sampleEvents[1], businessProfileId: undefined }], "0.businessProfileId"],
+    ["empty Business Profile id", [{ ...sampleEvents[2], businessProfileId: "" }], "0.businessProfileId"],
+    ["whitespace-only Business Profile id", [{ ...sampleEvents[0], businessProfileId: "   " }], "0.businessProfileId"],
+    ["Business Profile id with whitespace", [{ ...sampleEvents[3], businessProfileId: "bp 1" }], "0.businessProfileId"],
+    ["whitespace-only workspace id", [{ ...sampleEvents[4], workspaceId: " " }], "0.workspaceId"],
     ["provider field leaking past normalization", [{ ...sampleEvents[1], is_echo: true }], "0"],
     ["unsupported channel", [{ ...sampleEvents[3], channel: "THREADS" }], "0.channel"],
     ["timestamp that is not a Date", [{ ...sampleEvents[3], occurredAt: "2026-09-17T10:00:00Z" }], "0.occurredAt"],
@@ -242,6 +253,7 @@ describe("SendResult", () => {
 describe("OutboundMessageCommand", () => {
   const command: OutboundMessageCommand = {
     workspaceId: "ws_1",
+    businessProfileId: "bp_1",
     channelAccountId: "ca_1",
     conversationId: "conv_1",
     recipientExternalId: "customer_1",
@@ -263,6 +275,9 @@ describe("OutboundMessageCommand", () => {
   it("rejects malformed commands", () => {
     for (const invalid of [
       { ...command, operationId: "" },
+      { ...command, businessProfileId: undefined },
+      { ...command, businessProfileId: "" },
+      { ...command, businessProfileId: "bp\t1" },
       { ...command, content: { type: "TEXT", text: "" } },
       { ...command, content: { type: "TEMPLATE", languageCode: "en_US", parameters: [] } },
       { ...command, content: { type: "IMAGE", url: "https://example.com/a.png" } },
@@ -276,6 +291,7 @@ describe("OutboundMessageCommand", () => {
 describe("fixture adapters", () => {
   const config: FixtureAdapterConfig = {
     workspaceId: "ws_1",
+    businessProfileId: "bp_1",
     channelAccountId: "ca_1",
     verifyToken: "verify-token",
     expectedSignature: "fixture-signature",
@@ -357,6 +373,33 @@ describe("fixture adapters", () => {
     },
   ] as const;
 
+  it("scopes events to the trusted account binding, even when two Business Profiles share provider user IDs", async () => {
+    const bp2 = createInstagramFixtureAdapter({ ...config, businessProfileId: "bp_2", channelAccountId: "ca_2" });
+    const body = {
+      object: "instagram",
+      entry: [
+        {
+          messaging: [
+            { sender: { id: "igsid_shared" }, recipient: { id: "ig_biz" }, timestamp: 1_789_725_600_000, message: { mid: "ig_mid_same", text: "Hi" } },
+          ],
+        },
+      ],
+    };
+    const post = (): RawWebhook => ({
+      method: "POST",
+      headers: { "x-hub-signature-256": "sha256=fixture-signature" },
+      query: {},
+      rawBody: asciiBytes(JSON.stringify(body)),
+      receivedAt: occurredAt,
+    });
+
+    const [inBp1] = await instagram.normalizeWebhook(post());
+    const [inBp2] = await bp2.normalizeWebhook(post());
+
+    expect(inBp1).toMatchObject({ businessProfileId: "bp_1", channelAccountId: "ca_1", senderExternalId: "igsid_shared" });
+    expect(inBp2).toMatchObject({ businessProfileId: "bp_2", channelAccountId: "ca_2", senderExternalId: "igsid_shared" });
+  });
+
   it("both satisfy the same ChannelAdapter contract without provider-specific members", () => {
     const adapters: readonly ChannelAdapter[] = [instagram, whatsapp];
     expect(adapters.map((adapter) => adapter.channel)).toEqual(["INSTAGRAM", "WHATSAPP"]);
@@ -402,7 +445,7 @@ describe("fixture adapters", () => {
       expect(duplicate).toEqual(first);
       expect(parseNormalizedChannelEvents(first)).toEqual(first);
       for (const event of first) {
-        expect(event).toMatchObject({ workspaceId: "ws_1", channelAccountId: "ca_1", channel: adapter.channel });
+        expect(event).toMatchObject({ workspaceId: "ws_1", businessProfileId: "bp_1", channelAccountId: "ca_1", channel: adapter.channel });
       }
       expect(new Set(first.map((event) => event.sourceEventId)).size).toBe(first.length);
       await expect(adapter.normalizeWebhook(signedPost({ object: "something-else" }))).rejects.toThrow();
@@ -426,6 +469,7 @@ describe("fixture adapters", () => {
     it("returns normalized send outcomes, including ambiguity, instead of throwing", async () => {
       const command: OutboundMessageCommand = {
         workspaceId: "ws_1",
+        businessProfileId: "bp_1",
         channelAccountId: "ca_1",
         conversationId: "conv_1",
         recipientExternalId: "customer_1",
@@ -447,6 +491,7 @@ describe("fixture adapters", () => {
   it("gates template content by channel capability", async () => {
     const template: OutboundMessageCommand = {
       workspaceId: "ws_1",
+      businessProfileId: "bp_1",
       channelAccountId: "ca_1",
       conversationId: "conv_1",
       recipientExternalId: "customer_1",

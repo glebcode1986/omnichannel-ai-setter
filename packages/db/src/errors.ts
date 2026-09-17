@@ -11,6 +11,17 @@ export class WorkspaceAccessDeniedError extends Error {
   }
 }
 
+/**
+ * The Business Profile does not exist in the Workspace, or the member may not access it. Both cases fail
+ * identically, and the message names neither the profile nor the member.
+ */
+export class BusinessProfileAccessDeniedError extends Error {
+  constructor() {
+    super("Business Profile access denied");
+    this.name = "BusinessProfileAccessDeniedError";
+  }
+}
+
 /** The caller is a member but their role does not permit the operation. */
 export class WorkspacePermissionError extends Error {
   readonly operation: string;
@@ -23,8 +34,8 @@ export class WorkspacePermissionError extends Error {
 }
 
 /**
- * The record does not exist inside the caller's workspace. Records owned by other workspaces are reported
- * exactly like missing ones so their existence is not disclosed.
+ * The record does not exist inside the caller's Workspace and Business Profile. Records owned by other
+ * Workspaces or Business Profiles are reported exactly like missing ones so their existence is not disclosed.
  */
 export class TenantRecordNotFoundError extends Error {
   readonly entity: string;

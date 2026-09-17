@@ -6,10 +6,14 @@ declare const brand: unique symbol;
 export type Id<Entity extends string> = string & { readonly [brand]: Entity };
 
 export type WorkspaceId = Id<"Workspace">;
+export type WorkspaceMemberId = Id<"WorkspaceMember">;
+/** Operational/customer-data boundary inside a Workspace (DATA_MODEL.md v0.4 §2). */
+export type BusinessProfileId = Id<"BusinessProfile">;
 export type UserId = Id<"User">;
 export type ChannelAccountId = Id<"ChannelAccount">;
 export type ContactId = Id<"Contact">;
-export type ContactIdentityId = Id<"ContactIdentity">;
+export type ChannelIdentityId = Id<"ChannelIdentity">;
+export type ContactPointId = Id<"ContactPoint">;
 export type ConversationId = Id<"Conversation">;
 export type MessageId = Id<"Message">;
 export type AiDraftId = Id<"AiDraft">;
@@ -39,10 +43,13 @@ function toId<Entity extends string>(field: string) {
 }
 
 export const toWorkspaceId = toId<"Workspace">("workspaceId");
+export const toWorkspaceMemberId = toId<"WorkspaceMember">("workspaceMemberId");
+export const toBusinessProfileId = toId<"BusinessProfile">("businessProfileId");
 export const toUserId = toId<"User">("userId");
 export const toChannelAccountId = toId<"ChannelAccount">("channelAccountId");
 export const toContactId = toId<"Contact">("contactId");
-export const toContactIdentityId = toId<"ContactIdentity">("contactIdentityId");
+export const toChannelIdentityId = toId<"ChannelIdentity">("channelIdentityId");
+export const toContactPointId = toId<"ContactPoint">("contactPointId");
 export const toConversationId = toId<"Conversation">("conversationId");
 export const toMessageId = toId<"Message">("messageId");
 export const toAiDraftId = toId<"AiDraft">("aiDraftId");
