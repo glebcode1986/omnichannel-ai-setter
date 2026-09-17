@@ -93,7 +93,13 @@ Implemented as stacked PRs awaiting independent review, in dependency order:
 4. #51 (#5): BullMQ delay primitives.
 5. #52 (#6): channel-neutral webhook ingestion with a transactional outbox, scoped to the Business Profile resolved from the channel account (see `docs/specs/ARCHITECTURE.md` implementation notes).
 
-Nothing is merged yet. Phase 2 stays gated on Phase 1 acceptance.
+6. #62 (#37): the GitHub Actions `pnpm verify` gate, staged at `docs/ci/verify.yml` because the implementation credential cannot write `.github/workflows/`.
+
+Nothing is merged yet.
+
+**Phase 2 start condition (MASTER Issue #61).** The owner's Stage B directive starts Phase 2 once the Issue #53 Business Profile sync is complete, which it now is (#49 `34a71d0`, #50 `1e214bf`, #51 `53a254f`, #52 `405bfd0`). Phase 2 work is therefore stacked on top of #52 and stays unmerged, under the same review-lag mode: Phase 1 acceptance is still required before anything merges.
+
+7. P2-01 (#8): `packages/channel-instagram` — the Instagram transport adapter and its fixture suite. It is not registered in `apps/web` yet: per-account credentials arrive with P2-02, so webhook routes still answer 404.
 
 ## Immediate next actions
 

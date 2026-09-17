@@ -156,6 +156,11 @@ export interface ChannelAdapter {
 
 Each channel adapter must ship fixture-driven tests covering duplicate webhook delivery, malformed/unknown events, text inbound, status events, own outbound echo, human/manual outbound signal where detectable, rejected send, ambiguous send and current channel-window decisions.
 
+### Channel reality notes (P2-01)
+
+- **`DeliveryStatusEvent` has no Instagram source.** Instagram's messaging webhooks report reads (`messaging_seen`) but no delivery status at all — `message_deliveries` is Messenger-only. An adapter that never emits `DELIVERY_STATUS` is conformant; the variant stays in the union for WhatsApp.
+- **`sourceEventId` may be synthesized.** It is defined as the provider's event identity, but Instagram items carry none while Meta retries deliveries for 36 hours. An adapter may therefore derive it deterministically from payload fields, as long as it never depends on a clock or receive time. It must be type-prefixed: an inbound message, its echo, its read receipt and a reaction to it all carry the same provider message ID and would otherwise collide on ingestion's dedupe key.
+
 ## Implementation notes (P1-02)
 
 These notes resolve points the v0.1 text left open; they do not change the semantics above.
