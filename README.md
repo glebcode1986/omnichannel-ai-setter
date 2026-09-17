@@ -44,7 +44,7 @@ Future channels should be addable through the same `ChannelAdapter` contract wit
 
 ## Current status
 
-Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2), domain/channel contracts (issue #3) and the PostgreSQL/Prisma model with Auth.js persistence and workspace-scoped repositories (issue #4). Queues and webhook ingestion are delivered by issues #5–#6; no product business logic exists yet.
+Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2), domain/channel contracts (issue #3) and the PostgreSQL/Prisma model with Auth.js persistence and workspace-scoped repositories (issue #4). BullMQ job contracts and durable delay primitives with a worker that runs them (issue #5). Webhook ingestion is delivered by issue #6; no product business logic exists yet.
 
 ## Development
 
@@ -53,9 +53,9 @@ Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entr
 - Node.js 24 (`nvm use` reads `.nvmrc`); `pnpm install` refuses other versions (`devEngines.runtime`).
 - pnpm 12 via Corepack: `corepack enable` (the exact version is pinned by `packageManager` in `package.json`).
 
-- Docker (or any PostgreSQL 17 server) for the database; `docker compose up -d --wait` starts the local-only service from `compose.yaml` on `127.0.0.1:54329`.
+- Docker (or PostgreSQL 17 and Redis 7 servers): `docker compose up -d --wait` starts the local-only services from `compose.yaml` — PostgreSQL on `127.0.0.1:54329`, Redis (append-only persistence) on `127.0.0.1:63799`.
 
-No Redis, Meta credentials or LLM keys are needed yet.
+No Meta credentials or LLM keys are needed yet.
 
 ### Setup
 
@@ -95,8 +95,9 @@ Package names use the `@omnichannel/*` scope. Internal packages export TypeScrip
 | `pnpm typecheck` | `tsc --noEmit` in every package independently, then root tooling |
 | `pnpm lint` | ESLint (type-aware, zero warnings) + `pnpm lint:boundaries` |
 | `pnpm lint:boundaries` | fails on forbidden/undeclared/circular workspace dependencies (ADR-008) |
-| `pnpm test` / `pnpm test:watch` | Vitest across all apps/packages and tooling (PostgreSQL suites run when `TEST_DATABASE_URL` is set, otherwise they are skipped) |
+| `pnpm test` / `pnpm test:watch` | Vitest across all apps/packages and tooling (PostgreSQL/Redis suites run when `TEST_DATABASE_URL`/`TEST_REDIS_URL` are set, otherwise they are skipped) |
 | `pnpm test:db` | only the `@omnichannel/db` suites, failing instead of skipping when `TEST_DATABASE_URL` is missing |
+| `pnpm test:redis` | only the `@omnichannel/queue` suites, failing instead of skipping when `TEST_REDIS_URL` is missing (e.g. `redis://127.0.0.1:63799`) |
 | `pnpm verify` | typecheck, lint, test and build in sequence |
 
 Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain typecheck` or `pnpm --filter @omnichannel/worker test`.
@@ -104,7 +105,7 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 ### Running the apps
 
 - Web: `pnpm dev:web`, then `GET http://localhost:3000/api/health` returns `{"status":"ok","service":"web"}`. Production: `pnpm --filter @omnichannel/web build && pnpm --filter @omnichannel/web start`.
-- Worker: `pnpm dev:worker` logs `worker.started` as JSON and stops gracefully on `SIGINT`/`SIGTERM`. Production: `pnpm --filter @omnichannel/worker build && pnpm --filter @omnichannel/worker start`.
+- Worker: `pnpm dev:worker` (needs `REDIS_URL`) logs `worker.started` with its queues as JSON, runs the BullMQ processors and stops gracefully on `SIGINT`/`SIGTERM`, waiting for running jobs. Business handlers arrive with later issues; until then jobs fail visibly without retries and delivery never sends. Production: `pnpm --filter @omnichannel/worker build && pnpm --filter @omnichannel/worker start`.
 
 ### Database
 

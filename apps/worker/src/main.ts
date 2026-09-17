@@ -1,7 +1,9 @@
 import { EnvValidationError } from "@omnichannel/env";
 import { createLogger } from "@omnichannel/observability";
+import { createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { loadWorkerEnv } from "./env";
+import { createPlaceholderHandlers } from "./handlers";
 import { createWorkerRuntime } from "./worker-runtime";
 
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"] as const;
@@ -30,7 +32,20 @@ function main(): void {
   }
 
   const logger = createLogger({ level: env.LOG_LEVEL, bindings: { service: "worker" } });
-  const runtime = createWorkerRuntime({ logger });
+  const runtime = createWorkerRuntime({
+    logger,
+    startProcessors: () => {
+      const connection = createRedisConnection(env.REDIS_URL, "worker", logger);
+      const workers = createQueueWorkers({ connection, logger, handlers: createPlaceholderHandlers() });
+      return {
+        queueNames: workers.queueNames,
+        async close() {
+          await workers.close();
+          await connection.quit().catch(() => connection.disconnect());
+        },
+      };
+    },
+  });
 
   process.on("uncaughtException", (error, origin) => {
     logger.error("worker.fatal", { error, origin });
