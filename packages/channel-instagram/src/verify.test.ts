@@ -56,7 +56,15 @@ describe("payload signature", () => {
     }
   });
 
-  it("rejects everything when no app secret is configured, instead of accepting unsigned payloads", async () => {
+  it("rejects a well-formed digest of the wrong length instead of throwing", async () => {
+    // Node's timingSafeEqual throws on unequal lengths; a truncated digest must still be a plain rejection,
+    // because the route does not treat verification as a throwing operation.
+    const truncated = { ...signedWebhook(body), headers: { "x-hub-signature-256": "sha256=abcdef" } };
+
+    await expect(adapter().verifyWebhook(truncated)).resolves.toMatchObject({ status: "REJECTED" });
+  });
+
+  it("rejects everything when no app secret is configured, even a payload signed with an empty secret", async () => {
     const config = testConfig();
     const blind = createInstagramAdapter({
       ...config,
@@ -64,6 +72,8 @@ describe("payload signature", () => {
     });
 
     expect((await blind.verifyWebhook(signedWebhook(body))).status).toBe("REJECTED");
+    // The interesting case: an attacker who knows the secret is empty can compute a matching digest.
+    expect((await blind.verifyWebhook(signedWebhook(body, { secret: "" }))).status).toBe("REJECTED");
   });
 
   it("never normalizes an unverified payload, even when destructured from the adapter", async () => {

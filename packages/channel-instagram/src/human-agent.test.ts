@@ -1,5 +1,5 @@
-import type { ConversationPolicyContext, OutboundMessageCommand } from "@omnichannel/channel-core";
-import { describe, expect, it } from "vitest";
+import type { ChannelAdapter, ConversationPolicyContext, OutboundMessageCommand } from "@omnichannel/channel-core";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createInstagramAdapter } from "./adapter";
 import { AT_MS, BINDING, CUSTOMER_ID, jsonResponse, scriptedHttp, testConfig } from "./__fixtures__/payloads";
@@ -82,16 +82,18 @@ describe("human agent send", () => {
     expect(http.requests).toHaveLength(0);
   });
 
-  it("keeps the automated path free of the tag no matter the eligibility", async () => {
+  it("keeps the automated path free of the tag, and the tag is unreachable through the shared contract", async () => {
     const http = scriptedHttp([jsonResponse(200, { message_id: "mid.auto-1" })]);
     const adapter = createInstagramAdapter(testConfig({ http: http.port, humanAgentApproval: "APPROVED" }));
 
     await adapter.send(command);
-
     expect(http.requests[0]?.body).not.toContain("HUMAN_AGENT");
-    // The tagged path is not reachable through the channel-neutral contract.
-    const asChannelAdapter: { sendAsHumanAgent?: unknown } = { ...adapter };
-    expect(typeof asChannelAdapter.sendAsHumanAgent).toBe("function");
-    expect(Object.keys(adapter)).not.toContain("tag");
+
+    // The isolation is a type boundary: core code holds a ChannelAdapter, which has no tagged send at all.
+    // (It is not an object-level secret — an Instagram-aware caller is meant to reach it deliberately.)
+    const asCore: ChannelAdapter = adapter;
+    expectTypeOf<ChannelAdapter>().not.toHaveProperty("sendAsHumanAgent");
+    // @ts-expect-error the channel-neutral contract exposes no Human Agent path
+    expect(asCore.sendAsHumanAgent).toBeDefined();
   });
 });

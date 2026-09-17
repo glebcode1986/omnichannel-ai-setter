@@ -86,6 +86,14 @@ describe("provider outcomes", () => {
     expect(calls).toBe(1);
   });
 
+  it("keeps policy, window and permission errors final even when Meta marks them transient", async () => {
+    // Retrying a closed window or a revoked permission cannot change the answer, whatever the flag says.
+    for (const code of [10, 100, 190, 200, 551, 2022]) {
+      const { outcome } = await send(jsonResponse(400, { error: { code, is_transient: true } }));
+      expect(outcome).toMatchObject({ outcome: "REJECTED", retryable: false });
+    }
+  });
+
   it("treats an unknown code as final unless Meta marks it transient", async () => {
     const final = await send(jsonResponse(400, { error: { code: 999_999 } }));
     const transient = await send(jsonResponse(400, { error: { code: 999_999, is_transient: true } }));
@@ -109,13 +117,20 @@ describe("provider outcomes", () => {
     expect(undispatched.outcome).toMatchObject({ outcome: "REJECTED", retryable: true, code: "PRE_DISPATCH" });
   });
 
-  it("does not claim success it cannot read, and keeps 5xx ambiguous", async () => {
+  it("does not claim success it cannot read, and keeps every 5xx ambiguous", async () => {
     const unreadableSuccess = await send(jsonResponse(200, { recipient_id: CUSTOMER_ID }));
     const serverError = await send({ kind: "RESPONSE", status: 503, body: "<html>service unavailable</html>" });
     const clientError = await send({ kind: "RESPONSE", status: 400, body: "not json" });
+    // Meta answers 500 with a readable, "transient" error body. It still failed *after* receiving the
+    // request, so whether the message exists is unknown and it must never be retried blindly.
+    const readableServerError = await send(
+      jsonResponse(500, { error: { message: "please retry", type: "OAuthException", code: 2, is_transient: true, fbtrace_id: "tr_5" } }),
+    );
 
     expect(unreadableSuccess.outcome).toMatchObject({ outcome: "AMBIGUOUS", code: "UNREADABLE_SUCCESS" });
     expect(serverError.outcome).toMatchObject({ outcome: "AMBIGUOUS", code: "HTTP_503" });
+    expect(readableServerError.outcome).toMatchObject({ outcome: "AMBIGUOUS", code: "2" });
+    expect(sendDisposition(readableServerError.outcome)).toBe("QUARANTINE_NO_RETRY");
     expect(clientError.outcome).toMatchObject({ outcome: "REJECTED", retryable: false, code: "HTTP_400" });
   });
 });

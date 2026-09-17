@@ -9,6 +9,7 @@
  * must quarantine rather than retry (ADR-012).
  */
 import type { OutboundMessageCommand, SendResult } from "@omnichannel/channel-core";
+import type { Logger } from "@omnichannel/observability";
 
 import { MAX_TEXT_BYTES, type ResolvedInstagramConfig } from "./config";
 import { classifyMetaError, formatErrorCode, parseMetaError, parseMetaSuccess } from "./errors";
@@ -52,6 +53,7 @@ export function buildSendUrl(config: ResolvedInstagramConfig): string {
 export async function dispatch(
   config: ResolvedInstagramConfig,
   body: InstagramSendRequestBody,
+  operationId?: string,
 ): Promise<SendResult> {
   const accessToken = await config.secrets.accessToken();
   if (accessToken === undefined || accessToken.length === 0) {
@@ -65,10 +67,10 @@ export async function dispatch(
     body: JSON.stringify(body),
     timeoutMs: SEND_TIMEOUT_MS,
   });
-  return mapResult(result);
+  return mapResult(result, config.logger, operationId);
 }
 
-export function mapResult(result: InstagramHttpResult): SendResult {
+export function mapResult(result: InstagramHttpResult, logger?: Logger, operationId?: string): SendResult {
   if (result.kind === "NO_RESPONSE") {
     if (result.reason === "PRE_DISPATCH") {
       return { outcome: "REJECTED", retryable: true, code: "PRE_DISPATCH", message: result.message };
@@ -87,19 +89,23 @@ export function mapResult(result: InstagramHttpResult): SendResult {
   }
 
   const error = parseMetaError(result.body);
-  if (error === undefined) {
-    return result.status >= 500
-      ? { outcome: "AMBIGUOUS", code: `HTTP_${String(result.status)}`, message: "unreadable provider error after dispatch" }
-      : { outcome: "REJECTED", retryable: false, code: `HTTP_${String(result.status)}`, message: "unreadable provider error" };
+  const code = error === undefined ? `HTTP_${String(result.status)}` : (formatErrorCode(error) ?? `HTTP_${String(result.status)}`);
+  // Identifiers and codes only: a provider message can quote customer content.
+  logger?.warn("instagram.send_rejected", {
+    ...(operationId === undefined ? {} : { operationId }),
+    status: result.status,
+    code,
+    ...(error?.traceId === undefined ? {} : { providerRequestId: error.traceId }),
+  });
+  if (result.status >= 500) {
+    // Meta failed after receiving the request; whether the message was created is unknown, whatever the
+    // body says about transience. Never a retry (ADR-012).
+    return { outcome: "AMBIGUOUS", code, message: "provider error after dispatch" };
   }
-  const code = formatErrorCode(error);
-  // The contract's REJECTED variant carries no provider request id; the trace id stays in adapter logs.
-  return {
-    outcome: "REJECTED",
-    retryable: classifyMetaError(error),
-    ...(code === undefined ? {} : { code }),
-    message: "provider rejected the message",
-  };
+  if (error === undefined) {
+    return { outcome: "REJECTED", retryable: false, code, message: "unreadable provider error" };
+  }
+  return { outcome: "REJECTED", retryable: classifyMetaError(error), code, message: "provider rejected the message" };
 }
 
 export async function sendStandardText(config: ResolvedInstagramConfig, command: OutboundMessageCommand): Promise<SendResult> {
@@ -111,5 +117,5 @@ export async function sendStandardText(config: ResolvedInstagramConfig, command:
     return { outcome: "REJECTED", retryable: true, code: "ACCOUNT_NOT_CONNECTED", message: "channel account is not connected" };
   }
   // No `tag` and no `messaging_type`: the automated path is standard-window only, by construction.
-  return dispatch(config, { recipient: { id: command.recipientExternalId }, message: { text: checked.text } });
+  return dispatch(config, { recipient: { id: command.recipientExternalId }, message: { text: checked.text } }, command.operationId);
 }

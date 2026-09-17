@@ -24,10 +24,23 @@ export interface InstagramHttpPort {
   send(request: InstagramHttpRequest): Promise<InstagramHttpResult>;
 }
 
-/** Default `fetch`-backed port. Distinguishes "never dispatched" from "unknown" as carefully as fetch allows. */
+/**
+ * Default `fetch`-backed port.
+ *
+ * `fetch` rejects with a `TypeError` for *every* transport failure — a refused connection, a DNS failure, a
+ * socket reset after the request body was written, even a body read that fails after a 200 response. The
+ * error therefore cannot tell us whether Meta received the message, so everything except a request we could
+ * not even construct is reported as `NETWORK`, which the caller must treat as ambiguous (ADR-012).
+ */
 export function createFetchHttpPort(): InstagramHttpPort {
   return {
     async send(request) {
+      // Checked before any I/O: this is the one failure that provably sent nothing.
+      try {
+        new URL(request.url);
+      } catch {
+        return { kind: "NO_RESPONSE", reason: "PRE_DISPATCH", message: "request URL is not valid" };
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), request.timeoutMs);
       try {
@@ -37,17 +50,13 @@ export function createFetchHttpPort(): InstagramHttpPort {
           body: request.body,
           signal: controller.signal,
         });
-        return { kind: "RESPONSE", status: response.status, body: await response.text() };
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return { kind: "NO_RESPONSE", reason: "TIMEOUT", message: `request timed out after ${String(request.timeoutMs)} ms` };
-        }
-        // fetch rejects for DNS/TLS/connection failures too; those may still have opened a connection, so
-        // only an invalid request (rejected before any I/O) is reported as safely undispatched.
-        const name = error instanceof Error ? error.name : typeof error;
-        return name === "TypeError"
-          ? { kind: "NO_RESPONSE", reason: "PRE_DISPATCH", message: "request could not be dispatched" }
-          : { kind: "NO_RESPONSE", reason: "NETWORK", message: "network failure after dispatch" };
+        // A body read can fail after a successful status; the send still happened, so it stays ambiguous.
+        const body = await response.text();
+        return { kind: "RESPONSE", status: response.status, body };
+      } catch {
+        return controller.signal.aborted
+          ? { kind: "NO_RESPONSE", reason: "TIMEOUT", message: `request timed out after ${String(request.timeoutMs)} ms` }
+          : { kind: "NO_RESPONSE", reason: "NETWORK", message: "network failure; delivery is unknown" };
       } finally {
         clearTimeout(timer);
       }

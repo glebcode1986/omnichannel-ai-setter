@@ -15,7 +15,7 @@ import type {
   VerificationResult,
   WindowDecision,
 } from "@omnichannel/channel-core";
-import { parseNormalizedChannelEvents } from "@omnichannel/channel-core";
+import { ContractValidationError, parseNormalizedChannelEvents } from "@omnichannel/channel-core";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 
 import { INSTAGRAM_CAPABILITIES } from "./capabilities";
@@ -62,8 +62,23 @@ export function createInstagramAdapter(config: InstagramAdapterConfig): Instagra
       Promise.resolve().then(() => {
         assertVerified(verify(input));
         const body = parseInstagramWebhookBody(input.rawBody);
-        // Validated against the shared schemas before leaving the package, so a mapping bug surfaces here.
-        return parseNormalizedChannelEvents(normalizeInstagramWebhook(body, resolved.binding));
+        // Each event is validated against the shared schemas on its own. Validating the batch as one unit
+        // would let a single unmappable item discard up to 1000 real messages, which Meta would then
+        // redeliver for 36 hours with the same result.
+        const valid: NormalizedChannelEvent[] = [];
+        for (const candidate of normalizeInstagramWebhook(body, resolved.binding)) {
+          try {
+            valid.push(...parseNormalizedChannelEvents([candidate]));
+          } catch (error) {
+            // Paths and codes only; the payload itself is customer data.
+            resolved.logger?.warn("instagram.event_dropped", {
+              channelAccountId: resolved.binding.channelAccountId,
+              eventType: candidate.type,
+              issues: error instanceof ContractValidationError ? error.issues : [],
+            });
+          }
+        }
+        return valid;
       }),
 
     // Capabilities belong to the bound account; another account's are simply not ours to report.

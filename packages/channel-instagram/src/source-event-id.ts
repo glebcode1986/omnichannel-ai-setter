@@ -9,12 +9,18 @@
  * The type prefix matters: an inbound message, its echo, its read receipt and a reaction to it all carry the
  * same `mid`, so a bare `mid` would make them collide on one dedupe key.
  */
+import { createHash } from "node:crypto";
+
 const MAX_LENGTH = 512;
 
 export type InstagramEventKind = "msg" | "echo" | "read" | "reaction" | "postback";
 
 export function sourceEventId(kind: InstagramEventKind, ...parts: readonly string[]): string {
   const id = [kind, ...parts].join(":");
-  // The contract caps identifiers at 512 characters; truncation stays deterministic.
-  return id.length <= MAX_LENGTH ? id : id.slice(0, MAX_LENGTH);
+  if (id.length <= MAX_LENGTH) {
+    return id;
+  }
+  // Truncating would cut the trailing parts that make the key unique (a long postback payload would drop
+  // its timestamp and collapse distinct events into one). A digest stays deterministic and collision-free.
+  return `${kind}:sha256:${createHash("sha256").update(id).digest("hex")}`;
 }

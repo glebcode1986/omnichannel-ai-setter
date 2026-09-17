@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createInstagramAdapter, type InstagramAdapter } from "./adapter";
 import { INSTAGRAM_CAPABILITIES } from "./capabilities";
-import { BINDING, envelope, inboundText, signedWebhook, testConfig } from "./__fixtures__/payloads";
+import { AT_MS, BINDING, CUSTOMER_ID, envelope, inboundText, jsonResponse, scriptedHttp, signedWebhook, testConfig } from "./__fixtures__/payloads";
 import type { ChannelAdapter } from "@omnichannel/channel-core";
 
 describe("adapter shape", () => {
@@ -25,20 +25,36 @@ describe("adapter shape", () => {
   });
 
   it("keeps working when its members are destructured (no reliance on `this`)", async () => {
-    const { verifyWebhook, normalizeWebhook, getCapabilities, evaluateWindow, send } = adapter;
+    const http = scriptedHttp([jsonResponse(200, { recipient_id: CUSTOMER_ID, message_id: "mid.detached" })]);
+    const { verifyWebhook, normalizeWebhook, getCapabilities, evaluateWindow, send } = createInstagramAdapter(
+      testConfig({ http: http.port }),
+    );
     const webhook = signedWebhook(envelope(inboundText()));
 
     expect(await verifyWebhook(webhook)).toEqual({ status: "VERIFIED" });
     expect(await normalizeWebhook(webhook)).toHaveLength(1);
     expect((await getCapabilities(BINDING.channelAccountId)).text).toBe(true);
-    expect(typeof (await evaluateWindow({
-      workspaceId: BINDING.workspaceId,
-      channelAccountId: BINDING.channelAccountId,
-      conversationId: "conv_1",
-      participantExternalId: "user",
-      now: new Date(),
-    })).state).toBe("string");
-    expect(typeof send).toBe("function");
+    expect(
+      await evaluateWindow({
+        workspaceId: BINDING.workspaceId,
+        channelAccountId: BINDING.channelAccountId,
+        conversationId: "conv_1",
+        participantExternalId: CUSTOMER_ID,
+        lastInboundAt: new Date(AT_MS - 60 * 60 * 1000),
+        now: new Date(AT_MS),
+      }),
+    ).toEqual({ state: "OPEN_FREEFORM", expiresAt: new Date(AT_MS + 23 * 60 * 60 * 1000) });
+    expect(
+      await send({
+        workspaceId: BINDING.workspaceId,
+        businessProfileId: BINDING.businessProfileId,
+        channelAccountId: BINDING.channelAccountId,
+        conversationId: "conv_1",
+        recipientExternalId: CUSTOMER_ID,
+        operationId: "op_detached",
+        content: { type: "TEXT", text: "Detached send." },
+      }),
+    ).toEqual({ outcome: "ACCEPTED", platformMessageId: "mid.detached" });
   });
 
   it("reports the full capability set for the bound account only", async () => {

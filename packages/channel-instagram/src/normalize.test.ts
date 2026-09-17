@@ -73,6 +73,17 @@ describe("inbound normalization", () => {
     }
   });
 
+  it("keeps a caption but still reports UNKNOWN when Meta flags the media as unsupported", async () => {
+    const [withCaption] = await normalize(envelope(inboundText({ is_unsupported: true })));
+    const [withAttachment] = await normalize(
+      envelope(inboundText({ text: undefined, is_unsupported: true, attachments: [{ type: "image", payload: {} }] })),
+    );
+
+    // The caption is real text, but the message also contains something we cannot see, so it is not TEXT.
+    expect(withCaption).toMatchObject({ messageKind: "UNKNOWN", text: "Are you open on Saturday?", media: [] });
+    expect(withAttachment).toMatchObject({ messageKind: "UNKNOWN", media: [] });
+  });
+
   it("drops deleted messages, which the normalized contract cannot express", async () => {
     expect(await normalize(envelope(inboundText({ is_deleted: true })))).toEqual([]);
   });
@@ -136,7 +147,7 @@ describe("batching, determinism and foreign accounts", () => {
   it("is deterministic across redeliveries and independent of the receive time", async () => {
     const body = envelope(inboundText(), reaction("react"));
     const first = await normalize(body);
-    const later = await createInstagramAdapter(testConfig({ now: () => new Date(AT_MS + 600_000) })).normalizeWebhook({
+    const later = await createInstagramAdapter(testConfig()).normalizeWebhook({
       ...signedWebhook(body),
       receivedAt: new Date(AT_MS + 900_000),
     });
@@ -164,5 +175,54 @@ describe("batching, determinism and foreign accounts", () => {
 
     expect(await normalize(foreign)).toEqual([]);
     expect(await normalize(mixed)).toHaveLength(1);
+  });
+});
+
+describe("scope safety", () => {
+  it("refuses an entry that does not name the bound account, including one with no id at all", async () => {
+    const anonymous = { object: "instagram", entry: [{ time: AT_MS, messaging: [inboundText()] }] };
+
+    // An entry that names no account is not evidence that it is ours; the binding is the only authority.
+    expect(await normalize(anonymous)).toEqual([]);
+  });
+
+  it("never turns our own account into a customer", async () => {
+    const selfTest = await normalize(envelope({ ...inboundText(), message: { mid: "mid.self", text: "test", is_self: true } }));
+    const fromUs = await normalize(
+      envelope({
+        sender: { id: BINDING.externalAccountId },
+        recipient: { id: BINDING.externalAccountId },
+        timestamp: AT_MS,
+        message: { mid: "mid.loop", text: "test" },
+      }),
+    );
+
+    expect(selfTest).toEqual([]);
+    expect(fromUs).toEqual([]);
+  });
+
+  it("drops only the offending event when one item cannot satisfy the contract", async () => {
+    // An empty sender id cannot be a scope identifier, so this event is unrepresentable — but the good
+    // message in the same delivery must still be ingested, or Meta redelivers the batch for 36 hours.
+    const mixed = await normalize(envelope({ ...inboundText(), sender: { id: "" } }, inboundText({ mid: "mid.good" })));
+
+    expect(mixed.map((event) => event.sourceEventId)).toEqual(["msg:mid.good"]);
+  });
+
+  it("keeps long postbacks distinct instead of truncating away what makes them unique", async () => {
+    const longPayload = (suffix: string) => ({
+      sender: { id: CUSTOMER_ID },
+      recipient: { id: BINDING.externalAccountId },
+      timestamp: AT_MS,
+      postback: { title: "t", payload: `${"x".repeat(600)}${suffix}` },
+    });
+    const events = await normalize(envelope(longPayload("a"), longPayload("b")));
+
+    expect(events).toHaveLength(2);
+    expect(events[0]?.sourceEventId).not.toBe(events[1]?.sourceEventId);
+    for (const event of events) {
+      expect(event.sourceEventId.length).toBeLessThanOrEqual(512);
+      expect(event.sourceEventId.startsWith("postback:")).toBe(true);
+    }
   });
 });

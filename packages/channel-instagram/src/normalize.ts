@@ -27,8 +27,9 @@ export function normalizeInstagramWebhook(body: InstagramWebhookBody, binding: I
   const events: NormalizedChannelEvent[] = [];
   for (const rawEntry of body.entry) {
     const entry = parseEntry(rawEntry);
-    // A delivery may batch several accounts; this adapter speaks only for the account it is bound to.
-    if (entry === undefined || (entry.id !== undefined && entry.id !== binding.externalAccountId)) {
+    // A delivery may batch several accounts; this adapter speaks only for the account it is bound to, and an
+    // entry that does not name an account is not evidence that it is ours.
+    if (entry === undefined || entry.id !== binding.externalAccountId) {
       continue;
     }
     for (const rawItem of entry.messaging ?? []) {
@@ -62,6 +63,11 @@ function normalizeItem(item: InstagramMessagingItem, binding: InstagramAccountBi
     const mid = message.mid;
     if (mid === undefined || mid.length === 0 || message.is_deleted === true) {
       // A deletion has no variant in the normalized contract; dropping it is better than inventing one.
+      return undefined;
+    }
+    // `is_self` marks a test message to our own account, and a non-echo message from the bound account is
+    // the same situation seen from the payload. Either would otherwise become a "customer" who is us.
+    if (message.is_echo !== true && (message.is_self === true || senderId === binding.externalAccountId)) {
       return undefined;
     }
     const { kind, media } = describeContent(message.attachments, message.is_unsupported === true, message.text);

@@ -59,7 +59,6 @@ export interface InstagramAdapterConfig {
   readonly connectionState?: InstagramConnectionState;
   readonly humanAgentApproval?: HumanAgentApproval;
   readonly logger?: Logger;
-  readonly now?: () => Date;
 }
 
 /** Config with defaults applied; the adapter works only with this shape. */
@@ -74,7 +73,6 @@ export interface ResolvedInstagramConfig {
   readonly connectionState: InstagramConnectionState;
   readonly humanAgentApproval: HumanAgentApproval;
   readonly logger?: Logger;
-  readonly now: () => Date;
 }
 
 export function resolveConfig(config: InstagramAdapterConfig): ResolvedInstagramConfig {
@@ -90,6 +88,5 @@ export function resolveConfig(config: InstagramAdapterConfig): ResolvedInstagram
     // Approval is a business fact stored during onboarding (P2-02); without it the tagged path stays shut.
     humanAgentApproval: config.humanAgentApproval ?? "UNKNOWN",
     ...(config.logger === undefined ? {} : { logger: config.logger }),
-    now: config.now ?? (() => new Date()),
   };
 }

@@ -115,7 +115,6 @@ export function testConfig(overrides: Partial<InstagramAdapterConfig> = {}): Ins
       accessToken: () => Promise.resolve(ACCESS_TOKEN),
     },
     http: scriptedHttp([jsonResponse(200, { recipient_id: CUSTOMER_ID, message_id: "mid.sent-1" })]).port,
-    now: () => new Date(AT_MS),
     ...overrides,
   };
 }

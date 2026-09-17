@@ -42,5 +42,9 @@ export async function sendAsHumanAgent(
   if (eligibility.state !== "ELIGIBLE") {
     return { outcome: "REJECTED", retryable: false, code: `HUMAN_AGENT_${eligibility.state}`, message: eligibility.reason };
   }
-  return dispatch(config, { recipient: { id: command.recipientExternalId }, message: { text: checked.text }, tag: "HUMAN_AGENT" });
+  return dispatch(
+    config,
+    { recipient: { id: command.recipientExternalId }, message: { text: checked.text }, tag: "HUMAN_AGENT" },
+    command.operationId,
+  );
 }
