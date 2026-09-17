@@ -1,88 +1,159 @@
 # Current Handoff
 
-**Date:** 2026-09-16  
-**Phase:** Phase 1 scaffold PR under architecture revision; Phase 2 Instagram/shared-AI, Phase 4 WhatsApp, Phase 5 SaaS UX and Phase 6 commercial SaaS are specified/task-contracted  
+**Date:** 2026-09-17  
+**Phase:** Active implementation — Phase 1 stacked implementation exists; Business Profile v0.4 sync is the current blocking correction before Phase 2  
 **Repository:** `glebcode1986/omnichannel-ai-setter`
 
-## Current implementation status
+## Source of truth
 
-PR #26 implements **P1-01 / Issue #2** (`feat/p1-01-project-skeleton`). ChatGPT architecture review submitted `REQUEST_CHANGES` before merge.
+GitHub issues/specs/task contracts are authoritative. Chat history is not an execution contract.
 
-### Blocking PR #26 architecture correction
+For Claude execution, read in this order:
+1. `PROJECT_CONTEXT.md`
+2. this handoff
+3. `AGENTS.md`
+4. `CLAUDE.md`
+5. `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`
+6. exact issue + task contract
+7. relevant ADR/specs
 
-Current scaffold matrix must be changed so:
-- `application` depends on `domain` + `channel-core`, **not `ai`**;
-- `application` is runtime-agnostic/pure: no Node built-ins/globals/types;
-- application owns provider-neutral use-case ports such as future `ReplyModel` / `EmbeddingProvider`;
-- `ai` implements those ports and may depend on `application`;
-- AI model-output Zod boundary schema/DTO belongs at the application boundary and maps into pure domain values/entities;
-- domain does not own provider DTOs and never depends on application/ai.
+Master execution index: **Issue #61 — Claude MVP build train**.
 
-Accepted PR #26 section-5 interpretations:
-- `db` / `queue -> application` allowed for implementing application ports;
-- `db -> ai` forbidden;
-- `application -> observability` forbidden;
-- browser automation dev/test/tooling only.
+## Current live implementation stack
 
-Claude must fix the same PR/branch, run checks and leave PR open for re-review. **Do not merge and do not start #3 yet.**
+The Phase 1 implementation has progressed beyond the old scaffold-only handoff.
 
-No CI status/workflow checks existed on PR #26 at review time. Follow-up Issue #37 adds a GitHub Actions `pnpm verify` gate after the scaffold is accepted.
+Open stacked PRs observed on 2026-09-17:
+- PR #26 / Issue #2 — P1-01 scaffold/tooling — current known HEAD `b2f650351b473b49b8b893045a8b07c97882f9a0`;
+- PR #49 / Issue #3 — P1-02 domain/channel contracts — stacked on #26;
+- PR #50 / Issue #4 — P1-03 Prisma/Auth/tenancy — stacked on #49;
+- PR #51 / Issue #5 — P1-04 BullMQ/delay — stacked on #50;
+- PR #52 / Issue #6 — P1-05 webhook ingestion — current known HEAD `89502864a6bc77c3005543e2894d76399f13c1b8`, stacked on #51.
 
-## Prepared architecture/backlogs
+Fetch live HEADs before acting; the values above are a handoff snapshot, not immutable branch references.
 
-### Phase 2 — Instagram/shared AI
-#8–#16 Claude, #17 independent review. Includes Instagram transport/onboarding, provider-neutral AI, separate factual/style retrieval, deterministic policy, delivery coordinator, handoff, evals and E2E.
+## Immediate blocker — Issue #53 Business Profile sync
 
-### Phase 4 — WhatsApp
-#18–#24 Claude, #25 review. Official Cloud API + Embedded Signup; accepted after-window modes:
-- `SERVICE_WINDOW_ONLY`
-- `TEMPLATE_REVIEW`
-- `TEMPLATE_AUTOPILOT` with explicit allowlist.
+The open Phase 1 stack was implemented before the accepted `DATA_MODEL.md` v0.4 Business Profile architecture fully propagated into implementation.
 
-### Phase 5 — SaaS UX
-#27–#35 Claude, #36 review. Inbox-first app shell/onboarding, unified Inbox, Review, AI Settings/simulation, Knowledge, Style, Leads, Analytics/Audit, responsive/accessibility E2E.
+Do **not** begin Phase 2 on the stale Workspace-only operational shape.
 
-Knowledge is factual authority; Style is phrasing/tone only and never authorizes facts.
+Current canonical model:
+- Workspace = top tenant/billing boundary;
+- Business Profile = operational/customer-data/privacy scope inside Workspace;
+- one BP initially owns up to one Instagram + one WhatsApp account;
+- Contact is canonical inside one BP by default;
+- ChannelIdentity/Conversation/customer memory/search do not create a cross-BP graph by default;
+- role answers **what** a member may do; BP scope answers **where**;
+- BP-owned persistence should preserve Workspace + BP consistency, using direct IDs/composite FKs where this strengthens isolation;
+- conversation state/version anchors support stale-action protection.
 
-### Phase 6 — Commercial SaaS / billing / usage
-#38–#44 Claude, #45 independent review. Specs: `BILLING_ENTITLEMENTS.md`, `USAGE_METERING.md`, `PRICING_PACKAGING.md`, `PHASE6_COMMERCIALIZATION_PLAN.md`.
+Issue **#53** and `docs/tasks/P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md` govern the correction.
 
-Accepted commercial architecture:
-- ADR-017: billing provider is an adapter behind application-owned provider-neutral ports;
-- server-side entitlements are authoritative;
-- immutable versioned plan definitions preserve grandfathered meaning;
-- ADR-018: customer AI usage is logical `AI_GENERATION_CYCLES`, not raw provider calls/tokens;
-- one logical generation may retry/repair without double charging;
-- quota exhaustion blocks new AI work but does not drop inbound customer messages;
-- delayed automated sends revalidate current entitlement before send;
-- downgrade/cancel does not delete data;
-- initial packaging shape: Starter / Growth / Scale.
+Correction order is mandatory:
+1. PR #49 — domain/channel contracts;
+2. propagate corrected #49 into PR #50, then fix DB/Auth/BP isolation;
+3. propagate corrected #50 into PR #51, then fix BP-aware queue payloads/job IDs;
+4. propagate corrected #51 into PR #52, then fix BP-aware webhook ingestion/outbox.
 
-Open owner decisions before production billing:
-- billing provider + merchant/legal/payment-jurisdiction strategy (blocks #41);
-- public monthly/annual prices + currencies;
-- quotas by plan;
-- trial duration/card requirement;
-- hard stop/top-up/auto-overage behavior;
-- annual discount and any advanced feature gating (blocks production values in #43).
+Preserve the existing stack with normal merge propagation. Do not force-push/rebase published branches just to clean the graph.
 
-## Execution order — immediate
+Every corrected PR must run complete branch-appropriate verification and publish:
 
-1. Claude fixes PR #26 according to the architecture review.
-2. ChatGPT re-reviews updated PR head.
-3. Run/complete R1 independent review track.
-4. Merge #2 only after acceptance.
-5. Add #37 CI verify gate early.
-6. Launch P1-02 / Issue #3 from fresh `main` using `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`.
+`CLAUDE_READY_FOR_ASTRA head=<full_sha> task=<P1-xx>`
 
-Do not let prepared future phases bypass dependency gates.
+## Temporary Astra/Codex review protocol
 
-## Stable supervisor links
+Independent review is temporarily asynchronous because reviewer quota is constrained.
 
-- `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`
-- `docs/tasks/README.md`
-- exact issue/task contract for each implementation PR.
+Claude should **not wait** for Astra after every iteration. Claude must:
+- perform full self-verification and adversarial checks;
+- record exact full HEAD SHA;
+- leave `CLAUDE_READY_FOR_ASTRA` marker;
+- continue to the next dependency-safe task.
 
-## Coding rule for every session
+This does not authorize Claude to merge its own feature PRs to `main`. Never claim Astra PASS unless that exact SHA was independently reviewed.
 
-Read `PROJECT_CONTEXT.md`, this file, `CLAUDE_EXECUTION_QUEUE.md`, `docs/tasks/README.md`, relevant ADR/spec/research file and exact issue/task contract. Chat history is not the execution source of truth.
+## Phase 1 exit
+
+After Issue #53 corrections, do Issue #37 GitHub Actions `pnpm verify` gate when permissions allow.
+
+Phase 1 is ready to hand into Phase 2 only when the corrected stack demonstrates:
+- fake provider webhook -> verify -> normalize -> Workspace/BP-scoped persistence -> transactional outbox -> queue;
+- PostgreSQL + Redis integration suites green;
+- cross-Workspace and cross-BP adversarial isolation;
+- duplicate/reordered webhook idempotency;
+- human/manual echo fail-safe behavior;
+- ambiguous external write never blind-retried;
+- no LLM or artificial wait in webhook/request lifecycle.
+
+## MVP build train after Phase 1
+
+Follow Issue #61 / `CLAUDE_EXECUTION_QUEUE.md`.
+
+### Stage B — Instagram + shared AI
+Issues #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16. Independent catch-up: #17.
+
+### Stage C — reliability before broad AUTOPILOT
+Issue #56: health, backpressure, kill switches, reconciliation, safe recovery.
+
+### Stage D — Design Partner UI
+#27 app shell/onboarding -> #58 EN/RU localization -> #28 Inbox -> #29 Review/conversation ops -> #31 Knowledge -> #32 Style -> #30 AI Settings/Test Drive -> #33 Leads -> #54 identity/memory -> #55 goals/followups/tasks -> #34 Analytics/Audit -> #35 UX E2E. Independent catch-up: #36.
+
+A tightly controlled Instagram design partner may begin before the whole commercial MVP when the core UI, DRAFT path, kill switch, Knowledge/Style/Test Drive, and tenant/BP safety are green.
+
+### Stage E — WhatsApp
+#18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24. Independent catch-up: #25.
+
+### Stage F — privacy/security
+Issue #57 using `SECURITY_PRIVACY_RETENTION.md`.
+
+### Stage G — commercial billing
+#38 -> #43 -> #39 -> #40 -> #46 -> first provider/seller-route decision -> #41 -> #47 -> #42 -> #44. Independent catch-up: #45/#48.
+
+Accepted commercial values are already in `PRICING_PACKAGING.md` v0.6 and Issue #43; do not reopen them during implementation unless the product owner changes them.
+
+### Stage H — Admin Operations
+Issue #59.
+
+### Stage I — launch gate
+Issue #60 using `LAUNCH_READINESS.md`, then independent-review catch-up and staged rollout to Commercial Beta.
+
+## Accepted commercial snapshot
+
+- Starter €49/mo or €490/yr;
+- Growth €99/mo or €990/yr;
+- Scale €249/mo or €2,490/yr;
+- BP capacities 1 / 3 / 10;
+- seats 1 / 5 / 15;
+- voice 300 / 1,500 / 6,000 min/month;
+- trial 14 days, no card, starts on first successful BP connection, 1 BP/3 seats/100 voice minutes;
+- core AI customer-facing included/unmetered initially;
+- voice is explicit metered resource with manual top-ups and no surprise auto-overage.
+
+## MVP scope guard
+
+Architecture is broader than the first commercial release. Do not delay MVP/Commercial Beta for:
+- full Booking/calendar implementation;
+- public Platform API/webhooks;
+- broad CRM connector catalog;
+- separate acquisition/prospecting product;
+- Telegram/Threads;
+- AI-generated voice/media replies;
+- universal cross-BP identity graph.
+
+These have designed extension points and can follow in V1.1/later unless a real design partner forces reprioritization.
+
+## Hard invariants
+
+Never trade these away for speed:
+- Workspace + Business Profile isolation;
+- human activity wins over AI;
+- stale draft/review/action protection;
+- model output is advisory; deterministic application policy authorizes sends/actions;
+- no blind retry after ambiguous external write;
+- provider/webhook/job idempotency;
+- inbound persists even when AI/billing/dependency is blocked;
+- AUTOPILOT is server-side and does not depend on open browser/dashboard;
+- queues are execution mechanisms, not sole durable intent storage;
+- secrets never enter prompts, ordinary logs, client output or plaintext audit.
