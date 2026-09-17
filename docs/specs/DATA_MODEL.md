@@ -55,31 +55,43 @@ Review state should preserve why human action is needed. For Instagram Human Age
 - human-agent sends require a human action/audit actor identity;
 - foreign keys favor preserving audit history over destructive cascades.
 
-## Implementation notes (P1-03)
+## Implementation notes (P1-03, aligned with Data Model v0.4 / Issue #53)
 
-The initial Prisma schema (`packages/db/prisma/schema.prisma`, migration `20260917140000_init`) implements this model with the following decisions and deviations:
+This branch still carries the v0.3 text above; the Business Profile model it implements is `DATA_MODEL.md` v0.4 on `docs/phase6-commercial-billing`. The initial Prisma schema (`packages/db/prisma/schema.prisma`, migration `20260917140000_init`) makes the following decisions:
 
-- **Tenancy in the database.** Every customer-owned table has `workspace_id`. References between tenant tables are composite foreign keys that include `workspace_id` (for example `messages(workspace_id, channel_account_id, conversation_id) -> conversations`), so a row can never point at another workspace's data. Tenant unique keys lead with `workspace_id`. All foreign keys use `ON UPDATE RESTRICT`, so ownership cannot be moved.
-- **Delete behaviour.** Everything uses `ON DELETE RESTRICT` except Auth.js `auth_accounts`/`auth_sessions`, which cascade from `users`. Records are archived rather than deleted.
-- **Repositories.** Tenant repository functions require a `WorkspaceContext` issued by `authorizeWorkspaceAccess(userId, explicit workspaceId)`. Contexts that are forged or copied are rejected. Cross-workspace records are reported as not found.
-- **`ChannelAccount.encrypted_credentials_ref`.** This is `credential_id`, pointing at `channel_credentials` (`key_id`, `algorithm`, `ciphertext`, `nonce`, `auth_tag`, `expires_at`). No plaintext token columns exist. Encryption and the Meta token lifecycle belong to the onboarding tasks.
-- **ChannelAccount uniqueness.** A platform account (`channel`, `external_account_id`) can be live (not `DISCONNECTED`) in only one workspace, so webhooks route unambiguously.
-- **Inbound events.** An added `inbound_events` table is the idempotency ledger, unique per (`workspace_id`, `channel_account_id`, `source_event_id`).
-- **Conversation.** There is one conversation per contact identity per channel account, matching platform DM threads.
-  - `human_takeover_at` is complemented by `takeover_state`, `takeover_reason`, `takeover_review_mode`, `takeover_paused_until`, `takeover_actor_kind` and `takeover_actor_user_id`, which mirror the domain `HumanTakeoverState`. A CHECK constraint keeps these fields consistent with the state.
-  - `review_eligibility_snapshot` stores the Human Agent review snapshot.
-  - Added `last_message_at` (not null) for inbox ordering.
-- **Message.**
-  - `type` is named `kind`.
-  - Platform IDs are unique per channel account.
-  - Adds `operation_id` (unique), `ai_draft_id` (at most one message per draft), `transport_path` and `sent_by_user_id`.
-  - CHECK constraints tie inbound rows to `PARTICIPANT` and require a human actor for `HUMAN_AGENT` sends.
-- **AiDraft.** Model metadata is stored as columns (`model_provider`, `model_name`, `prompt_version`, `schema_version`, `provider_request_id`, `latency_ms`). `confidence` must be in [0, 1].
-- **DeliveryJobRecord** (table `delivery_jobs`). There is one job per draft, and `operation_id` is unique. A `SENT` job must have `sent_at` and `platform_message_id`. Together with the one-message-per-draft rule, this keeps one logical draft from becoming several sends.
-- **Knowledge / style.** `knowledge_documents` carry source, version, status, content hash and an optional channel-account scope. `knowledge_chunks` are unique per document version and position and carry an `embedding_profile`. The pgvector and full-text columns and indexes are added by the retrieval task (ADR-011, RETRIEVAL.md). `style_examples` record provenance, and a `HUMAN_EDITED_DRAFT` example must reference its source draft.
-- **AutomationPolicy.**
-  - Timing ranges and quiet hours are stored as columns with the documented defaults.
-  - Reason codes and the template allowlist are text arrays validated by the domain.
-  - There is one workspace default (partial unique index) and at most one override per channel account.
-- **Auth.js.** Tables are `users`, `auth_accounts`, `auth_sessions` and `auth_verification_tokens`, with database sessions. Linked accounts keep only the provider link: OAuth access, refresh and ID tokens are not persisted. No sign-in provider is enabled yet; that choice belongs to the app-shell task.
-- **CHECK constraints.** Constraints Prisma cannot express live in the migration SQL. `db:check-drift` confirms that migrations and schema stay in sync.
+- **Tenancy chain.** A Workspace (tenant/billing) owns Business Profiles (`business_profiles`, status `SETUP | ACTIVE | INACTIVE`, never created implicitly).
+  - Business Profile owned tables carry both `workspace_id` and `business_profile_id`: `channel_accounts`, `contacts`, `channel_identities`, `conversations`, `messages`, `ai_drafts`, `delivery_jobs`, `inbound_events`, `automation_policies`.
+  - References between them are composite foreign keys that include both columns, so cross-Workspace and cross-Business-Profile references fail in the database. Tenant uniques lead with the same scope. `ON UPDATE RESTRICT` everywhere keeps ownership immutable.
+- **Where vs what.** `workspace_members.business_profile_scope` is `ALL | SELECTED`; `member_business_profile_access` holds SELECTED grants, with composite FKs to member and profile in the same Workspace.
+  - OWNER is always ALL (CHECK).
+  - `authorizeBusinessProfileAccess` re-reads membership, role, scope and grants on every request. Unauthorized and nonexistent profiles fail identically.
+  - Grants are removed with their membership (the only non-login cascade).
+  - Provisional rules until team/billing tasks: OWNER or an ALL-scoped ADMIN creates profiles. An ADMIN's grants are bounded by its own scope, and only OWNER grants OWNER.
+- **Delete behaviour.** History uses `ON DELETE RESTRICT`. Business Profiles are deactivated, not deleted.
+- **Channels.** A channel account belongs to one Business Profile.
+  - At most one live (not `DISCONNECTED`) account per profile and channel.
+  - A platform account can be live in only one Workspace + profile, so webhooks route unambiguously.
+  - `channel_credentials` stays Workspace-scoped (encrypted placeholder, 1:1 with its channel account). No plaintext tokens exist.
+- **Identity.** `contact_identities` is renamed `channel_identities`. The identity is the stable provider user ID per channel account, `UNIQUE(workspace_id, business_profile_id, channel_account_id, external_user_id)`.
+  - Contacts are canonical per Business Profile: the same provider user in two profiles is two contacts. There is no cross-profile identity graph.
+  - `contact_points` / `ExternalIdentity` tables are deferred to identity-resolution work (the domain primitive exists).
+- **Conversation.** Carries `business_profile_id`, `contact_id` (the identity's contact) and `channel_identity_id`.
+  - One thread per identity per account.
+  - Inbox index `(workspace_id, business_profile_id, status, last_message_at DESC)`.
+  - `state_version` (non-negative, CHECK) increments atomically with each stored inbound message. Lead-stage changes do not increment it; later tasks add further triggers.
+  - Takeover columns mirror the domain `HumanTakeoverState` (CHECK-enforced).
+  - The takeover pause default of 6 h is unchanged and noted for P2-07.
+- **Messages.**
+  - Platform message IDs are unique per channel account.
+  - `operation_id` is globally unique, and there is at most one message per AI draft.
+  - CHECKs tie inbound rows to `PARTICIPANT` and require a human actor for `HUMAN_AGENT` sends.
+- **AI drafts and delivery.** AI drafts carry `anchor_state_version` (CHECK >= 0). There is one delivery job per draft. A `SENT` job records `sent_at` and `platform_message_id`.
+- **Automation policy.** One Business Profile default (partial unique) plus at most one channel-account override in the same profile. There is no Workspace-level policy row. `ChannelAccount.default_ai_mode` remains and is noted for consolidation by the Phase 2 policy engine.
+- **Knowledge / style.**
+  - `knowledge_documents` and `style_examples` have a nullable `business_profile_id` (NULL = Workspace base, set = profile override), replacing the old channel-account scope.
+  - A style example learned from a message or draft must name its profile (CHECK), and its source FKs include the profile.
+  - `knowledge_chunks` inherit scope through their document.
+  - Vector and full-text columns come with retrieval (ADR-011).
+- **Inbound events.** An `inbound_events` idempotency ledger, unique per (Workspace, Business Profile, channel account, source event).
+- **Auth.js.** Users, provider-link-only accounts (no OAuth tokens), database sessions. No role or Business Profile scope is stored in the session.
+- **CHECK constraints.** Constraints Prisma cannot express live in the migration SQL. `db:check-drift` confirms that migrations and schema are in sync.

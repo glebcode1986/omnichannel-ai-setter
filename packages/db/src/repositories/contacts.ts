@@ -1,16 +1,16 @@
 import {
   isValidIdentifier,
+  toChannelIdentityId,
   toContactId,
-  toContactIdentityId,
+  type ChannelIdentityId,
   type ContactId,
-  type ContactIdentityId,
 } from "@omnichannel/domain";
 
 import type { DbClient } from "../client";
 import { DbInputError, rethrowAsTenantNotFound, TenantRecordNotFoundError } from "../errors";
-import { scopeOf, type WorkspaceContext } from "../tenancy";
+import { profileScopeOf, type BusinessProfileContext } from "../tenancy";
 
-export interface NewContactIdentity {
+export interface NewChannelIdentity {
   readonly channelAccountId: string;
   readonly externalUserId: string;
   readonly displayName?: string;
@@ -18,15 +18,17 @@ export interface NewContactIdentity {
 }
 
 /**
- * Creates a canonical contact and its first channel identity atomically. The channel account must belong
- * to the caller's workspace; otherwise nothing is written and `TenantRecordNotFoundError` is thrown.
+ * Creates a contact and its first channel identity atomically inside the context's Business Profile. The
+ * channel account must belong to the same profile; otherwise nothing is written and
+ * `TenantRecordNotFoundError` is thrown. Contacts are canonical per Business Profile: the same provider user
+ * reaching another profile becomes a separate contact there.
  */
-export async function createContactWithIdentity(
+export async function createContactWithChannelIdentity(
   db: DbClient,
-  context: WorkspaceContext,
-  input: NewContactIdentity,
-): Promise<{ readonly contactId: ContactId; readonly contactIdentityId: ContactIdentityId }> {
-  const workspaceId = scopeOf(context);
+  context: BusinessProfileContext,
+  input: NewChannelIdentity,
+): Promise<{ readonly contactId: ContactId; readonly channelIdentityId: ChannelIdentityId }> {
+  const scope = profileScopeOf(context);
   if (!isValidIdentifier(input.channelAccountId)) {
     throw new DbInputError("channelAccountId", "must be a valid identifier");
   }
@@ -35,7 +37,7 @@ export async function createContactWithIdentity(
   }
 
   const channelAccount = await db.channelAccount.findUnique({
-    where: { workspaceId_id: { workspaceId, id: input.channelAccountId } },
+    where: { workspaceId_businessProfileId_id: { ...scope, id: input.channelAccountId } },
     select: { id: true },
   });
   if (channelAccount === null) {
@@ -45,12 +47,12 @@ export async function createContactWithIdentity(
   try {
     return await db.$transaction(async (tx) => {
       const contact = await tx.contact.create({
-        data: { workspaceId, displayName: input.displayName },
+        data: { ...scope, displayName: input.displayName },
         select: { id: true },
       });
-      const identity = await tx.contactIdentity.create({
+      const identity = await tx.channelIdentity.create({
         data: {
-          workspaceId,
+          ...scope,
           contactId: contact.id,
           channelAccountId: input.channelAccountId,
           externalUserId: input.externalUserId,
@@ -59,7 +61,7 @@ export async function createContactWithIdentity(
         },
         select: { id: true },
       });
-      return { contactId: toContactId(contact.id), contactIdentityId: toContactIdentityId(identity.id) };
+      return { contactId: toContactId(contact.id), channelIdentityId: toChannelIdentityId(identity.id) };
     });
   } catch (error) {
     return rethrowAsTenantNotFound(error, "ChannelAccount");

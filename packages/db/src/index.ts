@@ -9,16 +9,23 @@
  */
 export { createDbClient, type DbClient, type DbClientOptions, type DbExecutor } from "./client";
 export {
+  BusinessProfileAccessDeniedError,
   DbInputError,
   TenantRecordNotFoundError,
   WorkspaceAccessDeniedError,
   WorkspacePermissionError,
 } from "./errors";
 export {
+  authorizeBusinessProfileAccess,
+  authorizedBusinessProfileFilter,
   authorizeWorkspaceAccess,
-  requireWorkspaceRole,
+  profileScopeOf,
+  requireRole,
   scopeOf,
   WORKSPACE_ADMIN_ROLES,
+  type BusinessProfileAccessRequest,
+  type BusinessProfileContext,
+  type BusinessProfileScope,
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
@@ -30,14 +37,16 @@ export * from "./repositories/workspaces";
 export type {
   AiDraft,
   AutomationPolicy,
+  BusinessProfile,
   ChannelAccount,
+  ChannelIdentity,
   Contact,
-  ContactIdentity,
   Conversation,
   DeliveryJobRecord,
   InboundEvent,
   KnowledgeChunk,
   KnowledgeDocument,
+  MemberBusinessProfileAccess,
   Message,
   StyleExample,
   Workspace,

@@ -2,10 +2,12 @@
 //
 // Conventions:
 // - tables/columns are snake_case; Prisma models/fields are PascalCase/camelCase;
-// - every customer-owned table carries `workspace_id`, and references between tenant tables are composite
-//   foreign keys that include `workspace_id`, so the database itself rejects cross-workspace references;
-// - uniqueness on tenant tables leads with `workspace_id`, so a write from one workspace can never collide
-//   with (and thereby reveal) another workspace's rows;
+// - Workspace is the tenant/billing boundary and Business Profile the operational/customer-data boundary
+//   inside it (DATA_MODEL.md v0.4). Every customer-owned table carries `workspace_id`; Business Profile owned
+//   tables also carry `business_profile_id`, and references between them are composite foreign keys that
+//   include both, so the database itself rejects cross-Workspace and cross-Business-Profile references;
+// - uniqueness on tenant tables leads with `workspace_id` (and `business_profile_id` where owned), so a write
+//   from one scope can never collide with (and thereby reveal) another scope's rows;
 // - history/audit rows use ON DELETE RESTRICT (no destructive cascades); only Auth.js login plumbing cascades;
 // - ON UPDATE RESTRICT everywhere: tenant ownership (workspace_id) and identifiers are immutable;
 // - enum values mirror the literal sets in @omnichannel/domain (checked by schema tests);
@@ -40,6 +42,17 @@ enum WorkspaceRole {
   OWNER
   ADMIN
   AGENT
+}
+
+enum BusinessProfileAccessScope {
+  ALL
+  SELECTED
+}
+
+enum BusinessProfileStatus {
+  SETUP
+  ACTIVE
+  INACTIVE
 }
 
 enum ChannelAccountStatus {
@@ -260,7 +273,7 @@ model VerificationToken {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Tenancy
+// Tenancy: Workspace (tenant/billing boundary) -> Business Profile (operational/customer-data boundary)
 // ---------------------------------------------------------------------------------------------------------
 
 model Workspace {
@@ -270,30 +283,72 @@ model Workspace {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   members            WorkspaceMember[]
+  businessProfiles   BusinessProfile[]
   channelCredentials ChannelCredential[]
+  knowledgeDocuments KnowledgeDocument[]
+  styleExamples      StyleExample[]
+
+  @@map("workspaces")
+}
+
+/// Role answers what a member may do; business_profile_scope answers where (TEAM_ROLES_UX.md).
+/// ALL covers every current and future Business Profile; SELECTED covers only explicit grants.
+model WorkspaceMember {
+  id                   String                     @id @default(uuid(7))
+  workspaceId          String                     @map("workspace_id")
+  userId               String                     @map("user_id")
+  role                 WorkspaceRole
+  businessProfileScope BusinessProfileAccessScope @default(SELECTED) @map("business_profile_scope")
+  createdAt            DateTime                   @default(now()) @map("created_at")
+  updatedAt            DateTime                   @updatedAt @map("updated_at")
+
+  workspace             Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  user                  User                          @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfileAccess MemberBusinessProfileAccess[]
+
+  @@unique([workspaceId, userId])
+  @@unique([workspaceId, id])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+/// A Business Profile inside a Workspace. INACTIVE preserves data; it is not deletion (DATA_MODEL.md v0.4 §2).
+model BusinessProfile {
+  id          String                @id @default(uuid(7))
+  workspaceId String                @map("workspace_id")
+  name        String
+  status      BusinessProfileStatus @default(SETUP)
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+
+  workspace          Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  memberAccess       MemberBusinessProfileAccess[]
   channelAccounts    ChannelAccount[]
   contacts           Contact[]
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
   automationPolicies AutomationPolicy[]
 
-  @@map("workspaces")
+  @@unique([workspaceId, id])
+  @@index([workspaceId, status])
+  @@map("business_profiles")
 }
 
-model WorkspaceMember {
-  id          String        @id @default(uuid(7))
-  workspaceId String        @map("workspace_id")
-  userId      String        @map("user_id")
-  role        WorkspaceRole
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+/// Explicit Business Profile grant for a SELECTED-scope member. Member and profile must share the Workspace.
+/// Grants are access configuration, not history: they are removed with their membership.
+model MemberBusinessProfileAccess {
+  id                String   @id @default(uuid(7))
+  workspaceId       String   @map("workspace_id")
+  workspaceMemberId String   @map("workspace_member_id")
+  businessProfileId String   @map("business_profile_id")
+  createdAt         DateTime @default(now()) @map("created_at")
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  member          WorkspaceMember @relation(fields: [workspaceId, workspaceMemberId], references: [workspaceId, id], onDelete: Cascade, onUpdate: Restrict)
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([workspaceId, userId])
-  @@index([userId])
-  @@map("workspace_members")
+  @@unique([workspaceMemberId, businessProfileId])
+  @@index([workspaceId, businessProfileId])
+  @@map("member_business_profile_access")
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -302,6 +357,7 @@ model WorkspaceMember {
 
 /// Encrypted credential placeholder. Plaintext tokens are never stored; encryption/key management and the
 /// Meta token lifecycle are implemented by the onboarding tasks. `keyId` names the encryption key version.
+/// Workspace-scoped because it is reached only through its (Business Profile owned) channel account.
 model ChannelCredential {
   id          String    @id @default(uuid(7))
   workspaceId String    @map("workspace_id")
@@ -324,6 +380,7 @@ model ChannelCredential {
 model ChannelAccount {
   id                String               @id @default(uuid(7))
   workspaceId       String               @map("workspace_id")
+  businessProfileId String               @map("business_profile_id")
   channel           ChannelType
   externalAccountId String               @map("external_account_id")
   displayName       String?              @map("display_name")
@@ -334,86 +391,95 @@ model ChannelAccount {
   createdAt         DateTime             @default(now()) @map("created_at")
   updatedAt         DateTime             @updatedAt @map("updated_at")
 
-  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  credential         ChannelCredential?  @relation(fields: [workspaceId, credentialId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  contactIdentities  ContactIdentity[]
+  businessProfile    BusinessProfile    @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  credential         ChannelCredential? @relation(fields: [workspaceId, credentialId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelIdentities  ChannelIdentity[]
   inboundEvents      InboundEvent[]
-  knowledgeDocuments KnowledgeDocument[]
-  styleExamples      StyleExample[]
   automationPolicies AutomationPolicy[]
 
-  @@unique([workspaceId, id])
+  @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, credentialId])
-  /// One live connection per platform account, so webhooks route to exactly one workspace.
+  /// One live connection per platform account, so webhooks route to exactly one Workspace + Business Profile.
   @@unique([channel, externalAccountId], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_external_account_key")
+  /// Packaging: a Business Profile initially owns at most one live account per channel (DATA_MODEL.md v0.4 §3).
+  @@unique([businessProfileId, channel], where: raw("status <> 'DISCONNECTED'"), map: "channel_accounts_live_profile_channel_key")
   @@index([channel, externalAccountId])
   @@map("channel_accounts")
 }
 
 /// Idempotency ledger for verified provider events: one row per (channel account, source event).
 model InboundEvent {
-  id               String           @id @default(uuid(7))
-  workspaceId      String           @map("workspace_id")
-  channelAccountId String           @map("channel_account_id")
-  sourceEventId    String           @map("source_event_id")
-  eventType        ChannelEventType @map("event_type")
-  occurredAt       DateTime         @map("occurred_at")
-  receivedAt       DateTime         @default(now()) @map("received_at")
-  processedAt      DateTime?        @map("processed_at")
+  id                String           @id @default(uuid(7))
+  workspaceId       String           @map("workspace_id")
+  businessProfileId String           @map("business_profile_id")
+  channelAccountId  String           @map("channel_account_id")
+  sourceEventId     String           @map("source_event_id")
+  eventType         ChannelEventType @map("event_type")
+  occurredAt        DateTime         @map("occurred_at")
+  receivedAt        DateTime         @default(now()) @map("received_at")
+  processedAt       DateTime?        @map("processed_at")
 
-  channelAccount ChannelAccount @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount @relation(fields: [workspaceId, businessProfileId, channelAccountId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@unique([workspaceId, channelAccountId, sourceEventId], map: "inbound_events_source_event_key")
+  @@unique([workspaceId, businessProfileId, channelAccountId, sourceEventId], map: "inbound_events_source_event_key")
   @@index([workspaceId, receivedAt])
   @@map("inbound_events")
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Contacts and conversations
+// Customer identity and conversations (Business Profile owned)
 // ---------------------------------------------------------------------------------------------------------
 
+/// Canonical customer inside one Business Profile; there is no cross-profile customer graph.
 model Contact {
-  id          String   @id @default(uuid(7))
-  workspaceId String   @map("workspace_id")
-  displayName String?  @map("display_name")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id                String   @id @default(uuid(7))
+  workspaceId       String   @map("workspace_id")
+  businessProfileId String   @map("business_profile_id")
+  displayName       String?  @map("display_name")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
-  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  identities ContactIdentity[]
+  businessProfile   BusinessProfile   @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelIdentities ChannelIdentity[]
+  conversations     Conversation[]
 
-  @@unique([workspaceId, id])
+  @@unique([workspaceId, businessProfileId, id])
   @@map("contacts")
 }
 
-model ContactIdentity {
-  id               String   @id @default(uuid(7))
-  workspaceId      String   @map("workspace_id")
-  contactId        String   @map("contact_id")
-  channelAccountId String   @map("channel_account_id")
-  externalUserId   String   @map("external_user_id")
-  displayName      String?  @map("display_name")
-  username         String?
-  metadata         Json     @default("{}")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+/// Provider identity of a contact on one channel account of the same Business Profile. The stable provider
+/// user ID is the key; username/display name are mutable attributes, never identity evidence.
+model ChannelIdentity {
+  id                String   @id @default(uuid(7))
+  workspaceId       String   @map("workspace_id")
+  businessProfileId String   @map("business_profile_id")
+  contactId         String   @map("contact_id")
+  channelAccountId  String   @map("channel_account_id")
+  externalUserId    String   @map("external_user_id")
+  displayName       String?  @map("display_name")
+  username          String?
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
-  contact        Contact        @relation(fields: [workspaceId, contactId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  channelAccount ChannelAccount @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact        Contact        @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount ChannelAccount @relation(fields: [workspaceId, businessProfileId, channelAccountId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   conversations  Conversation[]
 
-  @@unique([workspaceId, channelAccountId, id])
-  /// External identity lookup: a platform user maps to one identity per channel account.
-  @@unique([workspaceId, channelAccountId, externalUserId], map: "contact_identities_external_user_key")
-  @@index([workspaceId, contactId])
-  @@map("contact_identities")
+  @@unique([workspaceId, businessProfileId, channelAccountId, id])
+  /// External identity lookup: a provider user maps to one identity per channel account (hence per profile).
+  @@unique([workspaceId, businessProfileId, channelAccountId, externalUserId], map: "channel_identities_external_user_key")
+  @@index([workspaceId, businessProfileId, contactId])
+  @@map("channel_identities")
 }
 
 model Conversation {
   id                        String             @id @default(uuid(7))
   workspaceId               String             @map("workspace_id")
+  businessProfileId         String             @map("business_profile_id")
   channelAccountId          String             @map("channel_account_id")
-  contactIdentityId         String             @map("contact_identity_id")
+  contactId                 String             @map("contact_id")
+  channelIdentityId         String             @map("channel_identity_id")
   modeOverride              AiMode?            @map("mode_override")
   aiEnabled                 Boolean            @default(true) @map("ai_enabled")
   takeoverState             TakeoverState      @default(NONE) @map("takeover_state")
@@ -427,6 +493,8 @@ model Conversation {
   reviewEligibilitySnapshot Json?              @map("review_eligibility_snapshot")
   leadStage                 LeadStage          @default(NEW) @map("lead_stage")
   status                    ConversationStatus @default(OPEN)
+  /// Optimistic-concurrency anchor: increases with material changes that make anchored actions stale.
+  stateVersion              Int                @default(0) @map("state_version")
   lastInboundAt             DateTime?          @map("last_inbound_at")
   lastOutboundAt            DateTime?          @map("last_outbound_at")
   /// Inbox ordering: latest message activity (creation time until the first message).
@@ -434,16 +502,17 @@ model Conversation {
   createdAt                 DateTime           @default(now()) @map("created_at")
   updatedAt                 DateTime           @updatedAt @map("updated_at")
 
-  contactIdentity   ContactIdentity @relation(fields: [workspaceId, channelAccountId, contactIdentityId], references: [workspaceId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelIdentity   ChannelIdentity @relation(fields: [workspaceId, businessProfileId, channelAccountId, channelIdentityId], references: [workspaceId, businessProfileId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
+  contact           Contact         @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   takeoverActorUser User?           @relation(fields: [takeoverActorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   messages          Message[]
   aiDrafts          AiDraft[]
 
-  @@unique([workspaceId, id])
-  @@unique([workspaceId, channelAccountId, id])
-  /// One thread per platform participant per channel account (platform DM threads are 1:1).
-  @@unique([workspaceId, channelAccountId, contactIdentityId], map: "conversations_contact_identity_key")
-  @@index([workspaceId, status, lastMessageAt(sort: Desc)])
+  @@unique([workspaceId, businessProfileId, id])
+  @@unique([workspaceId, businessProfileId, channelAccountId, id])
+  /// One thread per provider participant per channel account (platform DM threads are 1:1).
+  @@unique([workspaceId, businessProfileId, channelAccountId, channelIdentityId], map: "conversations_channel_identity_key")
+  @@index([workspaceId, businessProfileId, status, lastMessageAt(sort: Desc)], map: "conversations_profile_inbox_idx")
   @@index([channelAccountId, lastInboundAt])
   @@map("conversations")
 }
@@ -451,6 +520,7 @@ model Conversation {
 model Message {
   id                      String                 @id @default(uuid(7))
   workspaceId             String                 @map("workspace_id")
+  businessProfileId       String                 @map("business_profile_id")
   channelAccountId        String                 @map("channel_account_id")
   conversationId          String                 @map("conversation_id")
   /// Platform message ID once known (inbound mid/wamid, or the ID returned by an accepted send).
@@ -472,17 +542,17 @@ model Message {
   createdAt               DateTime               @default(now()) @map("created_at")
   updatedAt               DateTime               @updatedAt @map("updated_at")
 
-  conversation   Conversation   @relation(fields: [workspaceId, channelAccountId, conversationId], references: [workspaceId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
-  aiDraft        AiDraft?       @relation("DraftSend", fields: [workspaceId, aiDraftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  conversation   Conversation   @relation(fields: [workspaceId, businessProfileId, channelAccountId, conversationId], references: [workspaceId, businessProfileId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
+  aiDraft        AiDraft?       @relation("DraftSend", fields: [workspaceId, businessProfileId, aiDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   sentByUser     User?          @relation(fields: [sentByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   anchoredDrafts AiDraft[]      @relation("DraftAnchor")
   styleExamples  StyleExample[]
 
-  @@unique([workspaceId, id])
-  @@unique([workspaceId, conversationId, id])
-  @@unique([workspaceId, channelAccountId, channelMessageId], map: "messages_channel_message_key")
+  @@unique([workspaceId, businessProfileId, id])
+  @@unique([workspaceId, businessProfileId, conversationId, id])
+  @@unique([workspaceId, businessProfileId, channelAccountId, channelMessageId], map: "messages_channel_message_key")
   /// At most one outbound message per AI draft.
-  @@unique([workspaceId, aiDraftId])
+  @@unique([workspaceId, businessProfileId, aiDraftId], map: "messages_ai_draft_key")
   @@index([conversationId, occurredAt])
   @@map("messages")
 }
@@ -494,8 +564,11 @@ model Message {
 model AiDraft {
   id                 String        @id @default(uuid(7))
   workspaceId        String        @map("workspace_id")
+  businessProfileId  String        @map("business_profile_id")
   conversationId     String        @map("conversation_id")
   anchorMessageId    String        @map("anchor_message_id")
+  /// Conversation state_version the draft was generated for; the draft is stale once it moves on.
+  anchorStateVersion Int           @map("anchor_state_version")
   text               String
   structuredOutput   Json          @map("structured_output")
   confidence         Float
@@ -516,21 +589,22 @@ model AiDraft {
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
 
-  conversation  Conversation       @relation(fields: [workspaceId, conversationId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  anchorMessage Message            @relation("DraftAnchor", fields: [workspaceId, conversationId, anchorMessageId], references: [workspaceId, conversationId, id], onDelete: Restrict, onUpdate: Restrict)
+  conversation  Conversation       @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "ai_drafts_conversation_fkey")
+  anchorMessage Message            @relation("DraftAnchor", fields: [workspaceId, businessProfileId, conversationId, anchorMessageId], references: [workspaceId, businessProfileId, conversationId, id], onDelete: Restrict, onUpdate: Restrict, map: "ai_drafts_anchor_message_fkey")
   sentMessage   Message?           @relation("DraftSend")
   deliveryJob   DeliveryJobRecord?
   styleExamples StyleExample[]
 
-  @@unique([workspaceId, id])
+  @@unique([workspaceId, businessProfileId, id])
   @@index([conversationId, createdAt])
-  @@index([workspaceId, status])
+  @@index([workspaceId, businessProfileId, status])
   @@map("ai_drafts")
 }
 
 model DeliveryJobRecord {
   id                String            @id @default(uuid(7))
   workspaceId       String            @map("workspace_id")
+  businessProfileId String            @map("business_profile_id")
   draftId           String            @map("draft_id")
   /// One logical outbound action; stable across queue retries (ADR-012).
   operationId       String            @unique @map("operation_id")
@@ -550,44 +624,46 @@ model DeliveryJobRecord {
   createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  draft AiDraft @relation(fields: [workspaceId, draftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  draft AiDraft @relation(fields: [workspaceId, businessProfileId, draftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
 
   /// One delivery job per draft, so a draft can never become more than one send.
-  @@unique([workspaceId, draftId])
+  @@unique([workspaceId, businessProfileId, draftId], map: "delivery_jobs_draft_key")
   @@index([status, scheduledFor])
-  @@index([workspaceId, status])
+  @@index([workspaceId, businessProfileId, status])
   @@map("delivery_jobs")
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Knowledge and style (separate retrieval domains, ADR-011). Vector/full-text columns arrive with retrieval.
+// Knowledge and style (separate retrieval domains, ADR-011): Workspace base + optional Business Profile
+// override. Vector/full-text columns arrive with retrieval.
 // ---------------------------------------------------------------------------------------------------------
 
 model KnowledgeDocument {
-  id               String                  @id @default(uuid(7))
-  workspaceId      String                  @map("workspace_id")
-  /// Absent for workspace-wide knowledge; set to scope a document to one channel account.
-  channelAccountId String?                 @map("channel_account_id")
-  title            String
-  sourceType       KnowledgeSourceType     @map("source_type")
-  sourceUri        String?                 @map("source_uri")
-  version          Int                     @default(1)
-  status           KnowledgeDocumentStatus @default(DRAFT)
-  contentHash      String?                 @map("content_hash")
-  createdByUserId  String?                 @map("created_by_user_id")
-  createdAt        DateTime                @default(now()) @map("created_at")
-  updatedAt        DateTime                @updatedAt @map("updated_at")
+  id                String                  @id @default(uuid(7))
+  workspaceId       String                  @map("workspace_id")
+  /// Absent for Workspace base knowledge; set for a Business Profile override/specific source.
+  businessProfileId String?                 @map("business_profile_id")
+  title             String
+  sourceType        KnowledgeSourceType     @map("source_type")
+  sourceUri         String?                 @map("source_uri")
+  version           Int                     @default(1)
+  status            KnowledgeDocumentStatus @default(DRAFT)
+  contentHash       String?                 @map("content_hash")
+  createdByUserId   String?                 @map("created_by_user_id")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
 
-  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  channelAccount ChannelAccount?  @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  createdByUser  User?            @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  chunks         KnowledgeChunk[]
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  createdByUser   User?            @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  chunks          KnowledgeChunk[]
 
   @@unique([workspaceId, id])
-  @@index([workspaceId, status])
+  @@index([workspaceId, businessProfileId, status])
   @@map("knowledge_documents")
 }
 
+/// Chunks inherit their document's scope (Workspace base or Business Profile override) through document_id.
 model KnowledgeChunk {
   id               String   @id @default(uuid(7))
   workspaceId      String   @map("workspace_id")
@@ -608,38 +684,40 @@ model KnowledgeChunk {
 }
 
 model StyleExample {
-  id               String                 @id @default(uuid(7))
-  workspaceId      String                 @map("workspace_id")
-  channelAccountId String?                @map("channel_account_id")
-  inboundContext   String                 @map("inbound_context")
-  outboundText     String                 @map("outbound_text")
-  provenance       StyleExampleProvenance
-  sourceMessageId  String?                @map("source_message_id")
-  sourceDraftId    String?                @map("source_draft_id")
-  approvedByUserId String?                @map("approved_by_user_id")
-  status           StyleExampleStatus     @default(ACTIVE)
-  embeddingProfile String?                @map("embedding_profile")
-  createdAt        DateTime               @default(now()) @map("created_at")
-  updatedAt        DateTime               @updatedAt @map("updated_at")
+  id                String                 @id @default(uuid(7))
+  workspaceId       String                 @map("workspace_id")
+  /// Absent for Workspace base style; required when the example comes from a Business Profile conversation.
+  businessProfileId String?                @map("business_profile_id")
+  inboundContext    String                 @map("inbound_context")
+  outboundText      String                 @map("outbound_text")
+  provenance        StyleExampleProvenance
+  sourceMessageId   String?                @map("source_message_id")
+  sourceDraftId     String?                @map("source_draft_id")
+  approvedByUserId  String?                @map("approved_by_user_id")
+  status            StyleExampleStatus     @default(ACTIVE)
+  embeddingProfile  String?                @map("embedding_profile")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  channelAccount ChannelAccount? @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  sourceMessage  Message?        @relation(fields: [workspaceId, sourceMessageId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  sourceDraft    AiDraft?        @relation(fields: [workspaceId, sourceDraftId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
-  approvedByUser User?           @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  sourceMessage   Message?         @relation(fields: [workspaceId, businessProfileId, sourceMessageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  sourceDraft     AiDraft?         @relation(fields: [workspaceId, businessProfileId, sourceDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  approvedByUser  User?            @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@index([workspaceId, status])
+  @@index([workspaceId, businessProfileId, status])
   @@map("style_examples")
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Automation policy
+// Automation policy: Business Profile default + optional channel-account override (DATA_MODEL.md v0.4 §15)
 // ---------------------------------------------------------------------------------------------------------
 
 model AutomationPolicy {
   id                                  String                     @id @default(uuid(7))
   workspaceId                         String                     @map("workspace_id")
-  /// Absent for the workspace default; set for a channel-account override.
+  businessProfileId                   String                     @map("business_profile_id")
+  /// Absent for the Business Profile default; set for a channel-account override in the same profile.
   channelAccountId                    String?                    @map("channel_account_id")
   mode                                AiMode                     @default(OFF)
   confidenceThreshold                 Float                      @default(0.8) @map("confidence_threshold")
@@ -658,11 +736,11 @@ model AutomationPolicy {
   createdAt                           DateTime                   @default(now()) @map("created_at")
   updatedAt                           DateTime                   @updatedAt @map("updated_at")
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  channelAccount ChannelAccount? @relation(fields: [workspaceId, channelAccountId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount  ChannelAccount? @relation(fields: [workspaceId, businessProfileId, channelAccountId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
 
-  /// One workspace default (channel_account_id IS NULL) per workspace.
-  @@unique([workspaceId], where: raw("channel_account_id IS NULL"), map: "automation_policies_workspace_default_key")
-  @@unique([workspaceId, channelAccountId])
+  /// One Business Profile default (channel_account_id IS NULL) per profile.
+  @@unique([workspaceId, businessProfileId], where: raw("channel_account_id IS NULL"), map: "automation_policies_profile_default_key")
+  @@unique([workspaceId, businessProfileId, channelAccountId], map: "automation_policies_channel_override_key")
   @@map("automation_policies")
 }

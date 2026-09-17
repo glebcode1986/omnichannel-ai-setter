@@ -18,6 +18,8 @@ import {
   TAKEOVER_REASONS,
   WHATSAPP_AFTER_WINDOW_POLICIES,
   WORKSPACE_ROLES,
+  BUSINESS_PROFILE_ACCESS_SCOPES,
+  BUSINESS_PROFILE_STATUSES,
   type Actor,
 } from "@omnichannel/domain";
 import { describe, expect, expectTypeOf, it } from "vitest";
@@ -29,6 +31,8 @@ describe("Prisma enums", () => {
     ["ChannelType", enums.ChannelType, CHANNEL_TYPES],
     ["AiMode", enums.AiMode, AI_MODES],
     ["WorkspaceRole", enums.WorkspaceRole, WORKSPACE_ROLES],
+    ["BusinessProfileAccessScope", enums.BusinessProfileAccessScope, BUSINESS_PROFILE_ACCESS_SCOPES],
+    ["BusinessProfileStatus", enums.BusinessProfileStatus, BUSINESS_PROFILE_STATUSES],
     ["ChannelAccountStatus", enums.ChannelAccountStatus, CHANNEL_ACCOUNT_STATUSES],
     ["ConversationStatus", enums.ConversationStatus, CONVERSATION_STATUSES],
     ["LeadStage", enums.LeadStage, LEAD_STAGES],
