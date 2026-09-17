@@ -8,6 +8,7 @@ import {
   DEFAULT_DELIVERY_DELAY_MS,
   toConfidence,
   toDurationRangeMs,
+  toQuietHours,
   type Confidence,
   type DurationRangeMs,
   type QuietHours,
@@ -114,7 +115,11 @@ export function createAutomationPolicy(input: AutomationPolicyInput): Automation
     mandatoryReviewReasons: [...reviewReasons],
     debounceWindowMs: toDurationRangeMs(debounce.minMs, debounce.maxMs, "debounceWindowMs"),
     deliveryDelayMs: toDurationRangeMs(delay.minMs, delay.maxMs, "deliveryDelayMs"),
-    ...(input.quietHours !== undefined ? { quietHours: input.quietHours } : {}),
+    // Rebuilt, not copied: the input may come from JavaScript or storage, and the policy must own its value
+    // so later mutation of the caller's object cannot change a validated policy.
+    ...(input.quietHours === undefined
+      ? {}
+      : { quietHours: toQuietHours(input.quietHours.timeZone, input.quietHours.start, input.quietHours.end) }),
     takeoverPauseMs,
     instagramAfterWindowPolicy,
     whatsappAfterWindowPolicy,

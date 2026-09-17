@@ -61,6 +61,7 @@ import {
   type OutboundMessage,
   type HumanTakeoverState,
   type Message,
+  type QuietHours,
   type WorkspaceId,
 } from "./index";
 
@@ -295,6 +296,20 @@ describe("human takeover", () => {
     expect([...HUMAN_TAKEOVER_STATES]).toEqual(states.map((takeover) => takeover.state));
     expect(() => describeState({ state: "PAUSED" } as unknown as HumanTakeoverState)).toThrow(DomainValidationError);
   });
+
+  it("never discloses the offending discriminant, which may be customer data", () => {
+    const secret = "SYNTHETIC_SECRET_DO_NOT_LOG";
+    const thrown = captureDomainError(() => assertNever({ type: secret } as never, "event"));
+
+    expect(thrown.field).toBe("event");
+    expect(`${String(thrown)} ${thrown.message} ${thrown.stack ?? ""}`).not.toContain(secret);
+    expect(thrown.message).toBe("event: unhandled variant (object with an unhandled type discriminant)");
+    // The same holds for primitives and for objects without a discriminant.
+    expect(captureDomainError(() => assertNever(secret as never)).message).toBe("value: unhandled variant (string)");
+    expect(captureDomainError(() => assertNever({ id: secret } as never)).message).toBe(
+      "value: unhandled variant (object without a type discriminant)",
+    );
+  });
 });
 
 describe("messages", () => {
@@ -348,11 +363,30 @@ describe("createAutomationPolicy", () => {
       ["whatsappAfterWindowPolicy", { ...base, whatsappAfterWindowPolicy: "FREEFORM" as never }],
       ["whatsappTemplateAutomationAllowlist", { ...base, whatsappTemplateAutomationAllowlist: [" "] }],
       ["mandatoryReviewReasons", { ...base, mandatoryReviewReasons: ["NOT_A_REASON" as never] }],
+      // Quiet hours reach the policy from storage or JavaScript callers, so they are revalidated here.
+      ["quietHours.timeZone", { ...base, quietHours: { timeZone: "Mars/Olympus", start: "22:00", end: "08:00" } as never }],
+      ["quietHours", { ...base, quietHours: { timeZone: "Europe/Istanbul", start: "24:00", end: "08:00" } as never }],
+      ["quietHours", { ...base, quietHours: { timeZone: "Europe/Istanbul", start: "22:00", end: "8:00" } as never }],
+      ["quietHours", { ...base, quietHours: { timeZone: "Europe/Istanbul", start: "22:00", end: "22:00" } as never }],
     ];
 
     for (const [field, input] of invalid) {
       expect(captureDomainError(() => createAutomationPolicy(input)).field).toBe(field);
     }
+  });
+
+  it("owns its quiet hours instead of holding the caller's object", () => {
+    const quietHours = { timeZone: "Europe/Istanbul", start: "22:00", end: "08:00" } as QuietHours;
+    const policy = createAutomationPolicy({ ...base, quietHours });
+
+    expect(policy.quietHours).toEqual(quietHours);
+    expect(policy.quietHours).not.toBe(quietHours);
+
+    // A caller that mutates its own input afterwards cannot change the validated policy.
+    const mutable = quietHours as { timeZone: string; start: string; end: string };
+    mutable.start = "00:00";
+    mutable.timeZone = "Mars/Olympus";
+    expect(policy.quietHours).toEqual({ timeZone: "Europe/Istanbul", start: "22:00", end: "08:00" });
   });
 
   it("keeps TEMPLATE_AUTOPILOT with an empty allowlist (no unattended template sends) and de-duplicates entries", () => {
