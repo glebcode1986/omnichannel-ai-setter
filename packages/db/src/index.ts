@@ -42,6 +42,7 @@ export {
   DEFAULT_MIN_SIMILARITY,
   EMBEDDING_DIMENSIONS,
 } from "./retrieval/sql";
+export { createStyleProfileStore, type StyleProfileQuery, type StyleProfileStore } from "./style-profile-store";
 export {
   createCredentialCipher,
   CREDENTIAL_ALGORITHM,

@@ -6,10 +6,12 @@ import {
   createDraftContextStore,
   createIngestionStore,
   createKnowledgeRetriever,
+  createStyleProfileStore,
   createStyleRetriever,
   EMBEDDING_DIMENSIONS,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
+import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger, type Logger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
@@ -111,7 +113,8 @@ function main(): void {
           ...(embeddings === undefined ? {} : { embeddings }),
           log: logger,
         },
-        persona: env.AI_PERSONA,
+        styleProfiles: createStyleProfileStore(db),
+        platformStyleFallback: resolveStyleProfile([{ persona: env.AI_PERSONA }]),
         logger,
       });
       const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft) });

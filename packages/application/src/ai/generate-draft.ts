@@ -46,8 +46,29 @@ export interface DraftGenerationDependencies {
   readonly timeoutMs?: number;
 }
 
-/** Why the model was asked. A human asking explicitly is a different act from automation deciding to. */
-export type DraftTrigger = "DEBOUNCE_ELAPSED" | "MANUAL_REQUEST";
+/**
+ * Why the model was asked, and on whose authority.
+ *
+ * A human asking explicitly is a different act from automation deciding to, and the difference decides
+ * whether a draft may be produced at all in mode OFF. So it is carried as a discriminated union with the
+ * acting user *inside* the human variant, rather than as a string an inbound-triggered job could also set:
+ * a background worker has no user to put there, so it cannot express a human request even by mistake.
+ */
+export type DraftTrigger =
+  | { readonly kind: "AUTOMATIC"; readonly reason: "DEBOUNCE_ELAPSED" }
+  | {
+      readonly kind: "HUMAN_REQUEST";
+      /** The workspace member who asked. Recorded on the draft as human-requested AI assistance. */
+      readonly requestedByUserId: string;
+      readonly requestedAt: Date;
+      /** Distinguishes repeated requests; a retried queue job reuses the same value. */
+      readonly requestId: string;
+    };
+
+/** True only for a request an authorized person made deliberately. */
+export function isHumanRequested(trigger: DraftTrigger): boolean {
+  return trigger.kind === "HUMAN_REQUEST";
+}
 
 export interface DraftGenerationCommand {
   readonly scope: ReplyGenerationRequest["scope"];
@@ -55,7 +76,7 @@ export interface DraftGenerationCommand {
   readonly anchorStateVersion: number;
   readonly trigger: DraftTrigger;
   readonly snapshot: DraftConversationSnapshot;
-  readonly persona: string;
+  readonly styleProfile: ReplyGenerationRequest["styleProfile"];
   readonly channel: ReplyGenerationRequest["channel"];
   readonly capabilityHints: readonly string[];
   readonly inbound: readonly ReplyGenerationRequest["inbound"][number][];
@@ -80,22 +101,31 @@ export type DraftGenerationOutcome =
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * A conversation must be open, AI-enabled, not under human control, and still on the state the draft
- * answers. Mode OFF mirrors only, so it generates nothing — not even on an explicit request (POLICY_ENGINE.md
- * and PROJECT_CONTEXT.md; see the PR description, this one is flagged for the product owner).
+ * What stops a generation before it starts.
+ *
+ * Two of these depend on who is asking (product-owner decision on PR #65). Mode OFF means no background
+ * generation and no automatic scheduling, but an authorized person may still click "ask AI" and get a
+ * draft they must then review, edit and send themselves. Likewise a human takeover blocks *automation*
+ * from racing the person handling the conversation — it cannot sensibly block that person from asking for
+ * help.
+ *
+ * The rest hold for everyone. AI disabled is a per-conversation kill switch, a closed conversation has
+ * nothing to answer, and an anchor the customer has already overtaken would answer the wrong question
+ * however it was requested.
  */
-export function draftGenerationBlockers(snapshot: DraftConversationSnapshot): readonly ReasonCode[] {
+export function draftGenerationBlockers(snapshot: DraftConversationSnapshot, trigger: DraftTrigger): readonly ReasonCode[] {
   const blockers: ReasonCode[] = [];
-  if (snapshot.mode === "OFF") {
+  const humanRequested = isHumanRequested(trigger);
+  if (snapshot.mode === "OFF" && !humanRequested) {
     blockers.push("MODE_NOT_AUTOPILOT");
   }
   if (!snapshot.aiEnabled) {
     blockers.push("AI_DISABLED");
   }
-  if (snapshot.takeoverState === "HUMAN_ACTIVE") {
+  if (snapshot.takeoverState === "HUMAN_ACTIVE" && !humanRequested) {
     blockers.push("HUMAN_TAKEOVER");
   }
-  if (snapshot.takeoverState === "REVIEW_REQUIRED") {
+  if (snapshot.takeoverState === "REVIEW_REQUIRED" && !humanRequested) {
     blockers.push("REVIEW_PENDING");
   }
   if (snapshot.status !== "OPEN") {
@@ -117,10 +147,10 @@ export async function generateDraft(
     businessProfileId: command.scope.businessProfileId,
     conversationId: command.scope.conversationId,
     anchorMessageId: command.anchorMessageId,
-    trigger: command.trigger,
+    trigger: command.trigger.kind,
   };
 
-  const blockers = draftGenerationBlockers(command.snapshot);
+  const blockers = draftGenerationBlockers(command.snapshot, command.trigger);
   if (blockers.length > 0) {
     // Nothing is persisted: a generation that never happened is not a draft.
     dependencies.log.info("ai.draft_declined", { ...fields, reasonCodes: blockers });
@@ -223,7 +253,7 @@ function buildRequest(dependencies: DraftGenerationDependencies, command: DraftG
     schemaVersion: dependencies.schemaVersion,
     nonce,
     timeoutMs: dependencies.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    persona: command.persona,
+    styleProfile: command.styleProfile,
     channel: command.channel,
     capabilityHints: command.capabilityHints,
     inbound,
@@ -266,11 +296,15 @@ function persistDraft(
   // A model cannot know the corpus was unreachable, so it cannot account for it: only this layer can.
   // The draft is still written — not every message needs a business fact — but never without review.
   const retrievalUnavailable = command.retrieval.supplied.status === "UNAVAILABLE";
+  // Manual assistance, by definition: the person asked for help writing, and they send it themselves.
+  // This is what keeps an "ask AI" click in mode OFF from ever becoming an automatic send.
+  const humanRequested = isHumanRequested(command.trigger);
   const reasonCodes = [...new Set<ReasonCode>(output.reason_codes)];
   const needsReview =
     output.needs_review ||
     fabricatedSources ||
     retrievalUnavailable ||
+    humanRequested ||
     reasonCodes.some((code) => (MANDATORY_REVIEW_REASON_CODES as readonly ReasonCode[]).includes(code));
 
   return save(dependencies, command, result, {
@@ -331,6 +365,8 @@ function save(
     SaveDraftInput,
     | "scope"
     | "generationKey"
+    | "trigger"
+    | "requestedByUserId"
     | "anchorMessageId"
     | "anchorStateVersion"
     | "provider"
@@ -345,6 +381,9 @@ function save(
   return dependencies.drafts.saveDraft({
     scope: command.scope,
     generationKey: generationKey(command),
+    trigger: command.trigger.kind,
+    // Who asked, recorded as human-requested AI assistance; absent for anything automation started.
+    ...(command.trigger.kind === "HUMAN_REQUEST" ? { requestedByUserId: command.trigger.requestedByUserId } : {}),
     anchorMessageId: command.anchorMessageId,
     anchorStateVersion: command.anchorStateVersion,
     provider: result.provider,
@@ -362,7 +401,12 @@ function save(
  * Identity of one logical generation. It is derived only from values that are fixed when the work is
  * enqueued, so every attempt at the same job produces the same key and a retry cannot create a second draft.
  * Deliberately excludes the conversation's live state version, which changes between attempts.
+ *
+ * A human request carries its own `requestId`, so asking twice for the same anchor produces two drafts —
+ * which is what a person clicking the button again expects, and the opposite of what a retried queue job
+ * should do.
  */
 export function generationKey(command: DraftGenerationCommand): string {
-  return [command.scope.conversationId, command.anchorMessageId, command.trigger, command.requestId ?? ""].join("|");
+  const request = command.trigger.kind === "HUMAN_REQUEST" ? command.trigger.requestId : "";
+  return [command.scope.conversationId, command.anchorMessageId, command.trigger.kind, request].join("|");
 }

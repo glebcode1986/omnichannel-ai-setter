@@ -31,6 +31,8 @@ import {
   isValidIdentifier,
   MANDATORY_REVIEW_REASON_CODES,
   NO_CAPABILITIES,
+  PLATFORM_STYLE_FALLBACK,
+  resolveStyleProfile,
   toAutomationPolicyId,
   toBusinessProfileId,
   toChannelAccountId,
@@ -414,3 +416,43 @@ function captureDomainError(action: () => unknown): DomainValidationError {
   }
   throw new Error("expected a DomainValidationError");
 }
+
+describe("resolveStyleProfile", () => {
+  it("merges field by field, so a narrow override does not reset the rest", () => {
+    const base = { persona: "We are Studio Alpha.", tone: "warm", emoji: "FREELY" as const, replyLength: "MEDIUM" as const };
+
+    const resolved = resolveStyleProfile([base, { signOff: "— the Alpha team" }]);
+
+    // Forgetting to restate the persona in an override must not silently drop a business to the platform
+    // default voice.
+    expect(resolved.persona).toBe("We are Studio Alpha.");
+    expect(resolved.tone).toBe("warm");
+    expect(resolved.emoji).toBe("FREELY");
+    expect(resolved.signOff).toBe("— the Alpha team");
+  });
+
+  it("gives later layers precedence, in the order the caller passes them", () => {
+    const resolved = resolveStyleProfile([{ persona: "Workspace voice" }, { persona: "Profile voice" }]);
+
+    expect(resolved.persona).toBe("Profile voice");
+  });
+
+  it("falls back to the platform voice only where nothing was configured", () => {
+    expect(resolveStyleProfile([])).toEqual(PLATFORM_STYLE_FALLBACK);
+    expect(resolveStyleProfile([{ tone: "brisk" }]).persona).toBe(PLATFORM_STYLE_FALLBACK.persona);
+  });
+
+  it("rebuilds and bounds what it is given, because it is rendered into system instructions", () => {
+    expect(() => resolveStyleProfile([{ persona: "   " }])).toThrow(/persona/);
+    expect(() => resolveStyleProfile([{ persona: "x".repeat(2_001) }])).toThrow(/persona/);
+    expect(() => resolveStyleProfile([{ avoidedPhrases: ["x".repeat(121)] }])).toThrow(/avoidedPhrases/);
+    expect(() => resolveStyleProfile([{ preferredPhrases: Array.from({ length: 51 }, (_v, i) => `p${String(i)}`) }])).toThrow(/preferredPhrases/);
+  });
+
+  it("drops blank entries rather than sending the model an empty instruction", () => {
+    const resolved = resolveStyleProfile([{ tone: "  ", preferredPhrases: ["", " happy to help ", "happy to help"] }]);
+
+    expect(resolved.tone).toBeUndefined();
+    expect(resolved.preferredPhrases).toEqual(["happy to help"]);
+  });
+});

@@ -1,6 +1,6 @@
 import type { ReplyGenerationRequest } from "@omnichannel/application";
 import { MODEL_EMITTABLE_REASON_CODES, parseModelOutput, ReplyModelUnavailableError } from "@omnichannel/application";
-import { LEAD_STAGES } from "@omnichannel/domain";
+import { LEAD_STAGES, resolveStyleProfile } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
 
 import { createAnthropicReplyModel } from "./reply-model";
@@ -57,7 +57,7 @@ const request = (overrides: Partial<ReplyGenerationRequest> = {}): ReplyGenerati
   schemaVersion: "ai-draft.v1",
   nonce: "fence-1",
   timeoutMs: 20_000,
-  persona: "Friendly studio assistant.",
+  styleProfile: resolveStyleProfile([{ persona: "Friendly studio assistant.", tone: "warm and direct", emoji: "NONE", avoidedPhrases: ["no worries"] }]),
   channel: "INSTAGRAM",
   capabilityHints: ["text"],
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
@@ -122,6 +122,23 @@ describe("request shape", () => {
     // History is replayed as data, never as a real assistant turn that could impersonate instructions.
     expect(body.messages.some((message) => message.role === "assistant")).toBe(false);
     expect(body.messages[0]?.content).toContain("kind=HISTORY OUTBOUND");
+  });
+
+  it("renders the business's own voice as trusted instructions, stating only what it chose", async () => {
+    const { model: replyModel, requests } = model([messageResponse()]);
+
+    await replyModel.generate(request());
+
+    const system = (JSON.parse(requests[0]?.body ?? "{}") as { system: string }).system;
+    expect(system).toContain("Friendly studio assistant.");
+    expect(system).toContain("Tone: warm and direct.");
+    expect(system).toContain("do not use emoji");
+    expect(system).toContain("Never use these phrasings: no worries");
+    // Nothing the business did not choose is asserted on its behalf.
+    expect(system).not.toContain("Usual greeting");
+    expect(system).not.toContain("Usual sign-off");
+    // "Reply in the JSON schema…" is always present, so this checks for the language instruction itself.
+    expect(system).not.toContain("unless the customer clearly writes in another language");
   });
 
   it("labels knowledge and style differently, so tone can never look like evidence", async () => {
