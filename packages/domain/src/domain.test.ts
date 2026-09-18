@@ -460,6 +460,9 @@ describe("isWithinQuietHours", () => {
   it("keeps midnight at the start of the day rather than the end", () => {
     // An `hourCycle` that renders midnight as 24 would put 00:30 outside a 22:00-07:00 period.
     expect(isWithinQuietHours(toQuietHours("UTC", "22:00", "07:00"), at("2026-09-19T00:30:00.000Z"))).toBe(true);
+  });
+});
+
 describe("resolveStyleProfile", () => {
   it("merges field by field, so a narrow override does not reset the rest", () => {
     const base = { persona: "We are Studio Alpha.", tone: "warm", emoji: "FREELY" as const, replyLength: "MEDIUM" as const };
