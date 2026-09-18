@@ -47,3 +47,10 @@ export {
 } from "./oauth";
 export type { HumanActor } from "./human-agent";
 export type { HumanAgentEligibility } from "./window";
+export {
+  DEFAULT_AUTOMATED_DISPATCH_TARGET_MS,
+  DEFAULT_AUTOMATED_RESPONSE_BUDGET_MS,
+  instagramTimingPolicy,
+  remainingAutomatedDispatchMs,
+  type InstagramTimingPolicy,
+} from "./timing";
