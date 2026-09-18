@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { candidateLimit, MAX_CANDIDATES, MIN_CANDIDATES } from "./sql";
+
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 function sourceFiles(directory: string): string[] {
@@ -46,6 +48,19 @@ describe("db retrieval has no AI-provider dependency", () => {
 
     // Query vectors arrive as data on the query; this package runs SQL and never asks a model for anything.
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("candidate limits", () => {
+  it("fetches more than the caller asked for, within a fixed ceiling", () => {
+    // Fusion can only reorder what it is given, so each list needs more than the final result size or the
+    // two lists have nothing to disagree about.
+    expect(candidateLimit(8)).toBeGreaterThan(8);
+    expect(candidateLimit(1)).toBe(MIN_CANDIDATES);
+    // And no caller can turn one retrieval into an unbounded scan.
+    expect(candidateLimit(10_000)).toBe(MAX_CANDIDATES);
+    expect(candidateLimit(Number.NaN)).toBe(MIN_CANDIDATES);
+    expect(candidateLimit(-5)).toBe(MIN_CANDIDATES);
   });
 });
 

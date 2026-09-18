@@ -45,9 +45,12 @@ export const DEFAULT_MIN_SIMILARITY = 0.55;
  */
 export const CANDIDATE_MULTIPLIER = 4;
 export const MIN_CANDIDATES = 20;
+/** A ceiling on the work one query can ask for, whatever limit a future caller passes. */
+export const MAX_CANDIDATES = 200;
 
 export function candidateLimit(limit: number): number {
-  return Math.max(MIN_CANDIDATES, Math.trunc(limit) * CANDIDATE_MULTIPLIER);
+  const requested = Number.isFinite(limit) ? Math.trunc(limit) * CANDIDATE_MULTIPLIER : 0;
+  return Math.min(MAX_CANDIDATES, Math.max(MIN_CANDIDATES, requested));
 }
 
 /**

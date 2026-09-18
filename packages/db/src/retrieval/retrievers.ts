@@ -25,7 +25,7 @@ import {
   type StyleRetriever,
 } from "@omnichannel/application";
 
-import type { DbClient } from "./../client";
+import type { DbClient } from "../client";
 import {
   candidateLimit,
   DEFAULT_MIN_LEXICAL_SCORE,
