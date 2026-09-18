@@ -99,6 +99,13 @@ export interface RetrievalQuery {
   readonly embedding?: EmbeddingVector;
   readonly limit: number;
   readonly thresholds?: Partial<RetrievalThresholds>;
+  /**
+   * BCP-47 tag of the language the reply will be written in. Style retrieval prefers examples in that
+   * language and falls back to examples that claim none; absent means no preference, which keeps the whole
+   * corpus rather than silently shrinking it. Knowledge retrieval ignores it: a fact is a fact whatever
+   * language it was written in.
+   */
+  readonly language?: string;
 }
 
 /**

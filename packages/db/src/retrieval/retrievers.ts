@@ -112,6 +112,9 @@ export function createStyleRetriever(db: DbClient): StyleRetriever {
         lexical: styleLexicalSql(),
         semantic: styleSemanticSql(),
         probe: styleProfileProbeSql(),
+        // Appended to each statement's own parameter list; `undefined` means the caller expressed no
+        // language preference, and the predicate then keeps every example.
+        extraParam: query.language ?? null,
       });
 
       const byId = new Map<string, StyleRow>();
@@ -161,7 +164,7 @@ const styleCandidate = (row: StyleRow): RankedCandidate => ({
 async function runLists<Row>(
   db: DbClient,
   query: RetrievalQuery,
-  sql: { readonly lexical: string; readonly semantic: string; readonly probe: string },
+  sql: { readonly lexical: string; readonly semantic: string; readonly probe: string; readonly extraParam?: string | null },
 ): Promise<{ lexical: Row[]; semantic: Row[]; diagnostics: RetrievalDiagnostics }> {
   const take = candidateLimit(query.limit);
   const minLexical = query.thresholds?.minLexicalScore ?? DEFAULT_MIN_LEXICAL_SCORE;
@@ -169,6 +172,8 @@ async function runLists<Row>(
   // A vector of the wrong width cannot be compared with the column at all. That is a misconfiguration,
   // not an outage, and it must not throw away a lexical list that would have worked: the semantic side is
   // skipped and the reason is recorded, exactly as for a failing embedding provider.
+  // Present only for the style queries, whose statements end with a language parameter.
+  const extra = sql.extraParam === undefined ? [] : [sql.extraParam];
   const usable = query.embedding !== undefined && query.embedding.values.length === EMBEDDING_DIMENSIONS;
   const vector = usable && query.embedding !== undefined ? toVectorLiteral(query.embedding.values) : undefined;
 
@@ -182,7 +187,15 @@ async function runLists<Row>(
       const lexicalRows =
         query.text === ""
           ? []
-          : await tx.$queryRawUnsafe<Row[]>(sql.lexical, query.scope.workspaceId, query.scope.businessProfileId, query.text, minLexical, take);
+          : await tx.$queryRawUnsafe<Row[]>(
+              sql.lexical,
+              query.scope.workspaceId,
+              query.scope.businessProfileId,
+              query.text,
+              minLexical,
+              take,
+              ...extra,
+            );
       const semanticRows =
         vector === undefined || query.embedding === undefined
           ? []
@@ -195,6 +208,7 @@ async function runLists<Row>(
               // The floor is a similarity; the query orders by distance, so it travels as a distance ceiling.
               1 - minSimilarity,
               take,
+              ...extra,
             );
       // Only on the empty path, and only when a vector was actually supplied: one cheap existence check
       // that separates "nothing was similar enough" from "this corpus is not embedded under this profile".
@@ -206,6 +220,7 @@ async function runLists<Row>(
               query.scope.workspaceId,
               query.scope.businessProfileId,
               query.embedding.profile,
+              ...extra,
             );
       return { lexical: lexicalRows, semantic: semanticRows, profilePresent: probed?.[0]?.present };
     }, RETRIEVAL_TRANSACTION);

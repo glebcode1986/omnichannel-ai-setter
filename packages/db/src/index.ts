@@ -38,6 +38,13 @@ export { createDraftContextStore, type DraftContext, type DraftContextQuery, typ
 export { createIngestionStore } from "./ingestion-store";
 export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
 export {
+  seedKnowledge,
+  seedStyleExample,
+  type SeededKnowledge,
+  type SeedKnowledgeInput,
+  type SeedStyleExampleInput,
+} from "./retrieval/seed";
+export {
   DEFAULT_MIN_LEXICAL_SCORE,
   DEFAULT_MIN_SIMILARITY,
   EMBEDDING_DIMENSIONS,

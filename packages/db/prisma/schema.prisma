@@ -819,6 +819,9 @@ model StyleExample {
   sourceDraftId     String?                @map("source_draft_id")
   approvedByUserId  String?                @map("approved_by_user_id")
   status            StyleExampleStatus     @default(ACTIVE)
+  /// BCP-47 tag of the example's language. NULL means language-agnostic: such an example is a fallback
+  /// that matches any language rather than a wrong-language match (product-owner decision on PR #66).
+  language          String?
   /// Set exactly when `embedding` is set (CHECK), as for knowledge chunks.
   embeddingProfile  String?                @map("embedding_profile")
   /// pgvector column; read and written only through raw SQL in `src/retrieval`.
@@ -833,6 +836,7 @@ model StyleExample {
   approvedByUser  User?            @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([workspaceId, businessProfileId, status])
+  @@index([workspaceId, businessProfileId, language], map: "style_examples_language_idx")
   @@map("style_examples")
 }
 
