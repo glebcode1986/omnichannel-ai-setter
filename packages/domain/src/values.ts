@@ -96,3 +96,38 @@ function minutesOfDayIn(timeZone: string, now: Date): number {
   const value = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? "0");
   return value("hour") * 60 + value("minute");
 }
+
+/**
+ * The next instant at which a quiet period ends, at or after `now`.
+ *
+ * Computed in the period's own time zone and returned as an instant, so a caller can compare it against a
+ * provider deadline without re-deriving anything. When `now` is already outside the period the answer is
+ * the *next* end, which is the same value a caller inside the period would get one tick earlier — so the
+ * function is total and never has to be guarded by a separate "is it quiet" check.
+ *
+ * Deliberately built by walking minute-of-day arithmetic rather than by constructing a local date: a zone
+ * offset can change between `now` and the boundary (a daylight-saving transition inside the quiet period is
+ * the common case for an overnight one), and a naive local-date construction lands on the wrong instant
+ * exactly then.
+ */
+export function nextQuietHoursEnd(quietHours: QuietHours, now: Date): Date {
+  const minutesNow = minutesOfDayIn(quietHours.timeZone, now);
+  const end = minutesOfDay(quietHours.end);
+  const minutesAhead = end > minutesNow ? end - minutesNow : end - minutesNow + MINUTES_PER_DAY;
+  const candidate = new Date(now.getTime() + minutesAhead * 60_000);
+  // One correction pass: if the offset shifted across the boundary, the wall clock at `candidate` is not
+  // `end`, and the difference is exactly the shift.
+  const drift = minutesOfDayIn(quietHours.timeZone, candidate) - end;
+  const corrected = new Date(candidate.getTime() - normalizeDrift(drift) * 60_000);
+  return corrected.getTime() > now.getTime() ? corrected : candidate;
+}
+
+const MINUTES_PER_DAY = 24 * 60;
+
+/** A drift of +23h59m is really -1m; fold it into the nearest direction. */
+function normalizeDrift(drift: number): number {
+  if (drift > MINUTES_PER_DAY / 2) {
+    return drift - MINUTES_PER_DAY;
+  }
+  return drift < -MINUTES_PER_DAY / 2 ? drift + MINUTES_PER_DAY : drift;
+}

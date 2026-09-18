@@ -51,3 +51,23 @@ Payment/refund disputes beyond documented simple policy, legal/contract interpre
 ## Test style
 
 Implement as pure functions/value objects where possible. Table-driven tests must cover every gate individually plus conflicting combinations. LLM text cannot change or disable a gate.
+
+## Implementation notes (P2-05 owner follow-up)
+
+- **A closed standard window under `STANDARD_ONLY` is `SKIP`, not a review item.** No send path exists,
+  now or by a human, so a review item would be one nobody could act on; the Inbox still shows the
+  conversation and its operational state. Under `HUMAN_ASSISTED_EXTENDED` with live eligibility the
+  decision is still `HOLD_REVIEW` with `reviewMode: "HUMAN_AGENT"`, because there a person *can* act.
+- **Quiet hours defer rather than block.** Inside a quiet period the decision carries `notBefore`, the end
+  of the period computed in its own time zone. Deferral happens only when that instant is still inside both
+  the provider's dispatch deadline and the messaging window; otherwise the reply can be sent neither now nor
+  later and a person decides. Quiet hours never cause a blind late send.
+- **`dispatchDeadline` is the provider's budget, not our preference.** On Instagram it is seconds long, so
+  a quiet period never fits inside it and the decision is always a hold there — which is the correct
+  outcome, reached from the general rule rather than from a channel-specific special case.
+- **After-window policy is channel-discriminated.** `AfterWindowPolicy` is a union over the channel, so a
+  WhatsApp conversation cannot carry an Instagram policy and the Human Agent exception is unrepresentable
+  outside Instagram rather than merely discouraged. WhatsApp's own variants (ADR-016) plug in without
+  touching Instagram semantics.
+- **Mode OFF stays terminal for automatic work.** An explicit human-requested draft is a separate
+  manual-assist path handled in draft generation, and it never reaches automatic scheduling.

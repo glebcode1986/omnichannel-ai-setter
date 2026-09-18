@@ -17,6 +17,7 @@
 import {
   allowsAutomatedSend,
   isWithinQuietHours,
+  nextQuietHoursEnd,
   type ReasonCode,
   type ReviewMode,
 } from "@omnichannel/domain";
@@ -87,15 +88,23 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (!contentSupported(input)) {
     reasons.add("UNSUPPORTED_MEDIA");
   }
-  if (input.limits.quietHours !== undefined && isWithinQuietHours(input.limits.quietHours, input.now)) {
-    // Deferring past quiet hours is not an option on a channel with a seconds-long automated budget
-    // (Issue #13 owner decision), so quiet hours mean a person decides, not a later robot.
+  // Quiet hours prefer to defer rather than block (product-owner decision on PR #67). A compliant later
+  // time is a better answer than a review item — but only if it still sits inside what the provider
+  // permits. On a channel with a seconds-long automated budget it never will, and then a person decides.
+  const deferral = evaluateQuietHours(input);
+  if (deferral.blocked) {
     reasons.add("QUIET_HOURS");
   }
 
   const windowReasons = evaluateWindowGate(input);
   for (const code of windowReasons) {
     reasons.add(code);
+  }
+  if (windowReasons.includes("WINDOW_CLOSED") && !reasons.has("HUMAN_AGENT_REVIEW_REQUIRED")) {
+    // No permitted send path exists, now or by a human (product-owner decision on PR #67). A review item
+    // here would be one nobody could act on, and a queue full of those is worse than an empty one — the
+    // Inbox still shows the conversation with its operational state.
+    terminal = true;
   }
 
   if (terminal) {
@@ -104,7 +113,32 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (reasons.size > 0) {
     return { action: "HOLD_REVIEW", reasons: ordered(reasons), reviewMode: reviewModeFor(input, reasons) };
   }
-  return { action: "SCHEDULE", reasons: [] };
+  return { action: "SCHEDULE", reasons: [], ...(deferral.notBefore === undefined ? {} : { notBefore: deferral.notBefore }) };
+}
+
+/**
+ * Quiet hours, as a deferral preference rather than a prohibition.
+ *
+ * Outside quiet hours nothing changes. Inside them there is a compliant later time — the end of the quiet
+ * period — and delivery is moved to it *if* that time is still within the provider's dispatch deadline and
+ * the messaging window. If it is not, the reply cannot be sent late and cannot be sent now, so it becomes a
+ * decision for a person. Quiet hours must never cause a blind late send.
+ */
+function evaluateQuietHours(input: PolicyInput): { readonly blocked: boolean; readonly notBefore?: Date } {
+  const quietHours = input.limits.quietHours;
+  if (quietHours === undefined || !isWithinQuietHours(quietHours, input.now)) {
+    return { blocked: false };
+  }
+  const resumesAt = nextQuietHoursEnd(quietHours, input.now);
+  if (input.dispatchDeadline !== undefined && resumesAt.getTime() > input.dispatchDeadline.getTime()) {
+    // Waiting would miss the provider's own budget, and sending late is not an option.
+    return { blocked: true };
+  }
+  if (input.window.state === "OPEN_FREEFORM" && input.window.expiresAt !== undefined && resumesAt.getTime() >= input.window.expiresAt.getTime()) {
+    // The messaging window closes before the quiet period ends, so there is no compliant later time.
+    return { blocked: true };
+  }
+  return { blocked: false, notBefore: resumesAt };
 }
 
 /**
@@ -170,7 +204,10 @@ function reviewModeFor(input: PolicyInput, reasons: ReadonlySet<ReasonCode>): Re
 }
 
 function humanAgentPathAvailable(input: PolicyInput): boolean {
-  return input.limits.instagramAfterWindowPolicy === "HUMAN_ASSISTED_EXTENDED" && input.humanAgent.state === "ELIGIBLE";
+  const afterWindow = input.limits.afterWindow;
+  // The human-support exception is Instagram's, and the union is what keeps it from being reachable on a
+  // channel whose policy vocabulary does not contain it.
+  return afterWindow.channel === "INSTAGRAM" && afterWindow.policy === "HUMAN_ASSISTED_EXTENDED" && input.humanAgent.state === "ELIGIBLE";
 }
 
 /**

@@ -20,7 +20,7 @@ const passing = (): PolicyInput => ({
   limits: {
     confidenceThreshold: 0.8,
     mandatoryReviewReasons: ["MISSING_FACT", "PAYMENT_DISPUTE", "LEGAL_INTERPRETATION", "HIGH_VALUE_COMMITMENT"],
-    instagramAfterWindowPolicy: "STANDARD_ONLY",
+    afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
   },
   account: "CONNECTED",
   capabilities: TEXT_ONLY,
@@ -98,20 +98,27 @@ const gates: { name: string; input: Partial<PolicyInput>; action: "SKIP" | "HOLD
   },
   { name: "the channel cannot send this content", input: { capabilities: NO_CAPABILITIES }, action: "HOLD_REVIEW", reason: "UNSUPPORTED_MEDIA" },
   {
+    // No permitted send path exists under STANDARD_ONLY, so a review item would be one nobody could act on.
     name: "the standard window is closed",
     input: { window: { state: "NOT_ELIGIBLE", reason: "standard messaging window closed" } },
-    action: "HOLD_REVIEW",
+    action: "SKIP",
     reason: "WINDOW_CLOSED",
   },
   {
     name: "the window state is unknown",
     input: { window: { state: "UNKNOWN", reason: "channel account is not connected" } },
-    action: "HOLD_REVIEW",
+    action: "SKIP",
     reason: "WINDOW_CLOSED",
   },
   {
-    name: "quiet hours are in force",
-    input: { limits: { ...passing().limits, quietHours: toQuietHours("UTC", "22:00", "23:00") }, now: new Date("2026-09-18T22:30:00.000Z") },
+    // Quiet hours block only when there is no compliant later time; here waiting would miss the deadline.
+    name: "quiet hours run past the provider's dispatch deadline",
+    input: {
+      limits: { ...passing().limits, quietHours: toQuietHours("UTC", "22:00", "23:00") },
+      now: new Date("2026-09-18T22:30:00.000Z"),
+      dispatchDeadline: new Date("2026-09-18T22:30:30.000Z"),
+      window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-19T22:00:00.000Z") },
+    },
     action: "HOLD_REVIEW",
     reason: "QUIET_HOURS",
   },
@@ -140,7 +147,7 @@ describe("the window is a fact about time, not a stored verdict", () => {
     const decision = decide({ window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() - 1) } });
 
     expect(decision.reasons).toContain("WINDOW_CLOSED");
-    expect(decision.action).toBe("HOLD_REVIEW");
+    expect(decision.action).toBe("SKIP");
   });
 
   it("accepts an open window with no stated expiry", () => {
@@ -154,17 +161,18 @@ describe("Instagram after-window policy (ADR-014)", () => {
   it("STANDARD_ONLY never offers the human-agent path, even when it is available", () => {
     const decision = decide({
       window: closed,
-      limits: { ...passing().limits, instagramAfterWindowPolicy: "STANDARD_ONLY" },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" } as const },
       humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
     });
 
-    expect(decision).toEqual({ action: "HOLD_REVIEW", reasons: ["WINDOW_CLOSED"], reviewMode: "NORMAL" });
+    // The business chose the stricter policy, so there is no send path and no review item to create.
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
   });
 
   it("HUMAN_ASSISTED_EXTENDED returns a human-agent review when eligibility is current", () => {
     const decision = decide({
       window: closed,
-      limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
       humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
     });
 
@@ -180,11 +188,12 @@ describe("Instagram after-window policy (ADR-014)", () => {
     it(`HUMAN_ASSISTED_EXTENDED does not invent eligibility when it is ${reason}`, () => {
       const decision = decide({
         window: closed,
-        limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+        limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
         humanAgent: { state: "UNAVAILABLE", reason },
       });
 
-      expect(decision).toEqual({ action: "HOLD_REVIEW", reasons: ["WINDOW_CLOSED"], reviewMode: "NORMAL" });
+      // Eligibility is never invented, so there is no human path either: nothing to review.
+      expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
     });
   }
 
@@ -194,7 +203,11 @@ describe("Instagram after-window policy (ADR-014)", () => {
         { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) } as const,
         { state: "UNAVAILABLE", reason: "EXPIRED" } as const,
       ]) {
-        const decision = decide({ window: closed, limits: { ...passing().limits, instagramAfterWindowPolicy: policy }, humanAgent });
+        const decision = decide({
+          window: closed,
+          limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy } },
+          humanAgent,
+        });
 
         expect(decision.action).not.toBe("SCHEDULE");
       }
@@ -204,7 +217,7 @@ describe("Instagram after-window policy (ADR-014)", () => {
   it("keeps an existing human-agent review claim while the path is still usable", () => {
     const decision = decide({
       takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
-      limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
       humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
     });
 
@@ -214,7 +227,7 @@ describe("Instagram after-window policy (ADR-014)", () => {
   it("drops a human-agent claim once the exception has expired", () => {
     const decision = decide({
       takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
-      limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
       humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" },
     });
 
@@ -226,11 +239,23 @@ describe("Instagram after-window policy (ADR-014)", () => {
   it("does not offer the human-agent path when the business chose STANDARD_ONLY, even mid-claim", () => {
     const decision = decide({
       takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
-      limits: { ...passing().limits, instagramAfterWindowPolicy: "STANDARD_ONLY" },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" } as const },
       humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
     });
 
     expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
+  });
+
+  it("carries a WhatsApp policy without ever reaching the Instagram exception", () => {
+    const decision = decide({
+      window: closed,
+      limits: { ...passing().limits, afterWindow: { channel: "WHATSAPP", policy: "TEMPLATE_REVIEW" } as const },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+    });
+
+    // The union is what makes an Instagram-only exception unrepresentable on another channel, rather than
+    // merely discouraged by a comment.
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
   });
 });
 
@@ -252,6 +277,8 @@ describe("gates combine instead of hiding one another", () => {
       "RETRIEVAL_UNAVAILABLE",
       "WINDOW_CLOSED",
     ]);
+    // A closed window under STANDARD_ONLY ends the matter even when other gates also failed.
+    expect(decision.action).toBe("SKIP");
   });
 
   it("lets a terminal reason win over reasons that would otherwise ask for a human", () => {
@@ -303,25 +330,61 @@ describe("mandatory-review categories", () => {
   });
 });
 
-describe("quiet hours", () => {
+describe("quiet hours defer rather than block", () => {
   const quiet = { ...passing().limits, quietHours: toQuietHours("Europe/Berlin", "22:00", "07:00") };
+  /** Far enough ahead that the quiet period always fits inside it. */
+  const openWindow = { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") } as const;
 
-  it("spans midnight in the period's own time zone", () => {
+  it("schedules for the end of the period when that time is still permitted", () => {
     // 23:30 in Berlin is 21:30 UTC: a UTC comparison would call this outside quiet hours.
-    const inside = decide({ limits: quiet, now: new Date("2026-09-18T21:30:00.000Z") });
-    const outside = decide({ limits: quiet, now: new Date("2026-09-18T12:00:00.000Z") });
+    const decision = decide({ limits: quiet, now: new Date("2026-09-18T21:30:00.000Z"), window: openWindow });
 
-    expect(inside.reasons).toContain("QUIET_HOURS");
-    expect(outside).toEqual({ action: "SCHEDULE", reasons: [] });
+    expect(decision.action).toBe("SCHEDULE");
+    expect(decision.reasons).toEqual([]);
+    // 07:00 Berlin the next morning, which is 05:00 UTC.
+    expect(decision.action === "SCHEDULE" ? decision.notBefore?.toISOString() : undefined).toBe("2026-09-19T05:00:00.000Z");
+  });
+
+  it("does not defer at all outside the period", () => {
+    const decision = decide({ limits: quiet, now: new Date("2026-09-18T12:00:00.000Z"), window: openWindow });
+
+    expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("holds instead of deferring when waiting would miss the provider's deadline", () => {
+    // Instagram's automated budget is seconds long, so there is never a compliant later time on it.
+    const decision = decide({
+      limits: quiet,
+      now: new Date("2026-09-18T21:30:00.000Z"),
+      window: openWindow,
+      dispatchDeadline: new Date("2026-09-18T21:30:25.000Z"),
+    });
+
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
+    expect(decision.reasons).toContain("QUIET_HOURS");
+  });
+
+  it("holds instead of deferring when the messaging window closes first", () => {
+    const decision = decide({
+      limits: quiet,
+      now: new Date("2026-09-18T21:30:00.000Z"),
+      window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-19T01:00:00.000Z") },
+    });
+
+    // Deferring past the window would be a send the provider does not permit; quiet hours must never
+    // cause a blind late send.
+    expect(decision.reasons).toContain("QUIET_HOURS");
+    expect(decision.action).toBe("HOLD_REVIEW");
   });
 
   it("treats the end of the period as open again", () => {
     // 07:00 Berlin is 05:00 UTC; `end` is exclusive so the first allowed minute is exactly 07:00.
-    const atEnd = decide({ limits: quiet, now: new Date("2026-09-18T05:00:00.000Z") });
-    const justBefore = decide({ limits: quiet, now: new Date("2026-09-18T04:59:00.000Z") });
+    const atEnd = decide({ limits: quiet, now: new Date("2026-09-18T05:00:00.000Z"), window: openWindow });
+    const justBefore = decide({ limits: quiet, now: new Date("2026-09-18T04:59:00.000Z"), window: openWindow });
 
     expect(atEnd).toEqual({ action: "SCHEDULE", reasons: [] });
-    expect(justBefore.reasons).toContain("QUIET_HOURS");
+    expect(justBefore.action).toBe("SCHEDULE");
+    expect(justBefore.action === "SCHEDULE" ? justBefore.notBefore?.toISOString() : undefined).toBe("2026-09-18T05:00:00.000Z");
   });
 });
 

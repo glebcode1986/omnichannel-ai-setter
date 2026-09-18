@@ -30,6 +30,7 @@ import {
   isStaleAnchor,
   isValidIdentifier,
   isWithinQuietHours,
+  nextQuietHoursEnd,
   MANDATORY_REVIEW_REASON_CODES,
   NO_CAPABILITIES,
   PLATFORM_STYLE_FALLBACK,
@@ -500,5 +501,39 @@ describe("resolveStyleProfile", () => {
 
     expect(resolved.tone).toBeUndefined();
     expect(resolved.preferredPhrases).toEqual(["happy to help"]);
+  });
+});
+
+describe("nextQuietHoursEnd", () => {
+  it("returns the next end of the period, in the period's own zone", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // 21:30 UTC is 23:30 Berlin, so the period ends at 07:00 Berlin the next morning = 05:00 UTC.
+    expect(nextQuietHoursEnd(quiet, new Date("2026-09-18T21:30:00.000Z")).toISOString()).toBe("2026-09-19T05:00:00.000Z");
+  });
+
+  it("is total: outside the period it answers the next end rather than failing", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+
+    // Midday is outside, and the next 07:00 is tomorrow's.
+    expect(nextQuietHoursEnd(quiet, new Date("2026-09-18T12:00:00.000Z")).toISOString()).toBe("2026-09-19T07:00:00.000Z");
+  });
+
+  it("lands on the right instant across a daylight-saving change", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // Berlin goes UTC+2 -> UTC+1 during the night of 25 October 2026, inside this period. Naive local-date
+    // arithmetic lands an hour out; the answer must still be 07:00 Berlin, which is 06:00 UTC.
+    const end = nextQuietHoursEnd(quiet, new Date("2026-10-24T22:30:00.000Z"));
+    expect(end.toISOString()).toBe("2026-10-25T06:00:00.000Z");
+  });
+
+  it("always answers a moment in the future", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+    const now = new Date("2026-09-19T07:00:00.000Z");
+
+    // Exactly at the end, the next end is a day away — never the instant itself, which would let a caller
+    // schedule for a time that has already passed.
+    expect(nextQuietHoursEnd(quiet, now).getTime()).toBeGreaterThan(now.getTime());
   });
 });

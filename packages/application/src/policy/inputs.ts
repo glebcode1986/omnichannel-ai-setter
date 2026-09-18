@@ -16,7 +16,16 @@
  *   Instagram-shaped exception leaking into a channel-neutral decision.
  */
 import type { WindowDecision } from "@omnichannel/channel-core";
-import type { AiMode, ChannelCapabilities, HumanTakeoverState, InstagramAfterWindowPolicy, QuietHours, ReasonCode, ReviewMode } from "@omnichannel/domain";
+import type {
+  AiMode,
+  ChannelCapabilities,
+  HumanTakeoverState,
+  InstagramAfterWindowPolicy,
+  QuietHours,
+  ReasonCode,
+  ReviewMode,
+  WhatsAppAfterWindowPolicy,
+} from "@omnichannel/domain";
 
 /**
  * Whether a *human* could still reply under a provider's human-support exception.
@@ -61,11 +70,23 @@ export interface PolicyRetrieval {
 }
 
 /** The automation settings that bear on a send, already resolved for this conversation. */
+/**
+ * What the business chose to happen once the channel's standard automated window closes.
+ *
+ * Discriminated by channel rather than a flat Instagram-only field (product-owner decision on PR #67): the
+ * evaluator is channel-neutral, and WhatsApp's options (ADR-016) are not Instagram's. A flat second field
+ * would let a WhatsApp conversation silently carry an Instagram policy, and the union makes that
+ * unrepresentable instead of merely discouraged.
+ */
+export type AfterWindowPolicy =
+  | { readonly channel: "INSTAGRAM"; readonly policy: InstagramAfterWindowPolicy }
+  | { readonly channel: "WHATSAPP"; readonly policy: WhatsAppAfterWindowPolicy };
+
 export interface PolicyLimits {
   readonly confidenceThreshold: number;
   readonly mandatoryReviewReasons: readonly ReasonCode[];
   readonly quietHours?: QuietHours;
-  readonly instagramAfterWindowPolicy: InstagramAfterWindowPolicy;
+  readonly afterWindow: AfterWindowPolicy;
 }
 
 export interface PolicyInput {
@@ -80,6 +101,12 @@ export interface PolicyInput {
   readonly capabilities: ChannelCapabilities;
   readonly window: WindowDecision;
   readonly humanAgent: HumanAgentAvailability;
+  /**
+   * The latest instant an automated reply may still be dispatched — the provider's own budget, not our
+   * preference (Issue #13). Absent means the channel imposes no deadline. Quiet hours may defer only
+   * within it, and never past it.
+   */
+  readonly dispatchDeadline?: Date;
   readonly replyCycle: ReplyCycleState;
   readonly now: Date;
 }
@@ -95,4 +122,13 @@ export interface PolicyInput {
 export type PolicyDecision =
   | { readonly action: "SKIP"; readonly reasons: readonly ReasonCode[] }
   | { readonly action: "HOLD_REVIEW"; readonly reasons: readonly ReasonCode[]; readonly reviewMode: ReviewMode }
-  | { readonly action: "SCHEDULE"; readonly reasons: readonly ReasonCode[] };
+  | {
+      readonly action: "SCHEDULE";
+      readonly reasons: readonly ReasonCode[];
+      /**
+       * Earliest permitted dispatch. Present only when quiet hours moved it: a deferral the coordinator
+       * must honour, and one this layer only ever produces when the deferred time still sits inside the
+       * channel's eligibility and timing budget.
+       */
+      readonly notBefore?: Date;
+    };
