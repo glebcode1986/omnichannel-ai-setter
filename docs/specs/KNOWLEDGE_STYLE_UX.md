@@ -225,3 +225,28 @@ A workspace may define a base brand voice while each Business Profile overrides 
 - retrieval/outage state must be visible rather than producing invented confident answers;
 - never promote chat text or style examples into factual authority without an explicit human confirmation step;
 - never allow Style settings to override deterministic channel, entitlement, human-takeover or safety gates.
+
+## Product-owner implementation clarifications — 2026-09-18
+
+### Style Profile / persona persistence
+The business communication persona is customer-owned product configuration, not worker environment configuration.
+
+Canonical runtime resolution:
+1. Workspace base `StyleProfile`;
+2. optional Business-Profile-specific `StyleProfile` override;
+3. conversation-level downward/temporary overrides where allowed;
+4. platform default only when no customer-owned Style Profile exists.
+
+Worker/environment configuration may provide a safe generic platform fallback, but must never be the authoritative persona for a specific Workspace or Business Profile.
+
+Phase 5 owns the end-user Style UI. Earlier backend phases may seed/store the same canonical Style Profile shape so AI behavior is testable before the UI exists.
+
+### Pre-Phase-5 seeding
+Do not pull the full Knowledge/Style editing UI into Phase 2. Provide a minimal internal/dev/test seeding path sufficient for the Instagram vertical slice and CI to create versioned trusted Knowledge and approved Style data with real provenance. This path is not a public customer API and must not bypass normal Workspace/Business-Profile scope rules.
+
+### Workspace base vs Business Profile override
+Retrieve both Workspace-base and Business-Profile-specific material. Business-Profile-specific material takes precedence **only when an override is intentional and explicitly represented**; semantic similarity alone must never guess that two facts conflict.
+
+Until ingestion has explicit override metadata, do not silently shadow Workspace facts by semantic inference. The Phase-2 vertical-slice fixtures should avoid contradictory unlinked sources. Phase-5 ingestion must expose an explicit override/supersession relationship or stable logical key so deterministic shadowing is possible.
+
+Style follows the same base + BP-override model at the profile/dimension level.
