@@ -29,3 +29,39 @@ export type {
 } from "./ingestion/ports";
 export { processEvent, type EventProcessingContext, type EventProcessingResult } from "./ingestion/process-event";
 export { isEligibleForInboundDebounce, nextDeliveryStatus, outboxRetryDelayMs, sampleDelayMs } from "./ingestion/rules";
+export {
+  draftGenerationBlockers,
+  generateDraft,
+  generationKey,
+  type DraftGenerationCommand,
+  type DraftGenerationDependencies,
+  type DraftGenerationOutcome,
+  type DraftLogPort,
+  type DraftTrigger,
+} from "./ai/generate-draft";
+export {
+  aiDraftOutputSchema,
+  MODEL_EMITTABLE_REASON_CODES,
+  MODEL_OUTPUT_SCHEMA_VERSION,
+  parseModelOutput,
+  type AiDraftOutput,
+  type ModelOutputIssue,
+  type ModelOutputParse,
+} from "./ai/model-output";
+export {
+  ReplyModelUnavailableError,
+  type AiDraftStore,
+  type ConversationSegment,
+  type DraftConversationSnapshot,
+  type GenerationScope,
+  type KnowledgeSegment,
+  type ModelUsage,
+  type PersistedDraft,
+  type ReplyGenerationRequest,
+  type ReplyGenerationResult,
+  type ReplyModel,
+  type SaveDraftInput,
+  type SegmentKind,
+  type StyleSegment,
+} from "./ai/ports";
+export { containsNonce, MAX_SEGMENT_CHARS, sanitizeUntrustedText } from "./ai/sanitize";

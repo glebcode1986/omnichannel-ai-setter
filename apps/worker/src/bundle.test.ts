@@ -22,6 +22,7 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
           LOG_LEVEL: "info",
           REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1",
           DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-password@127.0.0.1:1/omnichannel",
+          ANTHROPIC_API_KEY: "sk-ant-fake-key-for-tests",
         },
         stdio: ["ignore", "pipe", "pipe"],
       });

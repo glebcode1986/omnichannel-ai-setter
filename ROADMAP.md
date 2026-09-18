@@ -35,7 +35,7 @@
 - [x] configurable Instagram after-window policy: `STANDARD_ONLY | HUMAN_ASSISTED_EXTENDED`
 - [~] #8 Instagram transport adapter + fixtures — implemented in `packages/channel-instagram` and under review; not registered in `apps/web` until #9 supplies per-account credentials
 - [~] #9 Instagram Login onboarding/token lifecycle — implemented and under review (connect/callback/disconnect, encrypted credentials, refresh); no UI yet (#27)
-- [ ] #10 provider-neutral AI draft engine
+- [~] #10 provider-neutral AI draft engine — implemented and under review (application-owned port + Zod boundary, Anthropic implementation, idempotent draft persistence)
 - [ ] #11 factual + style retrieval
 - [ ] #12 deterministic policy engine
 - [ ] #13 delivery coordinator/final revalidation

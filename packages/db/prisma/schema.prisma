@@ -615,8 +615,11 @@ model AiDraft {
   anchorMessageId    String        @map("anchor_message_id")
   /// Conversation state_version the draft was generated for; the draft is stale once it moves on.
   anchorStateVersion Int           @map("anchor_state_version")
-  text               String
-  structuredOutput   Json          @map("structured_output")
+  /// Identity of one logical generation; a retried job reuses it instead of creating a second draft.
+  generationKey      String        @map("generation_key")
+  /// Null only for a held generation whose output was unusable; the row still records what was attempted.
+  text               String?
+  structuredOutput   Json?         @map("structured_output")
   confidence         Float
   modelSuggestsSend  Boolean       @map("model_suggests_send")
   needsReview        Boolean       @map("needs_review")
@@ -632,6 +635,12 @@ model AiDraft {
   schemaVersion      String        @map("schema_version")
   providerRequestId  String?       @map("provider_request_id")
   latencyMs          Int?          @map("latency_ms")
+  /// Normalized provider usage, for cost analysis. Cache columns exist so enabling prompt caching later
+  /// cannot silently under-report input cost.
+  inputTokens        Int?          @map("input_tokens")
+  outputTokens       Int?          @map("output_tokens")
+  cacheReadTokens    Int?          @map("cache_read_tokens")
+  cacheWriteTokens   Int?          @map("cache_write_tokens")
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
 
@@ -642,6 +651,8 @@ model AiDraft {
   styleExamples StyleExample[]
 
   @@unique([workspaceId, businessProfileId, id])
+  /// One draft per logical generation, so a retried job is idempotent.
+  @@unique([workspaceId, businessProfileId, generationKey], map: "ai_drafts_generation_key")
   @@index([conversationId, createdAt])
   @@index([workspaceId, businessProfileId, status])
   @@map("ai_drafts")

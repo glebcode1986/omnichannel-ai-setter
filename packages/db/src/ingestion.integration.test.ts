@@ -589,6 +589,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
           conversationId: profile.conversationId,
           anchorMessageId: profile.messageId,
           anchorStateVersion: await stateVersionOf(profile.conversationId),
+          generationKey: unique("gen"),
           text: "See you tomorrow at 10.",
           structuredOutput: {},
           confidence: 0.9,

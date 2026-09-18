@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@omnichannel/channel-core": "workspace:*",
-    "@omnichannel/domain": "workspace:*"
+    "@omnichannel/domain": "workspace:*",
+    "zod": "^4.6.5"
   }
 }

@@ -1,11 +1,15 @@
-import { dispatchOutbox } from "@omnichannel/application";
-import { createDbClient, createIngestionStore } from "@omnichannel/db";
+import { dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
+import { createAnthropicReplyModel } from "@omnichannel/ai";
+import { createAiDraftStore, createDbClient, createDraftContextStore, createIngestionStore } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { loadWorkerEnv } from "./env";
-import { createPlaceholderHandlers } from "./handlers";
+import { randomUUID } from "node:crypto";
+
+import { createAiDraftHandler } from "./ai-draft-handler";
+import { createHandlers } from "./handlers";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
@@ -17,6 +21,8 @@ const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
  * repeats within this window are the same request. A later signal while still stopping forces exit.
  */
 const DUPLICATE_SIGNAL_WINDOW_MS = 2_000;
+/** Bumped whenever the prompt changes, and persisted with every draft so output stays attributable. */
+const PROMPT_VERSION = "reply.v1";
 
 function main(): void {
   let env;
@@ -40,8 +46,31 @@ function main(): void {
     logger,
     startProcessors: () => {
       const connection = createRedisConnection(env.REDIS_URL, "worker", logger);
-      const workers = createQueueWorkers({ connection, logger, handlers: createPlaceholderHandlers() });
       const db = createDbClient({ connectionString: env.DATABASE_URL });
+      // Provider choice is configuration: the model ID and key come from the validated environment, and
+      // nothing below this line knows which provider is in use.
+      const replyModel = createAnthropicReplyModel({
+        apiKey: env.ANTHROPIC_API_KEY,
+        model: env.AI_REPLY_MODEL,
+        maxOutputTokens: env.AI_REPLY_MAX_OUTPUT_TOKENS,
+        logger,
+      });
+      const generateDraft = createAiDraftHandler({
+        engine: {
+          model: replyModel,
+          drafts: createAiDraftStore(db),
+          log: logger,
+          now: () => new Date(),
+          newNonce: randomUUID,
+          promptVersion: PROMPT_VERSION,
+          schemaVersion: MODEL_OUTPUT_SCHEMA_VERSION,
+          timeoutMs: env.AI_REPLY_TIMEOUT_MS,
+        },
+        context: createDraftContextStore(db),
+        persona: env.AI_PERSONA,
+        logger,
+      });
+      const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft) });
       const producer = createQueueProducer({ connection, logger });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,

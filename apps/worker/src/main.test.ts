@@ -44,6 +44,8 @@ function runWorker(
 /** Real Redis when available; otherwise an unreachable address, which the worker must survive quietly. */
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-password@127.0.0.1:1/omnichannel";
+/** The worker now needs a model key to start; no request is made unless a draft job runs. */
+const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 
 /** With Redis unreachable the only permitted stderr entry is the (URL-free) outage warning. */
 function expectOnlyRedisOutageOnStderr(stderr: string): void {
@@ -61,7 +63,7 @@ function events(output: string): string[] {
 describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   it("starts, then shuts down gracefully with exit code 0 on SIGTERM", async () => {
     let signalled = false;
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL }, (stdout, child) => {
+    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY }, (stdout, child) => {
       if (!signalled && stdout.includes('"event":"worker.started"')) {
         signalled = true;
         child.kill("SIGTERM");
@@ -75,7 +77,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
   it("treats a burst of repeated signals (one Ctrl+C relayed by pnpm/watchers) as one graceful shutdown", async () => {
     let signalled = false;
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL }, (stdout, child) => {
+    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY }, (stdout, child) => {
       if (!signalled && stdout.includes('"event":"worker.started"')) {
         signalled = true;
         child.kill("SIGINT");
@@ -93,7 +95,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     const result = await new Promise<ProcessResult>((resolve, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
         cwd: appDir,
-        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug", REDIS_URL, DATABASE_URL },
+        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stderr = "";
@@ -111,7 +113,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   }, 30_000);
 
   it("fails fast with exit code 1 and no value echo when the environment is invalid", async () => {
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish", REDIS_URL, DATABASE_URL });
+    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY });
 
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
@@ -121,7 +123,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   }, 30_000);
 
   it("requires a Redis URL without echoing an invalid one", async () => {
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL: "http://user:secret-pass@example.test", DATABASE_URL });
+    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL: "http://user:secret-pass@example.test", DATABASE_URL, ANTHROPIC_API_KEY });
 
     expect(result.code).toBe(1);
     expect(events(result.stderr)).toEqual(["worker.env_invalid"]);

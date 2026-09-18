@@ -64,6 +64,36 @@ Conversation text, retrieved docs and style examples are always untrusted data a
 - prompts and output schemas are versioned and persisted with each draft;
 - store provider/model/request/usage/latency metadata for debugging and cost analysis, but never raw secrets.
 
+## Implementation notes (P2-03)
+
+- **The port returns raw output.** `ReplyGenerationResult.output` is `unknown`, plus normalized telemetry
+  (`provider`, `model`, `requestId`, `usage`, `latencyMs`) and an optional `rejection` for a refusal,
+  truncation or unreadable body. A provider implementation can never decide that its own output is
+  acceptable: `packages/application` owns the Zod schema and validates every result.
+- **The request is a typed segment tree, not a prompt string.** Persona and channel hints are trusted
+  configuration; inbound messages, history, knowledge chunks and style examples are separate, differently
+  typed arrays of labelled segments. Only `packages/ai` renders them, into a system role that contains no
+  untrusted text and a user role where every untrusted block is fenced with a per-request nonce. History is
+  replayed as labelled data, never as real assistant turns.
+- **No tools, ever.** The port has no tool, callback or transport field, and the provider request is sent
+  with no `tools` key at all, so "the model cannot call a channel tool" holds by omission. Nothing in the
+  result is assignable to an outbound command.
+- **Reason codes the model may emit are a strict subset.** Deterministic gate codes (`HUMAN_TAKEOVER`,
+  `WINDOW_CLOSED`, `RATE_LIMITED`, …) and `INVALID_MODEL_OUTPUT` are established by the system; a model
+  claiming one fails validation rather than entering the audit trail.
+- **Sources are checked against what was supplied.** A `factual_source_ids` entry that was not in the
+  request is dropped, the draft is marked for review and `MISSING_FACT` is added. Style example IDs can
+  never appear there, because style is a different type.
+- **One bounded repair.** Malformed output gets exactly one regeneration carrying the issue paths and the
+  previous output *as untrusted data*; after that the generation is stored as a `HELD` audit row with
+  `INVALID_MODEL_OUTPUT`, null text and every metadata column populated. A provider refusal is never
+  repaired or retried.
+- **Generation is idempotent.** Each generation has a key derived from conversation, anchor, state version,
+  trigger and request ID, unique per Business Profile, so a retried queue job returns the existing draft
+  instead of creating a second one.
+- **Provider choice is configuration.** The model ID, timeout, output cap and persona come from the worker
+  environment; `packages/ai` never reads `process.env`.
+
 ## Factuality
 
 Pricing, policy, availability, commitments and product claims require either explicit conversation facts or retrieved trusted knowledge. Style memory never counts as factual evidence. Missing material facts must produce a clarifying question or review reason rather than invention.
