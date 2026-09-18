@@ -158,3 +158,16 @@ Mobile uses stacked navigation rather than three panes:
 3. contact/AI details as drawer/sheet.
 
 Critical actions — reply, take over, approve/edit/reject, mode state — remain reachable without desktop-only hover interactions.
+
+## Product-owner clarification: OFF mode
+
+`OFF` disables **background/automatic AI generation and all automatic delivery**. It does not prohibit an authorized human from deliberately invoking an explicit `Generate draft / Ask AI` action for the current conversation.
+
+A human-requested draft while effective mode is `OFF`:
+- is created only from an explicit authorized user action;
+- is never auto-scheduled or auto-sent;
+- remains a human-assist artifact that the user must review/edit/send manually;
+- is audited as human-requested AI assistance;
+- does not enable follow-ups, background generation or AUTOPILOT for later inbound messages.
+
+This keeps `OFF` predictable for automation while preserving useful on-demand assistance.
