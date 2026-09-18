@@ -65,3 +65,32 @@ export {
   type StyleSegment,
 } from "./ai/ports";
 export { containsNonce, MAX_SEGMENT_CHARS, sanitizeUntrustedText } from "./ai/sanitize";
+export { fuseByReciprocalRank, RRF_K, type FusedCandidate, type RankedCandidate } from "./retrieval/fusion";
+export {
+  EmbeddingUnavailableError,
+  noRetrieval,
+  RetrievalUnavailableError,
+  type EmbeddingIntent,
+  type EmbeddingProvider,
+  type EmbeddingVector,
+  type KnowledgeHit,
+  type KnowledgeRetrievalResult,
+  type KnowledgeRetrievalStatus,
+  type KnowledgeRetriever,
+  type RetrievalDiagnostics,
+  type RetrievalQuery,
+  type RetrievalScope,
+  type RetrievalScopeLevel,
+  type RetrievalThresholds,
+  type StyleHit,
+  type StyleRetrievalResult,
+  type StyleRetriever,
+  type SuppliedRetrieval,
+} from "./retrieval/ports";
+export {
+  retrieveDraftContext,
+  type DraftRetrievalContext,
+  type DraftRetrievalDependencies,
+  type DraftRetrievalQuery,
+  type RetrievalLogPort,
+} from "./retrieval/retrieve-draft-context";

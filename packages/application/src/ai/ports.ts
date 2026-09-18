@@ -13,6 +13,8 @@
 import type { ChannelType } from "@omnichannel/channel-core";
 import type { AiMode, ReasonCode } from "@omnichannel/domain";
 
+import type { SuppliedRetrieval } from "../retrieval/ports";
+
 /** Where the generation happens; the Business Profile is the customer-data boundary. */
 export interface GenerationScope {
   readonly workspaceId: string;
@@ -31,10 +33,15 @@ export interface ConversationSegment {
   readonly occurredAt: Date;
 }
 
-/** A retrieved knowledge chunk. Only these may back a factual claim. */
+/**
+ * A retrieved knowledge chunk. Only these may back a factual claim.
+ *
+ * Just the citable ID and the text: document title and version are audit data, kept in the draft's
+ * retrieval record, not sent to the model. A fence header carries IDs only, so nothing business-authored
+ * or customer-authored can reach the line that delimits untrusted data.
+ */
 export interface KnowledgeSegment {
   readonly chunkId: string;
-  readonly provenance: string;
   readonly text: string;
 }
 
@@ -154,7 +161,10 @@ export interface SaveDraftInput {
   readonly intent?: string;
   readonly suggestedLeadStage?: string;
   readonly suggestedAction?: string;
+  /** What the model said it relied on: a subset of what retrieval supplied, never more. */
   readonly factualSourceIds: readonly string[];
+  /** What retrieval supplied and at what score, so a reviewer can tell a miss from an outage. */
+  readonly retrieval: SuppliedRetrieval;
   readonly status: "PENDING" | "HELD";
   readonly provider: string;
   readonly model: string;

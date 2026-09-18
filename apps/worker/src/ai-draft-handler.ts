@@ -5,7 +5,14 @@
  * output and what gets stored are the application's decisions; whether anything is ever sent is the policy
  * engine's and the delivery coordinator's, neither of which this path can reach.
  */
-import { generateDraft, type DraftGenerationDependencies, type DraftTrigger } from "@omnichannel/application";
+import {
+  generateDraft,
+  noRetrieval,
+  retrieveDraftContext,
+  type DraftGenerationDependencies,
+  type DraftRetrievalDependencies,
+  type DraftTrigger,
+} from "@omnichannel/application";
 import type { DraftContextStore } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
 import { NonRetryableJobError, type InboundDebounceJob } from "@omnichannel/queue";
@@ -13,6 +20,8 @@ import { NonRetryableJobError, type InboundDebounceJob } from "@omnichannel/queu
 export interface AiDraftHandlerDependencies {
   readonly engine: DraftGenerationDependencies;
   readonly context: DraftContextStore;
+  /** Absent only where retrieval is deliberately not wired; the draft is then marked as unretrieved. */
+  readonly retrieval?: DraftRetrievalDependencies;
   readonly persona: string;
   readonly logger: Logger;
 }
@@ -41,6 +50,16 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       throw new NonRetryableJobError("conversation or anchor message not found for draft generation");
     }
 
+    // Retrieval runs before generation (AI_ORCHESTRATION.md): the model is given the facts, never a way
+    // to go and look for them.
+    const retrieved =
+      dependencies.retrieval === undefined
+        ? undefined
+        : await retrieveDraftContext(dependencies.retrieval, {
+            scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId },
+            inbound: context.inbound,
+          });
+
     const outcome = await generateDraft(dependencies.engine, {
       scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, conversationId: job.conversationId },
       anchorMessageId: job.anchorMessageId,
@@ -54,10 +73,9 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       capabilityHints: ["text"],
       inbound: context.inbound,
       history: context.history,
-      // Retrieval lands with P2-04; until then the model works from the conversation alone and must say so
-      // rather than invent business facts.
-      knowledge: [],
-      style: [],
+      knowledge: retrieved?.knowledge ?? [],
+      style: retrieved?.style ?? [],
+      retrieval: retrieved?.supplied ?? noRetrieval(),
       ...(job.requestId === undefined ? {} : { requestId: job.requestId }),
     });
 

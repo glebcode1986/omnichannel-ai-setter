@@ -36,6 +36,12 @@ export {
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
 export { createIngestionStore } from "./ingestion-store";
+export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
+export {
+  DEFAULT_MIN_LEXICAL_SCORE,
+  DEFAULT_MIN_SIMILARITY,
+  EMBEDDING_DIMENSIONS,
+} from "./retrieval/sql";
 export {
   createCredentialCipher,
   CREDENTIAL_ALGORITHM,

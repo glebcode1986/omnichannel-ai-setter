@@ -21,6 +21,18 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
    */
   AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
   /**
+   * Embeddings provider. Optional on purpose: with no key the worker runs lexical-only retrieval, which is
+   * a supported configuration rather than a degraded one — a missed fact produces MISSING_FACT and human
+   * review, never an invented answer. Requiring a key would make an embeddings outage a boot failure.
+   */
+  VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
+  AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
+  /** Must match the `vector(N)` column; changing it needs a migration and a controlled re-embedding. */
+  AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
+  /** Bumped by hand to force new vectors to be treated as a separate profile. */
+  AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
+
+  /**
    * The business persona the model writes as. Configuration for now: the data model has no persona field,
    * and the AI configuration UX (Phase 5) owns where a business edits this.
    */

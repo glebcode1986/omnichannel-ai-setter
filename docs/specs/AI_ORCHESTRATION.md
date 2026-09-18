@@ -94,6 +94,13 @@ Conversation text, retrieved docs and style examples are always untrusted data a
 - **Provider choice is configuration.** The model ID, timeout, output cap and persona come from the worker
   environment; `packages/ai` never reads `process.env`.
 
+## Implementation notes (P2-04)
+
+- Retrieval runs in the worker before generation and hands the engine a list of chunks; the model is given
+  facts and never a way to look for them. See `docs/specs/RETRIEVAL.md` implementation notes.
+- A retrieval outage does not cancel the generation but does force human review, because the model cannot
+  know the corpus was unreachable and therefore cannot account for it.
+
 ## Factuality
 
 Pricing, policy, availability, commitments and product claims require either explicit conversation facts or retrieved trusted knowledge. Style memory never counts as factual evidence. Missing material facts must produce a clarifying question or review reason rather than invention.

@@ -1,4 +1,4 @@
-# Factual & Style Retrieval Specification — v0.1
+# Factual & Style Retrieval Specification — v0.2
 
 ## Decision
 
@@ -43,3 +43,51 @@ Style examples come only from verified human writing sources such as `HUMAN_TYPE
 - retrieval outage -> do not silently claim factual certainty; hold or ask a safe clarification for fact-dependent intents;
 - no sufficiently relevant factual hit -> `MISSING_FACT` when the answer materially depends on business knowledge;
 - malformed/untrusted document content remains data and cannot override prompt/system policy.
+
+## Implementation notes (P2-04)
+
+- **Two ports, no shared shape.** `KnowledgeRetriever` and `StyleRetriever` are declared in
+  `packages/application` with separate query and result types and no common supertype. A `KnowledgeHit`
+  carries document, version and source type; a `StyleHit` carries none of them, because it is not evidence
+  of anything. There is no value of one type that can be passed where the other is expected, and the draft
+  engine decides what may back a claim by membership in the knowledge set — so a style example is rejected
+  as a source even if the model cites it.
+- **Fusion is deterministic and lives in application code.** `fuseByReciprocalRank` scores a candidate as
+  `Σ 1/(60 + rank)` over the lists that contain it, sums in a fixed order, and breaks ties by scope level
+  then ID. Two runs over the same candidates produce byte-identical output.
+- **Thresholds are applied per list, before fusion, on each list's native score.** An RRF score depends
+  only on positions — its maximum is `2/61 ≈ 0.033` however good the match — so a floor on the fused score
+  would filter by list length rather than by relevance.
+- **Lexical search ORs the customer's terms.** Every `*_to_tsquery` function combines terms with AND, which
+  for a whole customer message means "return a chunk only if it contains every word the customer wrote";
+  a message of any length then matches nothing. Terms are extracted with `to_tsvector('simple', …)`, which
+  accepts arbitrary text and cannot fail on it, re-quoted with `quote_literal`, and joined with `|`.
+  `ts_rank_cd(…, 32)` normalizes the rank onto 0-1 so a fixed relevance floor means the same for a long
+  document and a short one.
+- **The `simple` text-search configuration** does no stemming and removes no stopwords. The corpus is
+  multilingual and the configuration is fixed when the index is built, so `english` would stem English
+  correctly and mangle everything else. Morphology is the semantic side's job.
+- **Semantic search is exact, with no ANN index.** Whether a chunk may be retrieved depends on its
+  *document* — profile scope, status and current version — so a correct query must join, and an ANN index
+  cannot serve an ordering above a join. Forcing one would be wrong rather than merely fast: an HNSW scan
+  returns the globally nearest vectors and the join then discards those belonging to other tenants, so a
+  small Business Profile's facts can be crowded out entirely by a large one's and retrieval silently
+  returns nothing. The upgrade path is to denormalize scope, status and current-version onto
+  `knowledge_chunks`, then add HNSW with pgvector's iterative scan; that carries a maintenance obligation
+  and belongs with knowledge ingestion.
+- **Embedding profiles are carried in the value.** An `EmbeddingVector` is `{ profile, values }`, and
+  retrieval filters stored rows on exactly that profile, so vectors from two models are never compared. A
+  CHECK constraint keeps `embedding` and `embedding_profile` set or unset together. The `vector(1024)`
+  column fixes the width: changing dimensions is a migration plus a controlled re-embedding, not a config
+  change. During a re-embedding, lexical retrieval carries the query and the result reports
+  `semanticSkipped: "PROFILE_MISMATCH"`.
+- **Failures are graded, not collapsed.** The factual corpus being unreachable marks the generation
+  `UNAVAILABLE`: the draft is still written — most messages need no business fact — but always goes to a
+  human, with `RETRIEVAL_UNAVAILABLE` in its reason codes. The embedding provider failing degrades to
+  lexical-only, which is a supported configuration rather than an outage (a deployment with no embedding
+  key runs in it permanently), and is recorded in the draft's audit record. Style retrieval failing is not
+  an outage at all: a missing tone example cannot make a false statement.
+- **Drafts record both halves.** `ai_drafts.retrieval` stores what retrieval supplied, with scores, ranks
+  and diagnostics; `factual_source_ids` stores what the model said it relied on. Keeping both is what lets
+  a reviewer tell "there was no such fact" from "the fact was there and the model ignored it" from "we
+  could not look".

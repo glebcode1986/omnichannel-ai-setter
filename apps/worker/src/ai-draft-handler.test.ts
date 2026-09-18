@@ -1,4 +1,10 @@
-import { ReplyModelUnavailableError, type DraftGenerationDependencies } from "@omnichannel/application";
+import {
+  RetrievalUnavailableError,
+  ReplyModelUnavailableError,
+  type DraftGenerationDependencies,
+  type DraftRetrievalDependencies,
+  type ReplyGenerationRequest,
+} from "@omnichannel/application";
 import type { DraftContext, DraftContextStore } from "@omnichannel/db";
 import { createLogger } from "@omnichannel/observability";
 import { NonRetryableJobError } from "@omnichannel/queue";
@@ -22,16 +28,64 @@ const context: DraftContext = {
   history: [],
 };
 
-function harness(overrides: { context?: DraftContext | undefined; generate?: DraftGenerationDependencies["model"]["generate"] } = {}) {
+const retrievalDependencies = (overrides: Partial<DraftRetrievalDependencies> = {}): DraftRetrievalDependencies => ({
+  knowledge: {
+    search: () =>
+      Promise.resolve({
+        hits: [
+          {
+            chunkId: "chunk_1",
+            documentId: "doc_1",
+            documentTitle: "Hours",
+            documentVersion: 1,
+            sourceType: "MANUAL",
+            scopeLevel: "WORKSPACE",
+            text: "Saturday hours are 10:00-18:00.",
+            score: 0.03,
+            lexicalRank: 1,
+          },
+        ],
+        diagnostics: { lexicalCandidates: 1, semanticCandidates: 0 },
+      }),
+  },
+  style: {
+    search: () =>
+      Promise.resolve({
+        hits: [
+          {
+            exampleId: "style_1",
+            scopeLevel: "WORKSPACE",
+            inboundContext: "open saturday?",
+            outboundText: "Hey! 10 till 6",
+            provenance: "HUMAN_TYPED",
+            score: 0.016,
+          },
+        ],
+        diagnostics: { lexicalCandidates: 1, semanticCandidates: 0 },
+      }),
+  },
+  log: { info: () => undefined, warn: () => undefined },
+  ...overrides,
+});
+
+function harness(
+  overrides: {
+    context?: DraftContext | undefined;
+    generate?: DraftGenerationDependencies["model"]["generate"];
+    retrieval?: DraftRetrievalDependencies;
+  } = {},
+) {
   const saved: unknown[] = [];
+  const requests: ReplyGenerationRequest[] = [];
   const logs: string[] = [];
   const store: DraftContextStore = { load: () => Promise.resolve("context" in overrides ? overrides.context : context) };
   const engine: DraftGenerationDependencies = {
     model: {
       generate:
         overrides.generate ??
-        (() =>
-          Promise.resolve({
+        ((request) => {
+          requests.push(request);
+          return Promise.resolve({
             output: {
               reply: "We open at 10.",
               confidence: 0.8,
@@ -46,7 +100,8 @@ function harness(overrides: { context?: DraftContext | undefined; generate?: Dra
             provider: "anthropic",
             model: "claude-opus-5",
             latencyMs: 12,
-          })),
+          });
+        }),
     },
     drafts: {
       saveDraft: (input) => {
@@ -63,10 +118,11 @@ function harness(overrides: { context?: DraftContext | undefined; generate?: Dra
   const handler = createAiDraftHandler({
     engine,
     context: store,
+    ...("retrieval" in overrides ? { retrieval: overrides.retrieval } : { retrieval: retrievalDependencies() }),
     persona: "Friendly studio assistant.",
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
-  return { handler, saved, logs };
+  return { handler, saved, logs, requests };
 }
 
 describe("ai draft handler", () => {
@@ -107,6 +163,28 @@ describe("ai draft handler", () => {
 
     expect(generate).not.toHaveBeenCalled();
     expect(saved).toHaveLength(0);
+  });
+
+  it("retrieves facts and tone before asking the model, and records what it supplied", async () => {
+    const { handler, saved, requests } = harness();
+
+    await handler(job);
+
+    // The model is given the facts; it is never given a way to go and look for them.
+    expect(requests[0]?.knowledge).toEqual([{ chunkId: "chunk_1", text: "Saturday hours are 10:00-18:00." }]);
+    expect(requests[0]?.style).toEqual([{ exampleId: "style_1", text: "Hey! 10 till 6" }]);
+    expect(saved[0]).toMatchObject({ retrieval: { status: "OK", knowledge: [{ chunkId: "chunk_1", documentId: "doc_1" }] } });
+  });
+
+  it("marks the draft for review when the factual corpus cannot be reached", async () => {
+    const { handler, saved } = harness({
+      retrieval: retrievalDependencies({ knowledge: { search: () => Promise.reject(new RetrievalUnavailableError("down")) } }),
+    });
+
+    await handler(job);
+
+    expect(saved[0]).toMatchObject({ needsReview: true, retrieval: { status: "UNAVAILABLE" } });
+    expect((saved[0] as { reasonCodes: string[] }).reasonCodes).toContain("RETRIEVAL_UNAVAILABLE");
   });
 
   it("carries the debounce job's identifiers into a draft job", () => {

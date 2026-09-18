@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { SaveDraftInput } from "@omnichannel/application";
+import { noRetrieval, type SaveDraftInput } from "@omnichannel/application";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAiDraftStore } from "./ai-draft-store";
@@ -40,6 +40,7 @@ describe.skipIf(!databaseTestsEnabled())("ai draft store (PostgreSQL)", () => {
     intent: "HOURS",
     suggestedLeadStage: "ENGAGED",
     factualSourceIds: ["chunk_1"],
+    retrieval: noRetrieval(),
     status: "PENDING",
     provider: "anthropic",
     model: "claude-opus-5-20260101",

@@ -1,6 +1,13 @@
 import { dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
-import { createAnthropicReplyModel } from "@omnichannel/ai";
-import { createAiDraftStore, createDbClient, createDraftContextStore, createIngestionStore } from "@omnichannel/db";
+import { createAnthropicReplyModel, createVoyageEmbeddingProvider } from "@omnichannel/ai";
+import {
+  createAiDraftStore,
+  createDbClient,
+  createDraftContextStore,
+  createIngestionStore,
+  createKnowledgeRetriever,
+  createStyleRetriever,
+} from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
@@ -55,6 +62,18 @@ function main(): void {
         maxOutputTokens: env.AI_REPLY_MAX_OUTPUT_TOKENS,
         logger,
       });
+      // No embeddings key means lexical-only retrieval, which is supported: retrieval still runs and a
+      // fact it misses becomes MISSING_FACT and human review rather than an invented answer.
+      const embeddings =
+        env.VOYAGE_API_KEY === undefined
+          ? undefined
+          : createVoyageEmbeddingProvider({
+              apiKey: env.VOYAGE_API_KEY,
+              model: env.AI_EMBEDDING_MODEL,
+              dimensions: env.AI_EMBEDDING_DIMENSIONS,
+              revision: env.AI_EMBEDDING_REVISION,
+              logger,
+            });
       const generateDraft = createAiDraftHandler({
         engine: {
           model: replyModel,
@@ -67,6 +86,12 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
+        retrieval: {
+          knowledge: createKnowledgeRetriever(db),
+          style: createStyleRetriever(db),
+          ...(embeddings === undefined ? {} : { embeddings }),
+          log: logger,
+        },
         persona: env.AI_PERSONA,
         logger,
       });
