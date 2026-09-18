@@ -216,7 +216,10 @@ function readJson(result: InstagramHttpResult): { ok: true; value: JsonObject } 
   if (result.status < 200 || result.status >= 300) {
     const error = parseTokenEndpointError(result.body);
     const code = error === undefined ? `HTTP_${String(result.status)}` : (formatErrorCode(error) ?? `HTTP_${String(result.status)}`);
-    return { ok: false, failure: { ok: false, reason: "provider_rejected", code } };
+    // A throttled or broken provider has not told us anything about the credential. Reporting that as a
+    // rejection would mark a perfectly good account as needing re-authorization.
+    const transient = result.status >= 500 || result.status === 429 || error?.transient === true;
+    return { ok: false, failure: { ok: false, reason: transient ? "unavailable" : "provider_rejected", code } };
   }
   return parsed === undefined ? { ok: false, failure: { ok: false, reason: "invalid_response" } } : { ok: true, value: parsed };
 }
@@ -250,7 +253,12 @@ function stringField(payload: JsonObject, field: string): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Instagram account IDs are 17 digits, which is beyond what a JSON number can carry exactly. If a provider
+ * ever sends one unquoted, the value has already lost precision by the time it reaches us, so it is refused
+ * rather than persisted as a wrong account.
+ */
 function numberFieldAsString(payload: JsonObject, field: string): string | undefined {
   const value = payload[field];
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) ? String(value) : undefined;
 }

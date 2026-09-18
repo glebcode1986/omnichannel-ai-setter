@@ -96,6 +96,27 @@ describe("code exchange", () => {
     expect(JSON.stringify(rejected)).not.toContain("Matching code");
   });
 
+  it("separates a provider that refused us from one that is merely failing", async () => {
+    const refused = await exchangeCode(config(scriptedHttp([jsonResponse(400, { error_type: "OAuthException", code: 400, error_message: "bad code" })]).port), "c");
+    const throttled = await exchangeCode(config(scriptedHttp([jsonResponse(429, { error: { code: 4, message: "rate limited" } })]).port), "c");
+    const broken = await exchangeCode(config(scriptedHttp([jsonResponse(500, { error: { code: 2, is_transient: true } })]).port), "c");
+
+    expect(refused).toMatchObject({ ok: false, reason: "provider_rejected" });
+    // 5xx and throttling say nothing about the credential, so they must not read as a rejection.
+    expect(throttled).toMatchObject({ ok: false, reason: "unavailable" });
+    expect(broken).toMatchObject({ ok: false, reason: "unavailable" });
+  });
+
+  it("refuses a numeric account id that cannot survive JSON, instead of persisting a wrong one", async () => {
+    // Real Instagram IDs are 17 digits; unquoted, they lose precision before we ever see them.
+    const unsafe = await exchangeCode(
+      config(scriptedHttp([{ kind: "RESPONSE", status: 200, body: '{"data":[{"access_token":"t","user_id":17841400000000001,"permissions":"instagram_business_basic"}]}' }]).port),
+      "c",
+    );
+
+    expect(unsafe).toEqual({ ok: false, reason: "invalid_response" });
+  });
+
   it("reports a transport failure as unavailable rather than a rejection", async () => {
     const result = await exchangeCode(config(scriptedHttp([{ kind: "NO_RESPONSE", reason: "TIMEOUT", message: "timed out" }]).port), "c");
 

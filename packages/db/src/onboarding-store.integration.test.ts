@@ -171,6 +171,71 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
     expect(String(rejection)).not.toContain(main.workspaceId);
   });
 
+  it("lets a profile connect a different account after disconnecting the wrong one", async () => {
+    const wrong = unique("ig-wrong");
+    const right = unique("ig-right");
+    const first = await connect(main, wrong);
+    await store.setAccountStatus(main, first.channelAccountId, "DISCONNECTED");
+
+    // Connecting the wrong Instagram account is an ordinary mistake; the profile must be recoverable.
+    const second = await connect(main, right);
+
+    expect(second.channelAccountId).not.toBe(first.channelAccountId);
+    const rows = await db().channelAccount.findMany({
+      where: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId },
+      select: { externalAccountId: true, status: true },
+      orderBy: { createdAt: "asc" },
+    });
+    // The disconnected row stays for audit; only one account is live.
+    expect(rows).toEqual([
+      { externalAccountId: wrong, status: "DISCONNECTED" },
+      { externalAccountId: right, status: "CONNECTED" },
+    ]);
+    // A live account still blocks a different one, which is what the guard is actually for.
+    await expect(connect(main, unique("ig-third"))).rejects.toMatchObject({ reason: "different_account" });
+  });
+
+  it("reconnecting a previously disconnected account revives its own row", async () => {
+    const external = unique("ig-account");
+    const first = await connect(main, external);
+    await store.setAccountStatus(main, first.channelAccountId, "DISCONNECTED");
+
+    const again = await connect(main, external, { now: new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000) });
+
+    expect(again.channelAccountId).toBe(first.channelAccountId);
+    expect(await db().channelAccount.count({ where: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId } })).toBe(1);
+  });
+
+  it("refuses a context that did not come from authorization", async () => {
+    const forged = { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, userId: "u", workspaceMemberId: "m", role: "OWNER" } as unknown as BusinessProfileContext;
+    const { channelAccountId } = await connect(main, unique("ig-account"));
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+
+    // Every store method must reject a hand-made context, not just the ones that delegate to repositories.
+    await expect(store.readCredential(forged, { credentialId, purpose: PURPOSE })).rejects.toThrow();
+    await expect(store.findAccountById(forged, channelAccountId)).rejects.toThrow();
+    await expect(store.findAccountByExternalId(forged, { channel: "INSTAGRAM", externalAccountId: "x" })).rejects.toThrow();
+    await expect(store.rotateCredential(forged, { credentialId, purpose: PURPOSE, token: "t", expiresAt: EXPIRES, refreshedAt: new Date() })).rejects.toThrow();
+    await expect(store.revokeCredential(forged, { credentialId, purpose: PURPOSE, now: new Date() })).rejects.toThrow();
+    await expect(
+      store.connectAccount(forged, {
+        channel: "INSTAGRAM",
+        externalAccountId: unique("ig-forged"),
+        capabilities: { ...NO_CAPABILITIES, text: true },
+        purpose: PURPOSE,
+        token: TOKEN,
+        expiresAt: EXPIRES,
+        now: NOW,
+      }),
+    ).rejects.toThrow();
+  });
+
   it("disconnect frees both live slots and destroys the secret while keeping the row", async () => {
     const external = unique("ig-account");
     const { channelAccountId } = await connect(main, external);

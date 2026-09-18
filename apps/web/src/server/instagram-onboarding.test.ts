@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { INSTAGRAM_CAPABILITIES, type InstagramOAuthConfig } from "@omnichannel/channel-instagram";
-import type { BusinessProfileContext, InstagramOnboardingStore } from "@omnichannel/db";
+import { TenantRecordNotFoundError, type BusinessProfileContext, type InstagramOnboardingStore } from "@omnichannel/db";
 import { createLogger } from "@omnichannel/observability";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,12 @@ import {
   STATE_COOKIE_NAME,
   type OnboardingDependencies,
 } from "./instagram-onboarding";
-import { createInstagramCallbackHandler, createInstagramConnectHandler, type InstagramRouteDependencies } from "./instagram-routes";
+import {
+  createInstagramCallbackHandler,
+  createInstagramConnectHandler,
+  createInstagramDisconnectHandler,
+  type InstagramRouteDependencies,
+} from "./instagram-routes";
 import { UnauthenticatedError } from "./workspace-context";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
@@ -465,6 +470,21 @@ describe("instagram onboarding", () => {
       expect(fake.accounts[0]).toMatchObject({ status: "CONNECTED" });
     });
 
+    it("keeps the account connected when Meta is throttling or broken", async () => {
+      const accountId = await connected();
+      const later = new Date(NOW.getTime() + 2 * day);
+      for (const response of [
+        { status: 500, body: { error: { code: 2, is_transient: true, message: "please retry" } } },
+        { status: 429, body: { error: { code: 4, message: "rate limited" } } },
+      ]) {
+        const deps = dependencies([response], later);
+        // A failing provider has said nothing about our credential; treating that as revocation would
+        // take a working account offline until someone re-authorizes it by hand.
+        expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("UNAVAILABLE");
+        expect(fake.accounts[0]).toMatchObject({ status: "CONNECTED" });
+      }
+    });
+
     it("needs re-authorization when Meta rejects the refresh", async () => {
       const accountId = await connected();
       const deps = dependencies([{ status: 400, body: { error: { code: 190, error_subcode: 460, message: "password changed" } } }], new Date(NOW.getTime() + 2 * day));
@@ -531,6 +551,28 @@ describe("instagram routes", () => {
     vi.restoreAllMocks();
   });
 
+  it("answers a disconnect for an unknown account with not found, not a server error", async () => {
+    const handler = createInstagramDisconnectHandler(
+      routeDependencies({
+        onboarding: () =>
+          ({
+            store: {
+              findAccountById: () => Promise.resolve(undefined),
+              setAccountStatus: () => Promise.reject(new TenantRecordNotFoundError("ChannelAccount")),
+            },
+            logger: createLogger({ level: "error", sink: () => undefined }),
+            now: () => NOW,
+          }) as unknown as OnboardingDependencies,
+      }),
+    );
+
+    const response = await handler(new Request("https://app.example.test/x", { method: "POST" }), {
+      params: Promise.resolve({ workspaceId: "ws_1", businessProfileId: "bp_1", channelAccountId: "ca_missing" }),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
   it("reads the state nonce only from the named cookie", async () => {
     const seen: (string | undefined)[] = [];
     const handler = createInstagramCallbackHandler(routeDependencies());
@@ -552,7 +594,27 @@ describe("instagram routes", () => {
 });
 
 describe("state nonce", () => {
-  it("is stored only as a 32-byte hash", () => {
-    expect(createHash("sha256").update("cookie-nonce-1", "utf8").digest().length).toBe(32);
+  it("is stored only as the hash of the cookie value, never the value itself", async () => {
+    const fake = fakeStore();
+    const started = await startInstagramConnect(
+      {
+        store: fake.store,
+        oauth: { appId: "a", appSecret: "s", redirectUri: "https://app.example.test/cb", http: { send: () => Promise.resolve({ kind: "NO_RESPONSE", reason: "NETWORK", message: "unused" }) } },
+        logger: createLogger({ level: "error", sink: () => undefined }),
+        now: () => NOW,
+        newId: (() => {
+          const values = ["state-value-9", "cookie-nonce-9"];
+          let index = 0;
+          return () => values[index++] ?? "x";
+        })(),
+        humanAgentApproval: "UNKNOWN",
+      },
+      context(),
+    );
+    const stored = fake.states.get("state-value-9");
+
+    expect(Buffer.from(stored?.nonceHash ?? new Uint8Array()).equals(createHash("sha256").update(started.cookieNonce, "utf8").digest())).toBe(true);
+    // The nonce itself must not be recoverable from the row.
+    expect(JSON.stringify(stored)).not.toContain(started.cookieNonce);
   });
 });

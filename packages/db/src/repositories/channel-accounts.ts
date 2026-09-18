@@ -98,14 +98,25 @@ export async function connectChannelAccount(
     throw new DbInputError("externalAccountId", "must be a valid identifier");
   }
 
-  const existing = await db.channelAccount.findFirst({
-    where: { ...scope, channel: input.channel },
+  // Only a *live* account owns the profile's channel slot, matching the partial unique index. A
+  // disconnected row is history: it must not stop the profile from connecting a different account later.
+  const live = await db.channelAccount.findFirst({
+    where: { ...scope, channel: input.channel, status: { not: "DISCONNECTED" } },
     select: { id: true, externalAccountId: true, credentialId: true },
   });
-  if (existing !== null && existing.externalAccountId !== input.externalAccountId) {
-    // The profile already speaks for another Instagram account; swapping it would orphan its history.
+  if (live !== null && live.externalAccountId !== input.externalAccountId) {
+    // This profile already speaks for another Instagram account; swapping it would orphan its history.
     throw new ChannelConnectError("different_account");
   }
+  // Reconnecting an account that was disconnected revives its own row rather than creating a second one,
+  // which would also collide on the account's unique credential reference.
+  const existing =
+    live ??
+    (await db.channelAccount.findFirst({
+      where: { ...scope, channel: input.channel, externalAccountId: input.externalAccountId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, externalAccountId: true, credentialId: true },
+    }));
 
   try {
     if (existing === null) {

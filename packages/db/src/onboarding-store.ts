@@ -27,7 +27,7 @@ import {
   writeChannelCredential,
   type StoredCredential,
 } from "./repositories/channel-credentials";
-import type { BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export interface ConnectedAccountRef {
   readonly channelAccountId: string;
@@ -96,15 +96,18 @@ export interface InstagramOnboardingStore {
 
 export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialCipher): InstagramOnboardingStore {
   return {
-    createConnectState: (context, input) => createChannelConnectState(db, context, input),
+    // Every method is async so that a rejected context reaches the caller as a rejected promise, never as a
+    // synchronous throw from what the port declares as an async call.
+    createConnectState: async (context, input) => createChannelConnectState(db, context, input),
 
-    consumeConnectState: (input) => consumeChannelConnectState(db, input),
+    consumeConnectState: async (input) => consumeChannelConnectState(db, input),
 
     async findAccountByExternalId(context, input) {
+      // Rejects a context that did not come from authorization, exactly as the repositories do.
+      const scope = profileScopeOf(context);
       const account = await db.channelAccount.findFirst({
         where: {
-          workspaceId: context.workspaceId,
-          businessProfileId: context.businessProfileId,
+          ...scope,
           channel: input.channel,
           externalAccountId: input.externalAccountId,
         },
@@ -114,34 +117,25 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
     },
 
     async findAccountById(context, channelAccountId) {
+      const scope = profileScopeOf(context);
       const account = await db.channelAccount.findUnique({
-        where: {
-          workspaceId_businessProfileId_id: {
-            workspaceId: context.workspaceId,
-            businessProfileId: context.businessProfileId,
-            id: channelAccountId,
-          },
-        },
+        where: { workspaceId_businessProfileId_id: { ...scope, id: channelAccountId } },
         select: { id: true, credentialId: true },
       });
       return account === null ? undefined : { channelAccountId: account.id, credentialId: account.credentialId ?? undefined };
     },
 
     async connectAccount(context, input) {
+      const scope = profileScopeOf(context);
       return db.$transaction(async (tx) => {
         const existing = await tx.channelAccount.findFirst({
-          where: {
-            workspaceId: context.workspaceId,
-            businessProfileId: context.businessProfileId,
-            channel: input.channel,
-            externalAccountId: input.externalAccountId,
-          },
+          where: { ...scope, channel: input.channel, externalAccountId: input.externalAccountId },
           select: { credentialId: true },
         });
         const existingCredentialId = existing?.credentialId ?? undefined;
         if (existingCredentialId === undefined) {
           const { credentialId } = await writeChannelCredential(tx, cipher, {
-            workspaceId: context.workspaceId,
+            workspaceId: scope.workspaceId,
             purpose: input.purpose,
             token: input.token,
             expiresAt: input.expiresAt,
@@ -157,7 +151,7 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
         }
         // Reconnect: the credential row keeps its identity so the account's history stays attached to it.
         await rotateChannelCredential(tx, cipher, {
-          workspaceId: context.workspaceId,
+          workspaceId: scope.workspaceId,
           credentialId: existingCredentialId,
           purpose: input.purpose,
           token: input.token,
@@ -179,13 +173,11 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
       await setChannelAccountStatus(db, context, channelAccountId, status);
     },
 
-    readCredential: (context, input) =>
-      readChannelCredential(db, cipher, { workspaceId: context.workspaceId, credentialId: input.credentialId, purpose: input.purpose }),
+    readCredential: async (context, input) =>
+      readChannelCredential(db, cipher, { workspaceId: profileScopeOf(context).workspaceId, credentialId: input.credentialId, purpose: input.purpose }),
 
-    rotateCredential: (context, input) =>
-      rotateChannelCredential(db, cipher, { workspaceId: context.workspaceId, ...input }),
+    rotateCredential: async (context, input) => rotateChannelCredential(db, cipher, { workspaceId: profileScopeOf(context).workspaceId, ...input }),
 
-    revokeCredential: (context, input) =>
-      revokeChannelCredential(db, cipher, { workspaceId: context.workspaceId, ...input }),
+    revokeCredential: async (context, input) => revokeChannelCredential(db, cipher, { workspaceId: profileScopeOf(context).workspaceId, ...input }),
   };
 }

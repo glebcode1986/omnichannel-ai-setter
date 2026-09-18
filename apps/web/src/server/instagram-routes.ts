@@ -8,7 +8,13 @@
  * - the callback redirects to a fixed application URL and never reflects provider text, so nothing Meta
  *   sends can reach the browser as markup or as an open redirect.
  */
-import { BusinessProfileAccessDeniedError, WorkspaceAccessDeniedError, WorkspacePermissionError, type BusinessProfileContext } from "@omnichannel/db";
+import {
+  BusinessProfileAccessDeniedError,
+  TenantRecordNotFoundError,
+  WorkspaceAccessDeniedError,
+  WorkspacePermissionError,
+  type BusinessProfileContext,
+} from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
 
 import {
@@ -167,8 +173,12 @@ function errorResponse(error: unknown, logger: Logger): Response {
   if (error instanceof WorkspacePermissionError) {
     return new Response(null, { status: 403 });
   }
-  if (error instanceof WorkspaceAccessDeniedError || error instanceof BusinessProfileAccessDeniedError) {
-    // Not found rather than forbidden: whether a Workspace exists is itself information.
+  if (
+    error instanceof WorkspaceAccessDeniedError ||
+    error instanceof BusinessProfileAccessDeniedError ||
+    error instanceof TenantRecordNotFoundError
+  ) {
+    // Not found rather than forbidden: whether a Workspace or account exists is itself information.
     return new Response(null, { status: 404 });
   }
   logger.error("instagram.route_failed", { errorName: error instanceof Error ? error.name : typeof error });
