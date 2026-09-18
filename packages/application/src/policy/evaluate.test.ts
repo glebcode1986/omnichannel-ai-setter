@@ -201,12 +201,36 @@ describe("Instagram after-window policy (ADR-014)", () => {
     }
   });
 
-  it("keeps an existing human-agent review claim on a hold caused by something else", () => {
+  it("keeps an existing human-agent review claim while the path is still usable", () => {
     const decision = decide({
       takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
+      limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
     });
 
     expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "HUMAN_AGENT" });
+  });
+
+  it("drops a human-agent claim once the exception has expired", () => {
+    const decision = decide({
+      takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
+      limits: { ...passing().limits, instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" },
+    });
+
+    // A review mode is a promise about which button will work. Showing HUMAN_AGENT here would send the
+    // operator to a send the adapter re-checks and refuses at dispatch.
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
+  });
+
+  it("does not offer the human-agent path when the business chose STANDARD_ONLY, even mid-claim", () => {
+    const decision = decide({
+      takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
+      limits: { ...passing().limits, instagramAfterWindowPolicy: "STANDARD_ONLY" },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+    });
+
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
   });
 });
 
@@ -245,6 +269,17 @@ describe("gates combine instead of hiding one another", () => {
 
     expect(once).toEqual(again);
     expect(once.reasons).toEqual(["ACCOUNT_UNHEALTHY", "WINDOW_CLOSED"]);
+  });
+});
+
+describe("the confidence threshold", () => {
+  it("lets a draft exactly at the threshold through, and blocks the smallest step below it", () => {
+    const at = decide({ draft: { ...passing().draft, confidence: 0.8 } });
+    const below = decide({ draft: { ...passing().draft, confidence: 0.8 - Number.EPSILON } });
+
+    // "Meets the threshold" includes equality; an off-by-one here silently holds every borderline draft.
+    expect(at).toEqual({ action: "SCHEDULE", reasons: [] });
+    expect(below.reasons).toContain("LOW_CONFIDENCE");
   });
 });
 

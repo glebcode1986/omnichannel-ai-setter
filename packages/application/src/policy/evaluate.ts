@@ -21,7 +21,7 @@ import {
   type ReviewMode,
 } from "@omnichannel/domain";
 
-import type { HumanAgentAvailability, PolicyDecision, PolicyInput } from "./inputs";
+import type { PolicyDecision, PolicyInput } from "./inputs";
 
 export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   const reasons = new Set<ReasonCode>();
@@ -46,17 +46,18 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
     reasons.add("SUPERSEDED_BY_NEWER_INBOUND");
     terminal = true;
   }
-  if (!allowsAutomatedSend(input.takeover) && input.takeover.state === "HUMAN_ACTIVE") {
-    // A human owns the conversation (ADR-004). Queueing a review item would compete with the person
-    // already handling it.
-    reasons.add("HUMAN_TAKEOVER");
-    terminal = true;
+  if (!allowsAutomatedSend(input.takeover)) {
+    if (input.takeover.state === "HUMAN_ACTIVE") {
+      // A human owns the conversation (ADR-004). Queueing a review item would compete with the person
+      // already handling it.
+      reasons.add("HUMAN_TAKEOVER");
+      terminal = true;
+    } else {
+      reasons.add("REVIEW_PENDING");
+    }
   }
 
   // --- Everything below blocks an automatic send but still deserves a human's attention ----------------
-  if (input.takeover.state === "REVIEW_REQUIRED") {
-    reasons.add("REVIEW_PENDING");
-  }
   if (input.mode === "DRAFT") {
     // DRAFT always holds: the whole point of the mode is that a person sees every reply first.
     reasons.add("MODE_NOT_AUTOPILOT");
@@ -116,7 +117,7 @@ function evaluateWindowGate(input: PolicyInput): readonly ReasonCode[] {
   if (isWindowOpen(input)) {
     return [];
   }
-  if (input.limits.instagramAfterWindowPolicy === "HUMAN_ASSISTED_EXTENDED" && input.humanAgent.state === "ELIGIBLE") {
+  if (humanAgentPathAvailable(input)) {
     // The AI may draft; only a deliberate human action may initiate the tagged send. This layer therefore
     // returns a review path and never a schedule — no automated delivery may carry HUMAN_AGENT.
     return ["WINDOW_CLOSED", "HUMAN_AGENT_REVIEW_REQUIRED"];
@@ -152,18 +153,24 @@ function contentSupported(input: PolicyInput): boolean {
 }
 
 /**
- * `HUMAN_AGENT` only where a human-support exception is genuinely available, or where the conversation is
- * already held under one. Everything else is a normal review.
+ * A review mode is a promise to the operator about which button will work. `HUMAN_AGENT` is therefore
+ * offered only while the path is actually usable *right now*: the business must have chosen the extended
+ * policy, and the provider exception must still be live.
+ *
+ * An existing `HUMAN_AGENT` review claim does not survive the exception expiring. Keeping it would show a
+ * send path that the adapter re-checks and refuses at dispatch, which turns a stale decision into a dead
+ * end the operator only discovers by clicking it.
  */
 function reviewModeFor(input: PolicyInput, reasons: ReadonlySet<ReasonCode>): ReviewMode {
-  if (input.takeover.state === "REVIEW_REQUIRED" && input.takeover.reviewMode === "HUMAN_AGENT") {
-    return "HUMAN_AGENT";
+  if (!humanAgentPathAvailable(input)) {
+    return "NORMAL";
   }
-  return reasons.has("HUMAN_AGENT_REVIEW_REQUIRED") && isHumanAgentEligible(input.humanAgent) ? "HUMAN_AGENT" : "NORMAL";
+  const alreadyClaimed = input.takeover.state === "REVIEW_REQUIRED" && input.takeover.reviewMode === "HUMAN_AGENT";
+  return alreadyClaimed || reasons.has("HUMAN_AGENT_REVIEW_REQUIRED") ? "HUMAN_AGENT" : "NORMAL";
 }
 
-function isHumanAgentEligible(availability: HumanAgentAvailability): boolean {
-  return availability.state === "ELIGIBLE";
+function humanAgentPathAvailable(input: PolicyInput): boolean {
+  return input.limits.instagramAfterWindowPolicy === "HUMAN_ASSISTED_EXTENDED" && input.humanAgent.state === "ELIGIBLE";
 }
 
 /**
