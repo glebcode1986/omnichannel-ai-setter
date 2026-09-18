@@ -20,5 +20,6 @@ export * from "./ids";
 export * from "./lead";
 export * from "./message";
 export * from "./reason-codes";
+export * from "./style-profile";
 export * from "./values";
 export * from "./workspace";

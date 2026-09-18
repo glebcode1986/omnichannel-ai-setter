@@ -29,6 +29,7 @@ describe.skipIf(!databaseTestsEnabled())("ai draft store (PostgreSQL)", () => {
       conversationId: profile.conversationId,
     },
     generationKey: randomUUID(),
+    trigger: "AUTOMATIC",
     anchorMessageId: profile.messageId,
     anchorStateVersion: 1,
     text: "We open at 10 on Saturday.",

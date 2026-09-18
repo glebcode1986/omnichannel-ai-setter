@@ -1,5 +1,6 @@
 import { ReplyModelUnavailableError, type DraftGenerationDependencies } from "@omnichannel/application";
 import type { DraftContext, DraftContextStore } from "@omnichannel/db";
+import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger } from "@omnichannel/observability";
 import { NonRetryableJobError } from "@omnichannel/queue";
 import { describe, expect, it, vi } from "vitest";
@@ -11,7 +12,7 @@ const job: AiDraftJob = {
   businessProfileId: "bp_1",
   conversationId: "conv_1",
   anchorMessageId: "msg_1",
-  trigger: "DEBOUNCE_ELAPSED",
+  trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
   correlationId: "corr_1",
 };
 
@@ -63,7 +64,8 @@ function harness(overrides: { context?: DraftContext | undefined; generate?: Dra
   const handler = createAiDraftHandler({
     engine,
     context: store,
-    persona: "Friendly studio assistant.",
+    styleProfiles: { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
+    platformStyleFallback: resolveStyleProfile([{ persona: "Platform default assistant." }]),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
   return { handler, saved, logs };
@@ -126,7 +128,7 @@ describe("ai draft handler", () => {
       businessProfileId: "bp_1",
       conversationId: "conv_1",
       anchorMessageId: "msg_7",
-      trigger: "DEBOUNCE_ELAPSED",
+      trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
       correlationId: "corr_9",
     });
   });

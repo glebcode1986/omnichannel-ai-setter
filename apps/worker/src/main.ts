@@ -1,7 +1,14 @@
 import { dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
 import { createAnthropicReplyModel } from "@omnichannel/ai";
-import { createAiDraftStore, createDbClient, createDraftContextStore, createIngestionStore } from "@omnichannel/db";
+import {
+  createAiDraftStore,
+  createDbClient,
+  createDraftContextStore,
+  createIngestionStore,
+  createStyleProfileStore,
+} from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
+import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
@@ -67,7 +74,8 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
-        persona: env.AI_PERSONA,
+        styleProfiles: createStyleProfileStore(db),
+        platformStyleFallback: resolveStyleProfile([{ persona: env.AI_PERSONA }]),
         logger,
       });
       const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft) });

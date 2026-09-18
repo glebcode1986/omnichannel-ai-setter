@@ -11,7 +11,7 @@
  *   accidentally concatenate customer text into system instructions.
  */
 import type { ChannelType } from "@omnichannel/channel-core";
-import type { AiMode, ReasonCode } from "@omnichannel/domain";
+import type { AiMode, ReasonCode, StyleProfile } from "@omnichannel/domain";
 
 /** Where the generation happens; the Business Profile is the customer-data boundary. */
 export interface GenerationScope {
@@ -57,8 +57,14 @@ export interface ReplyGenerationRequest {
   /** Per-request marker that fences untrusted blocks; regenerated if it appears inside the data itself. */
   readonly nonce: string;
   readonly timeoutMs: number;
-  /** Trusted configuration written by the business, not by a customer. */
-  readonly persona: string;
+  /**
+   * The business's own voice, already resolved from Workspace base and Business Profile override. Trusted
+   * configuration written by the business, never by a customer, and never a source of facts.
+   *
+   * Distinct from `style` below, which is retrieved *examples* of human writing: one says how to sound,
+   * the other shows it. Neither can establish a fact.
+   */
+  readonly styleProfile: StyleProfile;
   readonly channel: ChannelType;
   readonly capabilityHints: readonly string[];
   readonly inbound: readonly ConversationSegment[];
@@ -142,6 +148,10 @@ export interface AiDraftStore {
 export interface SaveDraftInput {
   readonly scope: GenerationScope;
   readonly generationKey: string;
+  /** Whether automation or a person asked for this generation. */
+  readonly trigger: "AUTOMATIC" | "HUMAN_REQUEST";
+  /** The workspace member who asked; present only for a human request. */
+  readonly requestedByUserId?: string;
   readonly anchorMessageId: string;
   readonly anchorStateVersion: number;
   /** Null only for a held, unusable generation, which is stored for audit. */

@@ -6,14 +6,20 @@
  * engine's and the delivery coordinator's, neither of which this path can reach.
  */
 import { generateDraft, type DraftGenerationDependencies, type DraftTrigger } from "@omnichannel/application";
-import type { DraftContextStore } from "@omnichannel/db";
+import type { DraftContextStore, StyleProfileStore } from "@omnichannel/db";
+import { resolveStyleProfile, type StyleProfile } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import { NonRetryableJobError, type InboundDebounceJob } from "@omnichannel/queue";
 
 export interface AiDraftHandlerDependencies {
   readonly engine: DraftGenerationDependencies;
   readonly context: DraftContextStore;
-  readonly persona: string;
+  readonly styleProfiles: StyleProfileStore;
+  /**
+   * The platform's voice of last resort, used only where a business has configured nothing. It is a safe
+   * default, never the authoritative persona for a tenant (product-owner decision on PR #65).
+   */
+  readonly platformStyleFallback: StyleProfile;
   readonly logger: Logger;
 }
 
@@ -24,7 +30,6 @@ export interface AiDraftJob {
   readonly conversationId: string;
   readonly anchorMessageId: string;
   readonly trigger: DraftTrigger;
-  readonly requestId?: string;
   readonly correlationId: string;
 }
 
@@ -49,7 +54,11 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       anchorStateVersion: context.snapshot.stateVersion,
       trigger: job.trigger,
       snapshot: context.snapshot,
-      persona: dependencies.persona,
+      // Workspace base, then this Business Profile's override, then the platform default underneath.
+      styleProfile: resolveStyleProfile(
+        await dependencies.styleProfiles.load({ workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }),
+        dependencies.platformStyleFallback,
+      ),
       channel: "INSTAGRAM",
       capabilityHints: ["text"],
       inbound: context.inbound,
@@ -58,7 +67,6 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       // rather than invent business facts.
       knowledge: [],
       style: [],
-      ...(job.requestId === undefined ? {} : { requestId: job.requestId }),
     });
 
     if (outcome.status === "UNAVAILABLE") {
@@ -75,14 +83,18 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
   };
 }
 
-/** The queue's debounce job names the conversation and anchor; the draft trigger follows from it. */
+/**
+ * The queue's debounce job names the conversation and anchor; the draft trigger follows from it — and it
+ * is always `AUTOMATIC`. An inbound message cannot produce a human request, because there is no person to
+ * name, which is the whole point of the union.
+ */
 export function draftJobFromDebounce(job: InboundDebounceJob): AiDraftJob {
   return {
     workspaceId: job.workspaceId,
     businessProfileId: job.businessProfileId,
     conversationId: job.conversationId,
     anchorMessageId: job.anchorMessageId,
-    trigger: "DEBOUNCE_ELAPSED",
+    trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
     correlationId: job.correlationId,
   };
 }

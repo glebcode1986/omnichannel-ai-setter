@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { OutboundMessageCommand } from "@omnichannel/channel-core";
+import { resolveStyleProfile } from "@omnichannel/domain";
 
 import {
   draftGenerationBlockers,
@@ -19,6 +20,10 @@ import {
 } from "./ports";
 
 const NOW = new Date("2026-09-18T10:00:00.000Z");
+
+const AUTOMATIC = { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" } as const;
+const STYLE = resolveStyleProfile([{ persona: "Friendly studio assistant.", emoji: "SPARING" }]);
+const HUMAN = { kind: "HUMAN_REQUEST", requestedByUserId: "user_7", requestedAt: NOW, requestId: "req_1" } as const;
 
 const validOutput = (overrides: Record<string, unknown> = {}) => ({
   reply: "We open at 10 on Saturday.",
@@ -48,9 +53,9 @@ const command = (overrides: Partial<DraftGenerationCommand> = {}): DraftGenerati
   scope: { workspaceId: "ws_1", businessProfileId: "bp_1", conversationId: "conv_1" },
   anchorMessageId: "msg_1",
   anchorStateVersion: 4,
-  trigger: "DEBOUNCE_ELAPSED",
+  trigger: AUTOMATIC,
   snapshot: snapshot(),
-  persona: "Friendly studio assistant.",
+  styleProfile: STYLE,
   channel: "INSTAGRAM",
   capabilityHints: ["text"],
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: NOW }],
@@ -114,14 +119,60 @@ function modelResult(overrides: Partial<ReplyGenerationResult>): ReplyGeneration
 
 describe("eligibility", () => {
   it("generates only for an open, AI-enabled conversation nobody has taken over", () => {
-    expect(draftGenerationBlockers(snapshot())).toEqual([]);
-    expect(draftGenerationBlockers(snapshot({ mode: "OFF" }))).toEqual(["MODE_NOT_AUTOPILOT"]);
-    expect(draftGenerationBlockers(snapshot({ aiEnabled: false }))).toEqual(["AI_DISABLED"]);
-    expect(draftGenerationBlockers(snapshot({ takeoverState: "HUMAN_ACTIVE" }))).toEqual(["HUMAN_TAKEOVER"]);
-    expect(draftGenerationBlockers(snapshot({ takeoverState: "REVIEW_REQUIRED" }))).toEqual(["REVIEW_PENDING"]);
-    expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }))).toEqual(["AI_DISABLED"]);
+    expect(draftGenerationBlockers(snapshot(), AUTOMATIC)).toEqual([]);
+    expect(draftGenerationBlockers(snapshot({ mode: "OFF" }), AUTOMATIC)).toEqual(["MODE_NOT_AUTOPILOT"]);
+    expect(draftGenerationBlockers(snapshot({ aiEnabled: false }), AUTOMATIC)).toEqual(["AI_DISABLED"]);
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "HUMAN_ACTIVE" }), AUTOMATIC)).toEqual(["HUMAN_TAKEOVER"]);
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "REVIEW_REQUIRED" }), AUTOMATIC)).toEqual(["REVIEW_PENDING"]);
+    expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }), AUTOMATIC)).toEqual(["AI_DISABLED"]);
     // The customer has spoken since: answering the older anchor would answer the wrong question.
-    expect(draftGenerationBlockers(snapshot({ anchorSuperseded: true }))).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
+    expect(draftGenerationBlockers(snapshot({ anchorSuperseded: true }), AUTOMATIC)).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
+  });
+
+  it("lets an authorized person ask for help where automation may not", () => {
+    // Product-owner decision on PR #65: OFF means no background generation, not "the assistant is gone".
+    expect(draftGenerationBlockers(snapshot({ mode: "OFF" }), HUMAN)).toEqual([]);
+    // Takeover exists to stop automation racing the person handling the conversation. It cannot sensibly
+    // stop that person from asking for a draft.
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "HUMAN_ACTIVE" }), HUMAN)).toEqual([]);
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "REVIEW_REQUIRED" }), HUMAN)).toEqual([]);
+  });
+
+  it("keeps the blockers that are not about who is asking", () => {
+    // A per-conversation kill switch, a closed conversation and an overtaken anchor hold for everyone.
+    expect(draftGenerationBlockers(snapshot({ aiEnabled: false }), HUMAN)).toEqual(["AI_DISABLED"]);
+    expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }), HUMAN)).toEqual(["AI_DISABLED"]);
+    expect(draftGenerationBlockers(snapshot({ anchorSuperseded: true }), HUMAN)).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
+  });
+
+  it("a human-requested draft is manual assistance and never auto-sends", async () => {
+    const { dependencies, saved } = harness([modelResult({ output: validOutput({ needs_review: false, should_send: true }) })]);
+
+    const outcome = await generateDraft(dependencies, command({ snapshot: snapshot({ mode: "OFF" }), trigger: HUMAN }));
+
+    expect(outcome).toMatchObject({ status: "GENERATED", needsReview: true });
+    // The audit row says who asked, so a human request can never be confused with automation.
+    expect(saved[0]).toMatchObject({ trigger: "HUMAN_REQUEST", requestedByUserId: "user_7" });
+    // The model's own advice is still stored verbatim rather than rewritten to match the outcome.
+    expect(saved[0]?.modelSuggestsSend).toBe(true);
+  });
+
+  it("records automation as automation, with nobody to attribute it to", async () => {
+    const { dependencies, saved } = harness([modelResult({})]);
+
+    await generateDraft(dependencies, command());
+
+    expect(saved[0]?.trigger).toBe("AUTOMATIC");
+    expect(saved[0]?.requestedByUserId).toBeUndefined();
+  });
+
+  it("gives each explicit request its own generation, and each retry the same one", () => {
+    const base = command({ trigger: HUMAN });
+    const again = command({ trigger: { ...HUMAN, requestId: "req_2" } });
+
+    // A person clicking twice wants two drafts; a retried queue job must not create a second one.
+    expect(generationKey(base)).not.toBe(generationKey(again));
+    expect(generationKey(base)).toBe(generationKey(command({ trigger: { ...HUMAN, requestedAt: new Date() } })));
   });
 
   it("writes nothing and calls no model when generation is not allowed", async () => {
@@ -200,7 +251,7 @@ describe("untrusted input", () => {
     // The request carries no rendered prompt at all: only typed, labelled segments.
     expect(request).not.toHaveProperty("prompt");
     expect(request?.inbound[0]?.text).toBe(injection);
-    expect(request?.persona).toBe("Friendly studio assistant.");
+    expect(request?.styleProfile.persona).toBe("Friendly studio assistant.");
     // Knowledge and style stay in their own typed arrays, so style can never back a factual claim.
     expect(request?.knowledge[0]?.chunkId).toBe("chunk_1");
     expect(request?.style[0]).not.toHaveProperty("chunkId");
@@ -388,8 +439,8 @@ describe("generation identity", () => {
     const base = command();
 
     expect(generationKey(base)).toBe(generationKey(command()));
-    expect(generationKey(command({ trigger: "MANUAL_REQUEST", requestId: "req_a" }))).not.toBe(
-      generationKey(command({ trigger: "MANUAL_REQUEST", requestId: "req_b" })),
+    expect(generationKey(command({ trigger: { ...HUMAN, requestId: "req_a" } }))).not.toBe(
+      generationKey(command({ trigger: { ...HUMAN, requestId: "req_b" } })),
     );
     // Deliberately independent of live conversation state, which changes between retries of the same job.
     expect(generationKey(command({ anchorStateVersion: 5 }))).toBe(generationKey(base));

@@ -36,6 +36,7 @@ export {
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
 export { createIngestionStore } from "./ingestion-store";
+export { createStyleProfileStore, type StyleProfileQuery, type StyleProfileStore } from "./style-profile-store";
 export {
   createCredentialCipher,
   CREDENTIAL_ALGORITHM,

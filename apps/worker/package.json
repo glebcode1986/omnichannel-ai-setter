@@ -14,6 +14,7 @@
     "@omnichannel/ai": "workspace:*",
     "@omnichannel/application": "workspace:*",
     "@omnichannel/db": "workspace:*",
+    "@omnichannel/domain": "workspace:*",
     "@omnichannel/env": "workspace:*",
     "@omnichannel/observability": "workspace:*",
     "@omnichannel/queue": "workspace:*",
@@ -25,7 +26,6 @@
   },
   "devDependencies": {
     "@omnichannel/channel-core": "workspace:*",
-    "@omnichannel/domain": "workspace:*",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.13"
   }

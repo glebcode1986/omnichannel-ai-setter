@@ -21,8 +21,9 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
    */
   AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
   /**
-   * The business persona the model writes as. Configuration for now: the data model has no persona field,
-   * and the AI configuration UX (Phase 5) owns where a business edits this.
+   * The platform's voice of last resort, used only where a business has configured no StyleProfile of its
+   * own. A tenant's persona lives in `style_profiles` and is resolved per Business Profile; this is a safe
+   * default for an unconfigured workspace, never the authoritative voice for one (decision on PR #65).
    */
   AI_PERSONA: z
     .string()

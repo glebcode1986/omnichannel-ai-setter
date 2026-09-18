@@ -40,7 +40,7 @@ const aiDraft: AiDraftGenerationJob = {
   correlationId: "corr-draft",
   conversationId: "conv_1",
   anchorMessageId: "msg_2",
-  trigger: "DEBOUNCE_ELAPSED",
+  trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
 };
 
 const delivery = (operationId: string, scheduledFor = new Date(), selectedDelayMs = 0, businessProfileId = "bp_1"): DeliveryJob => ({
