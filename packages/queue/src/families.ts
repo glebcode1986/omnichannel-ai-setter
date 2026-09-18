@@ -66,7 +66,9 @@ export const AI_DRAFT_GENERATION: JobFamily<AiDraftGenerationJob> = {
       job.businessProfileId,
       job.conversationId,
       job.anchorMessageId,
-      ...(job.requestId === undefined ? [] : [job.requestId]),
+      // A person asking twice for the same anchor wants two drafts, so each explicit request is its own
+      // job; automation for one anchor is always the same job, however many times it is retried.
+      ...(job.trigger.kind === "HUMAN_REQUEST" ? [job.trigger.kind, job.trigger.requestId] : [job.trigger.kind]),
     ),
   // Safe to retry: generation produces a draft, never a customer-visible send.
   jobOptions: { ...RETENTION, attempts: 3, backoff: { type: "exponential", delay: 5_000 } },

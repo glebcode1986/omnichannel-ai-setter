@@ -269,6 +269,9 @@ importers:
       '@omnichannel/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@omnichannel/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@omnichannel/env':
         specifier: workspace:*
         version: link:../../packages/env
@@ -297,9 +300,6 @@ importers:
       '@omnichannel/channel-core':
         specifier: workspace:*
         version: link:../../packages/channel-core
-      '@omnichannel/domain':
-        specifier: workspace:*
-        version: link:../../packages/domain
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

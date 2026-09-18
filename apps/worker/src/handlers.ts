@@ -19,8 +19,12 @@ export function createHandlers(generateDraft: (job: AiDraftJob) => Promise<void>
         businessProfileId: job.businessProfileId,
         conversationId: job.conversationId,
         anchorMessageId: job.anchorMessageId,
-        trigger: job.trigger === "MANUAL_REQUEST" ? "MANUAL_REQUEST" : "DEBOUNCE_ELAPSED",
-        ...(job.requestId === undefined ? {} : { requestId: job.requestId }),
+        // Carried across whole, never reconstructed: rebuilding it here is exactly where a background job
+        // could acquire an authority it was never given.
+        trigger:
+          job.trigger.kind === "HUMAN_REQUEST"
+            ? { ...job.trigger, requestedAt: new Date(job.trigger.requestedAt) }
+            : job.trigger,
         correlationId: job.correlationId,
       }),
     deliver: () =>

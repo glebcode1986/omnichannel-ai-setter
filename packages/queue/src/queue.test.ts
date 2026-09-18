@@ -55,8 +55,7 @@ describe("job payload schemas", () => {
         correlationId: "corr_1",
         conversationId: "conv_1",
         anchorMessageId: "msg_1",
-        trigger: "MANUAL_REQUEST",
-        requestId: "req_1",
+        trigger: { kind: "HUMAN_REQUEST", requestedByUserId: "user_7", requestedAt: "2026-09-18T10:00:00.000Z", requestId: "req_1" },
       }),
     ).toBeDefined();
     expect(
@@ -113,7 +112,7 @@ describe("job payload schemas", () => {
           correlationId: "corr_1",
           conversationId: "conv_1",
           anchorMessageId: "msg_1",
-          trigger: "DEBOUNCE_ELAPSED",
+          trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
         },
       ],
       [DELIVERY.jobName, deliveryJobSchema, { ...delivery }],
@@ -149,7 +148,7 @@ describe("job payload schemas", () => {
     }
   });
 
-  it("requires a request id exactly for manual AI draft requests", () => {
+  it("will not let a job claim a person asked for it without naming the person", () => {
     const base = {
       schemaVersion: 1,
       workspaceId: "ws_1",
@@ -158,9 +157,21 @@ describe("job payload schemas", () => {
       conversationId: "conv_1",
       anchorMessageId: "msg_1",
     };
-    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "MANUAL_REQUEST" }).success).toBe(false);
-    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "DEBOUNCE_ELAPSED", requestId: "r" }).success).toBe(false);
-    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "DEBOUNCE_ELAPSED" }).success).toBe(true);
+    const automatic = { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" };
+    const human = { kind: "HUMAN_REQUEST", requestedByUserId: "user_7", requestedAt: "2026-09-18T10:00:00.000Z", requestId: "req_1" };
+
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: automatic }).success).toBe(true);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: human }).success).toBe(true);
+
+    // Mode OFF permits a draft only when a person asked, so the claim has to carry the person. A
+    // background job has nobody to name and therefore cannot make it.
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { kind: "HUMAN_REQUEST", requestId: "req_1" } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...human, requestedByUserId: "" } }).success).toBe(false);
+    // Nor by smuggling the fields alongside an automatic trigger.
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...automatic, requestedByUserId: "user_7" } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: automatic, requestedByUserId: "user_7" }).success).toBe(false);
+    // A bare string is no longer a trigger at all.
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "HUMAN_REQUEST" }).success).toBe(false);
   });
 
   it("reports paths and codes without echoing values", () => {
@@ -201,7 +212,7 @@ describe("job identity", () => {
       anchorMessageId: "msg_1",
       anchorInboundAt: "2026-09-17T10:00:00.000Z",
     };
-    const draft = { ...debounce, trigger: "DEBOUNCE_ELAPSED" as const };
+    const draft = { ...debounce, trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" } as const };
     const reconciliation = {
       ...delivery,
       reason: "AMBIGUOUS_SEND_RESULT" as const,

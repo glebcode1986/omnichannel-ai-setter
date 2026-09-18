@@ -22,6 +22,10 @@ export function createAiDraftStore(db: DbClient): AiDraftStore {
         ...scope,
         conversationId: input.scope.conversationId,
         generationKey: input.generationKey,
+        // Whether automation or a person asked, and who: an "ask AI" click in mode OFF is a different act
+        // from a background job, and the audit trail has to be able to tell them apart.
+        trigger: input.trigger,
+        requestedByUserId: input.requestedByUserId,
         anchorMessageId: input.anchorMessageId,
         anchorStateVersion: input.anchorStateVersion,
         text: input.text,
