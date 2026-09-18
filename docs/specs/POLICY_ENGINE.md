@@ -51,3 +51,21 @@ Payment/refund disputes beyond documented simple policy, legal/contract interpre
 ## Test style
 
 Implement as pure functions/value objects where possible. Table-driven tests must cover every gate individually plus conflicting combinations. LLM text cannot change or disable a gate.
+
+## Product-owner decisions — 2026-09-18
+
+### OFF and explicit human assistance
+`OFF` remains terminal for background/normal AI generation and automatic delivery. An explicitly authorized human-requested draft is a separate manual-assist use case and may generate while OFF, but it can never be auto-scheduled or auto-sent because of that request.
+
+### Closed Instagram standard window
+Under Instagram `STANDARD_ONLY`, when the standard automated window is closed and no explicitly enabled human-assisted path applies, automatic work returns `SKIP` rather than creating a routine Review item. The Inbox must still show the customer message and an operational `window closed / AI could not send` state; incidents or explicit human actions may create separate actionable Review items.
+
+### Quiet hours
+Quiet hours should **defer** automated delivery when a compliant future send time exists inside the still-valid provider/channel window and timing budget.
+
+If quiet-hours deferral would cross or violate the provider/channel eligibility deadline, do not schedule a late send. Return `HOLD_REVIEW` (or the channel-specific safe terminal result where no human action is possible). Never silently send during quiet hours and never blindly send after provider eligibility expires.
+
+The policy/delivery contract may therefore carry a deterministic `notBefore/deferUntil` value or an equivalent scheduling result rather than treating quiet hours as a permanent block.
+
+### Channel-specific after-window policy
+Keep the evaluator channel-neutral by using a discriminated channel-policy input rather than a flat Instagram-only field. Instagram and WhatsApp after-window policies remain distinct variants; adding WhatsApp must not reinterpret Instagram semantics.
