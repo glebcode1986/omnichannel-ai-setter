@@ -117,8 +117,13 @@ export interface DraftConversationSnapshot {
   readonly aiEnabled: boolean;
   readonly takeoverState: "NONE" | "REVIEW_REQUIRED" | "HUMAN_ACTIVE";
   readonly mode: AiMode;
-  /** Current conversation state; a draft generated for an older one is stale. */
+  /** Current conversation state, persisted with the draft so a later action can tell it has moved on. */
   readonly stateVersion: number;
+  /**
+   * True when a customer message newer than the anchor already exists. Comparing state versions here would
+   * not work: the caller reads them at the same instant, so they are always equal.
+   */
+  readonly anchorSuperseded: boolean;
 }
 
 export interface PersistedDraft {

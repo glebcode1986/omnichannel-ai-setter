@@ -44,6 +44,8 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
     const outcome = await generateDraft(dependencies.engine, {
       scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, conversationId: job.conversationId },
       anchorMessageId: job.anchorMessageId,
+      // The state the draft is generated for, persisted with it; whether the anchor has been overtaken is a
+      // separate fact the context store establishes, because both versions are read at the same instant.
       anchorStateVersion: context.snapshot.stateVersion,
       trigger: job.trigger,
       snapshot: context.snapshot,

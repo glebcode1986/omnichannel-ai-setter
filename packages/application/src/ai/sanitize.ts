@@ -23,7 +23,10 @@ const INVISIBLE_RANGES: readonly (readonly [number, number])[] = [
   [0x202a, 0x202e], // embedding and override controls
   [0x2060, 0x2064], // word joiner and invisible operators
   [0x2066, 0x206f], // isolates and deprecated formatting
+  [0xfe00, 0xfe0f], // variation selectors
   [0xfeff, 0xfeff], // byte-order mark
+  [0xe0000, 0xe007f], // tag characters: a whole ASCII alphabet that renders as nothing
+  [0xe0100, 0xe01ef], // variation selectors supplement
 ];
 
 /** C0/C1 controls, except tab (0x09) and newline (0x0a), which are ordinary in a message. */

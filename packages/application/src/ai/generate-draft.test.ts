@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { OutboundMessageCommand } from "@omnichannel/channel-core";
 
@@ -40,6 +40,7 @@ const snapshot = (overrides: Partial<DraftGenerationCommand["snapshot"]> = {}): 
   takeoverState: "NONE",
   mode: "DRAFT",
   stateVersion: 4,
+  anchorSuperseded: false,
   ...overrides,
 });
 
@@ -113,14 +114,14 @@ function modelResult(overrides: Partial<ReplyGenerationResult>): ReplyGeneration
 
 describe("eligibility", () => {
   it("generates only for an open, AI-enabled conversation nobody has taken over", () => {
-    expect(draftGenerationBlockers(snapshot(), 4)).toEqual([]);
-    expect(draftGenerationBlockers(snapshot({ mode: "OFF" }), 4)).toEqual(["MODE_NOT_AUTOPILOT"]);
-    expect(draftGenerationBlockers(snapshot({ aiEnabled: false }), 4)).toEqual(["AI_DISABLED"]);
-    expect(draftGenerationBlockers(snapshot({ takeoverState: "HUMAN_ACTIVE" }), 4)).toEqual(["HUMAN_TAKEOVER"]);
-    expect(draftGenerationBlockers(snapshot({ takeoverState: "REVIEW_REQUIRED" }), 4)).toEqual(["REVIEW_PENDING"]);
-    expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }), 4)).toEqual(["AI_DISABLED"]);
-    // The customer has spoken since: answering the older state would answer the wrong question.
-    expect(draftGenerationBlockers(snapshot({ stateVersion: 5 }), 4)).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
+    expect(draftGenerationBlockers(snapshot())).toEqual([]);
+    expect(draftGenerationBlockers(snapshot({ mode: "OFF" }))).toEqual(["MODE_NOT_AUTOPILOT"]);
+    expect(draftGenerationBlockers(snapshot({ aiEnabled: false }))).toEqual(["AI_DISABLED"]);
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "HUMAN_ACTIVE" }))).toEqual(["HUMAN_TAKEOVER"]);
+    expect(draftGenerationBlockers(snapshot({ takeoverState: "REVIEW_REQUIRED" }))).toEqual(["REVIEW_PENDING"]);
+    expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }))).toEqual(["AI_DISABLED"]);
+    // The customer has spoken since: answering the older anchor would answer the wrong question.
+    expect(draftGenerationBlockers(snapshot({ anchorSuperseded: true }))).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
   });
 
   it("writes nothing and calls no model when generation is not allowed", async () => {
@@ -271,12 +272,52 @@ describe("malformed output", () => {
     });
   });
 
+  it("fences the repair attempt under a fresh marker the model has not seen", async () => {
+    const { dependencies, requests } = harness([
+      modelResult({ output: { reply: "nonce-1 leaked", confidence: "high" } }),
+      modelResult({}),
+    ]);
+
+    await generateDraft(dependencies, command());
+
+    // The previous output is the text most likely to contain the marker, so it must not reuse it.
+    expect(requests[1]?.nonce).not.toBe(requests[0]?.nonce);
+    expect(requests[1]?.repair?.previousOutput).toContain("nonce-1 leaked");
+    expect(requests[1]?.repair?.previousOutput.includes(requests[1]?.nonce ?? "")).toBe(false);
+  });
+
+  it("files a refusal on the repair attempt as a refusal, not as malformed output", async () => {
+    const { dependencies, saved } = harness([
+      modelResult({ output: { reply: "hi" } }),
+      modelResult({ output: undefined, rejection: "REFUSAL" }),
+    ]);
+
+    const outcome = await generateDraft(dependencies, command());
+
+    expect(outcome).toMatchObject({ status: "HELD", reasonCodes: ["UNSUPPORTED_CONTENT"] });
+    expect(saved[0]?.reasonCodes).toEqual(["UNSUPPORTED_CONTENT"]);
+  });
+
   it("accepts a repaired second attempt", async () => {
     const { dependencies, saved } = harness([modelResult({ output: { nonsense: true } }), modelResult({})]);
 
     expect(await generateDraft(dependencies, command())).toMatchObject({ status: "GENERATED" });
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({ status: "PENDING" });
+  });
+
+  it("refuses reason codes the system establishes, so a model cannot claim a gate", () => {
+    // A model asserting HUMAN_TAKEOVER or WINDOW_CLOSED would put a fact it cannot know into the audit trail.
+    for (const code of ["HUMAN_TAKEOVER", "WINDOW_CLOSED", "RATE_LIMITED", "INVALID_MODEL_OUTPUT", "MODE_NOT_AUTOPILOT"]) {
+      expect(parseModelOutput(validOutput({ reason_codes: [code] })).ok).toBe(false);
+    }
+    expect(parseModelOutput(validOutput({ reason_codes: ["MISSING_FACT", "HIGH_VALUE_COMMITMENT"] })).ok).toBe(true);
+  });
+
+  it("refuses a confidence outside 0..1, so the stored value is always comparable", () => {
+    expect(parseModelOutput(validOutput({ confidence: 1.2 })).ok).toBe(false);
+    expect(parseModelOutput(validOutput({ confidence: -0.1 })).ok).toBe(false);
+    expect(parseModelOutput(validOutput({ confidence: 1 })).ok).toBe(true);
   });
 
   it("rejects output that tries to ask for an action", () => {
@@ -329,15 +370,16 @@ describe("no transport authority", () => {
   });
 
   it("stores should_send as advisory and never acts on it", async () => {
-    const send = vi.fn();
-    const { dependencies, saved } = harness([modelResult({ output: validOutput({ should_send: true, confidence: 1 }) })]);
+    const { dependencies, saved, requests } = harness([modelResult({ output: validOutput({ should_send: true, confidence: 1 }) })]);
 
     await generateDraft(dependencies, command());
 
-    // The engine's only side effect is one draft row; there is no path from here to a channel.
+    // The engine's only side effects are the model call and one draft row; the dependency object it is
+    // given has no transport member at all, so there is no path from here to a channel.
     expect(saved).toHaveLength(1);
     expect(saved[0]?.status).toBe("PENDING");
-    expect(send).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(Object.keys(dependencies).sort()).toEqual(["drafts", "log", "model", "newNonce", "now", "promptVersion", "schemaVersion"]);
   });
 });
 
@@ -349,7 +391,8 @@ describe("generation identity", () => {
     expect(generationKey(command({ trigger: "MANUAL_REQUEST", requestId: "req_a" }))).not.toBe(
       generationKey(command({ trigger: "MANUAL_REQUEST", requestId: "req_b" })),
     );
-    // A newer conversation state is a different generation, not a retry of the old one.
-    expect(generationKey(command({ anchorStateVersion: 5 }))).not.toBe(generationKey(base));
+    // Deliberately independent of live conversation state, which changes between retries of the same job.
+    expect(generationKey(command({ anchorStateVersion: 5 }))).toBe(generationKey(base));
+    expect(generationKey(command({ anchorMessageId: "msg_2" }))).not.toBe(generationKey(base));
   });
 });

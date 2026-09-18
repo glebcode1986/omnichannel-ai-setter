@@ -15,7 +15,11 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
   /** Provider choice is configuration, not architecture (AI_ORCHESTRATION.md); swap it without a release. */
   AI_REPLY_MODEL: z.string().min(1).max(128).default("claude-opus-5"),
   AI_REPLY_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
-  AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(1_024),
+  /**
+   * Output budget. Generous on purpose: the default model deliberates before answering and that counts
+   * against this cap, so a tight budget truncates the reply and every draft is held for review.
+   */
+  AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
   /**
    * The business persona the model writes as. Configuration for now: the data model has no persona field,
    * and the AI configuration UX (Phase 5) owns where a business edits this.

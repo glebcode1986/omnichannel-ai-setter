@@ -12,7 +12,7 @@
  * - **Honesty.** Contradictory output (`should_send` with `needs_review`) is stored as it came; the model's
  *   own hesitation is never tidied away.
  */
-import { isStaleAnchor, MANDATORY_REVIEW_REASON_CODES, toConversationStateVersion, type ReasonCode } from "@omnichannel/domain";
+import { MANDATORY_REVIEW_REASON_CODES, type ReasonCode } from "@omnichannel/domain";
 
 import { parseModelOutput, type AiDraftOutput, type ModelOutputIssue } from "./model-output";
 import type {
@@ -79,10 +79,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * answers. Mode OFF mirrors only, so it generates nothing — not even on an explicit request (POLICY_ENGINE.md
  * and PROJECT_CONTEXT.md; see the PR description, this one is flagged for the product owner).
  */
-export function draftGenerationBlockers(
-  snapshot: DraftConversationSnapshot,
-  anchorStateVersion: number,
-): readonly ReasonCode[] {
+export function draftGenerationBlockers(snapshot: DraftConversationSnapshot): readonly ReasonCode[] {
   const blockers: ReasonCode[] = [];
   if (snapshot.mode === "OFF") {
     blockers.push("MODE_NOT_AUTOPILOT");
@@ -99,8 +96,8 @@ export function draftGenerationBlockers(
   if (snapshot.status !== "OPEN") {
     blockers.push("AI_DISABLED");
   }
-  if (isStaleAnchor(toConversationStateVersion(anchorStateVersion), toConversationStateVersion(snapshot.stateVersion))) {
-    // The customer has said something since; drafting against the old state would answer the wrong question.
+  if (snapshot.anchorSuperseded) {
+    // The customer has said something since; drafting against the old anchor answers the wrong question.
     blockers.push("SUPERSEDED_BY_NEWER_INBOUND");
   }
   return blockers;
@@ -118,7 +115,7 @@ export async function generateDraft(
     trigger: command.trigger,
   };
 
-  const blockers = draftGenerationBlockers(command.snapshot, command.anchorStateVersion);
+  const blockers = draftGenerationBlockers(command.snapshot);
   if (blockers.length > 0) {
     // Nothing is persisted: a generation that never happened is not a draft.
     dependencies.log.info("ai.draft_declined", { ...fields, reasonCodes: blockers });
@@ -151,10 +148,18 @@ export async function generateDraft(
     if (repaired !== undefined && repaired.parsed.ok) {
       return persistDraft(dependencies, command, repaired.result, repaired.parsed.value, fields);
     }
-    if (repaired?.parsed.ok === false) {
+    if (repaired?.parsed.ok === false && repaired.result.rejection === undefined) {
       dependencies.log.warn("ai.output_invalid", { ...fields, issues: repaired.parsed.issues, attempt: 2 });
     }
-    return holdUnusable(dependencies, command, repaired?.result ?? result, "INVALID_MODEL_OUTPUT", fields);
+    // A provider that refused on the second attempt refused; filing that as malformed output would put the
+    // wrong reason in the audit trail.
+    return holdUnusable(
+      dependencies,
+      command,
+      repaired?.result ?? result,
+      repaired?.result.rejection === "REFUSAL" ? "UNSUPPORTED_CONTENT" : "INVALID_MODEL_OUTPUT",
+      fields,
+    );
   }
 
   dependencies.log.warn("ai.model_rejected", { ...fields, rejection: result.rejection });
@@ -173,16 +178,17 @@ async function repair(
   previous: ReplyGenerationResult,
   issues: readonly ModelOutputIssue[],
 ): Promise<{ result: ReplyGenerationResult; parsed: ReturnType<typeof parseModelOutput> } | undefined> {
+  // The model has already seen the fence marker, and this block is its own output: it is the most likely
+  // text in the whole request to contain that marker. So the repair attempt gets a fresh nonce, checked
+  // against the previous output as well as every other segment.
+  const previousOutput = sanitizeUntrustedText(JSON.stringify(previous.output ?? null));
+  const nonce = freshNonce(dependencies, [previousOutput, ...allSegmentTexts(request)], request.scope.conversationId);
   try {
-    const result = await dependencies.model.generate({
-      ...request,
-      repair: {
-        issues,
-        // Bounded and sanitized like any other untrusted text.
-        previousOutput: sanitizeUntrustedText(JSON.stringify(previous.output ?? null)),
-      },
-    });
-    return { result, parsed: result.rejection === undefined ? parseModelOutput(result.output) : { ok: false, issues: [] } };
+    const result = await dependencies.model.generate({ ...request, nonce, repair: { issues, previousOutput } });
+    return {
+      result,
+      parsed: result.rejection === undefined ? parseModelOutput(result.output) : { ok: false, issues: [] },
+    };
   } catch (error) {
     if (error instanceof ReplyModelUnavailableError) {
       return undefined;
@@ -198,13 +204,11 @@ function buildRequest(dependencies: DraftGenerationDependencies, command: DraftG
   const knowledge = command.knowledge.map(sanitize);
   const style = command.style.map(sanitize);
 
-  // If the fence marker occurs inside the data, the data could close its own fence, so pick another.
-  let nonce = dependencies.newNonce();
-  const texts = [...inbound, ...history, ...knowledge, ...style].map((segment) => segment.text);
-  for (let attempt = 0; attempt < 3 && texts.some((text) => containsNonce(text, nonce)); attempt += 1) {
-    dependencies.log.warn("ai.nonce_collision", { conversationId: command.scope.conversationId });
-    nonce = dependencies.newNonce();
-  }
+  const nonce = freshNonce(
+    dependencies,
+    [...inbound, ...history, ...knowledge, ...style].map((segment) => segment.text),
+    command.scope.conversationId,
+  );
 
   return {
     scope: command.scope,
@@ -222,6 +226,20 @@ function buildRequest(dependencies: DraftGenerationDependencies, command: DraftG
     knowledge,
     style,
   };
+}
+
+/** A marker that appears inside the data would let the data close its own fence, so pick another. */
+function freshNonce(dependencies: DraftGenerationDependencies, texts: readonly string[], conversationId: string): string {
+  let nonce = dependencies.newNonce();
+  for (let attempt = 0; attempt < 3 && texts.some((text) => containsNonce(text, nonce)); attempt += 1) {
+    dependencies.log.warn("ai.nonce_collision", { conversationId });
+    nonce = dependencies.newNonce();
+  }
+  return nonce;
+}
+
+function allSegmentTexts(request: ReplyGenerationRequest): readonly string[] {
+  return [...request.inbound, ...request.history, ...request.knowledge, ...request.style].map((segment) => segment.text);
 }
 
 function persistDraft(
@@ -324,15 +342,10 @@ function save(
 }
 
 /**
- * Identity of one logical generation. A retried job produces the same key, so a retry cannot create a second
- * draft for the same anchor; a second manual request carries its own request ID and is a new generation.
+ * Identity of one logical generation. It is derived only from values that are fixed when the work is
+ * enqueued, so every attempt at the same job produces the same key and a retry cannot create a second draft.
+ * Deliberately excludes the conversation's live state version, which changes between attempts.
  */
 export function generationKey(command: DraftGenerationCommand): string {
-  return [
-    command.scope.conversationId,
-    command.anchorMessageId,
-    String(command.anchorStateVersion),
-    command.trigger,
-    command.requestId ?? "",
-  ].join("|");
+  return [command.scope.conversationId, command.anchorMessageId, command.trigger, command.requestId ?? ""].join("|");
 }

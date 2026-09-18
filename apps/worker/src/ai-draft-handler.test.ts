@@ -1,4 +1,4 @@
-import type { DraftGenerationDependencies } from "@omnichannel/application";
+import { ReplyModelUnavailableError, type DraftGenerationDependencies } from "@omnichannel/application";
 import type { DraftContext, DraftContextStore } from "@omnichannel/db";
 import { createLogger } from "@omnichannel/observability";
 import { NonRetryableJobError } from "@omnichannel/queue";
@@ -16,7 +16,7 @@ const job: AiDraftJob = {
 };
 
 const context: DraftContext = {
-  snapshot: { conversationId: "conv_1", status: "OPEN", aiEnabled: true, takeoverState: "NONE", mode: "DRAFT", stateVersion: 3 },
+  snapshot: { conversationId: "conv_1", status: "OPEN", aiEnabled: true, takeoverState: "NONE", mode: "DRAFT", stateVersion: 3, anchorSuperseded: false },
   channelAccountId: "ca_1",
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
   history: [],
@@ -87,10 +87,25 @@ describe("ai draft handler", () => {
   });
 
   it("retries when the provider is unavailable, because nothing was written", async () => {
-    const generate = vi.fn(() => Promise.reject(new (class extends Error {})()));
+    const generate = vi.fn(() => Promise.reject(new ReplyModelUnavailableError("timeout")));
     const { handler, saved } = harness({ generate: generate as unknown as DraftGenerationDependencies["model"]["generate"] });
 
-    await expect(handler(job)).rejects.toBeTruthy();
+    // The handler turns the port's unavailability into a retryable job failure with its own message.
+    await expect(handler(job)).rejects.toThrow(/reply model unavailable/);
+    expect(saved).toHaveLength(0);
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes nothing and does not call the model when the anchor was already overtaken", async () => {
+    const generate = vi.fn();
+    const { handler, saved } = harness({
+      context: { ...context, snapshot: { ...context.snapshot, anchorSuperseded: true } },
+      generate: generate as unknown as DraftGenerationDependencies["model"]["generate"],
+    });
+
+    await handler(job);
+
+    expect(generate).not.toHaveBeenCalled();
     expect(saved).toHaveLength(0);
   });
 

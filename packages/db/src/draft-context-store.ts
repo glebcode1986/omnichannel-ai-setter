@@ -56,6 +56,17 @@ export function createDraftContextStore(db: DbClient): DraftContextStore {
         return undefined;
       }
 
+      // A customer message newer than the anchor means the burst this draft answers is already out of date.
+      const newerInbound = await db.message.findFirst({
+        where: {
+          ...scope,
+          conversationId: conversation.id,
+          direction: "IN",
+          OR: [{ occurredAt: { gt: anchor.occurredAt } }, { occurredAt: anchor.occurredAt, id: { gt: anchor.id } }],
+        },
+        select: { id: true },
+      });
+
       const limit = Math.min(Math.max(Math.trunc(query.historyLimit ?? DEFAULT_HISTORY_LIMIT), 1), 100);
       const messages = await db.message.findMany({
         where: { ...scope, conversationId: conversation.id, occurredAt: { lte: anchor.occurredAt } },
@@ -83,6 +94,7 @@ export function createDraftContextStore(db: DbClient): DraftContextStore {
           takeoverState: conversation.takeoverState,
           mode: await resolveMode(db, scope, conversation.channelAccountId, conversation.modeOverride),
           stateVersion: conversation.stateVersion,
+          anchorSuperseded: newerInbound !== null,
         },
         channelAccountId: conversation.channelAccountId,
         inbound: ordered.slice(burstStart).map(toSegment),

@@ -35,7 +35,12 @@ export interface AnthropicReplyModelConfig {
   readonly logger?: Logger;
 }
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 1_024;
+/**
+ * Deliberately generous: a model that deliberates before answering spends this budget too, and a truncated
+ * answer is unusable JSON, which the application holds for review. Better to pay for headroom than to hold
+ * every draft.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
 
 export function createAnthropicReplyModel(config: AnthropicReplyModelConfig): ReplyModel {
   const http = config.http ?? createFetchModelHttpPort();
