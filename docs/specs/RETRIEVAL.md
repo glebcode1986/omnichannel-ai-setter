@@ -62,8 +62,17 @@ Style examples come only from verified human writing sources such as `HUMAN_TYPE
   for a whole customer message means "return a chunk only if it contains every word the customer wrote";
   a message of any length then matches nothing. Terms are extracted with `to_tsvector('simple', …)`, which
   accepts arbitrary text and cannot fail on it, re-quoted with `quote_literal`, and joined with `|`.
-  `ts_rank_cd(…, 32)` normalizes the rank onto 0-1 so a fixed relevance floor means the same for a long
-  document and a short one.
+  `ts_rank_cd(…, 32)` normalizes the rank onto 0-1 so a relevance floor means the same for a long document
+  and a short one.
+- **The lexical relevance floor defaults to zero, and that is an admission.** `ts_rank_cd` has no
+  inverse-document-frequency term: a chunk matching only "the" scores the same as one matching only
+  "deposit". No floor can separate them, and any floor high enough to exclude the first also excludes a
+  single match on a rare term, which is often the whole answer. Measured against this corpus the smallest
+  achievable score is ~0.091, so a "small, just to be safe" default would be inert while looking
+  protective. The consequence is that a short customer message can pull weakly-related chunks into the
+  knowledge list; cover-density ranking puts them below real matches, and the candidate ceiling, fusion and
+  the final limit cut the tail. A genuine fix needs IDF-aware ranking, which PostgreSQL full-text search
+  does not provide. The floor remains a per-query parameter and is applied when a caller sets it.
 - **The `simple` text-search configuration** does no stemming and removes no stopwords. The corpus is
   multilingual and the configuration is fixed when the index is built, so `english` would stem English
   correctly and mangle everything else. Morphology is the semantic side's job.
@@ -80,13 +89,20 @@ Style examples come only from verified human writing sources such as `HUMAN_TYPE
   CHECK constraint keeps `embedding` and `embedding_profile` set or unset together. The `vector(1024)`
   column fixes the width: changing dimensions is a migration plus a controlled re-embedding, not a config
   change. During a re-embedding, lexical retrieval carries the query and the result reports
-  `semanticSkipped: "PROFILE_MISMATCH"`.
+  `semanticSkipped: "PROFILE_MISMATCH"`. A query vector whose width does not match the column degrades the
+  same way rather than failing the whole retrieval: a misconfiguration must not discard a lexical list that
+  works. The worker reconciles the configured width with the column when it builds the provider, so the
+  mistake is visible at start-up rather than only in an audit record.
 - **Failures are graded, not collapsed.** The factual corpus being unreachable marks the generation
   `UNAVAILABLE`: the draft is still written — most messages need no business fact — but always goes to a
   human, with `RETRIEVAL_UNAVAILABLE` in its reason codes. The embedding provider failing degrades to
   lexical-only, which is a supported configuration rather than an outage (a deployment with no embedding
   key runs in it permanently), and is recorded in the draft's audit record. Style retrieval failing is not
   an outage at all: a missing tone example cannot make a false statement.
+- **One object carries both views.** `DraftRetrievalContext` holds the chunks and examples the model sees
+  *and* the record of what was supplied. They are not separate fields on the generation command, because
+  separate fields can disagree — and a draft citing a source its own provenance record never supplied is
+  exactly the failure this module exists to prevent.
 - **Drafts record both halves.** `ai_drafts.retrieval` stores what retrieval supplied, with scores, ranks
   and diagnostics; `factual_source_ids` stores what the model said it relied on. Keeping both is what lets
   a reviewer tell "there was no such fact" from "the fact was there and the model ignored it" from "we
