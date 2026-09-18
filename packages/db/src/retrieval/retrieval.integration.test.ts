@@ -224,6 +224,28 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(runs[0]?.hits[0]?.chunkId).toBe(both?.chunkId);
     });
 
+    it("applies the relevance floor to the lexical list, on a bounded score", async () => {
+      const rows = (threshold: number) =>
+        database.db.$queryRawUnsafe<{ score: number }[]>(
+          knowledgeLexicalSql(),
+          workspaceId,
+          profileA.businessProfileId,
+          "saturday opening hours",
+          threshold,
+          20,
+        );
+
+      const all = await rows(0);
+      expect(all.length).toBeGreaterThan(0);
+      // Normalized to 0-1, which is what lets one floor mean the same for a long chunk and a short one.
+      for (const row of all) {
+        expect(row.score).toBeGreaterThan(0);
+        expect(row.score).toBeLessThan(1);
+      }
+      // And the floor is a filter, not decoration: raise it and the same matching text is excluded.
+      expect(await rows(0.99)).toHaveLength(0);
+    });
+
     it("returns nothing at all when the business has no such fact", async () => {
       const facts = await knowledge().search(query({ text: "do you sell helicopters" }));
 

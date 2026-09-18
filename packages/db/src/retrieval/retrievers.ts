@@ -40,6 +40,13 @@ import {
   toVectorLiteral,
 } from "./sql";
 
+/**
+ * Exact vector scans are linear in corpus size, so the default 5 s interactive-transaction budget is
+ * raised: a slow retrieval should fail as a retrieval outage with the draft held for review, not as a
+ * surprising transaction abort part-way through the fusion.
+ */
+const RETRIEVAL_TRANSACTION = { isolationLevel: "RepeatableRead", timeout: 15_000, maxWait: 5_000 } as const;
+
 interface KnowledgeRow {
   readonly chunk_id: string;
   readonly document_id: string;
@@ -163,8 +170,11 @@ async function runLists<Row>(
   const vector = vectorLiteral(query.embedding);
 
   try {
-    // One transaction so both lists and the probe see the same snapshot: a document activated between the
-    // two queries would otherwise produce a fused result that never existed at any single instant.
+    // One REPEATABLE READ transaction so both lists and the probe see the same snapshot. The isolation
+    // level is the point: under PostgreSQL's default READ COMMITTED every statement takes a fresh snapshot,
+    // so a document activated between the two queries would produce a fused result that never existed at
+    // any single instant, and the profile probe could contradict the semantic list it is explaining. These
+    // are read-only queries, so the stricter level costs nothing and cannot fail on a write conflict.
     const { lexical, semantic, profilePresent } = await db.$transaction(async (tx) => {
       const lexicalRows =
         query.text === ""
@@ -195,7 +205,7 @@ async function runLists<Row>(
               query.embedding.profile,
             );
       return { lexical: lexicalRows, semantic: semanticRows, profilePresent: probed?.[0]?.present };
-    });
+    }, RETRIEVAL_TRANSACTION);
 
     return {
       lexical,

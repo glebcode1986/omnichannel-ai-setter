@@ -182,6 +182,34 @@ describe("retrieveDraftContext", () => {
     expect(context.supplied.status).toBe("OK");
   });
 
+  it("searches both corpora at the same time, not one after the other", async () => {
+    // Each search waits for the other to start. A sequential implementation deadlocks on the first await,
+    // so this fails as a timeout rather than passing slowly.
+    let started = 0;
+    let bothStarted!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+    const enter = async () => {
+      started += 1;
+      if (started === 2) {
+        bothStarted();
+      }
+      await gate;
+    };
+    const diagnostics = { lexicalCandidates: 0, semanticCandidates: 0 };
+    const dependencies: DraftRetrievalDependencies = {
+      knowledge: { search: () => enter().then(() => ({ hits: [], diagnostics })) },
+      style: { search: () => enter().then(() => ({ hits: [], diagnostics })) },
+      log: { info: () => undefined, warn: () => undefined },
+    };
+
+    // Retrieval sits inside the channel's whole response budget, next to debounce and generation.
+    await retrieveDraftContext(dependencies, { scope: SCOPE, inbound: inbound("Are you open Saturday?") });
+
+    expect(started).toBe(2);
+  }, 2_000);
+
   it("drops a style example that shares an ID with a knowledge chunk", async () => {
     // Impossible with distinct ID spaces, which is why it is worth failing loudly if it ever happens: the
     // draft engine decides what is a real source by membership in the knowledge set.

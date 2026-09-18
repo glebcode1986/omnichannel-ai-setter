@@ -83,32 +83,39 @@ export async function retrieveDraftContext(
     ...(embedding === undefined ? {} : { embedding }),
   };
 
-  let knowledgeHits: readonly KnowledgeHit[] = [];
-  let knowledgeDiagnostics: RetrievalDiagnostics = { lexicalCandidates: 0, semanticCandidates: 0 };
   // The retriever only knows that no vector arrived; only this layer knows the provider is the reason.
   const withFailure = (diagnostics: RetrievalDiagnostics): RetrievalDiagnostics =>
     embeddingFailed ? { ...diagnostics, semanticSkipped: "PROVIDER_ERROR" } : diagnostics;
+
+  // Concurrently: the two corpora are independent, and this sits inside the channel's total response
+  // budget alongside debounce, generation and the delivery delay. `allSettled` rather than `all` because
+  // the two failures are graded differently and one must not cancel the other.
+  const [factual, tone] = await Promise.allSettled([
+    dependencies.knowledge.search({ ...base, limit: dependencies.knowledgeLimit ?? DEFAULT_KNOWLEDGE_LIMIT }),
+    dependencies.style.search({ ...base, limit: dependencies.styleLimit ?? DEFAULT_STYLE_LIMIT }),
+  ]);
+
+  let knowledgeHits: readonly KnowledgeHit[] = [];
+  let knowledgeDiagnostics: RetrievalDiagnostics = { lexicalCandidates: 0, semanticCandidates: 0 };
   let status: KnowledgeRetrievalStatus = "OK";
-  try {
-    const result = await dependencies.knowledge.search({ ...base, limit: dependencies.knowledgeLimit ?? DEFAULT_KNOWLEDGE_LIMIT });
-    knowledgeHits = result.hits;
-    knowledgeDiagnostics = result.diagnostics;
-  } catch (error) {
+  if (factual.status === "fulfilled") {
+    knowledgeHits = factual.value.hits;
+    knowledgeDiagnostics = factual.value.diagnostics;
+  } else {
     // Not rethrown: a message that needs no business fact can still be answered, and the draft carries the
     // outage into review rather than the customer receiving confident-sounding silence about it.
-    dependencies.log.warn("ai.knowledge_retrieval_failed", { ...fields, errorName: errorName(error) });
+    dependencies.log.warn("ai.knowledge_retrieval_failed", { ...fields, errorName: errorName(factual.reason) });
     status = "UNAVAILABLE";
   }
 
   let styleHits: readonly { exampleId: string; outboundText: string; score: number }[] = [];
   let styleDiagnostics: RetrievalDiagnostics | undefined;
-  try {
-    const result = await dependencies.style.search({ ...base, limit: dependencies.styleLimit ?? DEFAULT_STYLE_LIMIT });
-    styleHits = result.hits.map((hit) => ({ exampleId: hit.exampleId, outboundText: hit.outboundText, score: hit.score }));
-    styleDiagnostics = result.diagnostics;
-  } catch (error) {
+  if (tone.status === "fulfilled") {
+    styleHits = tone.value.hits.map((hit) => ({ exampleId: hit.exampleId, outboundText: hit.outboundText, score: hit.score }));
+    styleDiagnostics = tone.value.diagnostics;
+  } else {
     // Tone is optional. Losing it cannot produce a false statement, so it never blocks or flags a draft.
-    dependencies.log.warn("ai.style_retrieval_failed", { ...fields, errorName: errorName(error) });
+    dependencies.log.warn("ai.style_retrieval_failed", { ...fields, errorName: errorName(tone.reason) });
   }
 
   // Defence in depth for the one invariant this module exists to protect: the draft engine decides which
