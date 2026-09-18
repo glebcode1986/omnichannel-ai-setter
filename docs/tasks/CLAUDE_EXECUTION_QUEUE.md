@@ -1,139 +1,161 @@
 # Claude Execution Queue
 
-> Stable execution page for Claude and the supervising human. GitHub issues/specs are the source of truth; chat is not. Always read the exact issue + linked task contract + current canonical specs before coding.
+> Stable execution page for Claude and the supervising human. GitHub issues/specs are source of truth; chat is not.
+>
+> **Always read `docs/handoff/CURRENT_HANDOFF.md` first. It is the current-stage ledger.**
 
-## Current status — Phase 1 code exists, but Business Profile sync is required before Phase 2
+## Current status — 2026-09-18
 
-Observed open stack:
+Stage B (Instagram + shared AI) is active.
 
-- PR #26 / Issue #2 — scaffold — HEAD last observed `b2f650351b473b49b8b893045a8b07c97882f9a0`
-- PR #49 / Issue #3 — domain/channel contracts — stacked on #26
-- PR #50 / Issue #4 — Prisma/Auth — stacked on #49
-- PR #51 / Issue #5 — BullMQ — stacked on #50
-- PR #52 / Issue #6 — webhook ingestion — HEAD last observed `89502864a6bc77c3005543e2894d76399f13c1b8`, stacked on #51
+Implemented in the current stack:
+- #8 Instagram transport adapter;
+- #9 Instagram onboarding/token lifecycle;
+- #10 provider-neutral AI draft engine;
+- #11 factual + style retrieval;
+- #12 deterministic policy engine.
 
-**Do not treat these observed SHAs as permanent. Fetch the live parent HEAD before every branch update.**
+Current earliest unresolved independent-review dependency: **PR #50 / P1-03**.
 
-The existing Phase 1 stack was implemented before accepted `DATA_MODEL.md` v0.4 Business Profile semantics fully propagated. Phase 2 is blocked on correcting the existing stack.
+Do not treat SHAs below as permanent. Fetch live PR metadata before every update.
 
-## NEXT TASK — Issue #53 P1-SYNC
+### Current stack snapshot
 
-Issue: `#53 [P1-SYNC] Align open Phase 1 stack with Business Profile / Data Model v0.4`  
-Contract: [`P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md`](./P1-BP-SYNC_CLAUDE_TASK_CONTRACT.md)
+- #49 P1-02 — `34a71d0d36b04f2c8933aa29479e26cbc87e7800` — Astra PASS
+- #50 P1-03 — `a3eebd62c5ee0d2e80b053ace43549425a08d6e6` — Astra CHANGES_REQUESTED
+- #51 P1-04 — `f45bb14aa14929696a07e00a6b3ebd1664191fd0`
+- #52 P1-05 — `9533b0a2a2fb26591d976788d45521cefbd6d717`
+- #63 P2-01 — `2d7bcd768ea96ee91e532e7a772408970b89b559`
+- #64 P2-02 — `ac318f34ed3dc9f3b962174250fbeb0aa4ddeaf8`
+- #65 P2-03 — `d58ada0d57f730f7ea26517f2db30f988d55bbdd`
+- #66 P2-04 — `c6972c7212792f68b8538e3cecddbc29cd542602`
+- #67 P2-05 — `015433c33bf02efb865248ed03c06784f87158a5`
 
-Execute in exact dependency order:
+## Immediate priority A — close PR #50 review gate
 
-1. update PR #49 (`feat/p1-02-domain-channel-contracts`);
-2. merge corrected #49 into PR #50 branch, then update/verify #50;
-3. merge corrected #50 into PR #51 branch, then update/verify #51;
-4. merge corrected #51 into PR #52 branch, then update/verify #52.
+Production row-lock fix is accepted in principle. Remaining review gap is the deterministic concurrency regression.
 
-Preserve published stack ancestry. Use normal merges for parent propagation; do not force-push/rebase merely to make history pretty.
+The current test must be changed so the **same forced PostgreSQL interleaving contains two real inbound messages**, not one repository append plus one synthetic Conversation-only update.
 
-Required model:
-- Workspace = tenant/billing boundary;
-- Business Profile = operational/customer-data boundary;
-- Contact is BP-scoped by default;
-- ChannelAccount/ChannelIdentity/Conversation and policy-critical queued work preserve Workspace + BP scope;
-- role = what; BP access = where;
-- no cross-BP customer merge/search disclosure by default;
-- conversation state/version supports stale-action protection.
+Required proof:
+1. preserve the PostgreSQL-observed lock-wait barrier;
+2. holder/newer side must persist a real inbound Message and perform the matching Conversation transition in the same transaction (paused repository transaction or equivalent faithful SQL setup);
+3. older side uses the actual repository append path;
+4. assert exactly two new inbound message rows;
+5. assert stateVersion +2;
+6. assert lastInboundAt/lastMessageAt equal the newer message timestamp;
+7. explicit fresh-conversation `lastInboundAt = NULL` case;
+8. no-lock mutation must fail deterministically.
 
-Every corrected PR must run complete branch-appropriate verification and publish:
+Publish:
 
-`CLAUDE_READY_FOR_ASTRA head=<full_sha> task=<P1-xx>`
+`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P1-03`
 
-## Temporary independent-review protocol
+Then propagate with **normal merges only** through all current child branches.
 
-Astra/Codex review is temporarily asynchronous because reviewer quota is constrained.
+Astra re-reviews #50 first; downstream acceptance remains queued.
 
-Claude must:
-- self-verify rigorously;
-- record exact HEAD SHAs;
-- leave exact-head Astra markers;
-- continue to the next dependency-safe task without waiting for Astra after each iteration.
+## Immediate priority B — apply product-owner follow-ups
 
-Claude must **not**:
-- claim Astra PASS without an actual independent exact-head review;
-- merge child PRs before parents;
-- merge its own feature PRs to `main` without human/project-owner authority;
-- weaken verification because review is delayed.
+The decisions are already canonicalized in specs and posted on the PRs.
 
-## After Issue #53
+### PR #65
+- OFF allows only an **explicit authorized human-requested** draft;
+- manual-assist draft never auto-schedules/sends;
+- encode trigger/source so background jobs cannot impersonate human intent;
+- tenant/BP persona comes from resolved StyleProfile, not worker env.
 
-### #37 — GitHub Actions `pnpm verify` gate
+### PR #66
+- add minimal internal/dev/test Knowledge + Style seeding for Phase-2 E2E;
+- no semantic inference of override conflicts;
+- explicit override/supersession metadata only;
+- StyleExample optional BCP-47-compatible language/locale;
+- embeddings unavailable -> lexical-only degraded mode, no worker outage.
 
-Add the minimal CI gate on top of the corrected Phase 1 stack. If Claude's credential still cannot write `.github/workflows/*`, report the exact permission blocker and continue with full local verification; do not silently omit the gate from the roadmap.
+### PR #67
+- Instagram STANDARD_ONLY + closed window -> SKIP routine automation;
+- quiet hours defer only if provider eligibility remains valid;
+- otherwise safe HOLD/terminal result, never late blind send;
+- after-window policy input becomes channel-discriminated now;
+- OFF manual-assist never enters automatic scheduling.
 
-### Phase 1 exit gate
+Apply in stack order and propagate normally.
 
-Before starting Phase 2, the corrected stack must demonstrate:
-- fake channel webhook -> verify -> normalize -> BP-scoped persistence -> transactional outbox/queue;
-- DB + Redis integration suites green;
-- Workspace and BP isolation adversarial tests;
-- duplicate/reordered event idempotency;
-- human/manual echo fail-safe takeover semantics;
-- no blind retry after ambiguous external write;
-- no LLM or artificial delay inside webhook lifecycle.
+## Next implementation task — #13 P2-06 Delivery Coordinator
 
-## Master MVP build train
+Start after/while completing the focused owner follow-ups above, preserving dependency safety.
 
-GitHub Issue **#61** is the ordered execution index from current sync to Commercial Beta. Follow its stage order unless the product owner explicitly changes priority.
+Required owner decisions already recorded:
+- provider timing beats generic human-like delay;
+- Instagram current verified automated budget = 30s; operational dispatch target ~25s;
+- debounce + generation + artificial delay share the same budget;
+- shorten/remove artificial delay as needed;
+- missed provider deadline -> do not ordinary-AUTOPILOT send late;
+- Human Agent remains explicit-human only;
+- quiet-hours defer only if a compliant future send still exists;
+- OFF manual-assist draft is never auto-scheduled;
+- STANDARD_ONLY closed window is SKIP;
+- consume channel-discriminated policy input.
 
-Default stages:
+Then continue:
+#14 -> #15 -> #16, then #56 reliability.
 
-1. **A — Phase 1 sync + CI:** #53, then #37.
-2. **B — Instagram + shared AI:** #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16.
-3. **C — Reliability before broad AUTOPILOT:** #56.
-4. **D — Design Partner UI:** #27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35.
-5. **E — WhatsApp:** #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24.
-6. **F — Privacy/security hardening:** #57.
-7. **G — Commercial billing:** #38 -> #43 -> #39 -> #40 -> #46 -> provider decision -> #41 -> #47 -> #42 -> #44.
-8. **H — Admin Operations:** #59.
-9. **I — Launch readiness / Commercial Beta:** #60 plus independent-review catch-up.
+## GitHub Actions / CI
 
-Independent review queues: #7, #17, #25, #36, #45, #48. They may lag during the temporary protocol, but release evidence must never pretend unreviewed SHAs passed.
+Issue #37 / PR #62 has an active workflow at `.github/workflows/verify.yml` on the CI branch.
 
-## Design Partner Alpha gate
+It runs root verify plus pgvector/PostgreSQL 17, migration drift, DB, Redis and E2E suites.
 
-A tightly controlled Instagram design partner can begin before the entire commercial MVP is complete when all of the following are true:
-- Instagram end-to-end path is green;
-- #56 kill switches/reliability minimum exists;
-- app shell/onboarding, Inbox, Review, Knowledge, Style and Test Drive are operational (#27/#28/#29/#31/#32/#30);
-- DRAFT is default;
-- Workspace/BP isolation is adversarially tested;
-- no production secret handling gap is knowingly open.
+Do not call this exact-SHA evidence for another PR unless it actually ran against that code/ref. Integrate/propagate the workflow into the active stack dependency-safely before using it as release evidence.
 
-Do not wait for booking/public API/prospecting product for Design Partner Alpha.
+## Independent-review protocol
 
-## Hard invariants — never cut these for speed
+Claude may continue dependency-safe implementation while Astra review lags, but:
+- never claim Astra PASS without exact-head verdict;
+- no self-merge of feature PRs to main;
+- use full exact SHA markers;
+- parent corrections propagate through children with normal merges;
+- do not rebase/force-push published stack branches merely to clean history;
+- Commercial Beta requires review catch-up.
 
-- Workspace + Business Profile isolation;
-- human activity always wins over AI automation;
-- stale draft/review/action protection;
-- model output is advisory; deterministic application policy authorizes sends/actions;
-- no blind retry after ambiguous provider/external write;
-- idempotent provider/webhook/job processing;
-- inbound customer data persists when AI/billing/dependencies are blocked;
-- AUTOPILOT executes server-side with dashboard/browser closed;
-- queues are execution mechanisms, not the sole durable intent store;
-- secrets never enter prompts, client output, normal logs or plaintext audit;
-- do not implement Later features merely because Data Model contains extension points.
+## Master build train
+
+1. **Stage B now:** #13 -> #14 -> #15 -> #16.
+2. **Stage C:** #56 reliability / kill switches / reconciliation.
+3. **Stage D:** #27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35.
+4. **Stage E:** #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24.
+5. **Stage F:** #57 privacy/security/deletion.
+6. **Stage G:** commercial billing issues per #61 and accepted pricing specs.
+7. **Stage H:** #59 Admin Operations.
+8. **Stage I:** #60 Launch Readiness / Commercial Beta.
+
+Independent review queues remain release-critical even when asynchronous.
 
 ## Per-task protocol
 
 For every task:
-1. fetch live parent/base state and exact HEAD;
+1. fetch live parent/base and exact HEAD;
 2. read `PROJECT_CONTEXT.md`, current handoff, `AGENTS.md`, `CLAUDE.md`;
-3. read exact GitHub issue, task contract, relevant ADRs/specs;
-4. implement only the bounded issue;
-5. add success, failure, tenant/BP, stale/race/idempotency tests required by the contract;
-6. run full affected infrastructure tests plus root verify;
-7. perform targeted adversarial/mutation checks on critical invariants;
-8. open/update a narrow PR against the correct parent branch;
-9. record real deviations only when an actual contract ambiguity is discovered;
-10. publish exact `CLAUDE_READY_FOR_ASTRA` marker and proceed to the next dependency-safe task.
+3. read exact issue/task contract + relevant specs/ADRs;
+4. implement only bounded scope;
+5. test success/failure + tenant/BP + stale/race/idempotency as applicable;
+6. run affected DB/Redis/E2E plus root verify;
+7. adversarial/mutation-check critical invariants;
+8. open/update narrow PR against correct parent;
+9. publish exact `CLAUDE_READY_FOR_ASTRA`;
+10. continue dependency-safe work without falsifying review status.
 
-## Scope guard
+## Hard invariants
 
-Architecture is broader than MVP. Booking, public Platform API/webhooks, broad CRM connectors, acquisition/prospecting, Telegram/Threads and AI-generated voice/media are not on the first Commercial Beta critical path unless the product owner explicitly reprioritizes them.
+- Workspace + Business Profile isolation.
+- Human activity wins over AI.
+- Stale draft/review/action protection.
+- Model proposes; deterministic application policy authorizes.
+- No blind retry after ambiguous external write.
+- Provider/webhook/job idempotency.
+- Inbound persists when AI/retrieval/billing is blocked.
+- AUTOPILOT is server-side.
+- Queue is not sole durable intent store.
+- Secrets never enter prompts/client output/normal logs/plaintext audit.
+- Style never establishes factual authority.
+- Provider policy/timing beats aesthetic delay.
