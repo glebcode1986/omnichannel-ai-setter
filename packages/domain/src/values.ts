@@ -66,3 +66,33 @@ export function toQuietHours(timeZone: string, start: string, end: string): Quie
   }
   return { timeZone, start: start as TimeOfDay, end: end as TimeOfDay };
 }
+
+/**
+ * Whether an instant falls inside a quiet period, in the period's own time zone.
+ *
+ * The comparison happens on the wall clock a person in that zone would read, not on UTC: "no automated
+ * messages after 22:00" is a statement about the customer's evening, and a UTC comparison would drift by
+ * the offset and break twice a year at daylight-saving boundaries.
+ *
+ * A period whose start is later than its end spans midnight (22:00-07:00), which is the common case for
+ * quiet hours and the reason this is not a simple range check. `start` is inclusive and `end` exclusive, so
+ * a period can never swallow the whole day and a send at exactly `end` is allowed.
+ */
+export function isWithinQuietHours(quietHours: QuietHours, now: Date): boolean {
+  const minutes = minutesOfDayIn(quietHours.timeZone, now);
+  const start = minutesOfDay(quietHours.start);
+  const end = minutesOfDay(quietHours.end);
+  return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+}
+
+function minutesOfDay(time: TimeOfDay): number {
+  const [hours, mins] = time.split(":");
+  return Number(hours) * 60 + Number(mins);
+}
+
+/** The wall-clock minute-of-day in a given IANA zone. `hourCycle: "h23"` keeps midnight at 00, not 24. */
+function minutesOfDayIn(timeZone: string, now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const value = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  return value("hour") * 60 + value("minute");
+}

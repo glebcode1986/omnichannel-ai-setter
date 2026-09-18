@@ -29,6 +29,7 @@ import {
   isSameChannelIdentity,
   isStaleAnchor,
   isValidIdentifier,
+  isWithinQuietHours,
   MANDATORY_REVIEW_REASON_CODES,
   NO_CAPABILITIES,
   toAutomationPolicyId,
@@ -414,3 +415,48 @@ function captureDomainError(action: () => unknown): DomainValidationError {
   }
   throw new Error("expected a DomainValidationError");
 }
+
+describe("isWithinQuietHours", () => {
+  const at = (iso: string) => new Date(iso);
+
+  it("compares the wall clock a person in that zone would read, not UTC", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // 21:30 UTC is 23:30 in Berlin in September: quiet. A UTC comparison would say otherwise.
+    expect(isWithinQuietHours(quiet, at("2026-09-18T21:30:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T12:00:00.000Z"))).toBe(false);
+  });
+
+  it("handles a period that spans midnight", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+
+    expect(isWithinQuietHours(quiet, at("2026-09-18T23:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T00:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T06:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T07:00:00.000Z"))).toBe(false);
+  });
+
+  it("handles a period inside one day", () => {
+    const quiet = toQuietHours("UTC", "09:00", "17:00");
+
+    expect(isWithinQuietHours(quiet, at("2026-09-18T08:59:00.000Z"))).toBe(false);
+    // Start is inclusive and end exclusive, so a period can never swallow the whole day.
+    expect(isWithinQuietHours(quiet, at("2026-09-18T09:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T16:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T17:00:00.000Z"))).toBe(false);
+  });
+
+  it("follows the zone across a daylight-saving change", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // Berlin is UTC+2 in summer and UTC+1 in winter; the same UTC instant falls on different sides.
+    expect(isWithinQuietHours(quiet, at("2026-10-24T20:30:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-11-24T20:30:00.000Z"))).toBe(false);
+    expect(isWithinQuietHours(quiet, at("2026-11-24T21:30:00.000Z"))).toBe(true);
+  });
+
+  it("keeps midnight at the start of the day rather than the end", () => {
+    // An `hourCycle` that renders midnight as 24 would put 00:30 outside a 22:00-07:00 period.
+    expect(isWithinQuietHours(toQuietHours("UTC", "22:00", "07:00"), at("2026-09-19T00:30:00.000Z"))).toBe(true);
+  });
+});

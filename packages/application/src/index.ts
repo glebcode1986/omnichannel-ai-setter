@@ -95,3 +95,14 @@ export {
   type DraftRetrievalQuery,
   type RetrievalLogPort,
 } from "./retrieval/retrieve-draft-context";
+export { evaluatePolicy } from "./policy/evaluate";
+export type {
+  AccountHealth,
+  HumanAgentAvailability,
+  PolicyDecision,
+  PolicyDraft,
+  PolicyInput,
+  PolicyLimits,
+  PolicyRetrieval,
+  ReplyCycleState,
+} from "./policy/inputs";
