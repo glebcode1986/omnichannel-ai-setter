@@ -60,9 +60,11 @@ Do not implement a background AI worker that automatically attaches HUMAN_AGENT 
 5. **Instagram echoes carry no `app_id`** (Messenger's `message_echoes` does). Correlating our own sends by platform message ID, as ADR-013 requires, is the only workable classification — now a platform constraint, not just a design preference.
 6. **New since the 2026-09-16 baseline:** a `message_edit` webhook subscription (added 2025-09-10), and Meta ended Handover Protocol support for Instagram on 2025-10-23 in favour of Conversation Routing. The normalized contract has no edit variant, so we do not subscribe to it; thread ownership is not modelled on Handover semantics.
 
-## Policy tension recorded for the product owner
+## Automated response timing — owner decision applied
 
-Meta's Messenger Platform and Instagram Messaging policy requires experiences classified as **automated** to respond to user-initiated input within **30 seconds**, with messaging restrictions after a remediation window; hybrid and human-led experiences are declared as such at App Review. This is in direct tension with the product's multi-message debounce (7–12 s, restarted per message) and randomized delayed delivery (30–120 s). It is not a P2-01 code decision, but App Review classification must be chosen deliberately before Instagram traffic is live.
+Meta's Messenger Platform and Instagram Messaging policy requires experiences classified as **automated** to respond to user-initiated input within **30 seconds**, with messaging restrictions after a remediation window; hybrid and human-led experiences are declared as such at App Review.
+
+The product owner resolved the resulting tension with the generic 7–12 s debounce and 30–120 s delivery delay (PR #63, 2026-09-17): **provider timing wins.** For Instagram, debounce + generation + any artificial delay must fit inside the verified budget, the operational target is ~25 s from the triggering inbound, artificial delay is shortened or dropped as needed, and a missed deadline means hold/review rather than sending late as ordinary AUTOPILOT. The adapter therefore exposes the budget and target as configuration (`instagramTimingPolicy`), and the delivery coordinator (P2-06) makes the scheduling decision. The number is not a domain constant: re-verify it at App Review and before production, and change the configuration if Meta's rule changes.
 
 ## Pages that could not be read on 2026-09-17
 
