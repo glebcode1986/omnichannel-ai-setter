@@ -13,6 +13,27 @@
  * Embedding generation sits behind its own port: `packages/db` runs the SQL and never calls an AI provider,
  * and `packages/ai` produces vectors and never sees a query plan.
  */
+/**
+ * A retrieved knowledge chunk, as the model sees it. Only these may back a factual claim.
+ *
+ * Just the citable ID and the text: document title and version are audit data, kept in the draft's
+ * retrieval record, not sent to the model. A fence header carries IDs only, so nothing business-authored
+ * or customer-authored can reach the line that delimits untrusted data.
+ */
+export interface KnowledgeSegment {
+  readonly chunkId: string;
+  readonly text: string;
+}
+
+/**
+ * A human-written example used for tone. Deliberately a different type from knowledge: style can never
+ * satisfy a factual requirement, and keeping the types apart makes that structural.
+ */
+export interface StyleSegment {
+  readonly exampleId: string;
+  readonly text: string;
+}
+
 /** Retrieval is always scoped to one tenant and one customer-data boundary. */
 export interface RetrievalScope {
   readonly workspaceId: string;
@@ -180,7 +201,30 @@ export interface SuppliedRetrieval {
   readonly styleDiagnostics?: RetrievalDiagnostics;
 }
 
-/** An empty record for a generation that did not consult retrieval at all. */
-export function noRetrieval(status: KnowledgeRetrievalStatus = "OK"): SuppliedRetrieval {
+/**
+ * An empty record for a generation that did not consult retrieval at all. The status is required: a
+ * default would let a caller that never searched record that the business was consulted and had nothing
+ * to say, which is the one confusion this whole module exists to prevent.
+ */
+export function noRetrieval(status: KnowledgeRetrievalStatus): SuppliedRetrieval {
   return { status, knowledge: [], style: [], knowledgeDiagnostics: { lexicalCandidates: 0, semanticCandidates: 0 } };
+}
+
+/**
+ * Everything one retrieval produced: what goes to the model, and what is recorded about it.
+ *
+ * One object rather than three fields on the command, so the prompt and the audit record cannot disagree.
+ * When they were separate a caller could put a chunk in front of the model that the record did not list,
+ * and the stored draft would then cite a source its own provenance record had never supplied.
+ */
+export interface DraftRetrievalContext {
+  readonly knowledge: readonly KnowledgeSegment[];
+  readonly style: readonly StyleSegment[];
+  /** The audit record, including whether the factual corpus was reachable. */
+  readonly supplied: SuppliedRetrieval;
+}
+
+/** A context for a generation that did not consult retrieval at all. */
+export function noRetrievalContext(status: KnowledgeRetrievalStatus): DraftRetrievalContext {
+  return { knowledge: [], style: [], supplied: noRetrieval(status) };
 }

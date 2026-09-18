@@ -7,7 +7,14 @@ import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } f
 import { seedWorkspace, type SeededProfile } from "../testing/fixtures";
 import { seedKnowledgeDocument, seedStyleExample, testVector, TEST_EMBEDDING_PROFILE } from "../testing/retrieval-fixtures";
 import { createKnowledgeRetriever, createStyleRetriever } from "./retrievers";
-import { knowledgeLexicalSql, knowledgeSemanticSql, searchableExpression, styleLexicalSql, toVectorLiteral } from "./sql";
+import {
+  DEFAULT_MIN_LEXICAL_SCORE,
+  knowledgeLexicalSql,
+  knowledgeSemanticSql,
+  searchableExpression,
+  styleLexicalSql,
+  toVectorLiteral,
+} from "./sql";
 
 /** Axis 0 is "opening hours"; axis 1 is an unrelated topic. Their overlap is exactly zero. */
 const HOURS_AXIS = testVector({ 0: 1 });
@@ -28,6 +35,7 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
   let staleChunkIds: readonly string[];
   let archivedChunkId: string;
   let semanticOnlyChunkId: string;
+  let constraintDocumentId: string;
 
   const knowledge = () => createKnowledgeRetriever(database.db);
   const style = () => createStyleRetriever(database.db);
@@ -101,6 +109,7 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       chunks: [{ content: "Le weekend nous ouvrons a dix heures.", embedding: HOURS_AXIS }],
     });
     semanticOnlyChunkId = semantic.chunkIds[0] ?? "";
+    constraintDocumentId = semantic.documentId;
 
     // Another workspace holds a better-matching fact, which must never surface.
     await seedKnowledgeDocument(database.db, {
@@ -224,6 +233,25 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(runs[0]?.hits[0]?.chunkId).toBe(both?.chunkId);
     });
 
+    it("has no inert default floor: every matching row clears zero, and a set floor really filters", async () => {
+      const rows = (threshold: number) =>
+        database.db.$queryRawUnsafe<{ score: number }[]>(
+          knowledgeLexicalSql(),
+          workspaceId,
+          profileA.businessProfileId,
+          "saturday opening hours",
+          threshold,
+          20,
+        );
+
+      // `ts_rank_cd` has no IDF, so no floor can separate a stopword match from the key term. The default
+      // is zero rather than a small number that would look protective while never excluding anything.
+      expect(DEFAULT_MIN_LEXICAL_SCORE).toBe(0);
+      const scores = (await rows(DEFAULT_MIN_LEXICAL_SCORE)).map((row) => row.score);
+      expect(scores.length).toBeGreaterThan(0);
+      expect(Math.min(...scores)).toBeGreaterThan(DEFAULT_MIN_LEXICAL_SCORE);
+    });
+
     it("applies the relevance floor to the lexical list, on a bounded score", async () => {
       const rows = (threshold: number) =>
         database.db.$queryRawUnsafe<{ score: number }[]>(
@@ -278,9 +306,14 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(facts.diagnostics.semanticSkipped).toBe("PROFILE_MISMATCH");
     });
 
-    it("refuses a vector of the wrong width instead of letting the driver fail", async () => {
-      await expect(knowledge().search(query({ embedding: vector([0.1, 0.2, 0.3]) }))).rejects.toBeInstanceOf(RetrievalUnavailableError);
-      await expect(knowledge().search(query({ embedding: vector([0.1, 0.2, 0.3]) }))).rejects.toThrow(/dimension_mismatch/);
+    it("degrades to words when handed a vector of the wrong width, rather than losing the answer", async () => {
+      const facts = await knowledge().search(query({ embedding: vector([0.1, 0.2, 0.3]) }));
+
+      // A misconfigured width is not a reason to throw away a lexical list that works perfectly well, and
+      // pgvector would otherwise raise on the comparison and have it reported as a corpus outage.
+      expect(facts.hits.map((hit) => hit.chunkId)).toContain(baseChunkId);
+      expect(facts.diagnostics.semanticCandidates).toBe(0);
+      expect(facts.diagnostics.semanticSkipped).toBe("PROVIDER_ERROR");
     });
   });
 
@@ -313,6 +346,33 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(tone.hits.length).toBeGreaterThan(0);
       // The factual answer is "we do not know", even though a human once wrote one down as an example.
       expect(facts.hits).toHaveLength(0);
+    });
+  });
+
+  describe("embedding profile constraints", () => {
+    let ordinal = 90;
+    const insertChunk = (profile: string | null, embedding: string | null) => {
+      ordinal += 1;
+      return database.db.$executeRawUnsafe(
+        `INSERT INTO "knowledge_chunks"
+           ("id", "workspace_id", "document_id", "document_version", "ordinal", "content", "embedding_profile", "embedding", "created_at", "updated_at")
+         VALUES (gen_random_uuid()::text, $1, $2, 1, $5, 'probe', $3, $4::vector, NOW(), NOW())`,
+        workspaceId,
+        constraintDocumentId,
+        profile,
+        embedding,
+        ordinal,
+      );
+    };
+
+    it("refuses a vector with no profile, and a profile with no vector", async () => {
+      // Without this, a vector could outlive the model that produced it and be compared with another
+      // model's — the exact silent quality failure ADR-011 asks the profile to prevent.
+      await expect(insertChunk(null, `[${testVector({ 0: 1 }).join(",")}]`)).rejects.toThrow(/embedding_profile_check/);
+      await expect(insertChunk(TEST_EMBEDDING_PROFILE, null)).rejects.toThrow(/embedding_profile_check/);
+      // Both set, or neither, is accepted.
+      await expect(insertChunk(TEST_EMBEDDING_PROFILE, `[${testVector({ 0: 1 }).join(",")}]`)).resolves.toBeGreaterThan(0);
+      await expect(insertChunk(null, null)).resolves.toBeGreaterThan(0);
     });
   });
 

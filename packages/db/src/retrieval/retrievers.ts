@@ -13,7 +13,6 @@
 import {
   fuseByReciprocalRank,
   RetrievalUnavailableError,
-  type EmbeddingVector,
   type KnowledgeHit,
   type KnowledgeRetrievalResult,
   type KnowledgeRetriever,
@@ -167,7 +166,11 @@ async function runLists<Row>(
   const take = candidateLimit(query.limit);
   const minLexical = query.thresholds?.minLexicalScore ?? DEFAULT_MIN_LEXICAL_SCORE;
   const minSimilarity = query.thresholds?.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
-  const vector = vectorLiteral(query.embedding);
+  // A vector of the wrong width cannot be compared with the column at all. That is a misconfiguration,
+  // not an outage, and it must not throw away a lexical list that would have worked: the semantic side is
+  // skipped and the reason is recorded, exactly as for a failing embedding provider.
+  const usable = query.embedding !== undefined && query.embedding.values.length === EMBEDDING_DIMENSIONS;
+  const vector = usable && query.embedding !== undefined ? toVectorLiteral(query.embedding.values) : undefined;
 
   try {
     // One REPEATABLE READ transaction so both lists and the probe see the same snapshot. The isolation
@@ -196,7 +199,7 @@ async function runLists<Row>(
       // Only on the empty path, and only when a vector was actually supplied: one cheap existence check
       // that separates "nothing was similar enough" from "this corpus is not embedded under this profile".
       const probed =
-        query.embedding === undefined || semanticRows.length > 0
+        vector === undefined || query.embedding === undefined || semanticRows.length > 0
           ? undefined
           : await tx.$queryRawUnsafe<{ present: boolean }[]>(
               sql.probe,
@@ -215,26 +218,14 @@ async function runLists<Row>(
         semanticCandidates: semantic.length,
         ...(query.embedding === undefined
           ? { semanticSkipped: "NO_EMBEDDING" as const }
-          : profilePresent === false
-            ? { semanticSkipped: "PROFILE_MISMATCH" as const }
-            : {}),
+          : !usable
+            ? { semanticSkipped: "PROVIDER_ERROR" as const }
+            : profilePresent === false
+              ? { semanticSkipped: "PROFILE_MISMATCH" as const }
+              : {}),
       },
     };
   } catch (error) {
     throw new RetrievalUnavailableError(error instanceof Error ? error.name : "query_failed");
   }
-}
-
-/**
- * A vector of the wrong width cannot be compared with the stored column at all; pgvector would raise, and
- * an unhandled raise here would be reported as an outage. Catching it at the boundary names the real cause.
- */
-function vectorLiteral(embedding: EmbeddingVector | undefined): string | undefined {
-  if (embedding === undefined) {
-    return undefined;
-  }
-  if (embedding.values.length !== EMBEDDING_DIMENSIONS) {
-    throw new RetrievalUnavailableError("embedding_dimension_mismatch");
-  }
-  return toVectorLiteral(embedding.values);
 }

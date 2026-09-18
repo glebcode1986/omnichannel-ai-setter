@@ -13,7 +13,9 @@
 import type { ChannelType } from "@omnichannel/channel-core";
 import type { AiMode, ReasonCode } from "@omnichannel/domain";
 
-import type { SuppliedRetrieval } from "../retrieval/ports";
+import type { KnowledgeSegment, StyleSegment, SuppliedRetrieval } from "../retrieval/ports";
+
+export type { KnowledgeSegment, StyleSegment };
 
 /** Where the generation happens; the Business Profile is the customer-data boundary. */
 export interface GenerationScope {
@@ -31,27 +33,6 @@ export interface ConversationSegment {
   readonly provenance: string;
   readonly text: string;
   readonly occurredAt: Date;
-}
-
-/**
- * A retrieved knowledge chunk. Only these may back a factual claim.
- *
- * Just the citable ID and the text: document title and version are audit data, kept in the draft's
- * retrieval record, not sent to the model. A fence header carries IDs only, so nothing business-authored
- * or customer-authored can reach the line that delimits untrusted data.
- */
-export interface KnowledgeSegment {
-  readonly chunkId: string;
-  readonly text: string;
-}
-
-/**
- * A human-written example used for tone. Deliberately a different type from knowledge: style can never
- * satisfy a factual requirement, and keeping the types apart makes that structural.
- */
-export interface StyleSegment {
-  readonly exampleId: string;
-  readonly text: string;
 }
 
 export interface ReplyGenerationRequest {

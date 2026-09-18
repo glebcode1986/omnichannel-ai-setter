@@ -7,7 +7,6 @@
  */
 import {
   generateDraft,
-  noRetrieval,
   retrieveDraftContext,
   type DraftGenerationDependencies,
   type DraftRetrievalDependencies,
@@ -20,8 +19,12 @@ import { NonRetryableJobError, type InboundDebounceJob } from "@omnichannel/queu
 export interface AiDraftHandlerDependencies {
   readonly engine: DraftGenerationDependencies;
   readonly context: DraftContextStore;
-  /** Absent only where retrieval is deliberately not wired; the draft is then marked as unretrieved. */
-  readonly retrieval?: DraftRetrievalDependencies;
+  /**
+   * Required. An optional dependency here would need a default retrieval record, and every possible
+   * default is a lie: "OK" claims the business was consulted, "UNAVAILABLE" claims an outage that did not
+   * happen. A caller that genuinely does not retrieve has to say which it means.
+   */
+  readonly retrieval: DraftRetrievalDependencies;
   readonly persona: string;
   readonly logger: Logger;
 }
@@ -52,13 +55,10 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
 
     // Retrieval runs before generation (AI_ORCHESTRATION.md): the model is given the facts, never a way
     // to go and look for them.
-    const retrieved =
-      dependencies.retrieval === undefined
-        ? undefined
-        : await retrieveDraftContext(dependencies.retrieval, {
-            scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId },
-            inbound: context.inbound,
-          });
+    const retrieved = await retrieveDraftContext(dependencies.retrieval, {
+      scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId },
+      inbound: context.inbound,
+    });
 
     const outcome = await generateDraft(dependencies.engine, {
       scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, conversationId: job.conversationId },
@@ -73,9 +73,7 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       capabilityHints: ["text"],
       inbound: context.inbound,
       history: context.history,
-      knowledge: retrieved?.knowledge ?? [],
-      style: retrieved?.style ?? [],
-      retrieval: retrieved?.supplied ?? noRetrieval(),
+      retrieval: retrieved,
       ...(job.requestId === undefined ? {} : { requestId: job.requestId }),
     });
 

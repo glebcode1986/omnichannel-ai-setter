@@ -118,7 +118,7 @@ function harness(
   const handler = createAiDraftHandler({
     engine,
     context: store,
-    ...("retrieval" in overrides ? { retrieval: overrides.retrieval } : { retrieval: retrievalDependencies() }),
+    retrieval: overrides.retrieval ?? retrievalDependencies(),
     persona: "Friendly studio assistant.",
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });

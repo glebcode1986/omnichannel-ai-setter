@@ -23,15 +23,21 @@
 export const EMBEDDING_DIMENSIONS = 1_024;
 
 /**
- * `ts_rank_cd` floor, on the normalized 0-1 scale (`ts_rank_cd(..., 32)` is `rank/(rank+1)`). Normalizing
- * is what makes a fixed floor meaningful at all: a raw `ts_rank_cd` grows without bound, so the same
- * threshold would mean different things for a long document and a short one.
+ * `ts_rank_cd` floor, on the normalized 0-1 scale (`ts_rank_cd(..., 32)` is `rank/(rank+1)`), and zero by
+ * default. That default is a deliberate admission rather than an oversight.
  *
- * Low on purpose. With OR semantics and the `simple` configuration — which removes no stopwords — a chunk
- * can match on a single common word, so the floor only has to exclude the very weakest matches; ranking,
- * the candidate cap and fusion do the rest.
+ * `ts_rank_cd` has no inverse-document-frequency term: a chunk matching only the word "the" and a chunk
+ * matching only the word "deposit" score identically. So a score floor cannot separate a stopword match
+ * from the match that actually answers the question, and any floor high enough to exclude the first also
+ * excludes a single match on a rare term — which is frequently the whole answer. Measured against this
+ * corpus, every matching row scores at least ~0.091, so any "low, just to be safe" default is either inert
+ * or harmful. Shipping an inert one would suggest a protection that does not exist.
+ *
+ * Noise is handled where it can be: cover-density ranking already prefers several query terms appearing
+ * close together by a wide margin, and the candidate ceiling, rank fusion and the final limit cut the tail.
+ * The floor stays a per-query parameter for a caller that knows its own corpus, and it is applied when set.
  */
-export const DEFAULT_MIN_LEXICAL_SCORE = 0.05;
+export const DEFAULT_MIN_LEXICAL_SCORE = 0;
 /**
  * Cosine-similarity floor. Tuned for normalized modern embedding models, where unrelated text lands near
  * 0.3-0.5 and genuinely related text sits well above. It is a query parameter, not a constant, because the

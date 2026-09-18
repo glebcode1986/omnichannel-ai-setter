@@ -14,8 +14,9 @@
  * - the **style corpus** failing is not an outage at all. A missing tone example cannot make a false
  *   statement; the reply simply sounds more generic.
  */
-import type { ConversationSegment, KnowledgeSegment, StyleSegment } from "../ai/ports";
+import type { ConversationSegment } from "../ai/ports";
 import type {
+  DraftRetrievalContext,
   EmbeddingProvider,
   EmbeddingVector,
   KnowledgeHit,
@@ -24,7 +25,6 @@ import type {
   RetrievalDiagnostics,
   RetrievalScope,
   StyleRetriever,
-  SuppliedRetrieval,
 } from "./ports";
 
 export interface RetrievalLogPort {
@@ -48,13 +48,6 @@ export interface DraftRetrievalQuery {
   readonly inbound: readonly ConversationSegment[];
 }
 
-export interface DraftRetrievalContext {
-  readonly knowledge: readonly KnowledgeSegment[];
-  readonly style: readonly StyleSegment[];
-  /** The audit record, including whether the factual corpus was reachable. */
-  readonly supplied: SuppliedRetrieval;
-}
-
 const DEFAULT_KNOWLEDGE_LIMIT = 8;
 /** Deliberately small: RETRIEVAL.md asks for few style examples so the model imitates rather than parrots. */
 const DEFAULT_STYLE_LIMIT = 3;
@@ -73,8 +66,9 @@ export async function retrieveDraftContext(
   const { embedding, failed: embeddingFailed } = await embedQuery(dependencies, text, fields);
 
   if (text === "" && embedding === undefined) {
-    // Nothing to search with: an empty burst (media only) is not a factual question.
-    return empty("OK", { lexicalCandidates: 0, semanticCandidates: 0, semanticSkipped: "NO_EMBEDDING" });
+    // Nothing to search with: an empty burst (media only) is not a factual question. No `semanticSkipped`
+    // reason is recorded, because nothing was skipped — there was no query to run on either side.
+    return empty("OK", { lexicalCandidates: 0, semanticCandidates: 0 });
   }
 
   const base = {

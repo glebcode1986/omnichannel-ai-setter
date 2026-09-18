@@ -69,7 +69,9 @@ export { fuseByReciprocalRank, RRF_K, type FusedCandidate, type RankedCandidate 
 export {
   EmbeddingUnavailableError,
   noRetrieval,
+  noRetrievalContext,
   RetrievalUnavailableError,
+  type DraftRetrievalContext,
   type EmbeddingIntent,
   type EmbeddingProvider,
   type EmbeddingVector,
@@ -89,7 +91,6 @@ export {
 } from "./retrieval/ports";
 export {
   retrieveDraftContext,
-  type DraftRetrievalContext,
   type DraftRetrievalDependencies,
   type DraftRetrievalQuery,
   type RetrievalLogPort,
