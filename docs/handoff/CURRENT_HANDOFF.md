@@ -139,6 +139,8 @@ The workflow runs:
 - Redis suites;
 - worker E2E.
 
+Neutral GitHub Actions run for exact PR #62 HEAD `d889a1d5dafe7718e07c980aa3ce267b60fb344b` completed **SUCCESS**: run `35383957555`.
+
 Important nuance: PR #62 is a separate stacked CI branch. Do not claim that a PR #50 exact HEAD has neutral CI evidence unless the workflow actually ran against that exact code/ref. Integrate/propagate the CI gate into the active stack in a dependency-safe way before relying on it as exact-SHA release evidence.
 
 ---
