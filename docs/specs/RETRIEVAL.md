@@ -107,3 +107,24 @@ Style examples come only from verified human writing sources such as `HUMAN_TYPE
   and diagnostics; `factual_source_ids` stores what the model said it relied on. Keeping both is what lets
   a reviewer tell "there was no such fact" from "the fact was there and the model ignored it" from "we
   could not look".
+
+## Implementation notes (P2-04 owner follow-up)
+
+- **A minimal internal seeding path**, not a customer API. `seedKnowledge` and `seedStyleExample` in
+  `packages/db/src/retrieval/seed.ts` exist so the Instagram vertical slice (#16) and CI can exercise real
+  trusted Knowledge and approved Style before Phase 5 builds the Library and Training screens. They take an
+  authorized `BusinessProfileContext` like every other customer-data write and create versioned,
+  provenanced rows under normal Workspace/Business Profile scope — the same rows the UI will later create,
+  not a shortcut around them. Nothing there writes a knowledge chunk from a message or a draft.
+- **Workspace base and Business Profile material both participate.** A Business Profile override wins only
+  where it is intentional and explicitly represented; retrieval never infers a conflict from semantic
+  similarity. Scope level breaks a tie in the deterministic ordering, which is ordering, not authority.
+  Until explicit supersession metadata exists, Phase-2 fixtures should avoid contradictory unlinked facts.
+- **Style examples carry an optional BCP-47 language.** A request naming a language keeps that language and
+  the examples that claim none; a NULL is a deliberate language-agnostic fallback rather than an unknown.
+  A request naming none keeps the whole corpus, because filtering on a preference nobody expressed would
+  silently shrink it. Knowledge ignores language: a fact is a fact whatever language it was written in.
+- **Semantic retrieval is degradable and says so.** Missing or unusable embedding credentials never prevent
+  the worker from starting; it logs `worker.retrieval_mode` at boot and runs lexical-only, and each draft's
+  retrieval record carries why the semantic side contributed nothing. Degradation is never reported as
+  factual certainty: a fact the lexical side misses becomes `MISSING_FACT`, not an invented answer.

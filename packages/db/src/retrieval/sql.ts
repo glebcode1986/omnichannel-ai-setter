@@ -154,11 +154,21 @@ export function knowledgeSemanticSql(): string {
   LIMIT $6`;
 }
 
-const styleFrom = (extraJoin = ""): string => `
+/**
+ * Style scope, plus the language rule (product-owner decision on PR #66).
+ *
+ * An example written in one language teaches the wrong rhythm for a reply in another, so a request that
+ * names a language keeps only that language and the examples that claim none. A NULL language is not
+ * "unknown but probably fine": it means the example is deliberately language-agnostic, which is the safe
+ * fallback. A request that names no language takes everything, because filtering on a preference nobody
+ * expressed would silently shrink the corpus.
+ */
+const styleFrom = (languageParam: string, extraJoin = ""): string => `
   FROM "style_examples" s${extraJoin}
   WHERE s."workspace_id" = $1
     AND (s."business_profile_id" IS NULL OR s."business_profile_id" = $2)
-    AND s."status" = 'ACTIVE'`;
+    AND s."status" = 'ACTIVE'
+    AND (${languageParam}::text IS NULL OR s."language" IS NULL OR s."language" = ${languageParam}::text)`;
 
 const STYLE_COLUMNS = `
     s."id" AS "example_id",
@@ -172,12 +182,13 @@ const STYLE_COLUMNS = `
  * text: the question is "how did a human answer a message like this one", and matching the reply text would
  * retrieve examples that merely sound like the customer.
  */
+/** $1 workspace, $2 business profile, $3 search terms, $4 minimum rank, $5 limit, $6 language. */
 export function styleLexicalSql(): string {
   return `
   WITH q AS (SELECT ${TS_QUERY} AS "query")
   SELECT ${STYLE_COLUMNS},
     ${rank('s."inbound_context"')} AS "score"
-  ${styleFrom('\n  CROSS JOIN q')}
+  ${styleFrom('$6', '\n  CROSS JOIN q')}
     AND ${searchableExpression('s."inbound_context"')} @@ q."query"
     AND ${rank('s."inbound_context"')} >= $4
   ORDER BY "score" DESC, s."id" ASC
@@ -204,20 +215,22 @@ export function knowledgeProfileProbeSql(): string {
   ) AS "present"`;
 }
 
+/** $1 workspace, $2 business profile, $3 embedding profile, $4 language. */
 export function styleProfileProbeSql(): string {
   return `
   SELECT EXISTS (
     SELECT 1
-    ${styleFrom()}
+    ${styleFrom('$4')}
       AND s."embedding_profile" = $3
   ) AS "present"`;
 }
 
+/** $1 workspace, $2 business profile, $3 vector, $4 embedding profile, $5 max distance, $6 limit, $7 language. */
 export function styleSemanticSql(): string {
   return `
   SELECT ${STYLE_COLUMNS},
     1 - (s."embedding" <=> $3::vector) AS "score"
-  ${styleFrom()}
+  ${styleFrom('$7')}
     AND s."embedding_profile" = $4
     AND s."embedding" <=> $3::vector <= $5
   ${SEMANTIC_ORDER}, s."id" ASC

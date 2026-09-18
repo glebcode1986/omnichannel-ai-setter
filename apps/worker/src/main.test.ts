@@ -72,7 +72,9 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
     expectOnlyRedisOutageOnStderr(result.stderr);
     expect(result.code).toBe(0);
-    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    // The retrieval mode is stated before the worker reports started, so an operator reading the log
+    // from the top can see which mode it is in without waiting for a customer question.
+    expect(events(result.stdout)).toEqual(["worker.retrieval_mode", "worker.started", "worker.stopping", "worker.stopped"]);
   }, 30_000);
 
   it("treats a burst of repeated signals (one Ctrl+C relayed by pnpm/watchers) as one graceful shutdown", async () => {
@@ -88,7 +90,9 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
     expectOnlyRedisOutageOnStderr(result.stderr);
     expect(result.code).toBe(0);
-    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    // The retrieval mode is stated before the worker reports started, so an operator reading the log
+    // from the top can see which mode it is in without waiting for a customer question.
+    expect(events(result.stdout)).toEqual(["worker.retrieval_mode", "worker.started", "worker.stopping", "worker.stopped"]);
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {
