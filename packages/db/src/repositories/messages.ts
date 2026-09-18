@@ -22,6 +22,14 @@ export interface NewInboundMessage {
 /**
  * Stores a participant message and, in the same transaction, advances the conversation's inbound/inbox
  * timestamps and its state version (a new customer message makes anchored drafts and reviews stale).
+ *
+ * The conversation row is locked before it is read, and the lock is held until commit. Without it, two
+ * messages arriving at once both read the same timestamps, each computes a maximum from that stale
+ * snapshot, and whichever commits last wins — so a 01:00 message delivered late can push `lastInboundAt`
+ * *backwards* from 02:00. The row would then claim the conversation's newest activity is older than a
+ * message it already contains, and every recency and messaging-window calculation downstream inherits the
+ * error. Incrementing `stateVersion` does not help: the timestamps are separate columns, assigned absolute
+ * values rather than derived in the database.
  */
 export async function appendInboundMessage(
   db: DbClient,
@@ -35,6 +43,18 @@ export async function appendInboundMessage(
 
   return db.$transaction(async (tx) => {
     const key = { workspaceId_businessProfileId_id: { ...scope, id: input.conversationId } };
+    // Locked first, and held through commit, so the read below and the write at the end cannot be
+    // interleaved with another append to the same conversation. The predicate carries the full tenant
+    // scope, so this can never lock another Workspace's or Business Profile's row.
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "conversations"
+      WHERE "workspace_id" = ${scope.workspaceId}
+        AND "business_profile_id" = ${scope.businessProfileId}
+        AND "id" = ${input.conversationId}
+      FOR UPDATE`;
+    if (locked.length === 0) {
+      throw new TenantRecordNotFoundError("Conversation");
+    }
     const conversation = await tx.conversation.findUnique({
       where: key,
       select: { channelAccountId: true, lastInboundAt: true, lastMessageAt: true },
