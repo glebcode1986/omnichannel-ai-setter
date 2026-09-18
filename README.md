@@ -1,5 +1,7 @@
 # Omnichannel AI Setter
 
+> **NEW SESSION / NEW AGENT: start with [`docs/handoff/CURRENT_HANDOFF.md`](docs/handoff/CURRENT_HANDOFF.md).** It is the canonical current-stage handoff, including live implementation stage, review blockers, accepted product decisions and next actions. Fetch live PR HEADs before acting.
+
 A multi-channel AI sales/support setter for Instagram and WhatsApp, designed as a SaaS product rather than a single-account bot.
 
 ## Product thesis
@@ -41,4 +43,16 @@ Future channels should be addable through the same `ChannelAdapter` contract wit
 
 ## Current status
 
-Architecture/specification phase. No production code should be implemented before the Phase 0 architecture checklist and interfaces are accepted.
+Active implementation. The project is in **Stage B — Instagram + shared AI**.
+
+Implemented in the current stacked train:
+- Business Profile-aware Phase 1 foundation;
+- Instagram transport;
+- Instagram onboarding/token lifecycle;
+- provider-neutral AI draft engine;
+- factual/style retrieval;
+- deterministic policy engine.
+
+Current independent-review gate is **PR #50**; the production row-lock fix is in place, but Astra still requires the forced PostgreSQL regression to persist both real inbound messages in the same deterministic schedule. Owner follow-ups on PRs #65/#66/#67 are also pending before/with Delivery Coordinator #13.
+
+Do not use this README as an exact SHA ledger. Read `docs/handoff/CURRENT_HANDOFF.md`, then fetch live GitHub state.
