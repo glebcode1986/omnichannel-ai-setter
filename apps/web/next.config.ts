@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
   // repository live in the root AGENTS.md/CLAUDE.md and must not be shadowed by generated files.
   agentRules: false,
   // Workspace packages export TypeScript source; Next compiles them as part of the app.
-  transpilePackages: ["@omnichannel/env", "@omnichannel/observability"],
+  transpilePackages: ["@omnichannel/db", "@omnichannel/domain", "@omnichannel/env", "@omnichannel/observability"],
   outputFileTracingRoot: monorepoRoot,
   turbopack: {
     root: monorepoRoot,

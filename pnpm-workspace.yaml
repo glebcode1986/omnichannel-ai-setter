@@ -10,3 +10,6 @@ engineStrict: true
 allowBuilds:
   # Verifies the platform-specific esbuild binary (used by tsx, vite and the worker bundle).
   esbuild: true
+  # Prisma (ADR-005): fetches the schema-engine binary used by `prisma migrate` from Prisma's CDN.
+  "@prisma/engines": true
+  prisma: true

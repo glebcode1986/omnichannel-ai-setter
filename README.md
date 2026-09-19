@@ -44,7 +44,7 @@ Future channels should be addable through the same `ChannelAdapter` contract wit
 
 ## Current status
 
-Phase 1 (skeleton). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2). Domain/channel contracts, persistence, queues and webhook ingestion are delivered by issues #3–#6; no product business logic exists yet.
+Phase 1 (foundation). The pnpm workspace, toolchain and runnable web/worker entrypoints exist (issue #2), domain/channel contracts (issue #3) and the PostgreSQL/Prisma model with Auth.js persistence and Workspace/Business Profile scoped repositories (issue #4). Queues and webhook ingestion are delivered by issues #5–#6; no product business logic exists yet.
 
 ## Development
 
@@ -53,7 +53,9 @@ Phase 1 (skeleton). The pnpm workspace, toolchain and runnable web/worker entryp
 - Node.js 24 (`nvm use` reads `.nvmrc`); `pnpm install` refuses other versions (`devEngines.runtime`).
 - pnpm 12 via Corepack: `corepack enable` (the exact version is pinned by `packageManager` in `package.json`).
 
-No database, Redis, Meta credentials or LLM keys are needed for the current scaffold.
+- Docker (or any PostgreSQL 17 server) for the database; `docker compose up -d --wait` starts the local-only service from `compose.yaml` on `127.0.0.1:54329`.
+
+No Redis, Meta credentials or LLM keys are needed yet.
 
 ### Setup
 
@@ -93,7 +95,8 @@ Package names use the `@omnichannel/*` scope. Internal packages export TypeScrip
 | `pnpm typecheck` | `tsc --noEmit` in every package independently, then root tooling |
 | `pnpm lint` | ESLint (type-aware, zero warnings) + `pnpm lint:boundaries` |
 | `pnpm lint:boundaries` | fails on forbidden/undeclared/circular workspace dependencies (ADR-008) |
-| `pnpm test` / `pnpm test:watch` | Vitest across all apps/packages and tooling |
+| `pnpm test` / `pnpm test:watch` | Vitest across all apps/packages and tooling (PostgreSQL suites run when `TEST_DATABASE_URL` is set, otherwise they are skipped) |
+| `pnpm test:db` | only the `@omnichannel/db` suites, failing instead of skipping when `TEST_DATABASE_URL` is missing |
 | `pnpm verify` | typecheck, lint, test and build in sequence |
 
 Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain typecheck` or `pnpm --filter @omnichannel/worker test`.
@@ -102,6 +105,21 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 
 - Web: `pnpm dev:web`, then `GET http://localhost:3000/api/health` returns `{"status":"ok","service":"web"}`. Production: `pnpm --filter @omnichannel/web build && pnpm --filter @omnichannel/web start`.
 - Worker: `pnpm dev:worker` logs `worker.started` as JSON and stops gracefully on `SIGINT`/`SIGTERM`. Production: `pnpm --filter @omnichannel/worker build && pnpm --filter @omnichannel/worker start`.
+
+### Database
+
+The schema lives in `packages/db/prisma/schema.prisma`; migrations in `packages/db/prisma/migrations` are the source of truth for the database (they add CHECK constraints Prisma cannot express, so never recreate them with `db push`). The Prisma client is generated into `packages/db/src/generated/` on `pnpm install` and before typechecking (it is not committed). Prisma 7 does not read `.env` files: export the variables from `packages/db/.env.example` first.
+
+```bash
+docker compose up -d --wait
+export DATABASE_URL=postgresql://omnichannel:omnichannel-local-only@127.0.0.1:54329/omnichannel
+pnpm --filter @omnichannel/db db:migrate:deploy                  # apply migrations
+TEST_DATABASE_URL=$DATABASE_URL pnpm test:db                     # isolation + constraint integration tests
+pnpm --filter @omnichannel/db db:migrate:dev --name <change>     # author a new migration (needs SHADOW_DATABASE_URL)
+pnpm --filter @omnichannel/db db:check-drift                     # migrations == schema.prisma (needs SHADOW_DATABASE_URL)
+```
+
+Workspace-level operations (members, Business Profile creation and listing) take a `WorkspaceContext` from `authorizeWorkspaceAccess`. Customer data (channel accounts, contacts, conversations, messages, …) is only reachable through repository functions that take a `BusinessProfileContext` from `authorizeBusinessProfileAccess`: an explicitly selected Workspace + Business Profile, checked against membership, role and profile grants on every request (ADR-009, `docs/specs/DATA_MODEL.md` v0.4). Composite foreign keys that include `workspace_id` and `business_profile_id` reject cross-Workspace and cross-Business Profile references in the database as well.
 
 ### Environment variables
 

@@ -1,0 +1,100 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  verify:
+    name: pnpm verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm verify
+
+  infrastructure:
+    name: infrastructure suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        # pgvector is already required by the retrieval stack, while retaining PostgreSQL 17.
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: omnichannel
+          POSTGRES_PASSWORD: omnichannel-ci-only
+          POSTGRES_DB: omnichannel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U omnichannel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel
+      SHADOW_DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel_shadow
+      TEST_DATABASE_URL: postgresql://omnichannel:omnichannel-ci-only@127.0.0.1:5432/omnichannel
+      TEST_REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create shadow database
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE omnichannel_shadow'
+
+      - name: Migrations match schema
+        run: pnpm --filter @omnichannel/db db:check-drift
+
+      - name: PostgreSQL suites
+        run: pnpm test:db
+
+      - name: Redis suites
+        run: pnpm test:redis
+
+      - name: Webhook to queue E2E
+        run: pnpm test:e2e

@@ -8,7 +8,23 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "postinstall": "prisma generate",
+    "db:generate": "prisma generate",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:check-drift": "prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code",
+    "typecheck": "prisma generate && tsc --noEmit",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@omnichannel/domain": "workspace:*",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@omnichannel/channel-core": "workspace:*",
+    "@types/pg": "^8.23.1",
+    "prisma": "7.10.0"
   }
 }

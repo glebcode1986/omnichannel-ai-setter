@@ -11,11 +11,16 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@auth/prisma-adapter": "2.11.3",
+    "@omnichannel/db": "workspace:*",
+    "@omnichannel/domain": "workspace:*",
     "@omnichannel/env": "workspace:*",
     "@omnichannel/observability": "workspace:*",
     "next": "^16.3.5",
+    "next-auth": "5.0.0-beta.32",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
