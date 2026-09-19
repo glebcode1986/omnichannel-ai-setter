@@ -266,6 +266,9 @@ importers:
       '@omnichannel/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@omnichannel/channel-instagram':
+        specifier: workspace:*
+        version: link:../../packages/channel-instagram
       '@omnichannel/db':
         specifier: workspace:*
         version: link:../../packages/db
