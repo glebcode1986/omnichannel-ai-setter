@@ -44,6 +44,7 @@ export {
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export { createIngestionStore } from "./ingestion-store";
+export { createSuspensionStore, type NewSuspension, type SuspensionStore, type SuspensionTargetQuery } from "./suspension-store";
 export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
 export {
   seedKnowledge,

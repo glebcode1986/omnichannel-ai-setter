@@ -199,6 +199,20 @@ enum KnowledgeDocumentStatus {
   ARCHIVED
 }
 
+enum SuspensionScope {
+  GLOBAL
+  WORKSPACE
+  BUSINESS_PROFILE
+  CHANNEL_ACCOUNT
+}
+
+enum SuspensionReason {
+  OPERATOR
+  DEPENDENCY_FAILURE
+  CHANNEL_UNHEALTHY
+  BACKLOG
+}
+
 enum ReplyLength {
   SHORT
   MEDIUM
@@ -255,6 +269,8 @@ model User {
   approvedStyleExamples     StyleExample[]
   channelConnectStates      ChannelConnectState[]
   requestedAiDrafts         AiDraft[]             @relation("DraftRequestedBy")
+  automationSuspensions     AutomationSuspension[] @relation("SuspensionBy")
+  liftedSuspensions         AutomationSuspension[] @relation("SuspensionLiftedBy")
 
   @@map("users")
 }
@@ -777,6 +793,38 @@ model KnowledgeChunk {
 
 /// How a business sounds: Workspace base when `business_profile_id` is NULL, a Business Profile override
 /// when it is set (product-owner decision on PR #65). Customer-owned configuration, never platform config.
+/// An operator's stop on automated outbound (RELIABILITY_INCIDENTS.md, Issue #56). Inbound is never
+/// suspended: a switch that also dropped customer messages would turn a precaution into data loss.
+model AutomationSuspension {
+  id                String           @id @default(uuid(7))
+  scope             SuspensionScope
+  /// Absent for GLOBAL; present for every narrower scope, enforced by a CHECK.
+  workspaceId       String?          @map("workspace_id")
+  businessProfileId String?          @map("business_profile_id")
+  channelAccountId  String?          @map("channel_account_id")
+  reason            SuspensionReason
+  /// Operator-written context. Never rendered to a customer and never a place for secrets.
+  note              String?
+  since             DateTime
+  /// Absent means it stays until a person lifts it, which is the safe default for a precaution.
+  until             DateTime?
+  /// Who pulled the switch; absent when the system did it in response to a dependency.
+  byUserId          String?          @map("by_user_id")
+  /// When and by whom it was lifted. Kept rather than deleted: the question after an incident is always
+  /// who turned this off and whether anyone turned it back on.
+  liftedAt          DateTime?        @map("lifted_at")
+  liftedByUserId    String?          @map("lifted_by_user_id")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  byUser     User? @relation("SuspensionBy", fields: [byUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  liftedByUser User? @relation("SuspensionLiftedBy", fields: [liftedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([scope, liftedAt])
+  @@index([workspaceId, businessProfileId, liftedAt])
+  @@map("automation_suspensions")
+}
+
 model StyleProfile {
   id                String        @id @default(uuid(7))
   workspaceId       String        @map("workspace_id")

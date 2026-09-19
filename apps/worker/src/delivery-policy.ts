@@ -10,15 +10,15 @@
  * the narrow `WindowInputs` shape: answering "may a reply still be sent?" must not require the credentials
  * needed to actually send one.
  */
-import type { DeliveryChannelState, PolicyLimits } from "@omnichannel/application";
+import type { DeliveryChannelState, PolicyInput, PolicyLimits } from "@omnichannel/application";
 import {
   evaluateHumanAgentEligibility,
   evaluateStandardWindow,
   instagramTimingPolicy,
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
-import type { DbClient } from "@omnichannel/db";
-import { isReasonCode, toQuietHours } from "@omnichannel/domain";
+import { createSuspensionStore, type DbClient } from "@omnichannel/db";
+import { activeSuspension, isReasonCode, toQuietHours } from "@omnichannel/domain";
 import type { DeliveryJob } from "@omnichannel/queue";
 
 /** Defaults used where an account has not recorded its own; the adapter owns the verified values. */
@@ -30,9 +30,13 @@ const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowM
 export interface ResolvedDeliveryPolicy {
   readonly limits: PolicyLimits;
   readonly channelState: DeliveryChannelState;
+  /** Present when a kill switch covers this send; the coordinator passes it to the policy engine. */
+  readonly outboundSuspended?: PolicyInput["outboundSuspended"];
 }
 
 export function createDeliveryPolicyResolver(db: DbClient, now: () => Date) {
+  const suspensions = createSuspensionStore(db);
+
   return async function resolve(job: DeliveryJob): Promise<ResolvedDeliveryPolicy | undefined> {
     const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
     const conversation = await db.conversation.findUnique({
@@ -73,6 +77,12 @@ export function createDeliveryPolicyResolver(db: DbClient, now: () => Date) {
       now: now(),
     };
 
+    // Read here, with everything else the decision rests on, so the switch is honoured by the same gate
+    // that honours every other rule. A separate check closer to the wire is how a switch acquires a path
+    // around it.
+    const covering = await suspensions.loadCovering({ ...scope, channelAccountId: conversation.channelAccountId });
+    const suspended = activeSuspension({ ...scope, channelAccountId: conversation.channelAccountId } as never, covering, ctx.now);
+
     const eligibility = evaluateHumanAgentEligibility(ctx, windowInputs);
     const timing = instagramTimingPolicy();
     return {
@@ -86,6 +96,7 @@ export function createDeliveryPolicyResolver(db: DbClient, now: () => Date) {
           : { quietHours: toQuietHours(policy.quietHoursTimeZone, policy.quietHoursStart, policy.quietHoursEnd) }),
         afterWindow: { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
       },
+      ...(suspended === undefined ? {} : { outboundSuspended: { scope: suspended.scope, reason: suspended.reason } }),
       channelState: {
         window: evaluateStandardWindow(ctx, windowInputs),
         humanAgent:

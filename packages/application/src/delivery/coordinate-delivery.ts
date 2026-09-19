@@ -48,6 +48,8 @@ export interface DeliveryCommand {
   readonly limits: PolicyLimits;
   readonly channelState: DeliveryChannelState;
   readonly authority: DeliveryAuthority;
+  /** Present when a kill switch covers this send (Issue #56); the policy engine decides what it means. */
+  readonly outboundSuspended?: PolicyInput["outboundSuspended"];
 }
 
 /**
@@ -252,6 +254,7 @@ function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCom
     window: command.channelState.window,
     humanAgent: command.channelState.humanAgent,
     ...(command.channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: command.channelState.dispatchDeadline }),
+    ...(command.outboundSuspended === undefined ? {} : { outboundSuspended: command.outboundSuspended }),
     replyCycle: context.replyCycle,
     now: dependencies.now(),
   };

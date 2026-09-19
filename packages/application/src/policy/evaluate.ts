@@ -70,6 +70,11 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (input.account !== "CONNECTED") {
     reasons.add("ACCOUNT_UNHEALTHY");
   }
+  if (input.outboundSuspended !== undefined) {
+    // Held rather than cancelled: the operator stopped sending, they did not decide the reply was wrong.
+    // Held rather than skipped, too — the work stays recoverable for when the switch is lifted.
+    reasons.add("AUTOMATION_SUSPENDED");
+  }
   if (input.draft.confidence < input.limits.confidenceThreshold) {
     reasons.add("LOW_CONFIDENCE");
   }

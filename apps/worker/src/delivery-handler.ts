@@ -9,14 +9,22 @@
  * unknown outcome, and an unknown outcome is quarantined rather than retried (ADR-012). So the coordinator's
  * own settlement is always what reaches the database, and the queue is only ever told what already happened.
  */
-import { coordinateDelivery, type DeliveryChannelState, type DeliveryDependencies, type PolicyLimits } from "@omnichannel/application";
+import { coordinateDelivery, type DeliveryChannelState, type DeliveryCommand, type DeliveryDependencies, type PolicyLimits } from "@omnichannel/application";
 import type { Logger } from "@omnichannel/observability";
 import type { DeliveryAttemptResult, DeliveryJob } from "@omnichannel/queue";
 
 export interface DeliveryHandlerDependencies {
   readonly engine: DeliveryDependencies;
   /** Resolves the automation limits and the live channel state for one conversation, at send time. */
-  readonly conversationPolicy: (job: DeliveryJob) => Promise<{ readonly limits: PolicyLimits; readonly channelState: DeliveryChannelState } | undefined>;
+  readonly conversationPolicy: (job: DeliveryJob) => Promise<
+    | {
+        readonly limits: PolicyLimits;
+        readonly channelState: DeliveryChannelState;
+        /** Present when a kill switch covers this send; carried straight through to the policy engine. */
+        readonly outboundSuspended?: DeliveryCommand["outboundSuspended"];
+      }
+    | undefined
+  >;
   readonly logger: Logger;
 }
 
@@ -33,6 +41,7 @@ export function createDeliveryHandler(dependencies: DeliveryHandlerDependencies)
       correlationId: job.correlationId,
       limits: policy.limits,
       channelState: policy.channelState,
+      ...(policy.outboundSuspended === undefined ? {} : { outboundSuspended: policy.outboundSuspended }),
       // A queue job is automation by construction: there is no acting human to name here, and the type
       // makes claiming one impossible rather than merely wrong.
       authority: { kind: "AUTOMATED" },
