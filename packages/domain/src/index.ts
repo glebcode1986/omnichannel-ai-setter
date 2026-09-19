@@ -22,5 +22,6 @@ export * from "./lead";
 export * from "./message";
 export * from "./reason-codes";
 export * from "./style-profile";
+export * from "./suspension";
 export * from "./values";
 export * from "./workspace";
