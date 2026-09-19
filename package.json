@@ -26,6 +26,7 @@
     "test:watch": "vitest",
     "test:db": "REQUIRE_DB_TESTS=1 vitest run --project @omnichannel/db",
     "test:redis": "REQUIRE_REDIS_TESTS=1 vitest run --project @omnichannel/queue",
+    "evals": "pnpm --filter @omnichannel/evals evals",
     "test:e2e": "REQUIRE_DB_TESTS=1 REQUIRE_REDIS_TESTS=1 vitest run --project @omnichannel/worker",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },

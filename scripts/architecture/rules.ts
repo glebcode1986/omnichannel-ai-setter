@@ -140,6 +140,12 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
     layer: "support",
     allowedWorkspaceDependencies: [],
   },
+  [pkg("evals")]: {
+    // Offline evaluation tooling. It may read every contract it grades, and nothing may depend on it:
+    // an evaluation harness that production code imports has stopped being an independent check.
+    layer: "infrastructure",
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("application"), pkg("ai"), pkg("observability")],
+  },
   [pkg("web")]: {
     layer: "app",
     allowedWorkspaceDependencies: "all-packages",
