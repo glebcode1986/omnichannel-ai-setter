@@ -17,7 +17,7 @@
  * Step 4 is the one that costs restraint. An ambiguous result is the case where retrying feels safe and is
  * not: the customer may already have the message, and a second one cannot be taken back (ADR-012).
  */
-import { sendDisposition } from "@omnichannel/channel-core";
+import { sendDisposition, type SendResult } from "@omnichannel/channel-core";
 import type { ReasonCode } from "@omnichannel/domain";
 
 import { evaluatePolicy } from "../policy/evaluate";
@@ -50,15 +50,19 @@ export interface DeliveryCommand {
   readonly authority: DeliveryAuthority;
 }
 
+/**
+ * `sendResult` is present exactly when the adapter was actually called. Its absence is meaningful: it says
+ * the reply never left this process, which is what lets a caller tell "we decided not to" from "we tried".
+ */
 export type DeliveryOutcome =
-  | { readonly status: "SENT"; readonly platformMessageId: string }
+  | { readonly status: "SENT"; readonly platformMessageId: string; readonly sendResult: SendResult }
   | { readonly status: "CANCELLED"; readonly reasons: readonly ReasonCode[] }
-  | { readonly status: "HELD"; readonly reason: string }
+  | { readonly status: "HELD"; readonly reason: string; readonly sendResult?: SendResult }
   | { readonly status: "RESCHEDULED"; readonly notBefore: Date }
   /** Another worker owns it, or it is already finished. Nothing was sent by this call. */
   | { readonly status: "NOT_CLAIMABLE" }
   /** A retryable provider rejection; the queue may try again while the state still allows it. */
-  | { readonly status: "RETRY"; readonly reason: string };
+  | { readonly status: "RETRY"; readonly reason: string; readonly sendResult: SendResult };
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -113,7 +117,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
       };
       await dependencies.store.settle(command.operationId, settlement, dependencies.now());
       dependencies.log.info("delivery.sent", { ...fields, platformMessageId: settlement.platformMessageId });
-      return { status: "SENT", platformMessageId: settlement.platformMessageId };
+      return { status: "SENT", platformMessageId: settlement.platformMessageId, sendResult: result };
     }
     case "RETRY_ALLOWED": {
       const rejected = result.outcome === "REJECTED" ? result : undefined;
@@ -126,7 +130,9 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
         : { kind: "RETRY", ...(rejected?.code === undefined ? {} : { code: rejected.code }), message };
       await dependencies.store.settle(command.operationId, settlement, dependencies.now());
       dependencies.log.warn("delivery.rejected_retryable", { ...fields, code: rejected?.code, exhausted });
-      return exhausted ? { status: "HELD", reason: "retry attempts exhausted" } : { status: "RETRY", reason: message };
+      return exhausted
+        ? { status: "HELD", reason: "retry attempts exhausted", sendResult: result }
+        : { status: "RETRY", reason: message, sendResult: result };
     }
     case "FAILED": {
       const rejected = result.outcome === "REJECTED" ? result : undefined;
@@ -141,7 +147,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
         dependencies.now(),
       );
       dependencies.log.warn("delivery.rejected", { ...fields, code: rejected?.code });
-      return { status: "HELD", reason: rejected?.message ?? "provider rejected the send" };
+      return { status: "HELD", reason: rejected?.message ?? "provider rejected the send", sendResult: result };
     }
     case "QUARANTINE_NO_RETRY": {
       const ambiguous = result.outcome === "AMBIGUOUS" ? result : undefined;
@@ -158,7 +164,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
         dependencies.now(),
       );
       dependencies.log.error("delivery.ambiguous", { ...fields, code: ambiguous?.code });
-      return { status: "HELD", reason: "send outcome is unknown" };
+      return { status: "HELD", reason: "send outcome is unknown", sendResult: result };
     }
   }
 }

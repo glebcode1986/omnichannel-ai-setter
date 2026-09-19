@@ -98,7 +98,9 @@ describe("the happy path is the only path to a send", () => {
 
     const outcome = await coordinateDelivery(dependencies, command());
 
-    expect(outcome).toEqual({ status: "SENT", platformMessageId: "mid_1" });
+    expect(outcome).toMatchObject({ status: "SENT", platformMessageId: "mid_1" });
+    // The raw result travels with the outcome, so the queue layer can run its own disposition logic.
+    expect(outcome.status === "SENT" ? outcome.sendResult : undefined).toEqual({ outcome: "ACCEPTED", platformMessageId: "mid_1" });
     expect(sends).toEqual([{ operationId: "op_1", text: "We open at 10 on Saturday." }]);
     expect(settlements).toEqual([{ kind: "SENT", platformMessageId: "mid_1" }]);
   });
@@ -221,7 +223,9 @@ describe("send outcomes", () => {
 
     // The customer may already have the reply, and a second one cannot be taken back (ADR-012).
     expect(settlements[0]).toMatchObject({ kind: "HELD", status: "HELD_AMBIGUOUS", code: "TIMEOUT" });
-    expect(outcome).toEqual({ status: "HELD", reason: "send outcome is unknown" });
+    expect(outcome).toMatchObject({ status: "HELD", reason: "send outcome is unknown" });
+    // Carried out so the queue can enqueue reconciliation; carried out is not the same as retried.
+    expect(outcome.status === "HELD" ? outcome.sendResult?.outcome : undefined).toBe("AMBIGUOUS");
   });
 
   it("holds a definite rejection with the provider's own code", async () => {
