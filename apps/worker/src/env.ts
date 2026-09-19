@@ -10,6 +10,21 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
   /** Redis for BullMQ scheduling and coordination (ADR-005); not the durable source of truth. */
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
 
+  /**
+   * Meta app credentials, needed to sign and verify. The worker only sends, but the adapter is one object
+   * and holds both halves.
+   */
+  INSTAGRAM_APP_SECRET: z.string().min(1).max(512).optional(),
+  /** Same key the web app encrypts with; the worker only ever decrypts to send. */
+  CHANNEL_CREDENTIAL_KEY_ID: z.string().min(1).max(64).optional(),
+  CHANNEL_CREDENTIAL_KEY: z.base64().length(44).optional(),
+  INSTAGRAM_VERIFY_TOKEN: z.string().min(1).max(512).optional(),
+  /**
+   * Whether Meta has approved this app for the Human Agent exception (ADR-014). Configuration rather than
+   * a stored flag on an account, and `UNKNOWN` fails closed — which is the default on purpose.
+   */
+  INSTAGRAM_HUMAN_AGENT_APPROVAL: z.enum(["APPROVED", "NOT_APPROVED", "UNKNOWN"]).default("UNKNOWN"),
+
   /** Model provider credentials. Read once here and passed inward as typed configuration. */
   ANTHROPIC_API_KEY: z.string().min(1).max(512),
   /** Provider choice is configuration, not architecture (AI_ORCHESTRATION.md); swap it without a release. */

@@ -48,8 +48,15 @@ const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-pa
 const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 
 /** With Redis unreachable the only permitted stderr entry is the (URL-free) outage warning. */
+/**
+ * These runs configure no Meta app credentials, so the worker correctly announces that it cannot deliver.
+ * That warning is the point: a worker unable to send should say so at boot rather than discovering it on
+ * the first customer message.
+ */
+const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "worker.no_channel_adapter"];
+
 function expectOnlyRedisOutageOnStderr(stderr: string): void {
-  expect(events(stderr).filter((event) => event !== "queue.redis_unavailable")).toEqual([]);
+  expect(events(stderr).filter((event) => !EXPECTED_STARTUP_WARNINGS.includes(event))).toEqual([]);
   expect(stderr).not.toContain("127.0.0.1:1");
 }
 

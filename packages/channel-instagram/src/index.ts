@@ -46,6 +46,12 @@ export {
   type OAuthResult,
 } from "./oauth";
 export type { HumanActor } from "./human-agent";
+export {
+  createInstagramAdapterRegistry,
+  type InstagramBinding,
+  type InstagramRegistryOptions,
+  type RegistryAccount,
+} from "./registry";
 export { evaluateHumanAgentEligibility, evaluateStandardWindow, type HumanAgentEligibility, type WindowInputs } from "./window";
 export {
   DEFAULT_AUTOMATED_DISPATCH_TARGET_MS,

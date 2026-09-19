@@ -35,7 +35,13 @@ export {
 } from "./tenancy";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
-export { createDeliveryStore, recoverStaleSendingDeliveries } from "./delivery-store";
+export {
+  createDeliveryStore,
+  recoverStaleSendingDeliveries,
+  requestHumanReview,
+  scheduleAutomatedDelivery,
+  type AutomatedDeliveryInput,
+} from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export { createIngestionStore } from "./ingestion-store";
 export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";

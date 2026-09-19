@@ -8,6 +8,7 @@ import {
   createKnowledgeRetriever,
   createStyleProfileStore,
   createDeliveryStore,
+  createCredentialCipher,
   createStyleRetriever,
   EMBEDDING_DIMENSIONS,
 } from "@omnichannel/db";
@@ -20,7 +21,12 @@ import { loadWorkerEnv, type WorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
+import type { DeliverySendPort } from "@omnichannel/application";
+
+import { createDebounceHandler } from "./debounce-handler";
+import { createInstagramDeliverySender } from "./instagram-sender";
 import { createDeliveryHandler } from "./delivery-handler";
+import { createDraftDisposition } from "./draft-disposition";
 import { createDeliveryPolicyResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { startOutboxSweeper } from "./outbox-sweeper";
@@ -64,6 +70,27 @@ function createEmbeddings(env: WorkerEnv, logger: Logger) {
   });
 }
 
+/**
+ * Without Meta app credentials there is no adapter, and delivery refuses with a named reason rather than
+ * pretending: a rejection that says why is safe, and an accepted send that never happened would not be.
+ */
+function createSender(env: WorkerEnv, db: ReturnType<typeof createDbClient>, logger: Logger): DeliverySendPort {
+  if (env.INSTAGRAM_APP_SECRET === undefined || env.INSTAGRAM_VERIFY_TOKEN === undefined || env.CHANNEL_CREDENTIAL_KEY_ID === undefined || env.CHANNEL_CREDENTIAL_KEY === undefined) {
+    logger.warn("worker.no_channel_adapter", { reason: "instagram app or credential-encryption configuration is missing" });
+    return {
+      send: () => Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is configured for delivery" }),
+    };
+  }
+  return createInstagramDeliverySender({
+    db,
+    cipher: createCredentialCipher({ keyId: env.CHANNEL_CREDENTIAL_KEY_ID, keys: { [env.CHANNEL_CREDENTIAL_KEY_ID]: Buffer.from(env.CHANNEL_CREDENTIAL_KEY, "base64") } }),
+    appSecret: env.INSTAGRAM_APP_SECRET,
+    verifyToken: env.INSTAGRAM_VERIFY_TOKEN,
+    humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
+    logger,
+  });
+}
+
 function main(): void {
   let env;
   try {
@@ -101,6 +128,7 @@ function main(): void {
       // Stated at boot, not inferred from silence: lexical-only is a supported mode, but an operator has
       // to be able to see which mode a worker is actually in before a customer asks a factual question.
       logger.info("worker.retrieval_mode", { semantic: embeddings !== undefined, lexical: true });
+      const producer = createQueueProducer({ connection, logger });
       const generateDraft = createAiDraftHandler({
         engine: {
           model: replyModel,
@@ -113,6 +141,7 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
+        dispose: createDraftDisposition({ db, producer, logger, now: () => new Date(), random: Math.random }),
         retrieval: {
           knowledge: createKnowledgeRetriever(db),
           style: createStyleRetriever(db),
@@ -126,21 +155,18 @@ function main(): void {
       const deliver = createDeliveryHandler({
         engine: {
           store: createDeliveryStore(db),
-          sender: {
-            // The adapter registry arrives with the vertical slice (#16). Until an account's credentials
-            // can be resolved here, delivery refuses rather than pretending: a rejection that names the
-            // reason is safe, and an accepted send that never happened would not be.
-            send: () =>
-              Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is registered for delivery" }),
-          },
+          sender: createSender(env, db, logger),
           log: logger,
           now: () => new Date(),
         },
         conversationPolicy: createDeliveryPolicyResolver(db, () => new Date()),
         logger,
       });
-      const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft, deliver) });
-      const producer = createQueueProducer({ connection, logger });
+      const workers = createQueueWorkers({
+        connection,
+        logger,
+        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger })),
+      });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
