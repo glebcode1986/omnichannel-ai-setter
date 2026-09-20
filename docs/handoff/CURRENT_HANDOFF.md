@@ -2,9 +2,9 @@
 
 **Last updated:** 2026-09-20  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
-**Implementation stage:** Stage B complete; Stage C reliability implemented in PR #72; independent review catch-up still blocked at PR #51  
-**Immediate correction:** PR #51 delayed-delivery fail-closed bug  
-**Do not start Stage D UI until:** #51 is corrected and propagated through the current stack
+**Implementation stage:** Stage B complete; Stage C reliability implemented in PR #72; independent review catch-up has advanced to PR #52  
+**Immediate correction:** PR #52 secret-safe webhook verification logging  
+**Do not start Stage D UI until:** #52 is corrected and propagated through the current stack
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
 > GitHub is canonical project memory. Chat history is not an execution contract. Fetch live PR HEADs before acting.
@@ -61,37 +61,40 @@ This is implementation evidence, not independent Astra acceptance yet.
 - PR #49 — Astra PASS
 - PR #50 — Astra PASS at `3934d99e391337498e7446b8335b90a3f6518b2d`
 
-### Current blocker
-PR #51 / P1-04 remains **CHANGES_REQUESTED** at:
-`3213497192f96ce15ac92767f855be4b9791d279`
+### PR #51 — PASS
+Astra accepted exact HEAD:
+`1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6`
 
-The defect:
-`scheduleDelivery` silently clamps a future `scheduledFor` to the queue's 7-day maximum. A declared 30-day send can therefore execute after 7 days while audit state still says 30 days.
+The fail-unsafe scheduling clamp is fixed: out-of-range future schedules are rejected before enqueue; exact-max/max+1/far-future/past-now/metadata consistency are pinned by real Redis regressions, and exact-head CI passed.
+
+### Current blocker — PR #52 / P1-05
+Astra reviewed exact HEAD:
+`193ef5ce5950977cd3116bbda6dc3d8aa838ecfe`
+
+Blocking security finding: `VerificationResult.REJECTED.reason` is adapter-controlled free text and is currently copied into structured logs. Because adapters receive raw webhook headers/query/body, this can leak bearer tokens, signatures, body fragments or other sensitive values into logs.
 
 Required correction:
-- reject out-of-range future schedules before enqueue;
-- never clamp/rewrite them earlier;
-- write no Redis/BullMQ job on rejection;
-- pin exact-max / max+1 / far-future / past-now behavior;
-- prevent materially contradictory `scheduledFor` / `selectedDelayMs` audit metadata;
-- preserve existing idempotency and channel neutrality.
+- never log adapter free-form `verification.reason`;
+- replace it with an application-owned closed reason code/classification;
+- add a canary regression proving unique secret/body/header/query fragments cannot reach any structured log fields;
+- preserve `UNAUTHORIZED`, challenge ordering and verify-before-normalize/persist behavior.
 
-A focused directive is already posted on PR #51.
+A focused directive is already posted on PR #52.
 
-### Review queue after #51
-After #51 gets a new HEAD and PASS, Astra continues strictly:
+### Review queue after #52
+After #52 gets a new HEAD and PASS, Astra continues strictly:
 
-#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72
+#63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72
 
-Do not re-review #50 unless its accepted code changes.
+Do not re-review #50 or #51 unless their accepted code changes.
 
 ## Current stack snapshot
 
 Fetch live values before modifying.
 
 - #50 `3934d99e391337498e7446b8335b90a3f6518b2d` — PASS
-- #51 `3213497192f96ce15ac92767f855be4b9791d279` — CHANGES_REQUESTED
-- #52 `cd89333ca7c11d77cc7b606ee40f95ee1c909a2b`
+- #51 `1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6` — PASS
+- #52 `193ef5ce5950977cd3116bbda6dc3d8aa838ecfe` — CHANGES_REQUESTED
 - #63 `d117291dded9fff6c1f9ce421a5af4a21308dfba`
 - #64 `0fc59ff60e53f9c130de3d4d74215f6ec6b350f8`
 - #65 `99dc18aff9210318639da19d54bad759937b7432`
@@ -125,10 +128,10 @@ Canonical ADR:
 
 ## Immediate execution plan
 
-1. Claude returns to PR #51 and fixes the Astra blocker.
-2. Publish `CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P1-04`.
-3. Propagate with normal merges through every descendant, now including #72.
-4. Astra re-reviews #51.
+1. Claude fixes PR #52 secret-safe logging finding.
+2. Publish `CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P1-05`.
+3. Propagate with normal merges through #63 -> #72.
+4. Astra re-reviews #52.
 5. If PASS, Astra continues dependency order through #72.
 6. Only after that review debt is moving cleanly should new Stage D UI branches begin.
 
