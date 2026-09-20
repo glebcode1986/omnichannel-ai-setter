@@ -426,6 +426,95 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
     });
   });
 
+  describe("the reconciliation store's own guards", () => {
+    // Exercised directly, because the decision core reaches most of these only on a race it cannot
+    // reproduce on demand: between loading an operation and writing a conclusion about it, an echo or a
+    // second worker may already have settled it. The guards are what make that harmless, so they are
+    // worth a test that does not depend on winning a race.
+    const store = () => createReconciliationStore(infra.db);
+    const opened = async (input: { operationId: string; deliveryJobId: string; conversationId: string }) => {
+      await store().open({ ...scope, ...input, reason: "AMBIGUOUS_SEND_RESULT", detectedAt: NOW });
+    };
+
+    it("will not mark an operation sent once something else has settled it", async () => {
+      const { conversationId, operationId } = await pendingDelivery();
+      const sender = deliver(conversationId, operationId);
+      await sender.run();
+      await opened({ operationId, deliveryJobId: operationId, conversationId });
+
+      await store().markSent(operationId, "mid-late-echo", AFTER_GRACE);
+
+      // One operation, one outbound message. A second one is a duplicate reply in the customer's inbox.
+      expect(await infra.db.message.count({ where: { operationId, direction: "OUT" } })).toBe(1);
+      const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true, platformMessageId: true } });
+      expect(job.status).toBe("SENT");
+      expect(job.platformMessageId).not.toBe("mid-late-echo");
+    });
+
+    it("writes the message and the terminal state together, or neither", async () => {
+      const { conversationId, operationId } = await pendingDelivery();
+      await infra.db.deliveryJobRecord.update({ where: { operationId }, data: { status: "HELD_AMBIGUOUS", claimedAt: NOW, attemptCount: 1 } });
+      await opened({ operationId, deliveryJobId: operationId, conversationId });
+
+      await store().markSent(operationId, "mid-confirmed", AFTER_GRACE);
+
+      // A SENT delivery with no message would let a later pass conclude nothing was sent and offer to
+      // send again, which is the exact duplicate ADR-012 exists to prevent.
+      expect(await infra.db.message.count({ where: { operationId, direction: "OUT", channelMessageId: "mid-confirmed" } })).toBe(1);
+      expect(await statusOf(operationId)).toBe("SENT");
+    });
+
+    it("makes a resumed operation claimable again, with no claim left on it", async () => {
+      const { conversationId, operationId } = await pendingDelivery();
+      await infra.db.deliveryJobRecord.update({ where: { operationId }, data: { status: "HELD_AMBIGUOUS", claimedAt: NOW, attemptCount: 1 } });
+      await opened({ operationId, deliveryJobId: operationId, conversationId });
+
+      await store().resume(operationId, AFTER_GRACE);
+
+      // A stale claim left behind would make the coordinator's conditional UPDATE find nothing, and the
+      // resumed reply would sit there looking scheduled and never be taken.
+      const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true, claimedAt: true, scheduledFor: true } });
+      expect(job).toMatchObject({ status: "SCHEDULED", claimedAt: null });
+      expect(job.scheduledFor.toISOString()).toBe(AFTER_GRACE.toISOString());
+    });
+
+    it("never turns a completed send into a review item", async () => {
+      const { conversationId, operationId } = await pendingDelivery();
+      const sender = deliver(conversationId, operationId);
+      await sender.run();
+      await opened({ operationId, deliveryJobId: operationId, conversationId });
+
+      await store().escalate(operationId, "we could not tell", AFTER_GRACE);
+
+      // The customer already has this reply. Asking a person to decide about it would be asking them to
+      // decide something that cannot be undone.
+      expect(await statusOf(operationId)).toBe("SENT");
+    });
+
+    it("keeps the moment the ambiguity first appeared, however often it is reported", async () => {
+      const { conversationId, operationId } = await pendingDelivery();
+      await infra.db.deliveryJobRecord.update({ where: { operationId }, data: { status: "HELD_AMBIGUOUS", claimedAt: NOW, attemptCount: 1 } });
+      await opened({ operationId, deliveryJobId: operationId, conversationId });
+
+      await store().open({
+        ...scope,
+        operationId,
+        deliveryJobId: operationId,
+        conversationId,
+        reason: "AMBIGUOUS_SEND_RESULT",
+        detectedAt: AFTER_GRACE,
+        providerRequestId: "req-late",
+      });
+
+      const record = await infra.db.deliveryReconciliation.findUniqueOrThrow({ where: { operationId } });
+      // The grace period before a person is told runs from the first detection. Refreshing it on every
+      // retry would let an operation stay unresolved forever while looking freshly detected each time.
+      expect(record.detectedAt.toISOString()).toBe(NOW.toISOString());
+      // A provider request id arriving on a later report is new evidence, and is kept.
+      expect(record.providerRequestId).toBe("req-late");
+    });
+  });
+
   describe("the operational picture", () => {
     it("counts what is stuck, from durable state rather than from memory", async () => {
       const ambiguous = await pendingDelivery();
