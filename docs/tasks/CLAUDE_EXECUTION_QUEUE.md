@@ -8,44 +8,43 @@
 Stage B is implemented through PR #71.
 Stage C reliability is implemented in PR #72.
 
-Independent review is still blocked at **PR #51**.
+Independent review has advanced past #51 and is now blocked at **PR #52**.
 
 ### Review state
 - #49 P1-02 — Astra PASS
 - #50 P1-03 — Astra PASS at `3934d99e391337498e7446b8335b90a3f6518b2d`
-- #51 P1-04 — **Astra CHANGES_REQUESTED** at `3213497192f96ce15ac92767f855be4b9791d279`
-- downstream #52 -> #72 remain queued
+- #51 P1-04 — Astra PASS at `1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6`
+- #52 P1-05 — **Astra CHANGES_REQUESTED** at `193ef5ce5950977cd3116bbda6dc3d8aa838ecfe`
+- downstream #63 -> #72 remain queued
 
-## NEXT TASK — fix PR #51 before opening Stage D
+## NEXT TASK — fix PR #52 before opening Stage D
 
-Astra found a fail-unsafe scheduling bug:
+Astra found a security/logging bug:
 
-`scheduleDelivery` silently clamps a future `scheduledFor` above `MAX_SCHEDULE_DELAY_MS`, so a delivery declared for 30 days can execute after 7 days.
+`VerificationResult.REJECTED.reason` is adapter-controlled free text, and `ingestWebhook` copies it into structured logs. Because adapters can inspect raw webhook headers/query/body, this can leak credentials or customer/provider payload fragments.
 
 Required fix:
-- derive delay from `scheduledFor`;
-- if future delay > max, reject before enqueue;
-- never clamp/rewrite earlier;
-- no BullMQ job on rejection;
-- pin max, max+1, far-future, past/now behavior;
-- pin `scheduledFor` / `selectedDelayMs` audit consistency;
-- run real Redis regression tests.
+- never log adapter free-form verification reason;
+- use only application-owned closed reason codes;
+- add a canary test proving returned secret/body/header/query fragments never reach any logged field;
+- preserve unauthorized/challenge/verify-before-normalize semantics;
+- search only the same ingestion/outbox path for sibling free-form adapter/provider log leaks.
 
 Publish:
-`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P1-04`
+`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P1-05`
 
 Then propagate with normal merges through:
-#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72.
+#63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72.
 
 Do not rebase/force-push. Do not merge to main.
 
 ## Astra protocol
 
-After the new #51 HEAD:
-1. re-review #51 only;
+After the new #52 HEAD:
+1. re-review #52 only;
 2. if PASS, continue dependency order through #72;
 3. exact-head verdicts only;
-4. do not re-review #50 unless accepted code changed.
+4. do not re-review #50/#51 unless accepted code changed.
 
 ## Stage B implemented
 
@@ -79,9 +78,9 @@ Human-takeover safety wins over reducing false-positive Review work.
 ## STOP CONDITION BEFORE STAGE D
 
 Do **not** open new Stage D UI implementation PRs until:
-- #51 has a corrected HEAD;
+- #52 has a corrected HEAD;
 - that correction is propagated through #72;
-- Astra has at least resumed dependency-order review from #51.
+- Astra has resumed dependency-order review from #52.
 
 This prevents the known queue scheduling defect from being copied into an even wider stack.
 
