@@ -74,6 +74,20 @@ export interface NewSuspension {
 }
 
 export function createSuspensionStore(db: DbClient): SuspensionStore {
+  /**
+   * Shared by the reader and the writer below, as a plain function rather than through `this`: a store
+   * whose methods only work while they are still attached to the object is a trap for the first caller
+   * who destructures it.
+   */
+  async function activeSystem(reason: SuspensionReason, at: Date): Promise<SystemSuspension | undefined> {
+    const row = await db.automationSuspension.findFirst({
+      where: { scope: "GLOBAL", reason, byUserId: null, liftedAt: null, since: { lte: at }, OR: [{ until: null }, { until: { gt: at } }] },
+      select: { id: true, since: true, until: true },
+      orderBy: { since: "desc" },
+    });
+    return row === null ? undefined : { id: row.id, since: row.since, ...(row.until === null ? {} : { until: row.until }) };
+  }
+
   return {
     async loadCovering(target) {
       const rows = await db.automationSuspension.findMany({
@@ -124,17 +138,10 @@ export function createSuspensionStore(db: DbClient): SuspensionStore {
       await db.automationSuspension.updateMany({ where: { id, liftedAt: null }, data: { liftedAt: at, liftedByUserId: byUserId } });
     },
 
-    async activeSystemSuspension(reason, at) {
-      const row = await db.automationSuspension.findFirst({
-        where: { scope: "GLOBAL", reason, byUserId: null, liftedAt: null, since: { lte: at }, OR: [{ until: null }, { until: { gt: at } }] },
-        select: { id: true, since: true, until: true },
-        orderBy: { since: "desc" },
-      });
-      return row === null ? undefined : { id: row.id, since: row.since, ...(row.until === null ? {} : { until: row.until }) };
-    },
+    activeSystemSuspension: activeSystem,
 
     async holdSystemSuspension(input) {
-      const active = await this.activeSystemSuspension(input.reason, input.at);
+      const active = await activeSystem(input.reason, input.at);
       if (active === undefined) {
         await db.automationSuspension.create({
           data: { scope: "GLOBAL", reason: input.reason, note: input.note, since: input.at, until: input.until, byUserId: null },

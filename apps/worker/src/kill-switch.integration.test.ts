@@ -203,6 +203,57 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     expect(attempt.sends()).toBe(1);
   }, 180_000);
 
+  it("stops one account without touching the account beside it", async () => {
+    const { conversationId, operationId } = await conversationWithDraft();
+    // A different account of the same workspace. It needs no row of its own: this table names accounts
+    // rather than referencing them, precisely so an operator can pause one before we have finished
+    // deciding what is wrong with it.
+    const otherAccountId = "01a0b40c-0000-7000-8000-00000000d0d0";
+    const suspensions = createSuspensionStore(infra.db);
+    await suspensions.suspend({
+      scope: "CHANNEL_ACCOUNT",
+      workspaceId: scope.workspaceId,
+      channelAccountId: otherAccountId,
+      reason: "CHANNEL_UNHEALTHY",
+      since: new Date(NOW.getTime() - 1_000),
+    });
+
+    // The narrowest scope is the one most easily resolved against the wrong identifier, and getting it
+    // wrong is silent: a switch that blocks the account nobody asked about, or none at all.
+    const unaffected = deliver(conversationId, operationId);
+    await unaffected.run();
+    expect(unaffected.sends()).toBe(1);
+
+    const next = await conversationWithDraft();
+    await suspensions.suspend({
+      scope: "CHANNEL_ACCOUNT",
+      workspaceId: scope.workspaceId,
+      channelAccountId,
+      reason: "CHANNEL_UNHEALTHY",
+      since: new Date(NOW.getTime() - 1_000),
+    });
+    const blocked = deliver(next.conversationId, next.operationId);
+    await blocked.run();
+
+    expect(blocked.sends()).toBe(0);
+    expect(await statusOf(next.operationId)).toBe("HELD_REVIEW");
+  }, 180_000);
+
+  it("keeps the first lift, because who turned it back on is the question", async () => {
+    const suspensions = createSuspensionStore(infra.db);
+    const second = await infra.db.user.create({ data: { name: "Second", email: `second-${String(seq)}@example.test` } });
+    await infra.db.workspaceMember.create({ data: { workspaceId: scope.workspaceId, userId: second.id, role: "ADMIN" } });
+    const { id } = await suspensions.suspend({ scope: "GLOBAL", reason: "OPERATOR", since: new Date(NOW.getTime() - 1_000) });
+
+    await suspensions.lift(id, ownerUserId, new Date(NOW.getTime() + 1_000));
+    await suspensions.lift(id, second.id, new Date(NOW.getTime() + 2_000));
+
+    // A second click must not rewrite the record of who decided the danger had passed.
+    const row = await infra.db.automationSuspension.findUniqueOrThrow({ where: { id }, select: { liftedAt: true, liftedByUserId: true } });
+    expect(row.liftedByUserId).toBe(ownerUserId);
+    expect(row.liftedAt?.toISOString()).toBe(new Date(NOW.getTime() + 1_000).toISOString());
+  }, 180_000);
+
   it("refuses a narrow suspension that names nothing", async () => {
     // The database enforces it too, not only the domain: a BUSINESS_PROFILE row with no profile named
     // would be a global stop wearing a contained-looking label.
