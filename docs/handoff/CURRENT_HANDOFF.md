@@ -1,10 +1,10 @@
 # Current Handoff
 
-**Last updated:** 2026-09-19  
+**Last updated:** 2026-09-20  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
-**Implementation stage:** Stage B code complete through Instagram end-to-end slice; independent review catch-up is blocked at PR #51  
-**Next Claude correction:** PR #51 BullMQ delayed-schedule fail-closed fix  
-**Next new feature after review-safe propagation:** Stage C / Issue #56 reliability, health, kill switches, reconciliation
+**Implementation stage:** Stage B complete; Stage C reliability implemented in PR #72; independent review catch-up still blocked at PR #51  
+**Immediate correction:** PR #51 delayed-delivery fail-closed bug  
+**Do not start Stage D UI until:** #51 is corrected and propagated through the current stack
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
 > GitHub is canonical project memory. Chat history is not an execution contract. Fetch live PR HEADs before acting.
@@ -12,84 +12,82 @@
 ## Read order
 
 1. `PROJECT_CONTEXT.md`
-2. **this file**
+2. this file
 3. `AGENTS.md`
 4. `CLAUDE.md`
 5. `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`
-6. Master Issue **#61**
-7. exact current PR/issue/task contract
+6. Master Issue #61
+7. exact issue / PR / task contract
 8. relevant specs/ADRs
 
 ## Executive status
 
-Claude has implemented the complete Stage B stack:
+Claude has now implemented:
 
-- P2-01 Instagram transport adapter — PR #63
-- P2-02 Instagram Login/token lifecycle — PR #64
-- P2-03 provider-neutral AI draft engine — PR #65
-- P2-04 factual/style retrieval — PR #66
-- P2-05 deterministic policy engine — PR #67
-- P2-06 delivery coordinator — PR #68
-- P2-07 human handoff/review state machine — PR #69
-- P2-08 evaluation harness/golden suite — PR #70
-- P2-09 Instagram vertical slice E2E — PR #71
+### Stage B — Instagram + shared AI
+- #63 Instagram transport
+- #64 Instagram onboarding/token lifecycle
+- #65 AI draft engine
+- #66 Knowledge/Style retrieval
+- #67 deterministic policy
+- #68 delivery coordinator
+- #69 human handoff / Review state machine
+- #70 eval harness / golden cases
+- #71 full Instagram vertical slice E2E
 
-Claude reports the vertical slice can now ingest and reply in DRAFT and has a server-side AUTOPILOT path that is delayed, stale-safe, takeover-safe and ambiguity-safe. Live Meta traffic is still unverified because real Meta app credentials/test traffic have not yet been exercised.
+### Stage C — reliability
+- #72 reliability / health / kill switches / backpressure / reconciliation / incident metrics
 
-Independent Astra review is intentionally moving in dependency order and has **not** accepted the downstream Stage B stack yet.
+PR #72 current snapshot HEAD:
+`c2c81a588f31985d0f5cbf58571e050978535e9e`
+
+Claude reports:
+- 851 baseline tests;
+- 70 E2E tests;
+- evals green;
+- migration drift 0;
+- real PostgreSQL + Redis verification;
+- kill switches at global/workspace/BP/channel-account scope;
+- durable reconciliation;
+- backlog-triggered bounded automation suspension;
+- health and incident state;
+- recovery re-enters the delivery coordinator instead of replaying sends.
+
+This is implementation evidence, not independent Astra acceptance yet.
 
 ## Independent review state
 
-### PR #49 — PASS
-Accepted exact HEAD:
-`34a71d0d36b04f2c8933aa29479e26cbc87e7800`
+### Accepted
+- PR #49 — Astra PASS
+- PR #50 — Astra PASS at `3934d99e391337498e7446b8335b90a3f6518b2d`
 
-### PR #50 — PASS
-Accepted exact HEAD:
-`3934d99e391337498e7446b8335b90a3f6518b2d`
-
-Astra independently verified via GitHub Actions:
-- migration/schema drift;
-- 60 PostgreSQL DB tests;
-- deterministic two-real-message concurrency regression;
-- Workspace/BP isolation;
-- composite FK/constraints;
-- root verify;
-- worker command on that stack.
-
-The earlier nonexistent CI-script issue is resolved on #50.
-
-### PR #51 — CURRENT BLOCKER / CHANGES_REQUESTED
-Reviewed exact HEAD:
+### Current blocker
+PR #51 / P1-04 remains **CHANGES_REQUESTED** at:
 `3213497192f96ce15ac92767f855be4b9791d279`
 
-Astra found a real queue scheduling defect:
-
-`scheduleDelivery` derives a future delay from `scheduledFor` and silently clamps it to `MAX_SCHEDULE_DELAY_MS` (7 days).
-
-Example: a payload declaring 30 days can actually execute after 7 days while its payload still claims the original 30-day `scheduledFor`. This can send a customer message materially early.
+The defect:
+`scheduleDelivery` silently clamps a future `scheduledFor` to the queue's 7-day maximum. A declared 30-day send can therefore execute after 7 days while audit state still says 30 days.
 
 Required correction:
-- never clamp an out-of-range future delivery earlier;
-- if derived delay > supported max, reject before enqueue;
-- no BullMQ job must be written;
-- pin exact-max accepted / max+1 rejected / far-future rejected / past-now semantics;
-- prevent materially contradictory `selectedDelayMs` / `scheduledFor` audit metadata;
-- preserve channel neutrality and existing idempotency.
+- reject out-of-range future schedules before enqueue;
+- never clamp/rewrite them earlier;
+- write no Redis/BullMQ job on rejection;
+- pin exact-max / max+1 / far-future / past-now behavior;
+- prevent materially contradictory `scheduledFor` / `selectedDelayMs` audit metadata;
+- preserve existing idempotency and channel neutrality.
 
-A focused implementation directive is already posted on PR #51.
+A focused directive is already posted on PR #51.
 
-After Claude fixes #51:
-1. publish `CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P1-04`;
-2. propagate with normal merges through all child branches;
-3. Astra re-reviews #51 first;
-4. only after PASS does Astra continue #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71.
+### Review queue after #51
+After #51 gets a new HEAD and PASS, Astra continues strictly:
 
-Do not re-run Astra on the old #51 HEAD and do not re-review #50; #50 is already PASS.
+#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72
 
-## Current live PR snapshot
+Do not re-review #50 unless its accepted code changes.
 
-Fetch live values before modifying. Snapshot at handoff update:
+## Current stack snapshot
+
+Fetch live values before modifying.
 
 - #50 `3934d99e391337498e7446b8335b90a3f6518b2d` — PASS
 - #51 `3213497192f96ce15ac92767f855be4b9791d279` — CHANGES_REQUESTED
@@ -103,126 +101,101 @@ Fetch live values before modifying. Snapshot at handoff update:
 - #69 `21e31fa3405d408e75b9f9bf777c58aee5ae7e9f`
 - #70 `cdbf9bd5924be99d2d24ae02dd7cfe2edebad310`
 - #71 `5126e4e6e81b41ebb47e680f8843b660ae4b8575`
+- #72 `c2c81a588f31985d0f5cbf58571e050978535e9e`
 
-## CI status
+## Product-owner decision from Stage C
 
-GitHub Actions workflow is active at:
+ADR-017 proposal is **rejected for MVP**.
 
-`.github/workflows/verify.yml`
+Do not treat an unmatched outbound echo as proof that an ambiguous automated send succeeded.
 
-It has been propagated into the active implementation stack, so exact PR heads can now receive neutral CI evidence.
+Reason:
+- human activity always wins;
+- false attribution could suppress takeover after a real human reply;
+- false takeover / extra Review work is safer than letting AI continue after human intervention.
 
-Current workflow covers:
-- root `pnpm verify`;
-- pgvector/PostgreSQL 17;
-- schema/migration drift;
-- DB suites;
-- Redis suites where present;
-- worker/E2E suites where present.
+MVP behavior:
+- correlated outbound echo -> may settle the known app operation;
+- unmatched outbound echo -> human/native activity and takeover;
+- unresolved ambiguous send -> quarantine/reconciliation/manual Review;
+- no blind retry.
 
-Do not count an empty/no-test Redis command as Redis verification. Verify the exact suite actually executed on each PR.
+Canonical ADR:
+`docs/adr/ADR-017-ambiguous-send-echo-attribution.md`
 
-## Stage B implementation notes
+## Immediate execution plan
 
-### PR #65 owner follow-ups applied
-- OFF permits explicit authorized human-requested AI draft only;
-- human-requested trigger is represented as a discriminated human source;
-- such a draft is always review/manual-assist and never auto-sent;
-- business persona moved to customer-owned StyleProfile;
-- resolution: Workspace base -> BP override -> future conversation-level downward override -> generic fallback.
+1. Claude returns to PR #51 and fixes the Astra blocker.
+2. Publish `CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P1-04`.
+3. Propagate with normal merges through every descendant, now including #72.
+4. Astra re-reviews #51.
+5. If PASS, Astra continues dependency order through #72.
+6. Only after that review debt is moving cleanly should new Stage D UI branches begin.
 
-### PR #66 owner follow-ups applied
-- minimal internal/dev/test Knowledge + Style seeding path added;
-- normal Workspace/BP authorization/provenance preserved;
-- no semantic guessing of knowledge overrides;
-- StyleExample supports optional BCP-47 language;
-- missing embeddings degrades lexical-only and is visible diagnostically.
+No rebase / force-push of the published stack. No self-merge to main.
 
-### PR #67 owner follow-ups applied
-- Instagram STANDARD_ONLY closed window -> SKIP routine automation;
-- quiet hours defer only if the future send still fits provider eligibility;
-- otherwise safe hold/terminal outcome, never late blind send;
-- after-window policy is channel-discriminated;
-- OFF manual-assist never enters automatic scheduling.
+## What is implemented but still not production-proven
 
-### PR #68 delivery coordinator implemented
-Owner timing rules:
-- provider timing beats aesthetic/human-like delay;
-- current Instagram automated baseline: 30s;
-- operational target about 25s;
-- debounce + generation + artificial delay share total budget;
-- artificial delay may become zero;
-- missed deadline -> no ordinary late AUTOPILOT;
-- Human Agent remains explicit-human only;
-- ambiguous sends quarantine/reconcile, never blind retry.
+- Live Meta API traffic has not yet been exercised with real app credentials/test account.
+- Stage B/C downstream PRs are not independently accepted yet because review is blocked at #51.
+- Reliability notification transport/operator HTTP surface remain later UI/integration work.
+- Real production SLOs/load numbers are not yet established.
 
-### PR #69
-Human handoff/review state machine implemented with real DB race test for review claiming.
+## Remaining Commercial Beta path
 
-### PR #70
-AI evaluation harness + golden suite implemented. No live provider dependency required.
+### Stage D — Design Partner UI
+#27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35
 
-### PR #71
-Instagram vertical slice E2E implemented. Honest known gaps:
-- real Meta API traffic still not exercised;
-- reconciliation consumer is Stage C (#56);
-- some web adapter registration is visible follow-up rather than hidden.
+This creates:
+- app shell/onboarding;
+- EN/RU;
+- Inbox;
+- Review operations;
+- Knowledge/Style UI;
+- Test Drive / AI settings;
+- Leads;
+- customer identity/memory;
+- goals/followups/tasks;
+- Analytics/Audit;
+- responsive/accessibility E2E.
 
-## Next execution plan
+### Stage E — WhatsApp
+#18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24
 
-### Immediate
-1. Claude fixes PR #51 Astra finding.
-2. Propagate new #51 parent through all descendants with normal merges.
-3. Astra re-reviews new #51 HEAD.
-4. Astra continues in dependency order after PASS.
+### Stage F
+#57 privacy/security/export/retention/deletion
 
-### New feature work after Stage B
-Issue #56 — reliability / health / kill switches / reconciliation / safe recovery.
+### Stage G
+commercial billing/entitlements/provider integration per #61
 
-Then Design Partner UI:
-#27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35.
+### Stage H
+#59 Admin Operations
 
-Then WhatsApp:
-#18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24.
-
-Then:
-#57 privacy/security/deletion -> commercial billing -> #59 Admin Operations -> #60 Launch Readiness.
-
-## Accepted product decisions to preserve
-
-- Human Agent is Instagram-specific and explicit-human only.
-- Provider timing policy overrides generic delay preferences.
-- OFF disables background automation but permits explicit human AI-assist draft.
-- StyleProfile is customer-owned; style never establishes factual truth.
-- Knowledge overrides require explicit relationship; no semantic shadow guessing.
-- Embeddings may degrade lexical-only.
-- STANDARD_ONLY closed window does not flood Review with unsendable drafts.
-- Quiet hours defer only when provider eligibility remains valid.
-- AUTOPILOT is fully server-side and must work with browser closed.
-- Human activity wins over AI.
-- Unknown external-write outcome -> reconciliation, never blind retry.
+### Stage I
+#60 Launch Readiness / release evidence / staged Commercial Beta
 
 ## Hard invariants
 
-Never cut these for speed:
+Never trade these for speed:
 - Workspace + Business Profile isolation;
-- exact tenant/BP authorization;
-- stale draft/review/action protection;
+- human activity wins over AI;
+- stale-action protection;
+- no blind retry after ambiguous external write;
+- no delivery earlier than durable declared schedule;
 - provider/webhook/job idempotency;
-- no blind resend after ambiguity;
-- no early delivery relative to declared durable schedule;
-- queues are not sole durable intent;
-- model output is advisory;
-- secrets never enter prompts/normal logs/client output/plaintext audit;
-- inbound persists even when downstream automation is blocked.
+- inbound survives downstream outages;
+- AUTOPILOT server-side, browser-independent;
+- model output advisory, application policy authoritative;
+- queues are execution mechanisms, not sole durable intent;
+- secrets stay out of prompts, client output, normal logs and plaintext audit.
 
 ## Scope guard
 
 Do not block first Commercial Beta on:
-- Booking/calendar;
+- full Booking/calendar;
 - public API/webhooks;
-- broad CRM connector catalog;
-- separate prospecting product;
+- broad CRM catalog;
+- separate prospecting/acquisition product;
 - Telegram/Threads;
 - generated media replies;
 - universal cross-BP identity graph.
