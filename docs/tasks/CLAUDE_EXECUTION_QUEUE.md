@@ -3,46 +3,49 @@
 > Read `docs/handoff/CURRENT_HANDOFF.md` first. It is the current-stage ledger.
 > GitHub issues/specs are authoritative; chat is not.
 
-## Current state — 2026-09-19
+## Current state — 2026-09-20
 
-Stage B implementation is complete through PR #71, but independent review catch-up is blocked at **PR #51**.
+Stage B is implemented through PR #71.
+Stage C reliability is implemented in PR #72.
+
+Independent review is still blocked at **PR #51**.
 
 ### Review state
 - #49 P1-02 — Astra PASS
 - #50 P1-03 — Astra PASS at `3934d99e391337498e7446b8335b90a3f6518b2d`
 - #51 P1-04 — **Astra CHANGES_REQUESTED** at `3213497192f96ce15ac92767f855be4b9791d279`
-- downstream #52 -> #71 remain queued until #51 passes
+- downstream #52 -> #72 remain queued
 
-## NEXT TASK — fix PR #51
+## NEXT TASK — fix PR #51 before opening Stage D
 
-Astra found that `scheduleDelivery` silently clamps future delays above `MAX_SCHEDULE_DELAY_MS`, so a delivery declared for 30 days may execute after 7 days.
+Astra found a fail-unsafe scheduling bug:
+
+`scheduleDelivery` silently clamps a future `scheduledFor` above `MAX_SCHEDULE_DELAY_MS`, so a delivery declared for 30 days can execute after 7 days.
 
 Required fix:
 - derive delay from `scheduledFor`;
-- reject future delay > `MAX_SCHEDULE_DELAY_MS`;
-- never clamp/rewrite it earlier;
-- write no BullMQ job on rejection;
-- preserve immediate/past semantics explicitly;
-- pin schedule/audit metadata consistency;
-- add real Redis regression tests for max, max+1, far future, now/past and contradictory metadata.
-
-Directive is posted on PR #51.
+- if future delay > max, reject before enqueue;
+- never clamp/rewrite earlier;
+- no BullMQ job on rejection;
+- pin max, max+1, far-future, past/now behavior;
+- pin `scheduledFor` / `selectedDelayMs` audit consistency;
+- run real Redis regression tests.
 
 Publish:
 `CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P1-04`
 
 Then propagate with normal merges through:
-#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71.
+#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72.
 
-No rebase/force-push and no merge to main.
+Do not rebase/force-push. Do not merge to main.
 
 ## Astra protocol
 
-After a new #51 HEAD exists:
+After the new #51 HEAD:
 1. re-review #51 only;
-2. if PASS, continue dependency order through downstream PRs;
+2. if PASS, continue dependency order through #72;
 3. exact-head verdicts only;
-4. do not re-review #50 unless its code changes — it already has PASS.
+4. do not re-review #50 unless accepted code changed.
 
 ## Stage B implemented
 
@@ -56,19 +59,43 @@ After a new #51 HEAD exists:
 - #70 eval harness/goldens
 - #71 Instagram E2E slice
 
-Stage B is implemented but not independently accepted downstream yet.
+## Stage C implemented
 
-## Next new feature after review-safe propagation
-
-Stage C — Issue #56:
-- reliability;
+PR #72 / Issue #56:
 - health;
+- scoped kill switches;
 - backpressure;
-- kill switches;
-- reconciliation consumer;
-- safe recovery.
+- durable reconciliation;
+- safe recovery;
+- incident state/metrics.
 
-Then Design Partner UI, then WhatsApp, privacy, billing, Admin Operations and Launch Readiness per Master Issue #61.
+### Owner decision for ADR-017
+Do not attribute unmatched outbound echoes to ambiguous automated sends in MVP.
+
+Unmatched echo remains human/native activity and triggers takeover.
+Ambiguous sends remain quarantined/reconciled unless authoritative correlation exists.
+Human-takeover safety wins over reducing false-positive Review work.
+
+## STOP CONDITION BEFORE STAGE D
+
+Do **not** open new Stage D UI implementation PRs until:
+- #51 has a corrected HEAD;
+- that correction is propagated through #72;
+- Astra has at least resumed dependency-order review from #51.
+
+This prevents the known queue scheduling defect from being copied into an even wider stack.
+
+## Next new feature train after the stop condition
+
+Stage D — Design Partner UI:
+#27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35.
+
+Then:
+- Stage E WhatsApp;
+- Stage F privacy/security;
+- Stage G billing;
+- Stage H Admin Operations;
+- Stage I Launch Readiness.
 
 ## Hard invariants
 
@@ -76,7 +103,7 @@ Then Design Partner UI, then WhatsApp, privacy, billing, Admin Operations and La
 - human activity wins over AI
 - no stale send
 - no blind retry after ambiguity
-- no delivery earlier than declared durable schedule
+- no delivery earlier than declared schedule
 - exact provider/window/timing revalidation
 - queues are execution mechanisms, not sole intent
 - model output is advisory
