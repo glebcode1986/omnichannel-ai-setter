@@ -295,3 +295,15 @@ Audit material reliability/admin actions such as:
 - recovery of a quarantined send/booking/payment action.
 
 Do not copy private customer content or secrets into reliability audit records.
+
+## Product-owner decision: unmatched outbound echoes
+
+For MVP, an unmatched outbound echo is **not** sufficient evidence to settle an ambiguous automated send as `SENT`.
+
+Preserve ADR-013 semantics:
+- correlated echo -> settle the known operation;
+- unmatched echo -> treat as native/manual human activity and pause automation;
+- ambiguous operation with no authoritative correlation -> remain quarantined/reconciliation-required and escalate to a person when needed;
+- never blind retry.
+
+ADR-017 records the rejected optimization and its revisit criteria. Human-takeover safety wins over reducing false-positive Review work.
