@@ -79,20 +79,26 @@ export function createDeliveryResumer(
       logger.warn("worker.resume_without_job", { operationId });
       return;
     }
-    await producer.scheduleDelivery({
-      schemaVersion: 1,
-      workspaceId: facts.workspaceId,
-      businessProfileId: facts.businessProfileId,
-      correlationId: facts.correlationId,
-      conversationId: facts.conversationId,
-      deliveryJobId: facts.deliveryJobId,
-      draftId: facts.draftId,
-      operationId,
-      scheduledFor: facts.scheduledFor.toISOString(),
-      // The delay is history now — the operation is being resumed, not scheduled — but the payload
-      // records what was originally chosen so an audit of the send still reads correctly.
-      selectedDelayMs: facts.selectedDelayMs,
-    });
+    await producer.scheduleDelivery(
+      {
+        schemaVersion: 1,
+        workspaceId: facts.workspaceId,
+        businessProfileId: facts.businessProfileId,
+        correlationId: facts.correlationId,
+        conversationId: facts.conversationId,
+        deliveryJobId: facts.deliveryJobId,
+        draftId: facts.draftId,
+        operationId,
+        scheduledFor: facts.scheduledFor.toISOString(),
+        // The delay is history now — the operation is being resumed, not scheduled — but the payload
+        // records what was originally chosen so an audit of the send still reads correctly.
+        selectedDelayMs: facts.selectedDelayMs,
+      },
+      // The delivery job that failed unrecoverably is retained under this same identity, and a retained
+      // identity makes an enqueue a silent no-op. Without this the operation would be resumed in the
+      // database and then never delivered — recovery that looks like it worked and did not.
+      { replaceRetained: true },
+    );
   };
 }
 

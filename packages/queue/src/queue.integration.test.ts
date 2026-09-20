@@ -440,6 +440,50 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
       ["queue.job_completed", "corr-draft"],
     ]);
   });
+
+  describe("raising work that already has a retained job", () => {
+    it("ignores an ordinary duplicate enqueue, which is what makes a retried producer safe", async () => {
+      const reconciliationQueue = inspect(RECONCILIATION.queueName);
+      const first = reconciliationFor("op-retained");
+      await producer.enqueueReconciliation(first);
+      const jobId = RECONCILIATION.jobId(first);
+
+      await producer.enqueueReconciliation({ ...first, providerCode: "SECOND" });
+
+      expect((await reconciliationQueue.getJob(jobId))?.data).not.toMatchObject({ providerCode: "SECOND" });
+    });
+
+    it("raises a reconciliation again after its job failed and was retained", async () => {
+      const reconciliationQueue = inspect(RECONCILIATION.queueName);
+      const job = reconciliationFor("op-exhausted");
+      const jobId = RECONCILIATION.jobId(job);
+      startWorkers(handlers({ reconcile: vi.fn(() => Promise.reject(new NonRetryableJobError("still unknown"))) }));
+      await producer.enqueueReconciliation(job);
+      await settled(reconciliationQueue, jobId);
+      expect(await (await reconciliationQueue.getJob(jobId))?.getState()).toBe("failed");
+
+      // Deterministic job IDs plus retention mean the sweeper's re-enqueue would otherwise be a silent
+      // no-op — the operation would stay unresolved forever and nothing would say so.
+      await producer.enqueueReconciliation({ ...job, providerCode: "RAISED_AGAIN" }, { replaceRetained: true });
+
+      expect((await reconciliationQueue.getJob(jobId))?.data).toMatchObject({ providerCode: "RAISED_AGAIN" });
+    });
+
+    it("raises a delivery again after the operation was resumed", async () => {
+      const deliveryQueue = inspect(DELIVERY.queueName);
+      const job = delivery("op-resumed", new Date(Date.now() - 1_000));
+      const jobId = DELIVERY.jobId(job);
+      startWorkers(handlers({ deliver: vi.fn(() => Promise.reject(new NonRetryableJobError("quarantined"))) }));
+      await producer.scheduleDelivery(job);
+      await settled(deliveryQueue, jobId);
+
+      // Without this the operation is resumed in the database and then never delivered: recovery that
+      // looks like it worked and did not.
+      await producer.scheduleDelivery({ ...job, correlationId: "corr-resumed" }, { replaceRetained: true });
+
+      expect((await deliveryQueue.getJob(jobId))?.data).toMatchObject({ correlationId: "corr-resumed" });
+    });
+  });
 });
 
 function reconciliationFor(operationId: string) {

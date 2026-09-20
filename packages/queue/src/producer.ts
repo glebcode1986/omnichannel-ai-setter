@@ -36,9 +36,19 @@ export interface QueueProducer {
   scheduleInboundDebounce(job: InboundDebounceJob, options: { readonly delayMs: number }): Promise<DebounceScheduleResult>;
   enqueueAiDraftGeneration(job: AiDraftGenerationJob): Promise<EnqueuedJob>;
   /** Stage B: durable delayed delivery at `job.scheduledFor`; never sleeps in the caller. */
-  scheduleDelivery(job: DeliveryJob): Promise<EnqueuedJob>;
-  enqueueReconciliation(job: ReconciliationJob): Promise<EnqueuedJob>;
+  scheduleDelivery(job: DeliveryJob, options?: RaiseOptions): Promise<EnqueuedJob>;
+  enqueueReconciliation(job: ReconciliationJob, options?: RaiseOptions): Promise<EnqueuedJob>;
   close(): Promise<void>;
+}
+
+export interface RaiseOptions {
+  /**
+   * Raise this work again even though a finished job with the same identity is still retained.
+   *
+   * For recovery paths only. An ordinary enqueue must stay a no-op when the work already exists — that
+   * deduplication is what makes a retried producer safe.
+   */
+  readonly replaceRetained?: boolean;
 }
 
 export interface QueueProducerOptions {
@@ -64,15 +74,38 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
     return queue;
   };
 
+  /**
+   * Clears a retained record of the same logical work so it can be raised again.
+   *
+   * Job IDs are deterministic, and completed and failed jobs are retained for days. Adding an ID that
+   * already exists is a silent no-op — which is exactly right for a duplicate enqueue and exactly wrong
+   * for recovery: a reconciliation that exhausted its attempts, or a delivery quarantined after an
+   * ambiguous send, would be permanently unraisable by the very sweeper that exists to raise it.
+   *
+   * A job that is currently running is not removed, and the add that follows is then the ordinary no-op:
+   * something already owns this work, which is the answer recovery wanted anyway.
+   */
+  async function clearRetained(family: { readonly queueName: string }, jobId: string): Promise<void> {
+    try {
+      await queueFor(family).remove(jobId);
+    } catch {
+      // Locked, or already gone. Both mean "leave it alone".
+    }
+  }
+
   async function add<Payload extends { readonly workspaceId: string; readonly businessProfileId: string; readonly correlationId: string }>(
     family: JobFamily<Payload>,
     payload: Payload,
     delayMs: number,
+    raise: RaiseOptions = {},
   ): Promise<EnqueuedJob> {
     if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > MAX_SCHEDULE_DELAY_MS) {
       throw new RangeError(`delayMs must be an integer between 0 and ${MAX_SCHEDULE_DELAY_MS}`);
     }
     const jobId = family.jobId(payload);
+    if (raise.replaceRetained === true) {
+      await clearRetained(family, jobId);
+    }
     await queueFor(family).add(family.jobName, payload, { ...family.jobOptions, jobId, delay: delayMs });
     options.logger.info("queue.enqueued", {
       queue: family.queueName,
@@ -120,14 +153,14 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
       return add(AI_DRAFT_GENERATION, parsePayload(AI_DRAFT_GENERATION.schema, AI_DRAFT_GENERATION.jobName, input), 0);
     },
 
-    async scheduleDelivery(input) {
+    async scheduleDelivery(input, options = {}) {
       const payload = parsePayload(DELIVERY.schema, DELIVERY.jobName, input);
       const delayMs = Math.max(0, Date.parse(payload.scheduledFor) - now().getTime());
-      return add(DELIVERY, payload, Math.min(delayMs, MAX_SCHEDULE_DELAY_MS));
+      return add(DELIVERY, payload, Math.min(delayMs, MAX_SCHEDULE_DELAY_MS), options);
     },
 
-    async enqueueReconciliation(input) {
-      return add(RECONCILIATION, parsePayload(RECONCILIATION.schema, RECONCILIATION.jobName, input), 0);
+    async enqueueReconciliation(input, options = {}) {
+      return add(RECONCILIATION, parsePayload(RECONCILIATION.schema, RECONCILIATION.jobName, input), 0, options);
     },
 
     async close() {

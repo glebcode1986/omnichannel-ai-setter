@@ -40,6 +40,7 @@ export {
   type EnqueuedJob,
   type QueueProducer,
   type QueueProducerOptions,
+  type RaiseOptions,
 } from "./producer";
 // One list, owned by the domain: the queue only re-exports it so a job payload and the
 // reconciliation consumer cannot drift apart.

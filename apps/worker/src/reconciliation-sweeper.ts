@@ -63,7 +63,12 @@ export function startReconciliationSweeper(options: ReconciliationSweeperOptions
             reason: operation.reason,
             detectedAt: operation.detectedAt.toISOString(),
             ...(operation.providerRequestId === undefined ? {} : { providerRequestId: operation.providerRequestId }),
-          });
+          },
+          // The previous job may still be retained in a failed state, and a retained identity makes an
+          // ordinary enqueue a silent no-op. This is the sweeper's whole purpose, so it replaces it —
+          // unless a worker is holding the job right now, in which case nothing is removed and the add
+          // is the ordinary no-op, which is the correct answer.
+          { replaceRetained: true });
           raised += 1;
         } catch (error) {
           // One unreachable queue must not stop the sweep: the rest of the batch is still worth raising,

@@ -93,8 +93,16 @@ describe("the kill switch stops outbound at a chosen scope", () => {
     // The casts are the point: this constructor is a boundary, and the values reaching it come from an
     // operator API and from database rows. A scope the nesting rules have never heard of would match no
     // branch and therefore cover nothing, which is a switch that silently does not work.
-    expect(() => createAutomationSuspension(suspension({ scope: "EVERYTHING" as AutomationSuspension["scope"] }))).toThrow(/scope/);
-    expect(() => createAutomationSuspension(suspension({ reason: "BECAUSE" as AutomationSuspension["reason"] }))).toThrow(/reason/);
+    //
+    // Asserted on the error's own `field` rather than on its message: without the guard the next line
+    // throws a TypeError whose text happens to contain the word "scope", so a message match would pass
+    // on an unvalidated input — which a mutation run duly demonstrated.
+    expect(() => createAutomationSuspension(suspension({ scope: "EVERYTHING" as AutomationSuspension["scope"] }))).toThrow(
+      expect.objectContaining({ name: "DomainValidationError", field: "scope" }),
+    );
+    expect(() => createAutomationSuspension(suspension({ reason: "BECAUSE" as AutomationSuspension["reason"] }))).toThrow(
+      expect.objectContaining({ name: "DomainValidationError", field: "reason" }),
+    );
   });
 });
 
