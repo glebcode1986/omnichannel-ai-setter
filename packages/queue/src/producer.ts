@@ -18,6 +18,7 @@ import {
   type InboundDebounceJob,
   type ReconciliationJob,
 } from "./payloads";
+import { deliveryDelayFor } from "./delay";
 import { createReplyCycleRegistry } from "./reply-cycle";
 
 export interface EnqueuedJob {
@@ -122,8 +123,9 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
 
     async scheduleDelivery(input) {
       const payload = parsePayload(DELIVERY.schema, DELIVERY.jobName, input);
-      const delayMs = Math.max(0, Date.parse(payload.scheduledFor) - now().getTime());
-      return add(DELIVERY, payload, Math.min(delayMs, MAX_SCHEDULE_DELAY_MS));
+      // Throws before `add` is reached, so a refused schedule leaves no job behind and touches nothing.
+      const delayMs = deliveryDelayFor(payload, now());
+      return add(DELIVERY, payload, delayMs);
     },
 
     async enqueueReconciliation(input) {
