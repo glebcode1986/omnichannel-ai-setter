@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AI_DRAFT_GENERATION,
   JobPayloadValidationError,
+  MAX_SCHEDULE_DELAY_MS,
   NonRetryableJobError,
   createQueueProducer,
   createQueueWorkers,
@@ -12,6 +13,7 @@ import {
   INBOUND_DEBOUNCE,
   planDelay,
   RECONCILIATION,
+  ScheduleRangeError,
   type AiDraftGenerationJob,
   type DeliveryAttemptResult,
   type DeliveryJob,
@@ -132,6 +134,86 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
     const rejected = env.logs.filter((entry) => entry.event === "queue.job_rejected");
     expect(rejected.map((entry) => entry.reason)).toEqual(["INVALID_PAYLOAD", "UNKNOWN_JOB_NAME"]);
     expect(JSON.stringify(env.logs)).not.toContain("secret text");
+  });
+
+  describe("a declared delivery schedule the queue cannot hold", () => {
+    // A fixed clock, so "exactly at the maximum" means exactly that rather than "a few milliseconds
+    // under it because the test took time to run".
+    const AT = new Date("2026-09-20T12:00:00.000Z");
+    const fixedProducer = () => createQueueProducer({ connection: env.connect("producer"), logger: env.logger, prefix: env.prefix, now: () => AT });
+    const at = (offsetMs: number) => new Date(AT.getTime() + offsetMs);
+
+    it("accepts a schedule exactly at the supported maximum, at the schedule it declared", async () => {
+      const producerAt = fixedProducer();
+      const job = await producerAt.scheduleDelivery(delivery("op-max", at(MAX_SCHEDULE_DELAY_MS), MAX_SCHEDULE_DELAY_MS));
+
+      expect(job.delayMs).toBe(MAX_SCHEDULE_DELAY_MS);
+      const stored = await inspect(DELIVERY.queueName).getJob(job.jobId);
+      expect(stored?.data).toMatchObject({ scheduledFor: at(MAX_SCHEDULE_DELAY_MS).toISOString() });
+      await producerAt.close();
+    });
+
+    it("refuses one millisecond beyond the maximum, and writes no job", async () => {
+      const producerAt = fixedProducer();
+      const job = delivery("op-over", at(MAX_SCHEDULE_DELAY_MS + 1), MAX_SCHEDULE_DELAY_MS);
+
+      await expect(producerAt.scheduleDelivery(job)).rejects.toMatchObject({ name: "ScheduleRangeError", reason: "OUT_OF_RANGE" });
+
+      // The refusal must leave nothing behind: a job written and then "rejected" is a send that happens.
+      expect(await inspect(DELIVERY.queueName).getJob(DELIVERY.jobId(job))).toBeUndefined();
+      expect(await inspect(DELIVERY.queueName).getJobCounts("delayed", "waiting")).toMatchObject({ delayed: 0, waiting: 0 });
+      await producerAt.close();
+    });
+
+    it("refuses a thirty-day schedule rather than running it after seven", async () => {
+      const producerAt = fixedProducer();
+      const thirtyDays = 30 * 24 * 60 * 60 * 1_000;
+      const job = delivery("op-30d", at(thirtyDays), 60_000);
+
+      // The defect this pins: clamping turned a send declared for next month into one three weeks early,
+      // while the durable payload went on claiming next month.
+      const refusal = await producerAt.scheduleDelivery(job).catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(ScheduleRangeError);
+      expect((refusal as ScheduleRangeError).reason).toBe("OUT_OF_RANGE");
+      expect(await inspect(DELIVERY.queueName).getJob(DELIVERY.jobId(job))).toBeUndefined();
+      await producerAt.close();
+    });
+
+    it("runs a schedule that has already passed immediately, which is not the same as early", async () => {
+      const producerAt = fixedProducer();
+
+      const job = await producerAt.scheduleDelivery(delivery("op-past", at(-3_600_000), 60_000));
+
+      // An operation resumed after an outage looks exactly like this. Running it now is safe because the
+      // coordinator re-reads and re-judges before any send; running it *early* would not be.
+      expect(job.delayMs).toBe(0);
+      expect(await inspect(DELIVERY.queueName).getJobCounts("waiting")).toMatchObject({ waiting: 1 });
+      await producerAt.close();
+    });
+
+    it("refuses a payload whose two statements about the plan disagree", async () => {
+      const producerAt = fixedProducer();
+      // `selectedDelayMs` is the whole delay chosen when the plan was made, and enqueueing happens at or
+      // after planning — so the wait still remaining can never exceed it. This payload claims both a
+      // one-minute plan and an hour of waiting left.
+      const job = delivery("op-contradictory", at(3_600_000), 60_000);
+
+      await expect(producerAt.scheduleDelivery(job)).rejects.toMatchObject({ name: "ScheduleRangeError", reason: "CONTRADICTORY_METADATA" });
+
+      expect(await inspect(DELIVERY.queueName).getJob(DELIVERY.jobId(job))).toBeUndefined();
+      await producerAt.close();
+    });
+
+    it("still accepts a plan enqueued later than it was made", async () => {
+      const producerAt = fixedProducer();
+
+      // Planned for a minute out, enqueued thirty seconds in: less waiting remains than was chosen, which
+      // is the ordinary case and must not be mistaken for a contradiction.
+      const job = await producerAt.scheduleDelivery(delivery("op-late-enqueue", at(30_000), 60_000));
+
+      expect(job.delayMs).toBe(30_000);
+      await producerAt.close();
+    });
   });
 
   it("creates one job for duplicate enqueues of the same logical work", async () => {

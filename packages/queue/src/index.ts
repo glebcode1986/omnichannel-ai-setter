@@ -6,7 +6,7 @@
  * Channel-neutral: no Meta/Instagram/WhatsApp logic and no provider sends.
  */
 export { createRedisConnection, type RedisRole } from "./connection";
-export { planDelay, type DelayPlan } from "./delay";
+export { deliveryDelayFor, planDelay, ScheduleRangeError, type DelayPlan, type ScheduleRejection } from "./delay";
 export {
   AI_DRAFT_GENERATION,
   buildJobId,
