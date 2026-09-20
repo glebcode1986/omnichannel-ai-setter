@@ -18,7 +18,14 @@ import {
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
 import { createSuspensionStore, type DbClient } from "@omnichannel/db";
-import { activeSuspension, isReasonCode, toQuietHours } from "@omnichannel/domain";
+import {
+  activeSuspension,
+  isReasonCode,
+  toBusinessProfileId,
+  toChannelAccountId,
+  toQuietHours,
+  toWorkspaceId,
+} from "@omnichannel/domain";
 import type { DeliveryJob } from "@omnichannel/queue";
 
 /** Defaults used where an account has not recorded its own; the adapter owns the verified values. */
@@ -80,8 +87,17 @@ export function createDeliveryPolicyResolver(db: DbClient, now: () => Date) {
     // Read here, with everything else the decision rests on, so the switch is honoured by the same gate
     // that honours every other rule. A separate check closer to the wire is how a switch acquires a path
     // around it.
+    //
+    // The identifiers go through the domain's own constructors rather than a cast: these three decide
+    // which switches cover this send, and a blank or swapped one would silently widen or narrow that
+    // answer. A cast would make the type-checker agree to exactly the mistake worth catching.
+    const suspensionTarget = {
+      workspaceId: toWorkspaceId(scope.workspaceId),
+      businessProfileId: toBusinessProfileId(scope.businessProfileId),
+      channelAccountId: toChannelAccountId(conversation.channelAccountId),
+    };
     const covering = await suspensions.loadCovering({ ...scope, channelAccountId: conversation.channelAccountId });
-    const suspended = activeSuspension({ ...scope, channelAccountId: conversation.channelAccountId } as never, covering, ctx.now);
+    const suspended = activeSuspension(suspensionTarget, covering, ctx.now);
 
     const eligibility = evaluateHumanAgentEligibility(ctx, windowInputs);
     const timing = instagramTimingPolicy();

@@ -48,6 +48,24 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
   AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
 
   /**
+   * Reliability controls (Issue #56).
+   *
+   * All four are tunable because the right values depend on the deployment rather than on the code: a
+   * single-tenant install and a busy platform disagree about what a backlog is, and a generous grace
+   * period on a quiet account is an hour of a customer waiting on a busy one.
+   */
+  RELIABILITY_STALE_CLAIM_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(120_000),
+  /**
+   * How long a send may stay unresolved before a person is told. Long enough that a late echo usually
+   * settles it first; short enough that nobody believes a reply went out for an hour when it may not have.
+   */
+  RECONCILE_GRACE_MS: z.coerce.number().int().min(30_000).max(24 * 3_600_000).default(10 * 60_000),
+  /** Waiting jobs at or above this level stop automated outbound until the pile drains. */
+  BACKLOG_WAITING_LIMIT: z.coerce.number().int().min(10).max(100_000).default(500),
+  /** Or an oldest job waiting this long, which catches a small queue that has stopped moving entirely. */
+  BACKLOG_OLDEST_WAITING_MS: z.coerce.number().int().min(30_000).max(24 * 3_600_000).default(10 * 60_000),
+
+  /**
    * The platform's voice of last resort, used only where a business has configured no StyleProfile of its
    * own. A tenant's persona lives in `style_profiles` and is resolved per Business Profile; this is a safe
    * default for an unconfigured workspace, never the authoritative voice for one (decision on PR #65).

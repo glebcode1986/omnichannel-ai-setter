@@ -36,6 +36,32 @@ describe("the kill switch stops outbound at a chosen scope", () => {
     expect(automatedOutboundAllowed(target, [elsewhere], AT)).toBe(true);
   });
 
+  it("checks what each scope actually names, one scope at a time", () => {
+    const otherWorkspace = toWorkspaceId("01a0b40c-0000-7000-8000-00000000000f");
+    const otherProfile = toBusinessProfileId("01a0b40c-0000-7000-8000-00000000000e");
+    const otherAccount = toChannelAccountId("01a0b40c-0000-7000-8000-00000000000d");
+
+    // Each of these is a switch that covers something else entirely. A scope that stopped checking one
+    // of its identifiers would widen silently, and widening is the direction that takes a whole platform
+    // down over one tenant's problem.
+    expect(automatedOutboundAllowed(target, [suspension({ scope: "WORKSPACE", workspaceId: otherWorkspace })], AT)).toBe(true);
+    expect(automatedOutboundAllowed(target, [suspension({ scope: "BUSINESS_PROFILE", businessProfileId: otherProfile })], AT)).toBe(true);
+    expect(
+      automatedOutboundAllowed(target, [suspension({ scope: "CHANNEL_ACCOUNT", businessProfileId: undefined, channelAccountId: otherAccount })], AT),
+    ).toBe(true);
+    // And the matching one still stops it, so the negatives above are not passing by accident.
+    expect(automatedOutboundAllowed(target, [suspension({ scope: "WORKSPACE" })], AT)).toBe(false);
+    expect(automatedOutboundAllowed(target, [suspension({ scope: "BUSINESS_PROFILE" })], AT)).toBe(false);
+    expect(automatedOutboundAllowed(target, [suspension({ scope: "CHANNEL_ACCOUNT", businessProfileId: undefined, channelAccountId: CA })], AT)).toBe(false);
+  });
+
+  it("ends the moment it says it ends, not a moment later", () => {
+    // `until` is the first instant no longer covered. An off-by-one here is a switch that keeps blocking
+    // after the operator was told it had expired, which is the kind of thing nobody looks for.
+    expect(automatedOutboundAllowed(target, [suspension({ until: AT })], AT)).toBe(true);
+    expect(automatedOutboundAllowed(target, [suspension({ until: new Date(AT.getTime() + 1) })], AT)).toBe(false);
+  });
+
   it("reports which suspension applies, widest first", () => {
     const narrow = suspension({ scope: "CHANNEL_ACCOUNT", channelAccountId: CA, reason: "CHANNEL_UNHEALTHY" });
     const wide = suspension({ scope: "GLOBAL", workspaceId: undefined, businessProfileId: undefined, reason: "OPERATOR" });
@@ -61,6 +87,14 @@ describe("the kill switch stops outbound at a chosen scope", () => {
     expect(() => createAutomationSuspension(suspension({ scope: "CHANNEL_ACCOUNT", channelAccountId: undefined }))).toThrow(/channelAccountId/);
     expect(() => createAutomationSuspension(suspension({ until: AT }))).toThrow(/until/);
     expect(createAutomationSuspension(suspension()).scope).toBe("BUSINESS_PROFILE");
+  });
+
+  it("refuses a scope or reason it does not recognise", () => {
+    // The casts are the point: this constructor is a boundary, and the values reaching it come from an
+    // operator API and from database rows. A scope the nesting rules have never heard of would match no
+    // branch and therefore cover nothing, which is a switch that silently does not work.
+    expect(() => createAutomationSuspension(suspension({ scope: "EVERYTHING" as AutomationSuspension["scope"] }))).toThrow(/scope/);
+    expect(() => createAutomationSuspension(suspension({ reason: "BECAUSE" as AutomationSuspension["reason"] }))).toThrow(/reason/);
   });
 });
 
@@ -96,6 +130,13 @@ describe("health degrades by capability, not by tenant", () => {
     // Nothing can be claimed durably without the database, so nothing may be sent.
     expect(outboundBlockedByHealth([dbDown], CA)).toBe(true);
   });
+
+  it("does not halt outbound for anything short of action required", () => {
+    // Degraded means working worse than usual with nobody needing to act. Halting sends on it would make
+    // every slow afternoon an outage, and the people it would page cannot do anything about it anyway.
+    expect(outboundBlockedByHealth([component({ kind: "DATABASE", id: "primary", state: "DEGRADED", summary: "slow" })], CA)).toBe(false);
+    expect(outboundBlockedByHealth([component({ state: "DEGRADED", summary: "slow" })], CA)).toBe(false);
+  });
 });
 
 describe("one outage is one incident", () => {
@@ -127,6 +168,17 @@ describe("one outage is one incident", () => {
     expect(incidents).toHaveLength(3);
   });
 
+  it("keeps two instances of the same kind apart", () => {
+    // Two channel accounts that both stopped working are two reconnections, not one. Folding them
+    // together would show an operator a single incident and leave one account broken after they fixed it.
+    const incidents = aggregateIncidents([
+      signal({ kind: "CHANNEL_ACCOUNT", id: CA }),
+      signal({ kind: "CHANNEL_ACCOUNT", id: toChannelAccountId("01a0b40c-0000-7000-8000-00000000000d") }),
+    ]);
+
+    expect(incidents).toHaveLength(2);
+  });
+
   it("produces the same result whatever order the failures arrive in", () => {
     const signals = [signal({ conversationId: "a" }), signal({ conversationId: "b", at: new Date(AT.getTime() + 5) }), signal({ code: "UNAUTHORIZED" })];
 
@@ -141,5 +193,17 @@ describe("one outage is one incident", () => {
     // An alert for a single retryable blip trains people to ignore alerts.
     expect(blip === undefined ? false : warrantsNotification(blip, thresholds)).toBe(false);
     expect(sustained === undefined ? false : warrantsNotification(sustained, thresholds)).toBe(true);
+  });
+
+  it("notifies on either signal alone, at the threshold and not before", () => {
+    const thresholds = { occurrences: 5, conversations: 3 };
+    const incident = { key: "k", kind: "AI_PROVIDER" as const, id: "anthropic", code: "TIMEOUT", firstSeen: AT, lastSeen: AT };
+
+    // Sustained on one machine, or spread across conversations: either is enough on its own. Requiring
+    // both would stay silent through a long outage that happened to affect one busy conversation.
+    expect(warrantsNotification({ ...incident, occurrences: 5, affectedConversations: 1 }, thresholds)).toBe(true);
+    expect(warrantsNotification({ ...incident, occurrences: 1, affectedConversations: 3 }, thresholds)).toBe(true);
+    // And the threshold is the value that trips it, not the one after.
+    expect(warrantsNotification({ ...incident, occurrences: 4, affectedConversations: 2 }, thresholds)).toBe(false);
   });
 });

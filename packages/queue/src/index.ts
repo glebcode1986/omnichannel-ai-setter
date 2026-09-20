@@ -10,12 +10,14 @@ export { planDelay, type DelayPlan } from "./delay";
 export {
   AI_DRAFT_GENERATION,
   buildJobId,
+  DEFAULT_QUEUE_LIMITS,
   DEFAULT_QUEUE_PREFIX,
   DELIVERY,
   INBOUND_DEBOUNCE,
   JOB_FAMILIES,
   RECONCILIATION,
   type JobFamily,
+  type QueueExecutionLimits,
 } from "./families";
 export {
   AI_DRAFT_TRIGGERS,
@@ -24,15 +26,14 @@ export {
   inboundDebounceJobSchema,
   JobPayloadValidationError,
   MAX_SCHEDULE_DELAY_MS,
-  RECONCILIATION_REASONS,
   reconciliationJobSchema,
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
   type PayloadIssue,
   type ReconciliationJob,
-  type ReconciliationReason,
 } from "./payloads";
+export { createQueueMonitor, type QueueDepth, type QueueMonitor, type QueueMonitorOptions } from "./monitor";
 export {
   createQueueProducer,
   type DebounceScheduleResult,
@@ -40,12 +41,16 @@ export {
   type QueueProducer,
   type QueueProducerOptions,
 } from "./producer";
+// One list, owned by the domain: the queue only re-exports it so a job payload and the
+// reconciliation consumer cannot drift apart.
+export { RECONCILIATION_REASONS, type ReconciliationReason } from "@omnichannel/domain";
 export type { ReplyCycleClaim, ReplyCycleOwnership } from "./reply-cycle";
 export {
   createQueueWorkers,
   NonRetryableJobError,
   type DeliveryAttemptResult,
   type JobContext,
+  type JobFailure,
   type JobOutcome,
   type QueueHandlers,
   type QueueWorkers,

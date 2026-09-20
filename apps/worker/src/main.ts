@@ -1,4 +1,4 @@
-import { dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
+import { DEFAULT_BACKLOG_THRESHOLDS, dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
 import { createAnthropicReplyModel, createVoyageEmbeddingProvider } from "@omnichannel/ai";
 import {
   createAiDraftStore,
@@ -6,21 +6,34 @@ import {
   createDraftContextStore,
   createIngestionStore,
   createKnowledgeRetriever,
+  createReconciliationStore,
   createStyleProfileStore,
   createDeliveryStore,
   createCredentialCipher,
   createStyleRetriever,
+  createSuspensionStore,
   EMBEDDING_DIMENSIONS,
+  countUnusableGenerations,
+  findUnresolvedOperations,
+  readReliabilitySnapshot,
+  recoverStaleSendingDeliveries,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger, type Logger } from "@omnichannel/observability";
-import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
+import { AI_DRAFT_GENERATION, createQueueMonitor, createQueueProducer, createQueueWorkers, createRedisConnection, DELIVERY, RECONCILIATION } from "@omnichannel/queue";
 
 import { loadWorkerEnv, type WorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
+import { startBacklogGuard } from "./backlog-guard";
+import { aiProviderProbe, channelAccountProbes, databaseProbe, queueProbe } from "./health-probes";
+import { startHealthReporter } from "./health-reporter";
+import { createIncidentReporter } from "./incident-reporter";
+import { createOperationEvidencePort } from "./operation-evidence";
+import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handler";
+import { startReconciliationSweeper } from "./reconciliation-sweeper";
 import type { DeliverySendPort } from "@omnichannel/application";
 
 import { createDebounceHandler } from "./debounce-handler";
@@ -33,6 +46,20 @@ import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"] as const;
+/** How often the operational picture is recomputed, and how often each recovery loop runs. */
+const HEALTH_INTERVAL_MS = 30_000;
+const RECONCILIATION_SWEEP_INTERVAL_MS = 60_000;
+const BACKLOG_GUARD_INTERVAL_MS = 30_000;
+/** An unresolved operation is asked about again no more often than this. */
+const RECONCILIATION_RETRY_AFTER_MS = 120_000;
+const RECONCILIATION_BATCH = 100;
+/** Failures fold into incidents over this window; the cap is a storm backstop, not a tuning knob. */
+const INCIDENT_WINDOW_MS = 15 * 60_000;
+const INCIDENT_SIGNAL_LIMIT = 5_000;
+/** Sustained, or spread across conversations: either is enough to be worth telling someone about. */
+const INCIDENT_THRESHOLDS = { occurrences: 20, conversations: 5 };
+/** Unusable generations in the window above which the provider is called degraded, not broken. */
+const AI_DEGRADED_FAILURES = 5;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
 /**
@@ -162,10 +189,65 @@ function main(): void {
         conversationPolicy: createDeliveryPolicyResolver(db, () => new Date()),
         logger,
       });
+      const reconcile = createReconcileHandler({
+        engine: {
+          store: createReconciliationStore(db),
+          // Honest by construction: Meta cannot resolve a send request to a message after the fact, so
+          // this answers UNKNOWN and the operation ends up in front of a person rather than guessed at.
+          evidence: createOperationEvidencePort(),
+          log: logger,
+          now: () => new Date(),
+          graceMs: env.RECONCILE_GRACE_MS,
+        },
+        resumeDelivery: createDeliveryResumer(
+          async (operationId) => {
+            const job = await db.deliveryJobRecord.findUnique({
+              where: { operationId },
+              select: {
+                workspaceId: true,
+                businessProfileId: true,
+                correlationId: true,
+                id: true,
+                draftId: true,
+                scheduledFor: true,
+                selectedDelayMs: true,
+                draft: { select: { conversationId: true } },
+              },
+            });
+            return job === null
+              ? undefined
+              : {
+                  workspaceId: job.workspaceId,
+                  businessProfileId: job.businessProfileId,
+                  correlationId: job.correlationId,
+                  conversationId: job.draft.conversationId,
+                  deliveryJobId: job.id,
+                  draftId: job.draftId,
+                  scheduledFor: job.scheduledFor,
+                  selectedDelayMs: job.selectedDelayMs,
+                };
+          },
+          producer,
+          logger,
+        ),
+        logger,
+      });
+      const incidents = createIncidentReporter({
+        logger,
+        windowMs: INCIDENT_WINDOW_MS,
+        limit: INCIDENT_SIGNAL_LIMIT,
+        thresholds: INCIDENT_THRESHOLDS,
+        now: () => new Date(),
+      });
       const workers = createQueueWorkers({
         connection,
         logger,
-        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger })),
+        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger }), reconcile),
+        // Every job failure is folded into an incident here rather than announced where it happened: one
+        // provider outage is one thing an operator needs to know, not one per conversation.
+        onJobFailure: (failure) => {
+          incidents.record(failure);
+        },
       });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
@@ -173,11 +255,59 @@ function main(): void {
           dispatchOutbox({ store: createIngestionStore(db), scheduler: producer, log: logger, now: () => new Date() }),
         logger,
       });
+      const suspensions = createSuspensionStore(db);
+      const monitor = createQueueMonitor({ connection });
+      const reconciliationSweeper = startReconciliationSweeper({
+        intervalMs: RECONCILIATION_SWEEP_INTERVAL_MS,
+        retryAfterMs: RECONCILIATION_RETRY_AFTER_MS,
+        limit: RECONCILIATION_BATCH,
+        recoverStaleClaims: () => recoverStaleSendingDeliveries(db, env.RELIABILITY_STALE_CLAIM_MS, new Date()),
+        findUnresolved: (options) => findUnresolvedOperations(db, options),
+        producer,
+        logger,
+        now: () => new Date(),
+      });
+      const backlogGuard = startBacklogGuard({
+        intervalMs: BACKLOG_GUARD_INTERVAL_MS,
+        thresholds: {
+          waiting: env.BACKLOG_WAITING_LIMIT,
+          oldestWaitingMs: env.BACKLOG_OLDEST_WAITING_MS,
+          clearFraction: DEFAULT_BACKLOG_THRESHOLDS.clearFraction,
+          suspendForMs: DEFAULT_BACKLOG_THRESHOLDS.suspendForMs,
+        },
+        depths: () => monitor.depths(),
+        suspensions,
+        logger,
+        now: () => new Date(),
+        // Outbound work only. A pile of inbound messages waiting to be stored is a reason to hurry, and
+        // stopping there would lose customer data that no retry can bring back.
+        watched: [AI_DRAFT_GENERATION.queueName, DELIVERY.queueName, RECONCILIATION.queueName],
+      });
+      const health = startHealthReporter({
+        intervalMs: HEALTH_INTERVAL_MS,
+        probes: async () => {
+          const accounts = await db.channelAccount.findMany({ select: { id: true, status: true } });
+          return [
+            databaseProbe(db),
+            queueProbe(connection),
+            aiProviderProbe(env.AI_REPLY_MODEL, () => countUnusableGenerations(db, new Date(Date.now() - INCIDENT_WINDOW_MS)), AI_DEGRADED_FAILURES),
+            ...channelAccountProbes(accounts),
+          ];
+        },
+        snapshot: (now) => readReliabilitySnapshot(db, now),
+        depths: () => monitor.depths(),
+        incidents,
+        logger,
+        now: () => new Date(),
+      });
       return {
         queueNames: workers.queueNames,
         async close() {
-          await sweeper.close();
+          // The loops first: each one holds a database or Redis handle, and closing the connection under
+          // a running sweep is how shutdown produces errors that look like an outage.
+          await Promise.all([sweeper.close(), reconciliationSweeper.close(), backlogGuard.close(), health.close()]);
           await workers.close();
+          await monitor.close();
           await producer.close();
           await connection.quit().catch(() => connection.disconnect());
           await db.$disconnect();
