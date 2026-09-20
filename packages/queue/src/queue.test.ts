@@ -7,14 +7,17 @@ import {
   aiDraftGenerationJobSchema,
   buildJobId,
   DELIVERY,
+  deliveryDelayFor,
   deliveryJobSchema,
   INBOUND_DEBOUNCE,
   inboundDebounceJobSchema,
   JOB_FAMILIES,
   JobPayloadValidationError,
+  MAX_SCHEDULE_DELAY_MS,
   planDelay,
   RECONCILIATION,
   reconciliationJobSchema,
+  ScheduleRangeError,
   type DeliveryJob,
 } from "./index";
 import { parsePayload } from "./payloads";
@@ -260,5 +263,62 @@ describe("planDelay", () => {
     expect(() => planDelay({ minMs: 0, maxMs: 8 * 24 * 60 * 60 * 1000 }, now)).toThrow(RangeError);
     expect(() => planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => 1)).toThrow(RangeError);
     expect(() => planDelay(DEFAULT_DELIVERY_DELAY_MS, now, () => Number.NaN)).toThrow(RangeError);
+  });
+});
+
+describe("the delay a declared delivery schedule implies", () => {
+  const AT = new Date("2026-09-17T10:00:00.000Z");
+  const at = (offsetMs: number) => new Date(AT.getTime() + offsetMs).toISOString();
+  const scheduled = (offsetMs: number, selectedDelayMs: number): DeliveryJob => ({
+    ...delivery,
+    scheduledFor: at(offsetMs),
+    selectedDelayMs,
+  });
+
+  it("waits exactly as long as the schedule says", () => {
+    expect(deliveryDelayFor(scheduled(30_000, 60_000), AT)).toBe(30_000);
+    expect(deliveryDelayFor(scheduled(MAX_SCHEDULE_DELAY_MS, MAX_SCHEDULE_DELAY_MS), AT)).toBe(MAX_SCHEDULE_DELAY_MS);
+  });
+
+  it("refuses a schedule beyond the queue's reach instead of shortening it", () => {
+    // Clamping sent a reply declared for next month three weeks early, while the durable payload went on
+    // claiming next month. Of the two ways to be wrong, early is the one that reaches a customer.
+    const refusal = (() => {
+      try {
+        deliveryDelayFor(scheduled(MAX_SCHEDULE_DELAY_MS + 1, MAX_SCHEDULE_DELAY_MS), AT);
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(refusal).toBeInstanceOf(ScheduleRangeError);
+    expect(refusal).toBeInstanceOf(RangeError);
+    expect((refusal as ScheduleRangeError).reason).toBe("OUT_OF_RANGE");
+  });
+
+  it("runs a schedule that has already passed immediately", () => {
+    // Which is what a resumed operation looks like. The coordinator re-judges before any send, so running
+    // now is safe in a way that running early is not.
+    expect(deliveryDelayFor(scheduled(-1, 60_000), AT)).toBe(0);
+    expect(deliveryDelayFor(scheduled(-3_600_000, 60_000), AT)).toBe(0);
+    expect(deliveryDelayFor(scheduled(0, 0), AT)).toBe(0);
+  });
+
+  it("refuses a payload whose two statements about the plan disagree", () => {
+    // `selectedDelayMs` is the whole delay chosen when the plan was made, and enqueueing happens at or
+    // after planning — so the wait still remaining can never exceed it.
+    expect(() => deliveryDelayFor(scheduled(60_001, 60_000), AT)).toThrow(
+      expect.objectContaining({ name: "ScheduleRangeError", reason: "CONTRADICTORY_METADATA" }),
+    );
+    // One millisecond the other way is the ordinary case: enqueued a moment after it was planned.
+    expect(deliveryDelayFor(scheduled(59_999, 60_000), AT)).toBe(59_999);
+    expect(deliveryDelayFor(scheduled(60_000, 60_000), AT)).toBe(60_000);
+  });
+
+  it("refuses an instant it cannot read at all", () => {
+    expect(() => deliveryDelayFor({ ...delivery, scheduledFor: "not-a-time" }, AT)).toThrow(
+      expect.objectContaining({ name: "ScheduleRangeError", reason: "CONTRADICTORY_METADATA" }),
+    );
   });
 });
