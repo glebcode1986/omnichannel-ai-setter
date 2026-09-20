@@ -143,7 +143,11 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
       },
     });
 
-    const later = new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000);
+    // Real time, like the revocation below and for the same reason: `created_at` is written by the
+    // database, and the schema refuses a refresh stamped earlier than the row itself. A fixed logical
+    // instant works only until the wall clock passes it, which is a test that fails on a date rather
+    // than on a change.
+    const later = new Date(Date.now() + 1_000);
     const again = await connect(main, external, { token: OTHER_TOKEN, now: later });
 
     expect(again.channelAccountId).toBe(first.channelAccountId);
@@ -200,7 +204,7 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
     const first = await connect(main, external);
     await store.setAccountStatus(main, first.channelAccountId, "DISCONNECTED");
 
-    const again = await connect(main, external, { now: new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000) });
+    const again = await connect(main, external, { now: new Date(Date.now() + 1_000) });
 
     expect(again.channelAccountId).toBe(first.channelAccountId);
     expect(await db().channelAccount.count({ where: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId } })).toBe(1);
