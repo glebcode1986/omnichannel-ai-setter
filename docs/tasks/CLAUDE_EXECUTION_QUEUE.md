@@ -13,7 +13,7 @@ Accepted:
 - #63 PASS `cd04a9972d25f8cf20edd57c5753c325130ee4de`
 - #64 PASS `f0dee940a1baf0f3c8d8615ef2090587bf2def01`
 
-## ACTIVE NOW — PR #65 / P2-03
+## P2-03 — ACCEPTED
 
 Current corrected HEAD:
 `ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
@@ -28,7 +28,8 @@ Current fix:
 - queue retry remains possible;
 - one bounded repair preserved.
 
-Astra has been explicitly re-started on this exact SHA.
+Astra accepted this exact SHA:
+`ASTRA_REVIEW: PASS head=ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`.
 
 ## Claude action on verdict
 
@@ -76,3 +77,18 @@ Do not open Stage D until the independent review queue has moved safely through 
 - queues are not sole durable intent
 - model output advisory
 - secret-safe logging
+
+
+## ACTIVE NOW — propagate accepted P2-03 into P2-04
+
+Claude is explicitly instructed to:
+1. normal-merge accepted #65 into #66;
+2. verify #66;
+3. publish fresh `CLAUDE_READY_FOR_ASTRA ... task=P2-04`;
+4. continue propagation through #67 -> #72.
+
+Astra watcher is explicitly instructed to ignore the stale #66 HEAD and review only the first fresh propagated P2-04 HEAD.
+
+If #66 passes, continue strict dependency order through #72.
+
+No Stage D yet.
