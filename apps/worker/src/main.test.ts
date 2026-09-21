@@ -109,6 +109,68 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(result.code).toBe(0);
   }, 30_000);
 
+  it("rides out its own Redis being unreachable, and says it survived", async () => {
+    const result = await new Promise<ProcessResult>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+        cwd: appDir,
+        // Deliberately unreachable, whatever the environment provides: this test is about the outage.
+        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug", REDIS_URL: "redis://127.0.0.1:1" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+      setTimeout(() => child.kill("SIGTERM"), 3_000);
+    });
+
+    // The outage is logged and survived; the worker shuts down cleanly when asked to.
+    expect(result.stderr).toContain("queue.redis_unavailable");
+    expect(result.stderr).not.toContain("worker.fatal");
+    expect(result.code).toBe(0);
+  }, 30_000);
+
+  it("still dies on an escaped rejection that is not its own Redis reconnecting", async () => {
+    const result = await new Promise<ProcessResult>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+        cwd: appDir,
+        env: {
+          PATH: process.env.PATH ?? "",
+          // A preload that rejects once, with a TypeError carrying no error code. `tsx` comes first so
+          // the preload itself can be TypeScript and stay inside this package's project.
+          NODE_OPTIONS: "--import tsx --import ./src/testing/escaped-rejection.ts",
+          NODE_ENV: "test",
+          LOG_LEVEL: "debug",
+          REDIS_URL: "redis://127.0.0.1:1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+      setTimeout(() => child.kill("SIGTERM"), 5_000);
+    });
+
+    // Same unreachable Redis as the test above, so the only difference is where the rejection came from.
+    // An unknown cause means unknown state, and the worker stops rather than carrying on.
+    expect(result.stderr).toContain("worker.fatal");
+    expect(result.stderr).toContain("TypeError");
+    expect(result.code).toBe(1);
+  }, 30_000);
+
   it("fails fast with exit code 1 and no value echo when the environment is invalid", async () => {
     const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish", REDIS_URL });
 
