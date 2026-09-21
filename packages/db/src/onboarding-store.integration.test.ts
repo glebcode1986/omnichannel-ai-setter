@@ -251,17 +251,78 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
         })
       ).credentialId ?? "";
 
-    // Revocation is stamped with real time: the schema refuses a revocation older than the row itself.
-    const revokedAt = new Date();
-    await store.setAccountStatus(main, channelAccountId, "DISCONNECTED");
-    await store.revokeCredential(main, { credentialId, purpose: PURPOSE, now: revokedAt });
+    await store.disconnectAccount(main, channelAccountId, new Date());
 
     expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toBeUndefined();
     const row = await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId } });
-    expect(row.revokedAt).toEqual(revokedAt);
+    expect(row.revokedAt).not.toBeNull();
     expect(Buffer.from(row.ciphertext).includes(Buffer.from(TOKEN, "utf8"))).toBe(false);
     // The freed slot lets the same Instagram account be connected in another Workspace.
     await expect(connect(await bareProfile(unique("onboard-next")), external)).resolves.toBeDefined();
+  });
+
+  it("commits the disconnect and the revocation together, or neither", async () => {
+    const { channelAccountId } = await connect(main, unique("ig-account"));
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+
+    // Fault injection: the credential write fails after the status write has already happened. Done as
+    // two operations this left the worst possible half-state — an account reading as disconnected, its
+    // live slot freed, while the encrypted token was still there and still usable.
+    const failing = createInstagramOnboardingStore(db(), {
+      ...cipher,
+      // The only thing a disconnect encrypts is the tombstone that replaces the secret, so failing every
+      // encryption on this instance fails exactly the second half of the operation and nothing else.
+      encrypt: () => {
+        throw new Error("credential write failed");
+      },
+    });
+    await expect(failing.disconnectAccount(main, channelAccountId, new Date())).rejects.toThrow(/credential write failed/);
+
+    const account = await db().channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true } });
+    const credential = await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId }, select: { revokedAt: true } });
+    // Neither half landed: still connected, still holding its secret. A failure that leaves the account
+    // usable is recoverable; one that leaves a live token behind a "disconnected" label is not.
+    expect(account.status).toBe("CONNECTED");
+    expect(credential.revokedAt).toBeNull();
+    expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toMatchObject({ token: TOKEN });
+  });
+
+  it("does not let a refresh in flight resurrect a credential a disconnect destroyed", async () => {
+    const { channelAccountId } = await connect(main, unique("ig-account"));
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+
+    // The interleaving: a refresh has read the credential and is waiting on Meta; the disconnect lands;
+    // the refresh then comes back with a brand-new token and tries to write it.
+    await store.disconnectAccount(main, channelAccountId, new Date());
+    const rotation = await store.rotateCredential(main, {
+      credentialId,
+      purpose: PURPOSE,
+      token: OTHER_TOKEN,
+      expiresAt: EXPIRES,
+      refreshedAt: new Date(Date.now() + 1_000),
+    });
+
+    expect(rotation).toBe("REVOKED");
+    const row = await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId } });
+    expect(row.revokedAt).not.toBeNull();
+    expect(row.expiresAt).toBeNull();
+    // Neither the old token nor the newly minted one is readable, and the account stays disconnected.
+    expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toBeUndefined();
+    expect(Buffer.from(row.ciphertext).includes(Buffer.from(OTHER_TOKEN, "utf8"))).toBe(false);
+    expect(Buffer.from(row.ciphertext).includes(Buffer.from(TOKEN, "utf8"))).toBe(false);
+    expect((await db().channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true } })).status).toBe("DISCONNECTED");
   });
 
   describe("connect state", () => {

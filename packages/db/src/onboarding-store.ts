@@ -25,6 +25,7 @@ import {
   revokeChannelCredential,
   rotateChannelCredential,
   writeChannelCredential,
+  type CredentialRotation,
   type StoredCredential,
 } from "./repositories/channel-credentials";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
@@ -73,11 +74,21 @@ export interface InstagramOnboardingStore {
   ): Promise<{ readonly channelAccountId: string }>;
 
   setAccountStatus(context: BusinessProfileContext, channelAccountId: string, status: ChannelAccountStatusValue): Promise<void>;
+  /**
+   * Disconnects an account and destroys its stored secret in **one** transaction.
+   *
+   * The two writes cannot be separated. Done apart, a failure between them leaves an account that reads
+   * as disconnected — its live slot freed, its UI saying the connection is gone — while the encrypted
+   * token is still there and still usable. That is the worst of the two possible half-states, because it
+   * is the one nobody goes looking for.
+   */
+  disconnectAccount(context: BusinessProfileContext, channelAccountId: string, now: Date): Promise<void>;
 
   readCredential(
     context: BusinessProfileContext,
     input: { readonly credentialId: string; readonly purpose: CredentialPurpose },
   ): Promise<StoredCredential | undefined>;
+  /** Returns `REVOKED` when the credential was destroyed while the provider call was in flight. */
   rotateCredential(
     context: BusinessProfileContext,
     input: {
@@ -87,7 +98,7 @@ export interface InstagramOnboardingStore {
       readonly expiresAt: Date;
       readonly refreshedAt: Date;
     },
-  ): Promise<void>;
+  ): Promise<CredentialRotation>;
   revokeCredential(
     context: BusinessProfileContext,
     input: { readonly credentialId: string; readonly purpose: CredentialPurpose; readonly now: Date },
@@ -171,6 +182,32 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
 
     async setAccountStatus(context, channelAccountId, status) {
       await setChannelAccountStatus(db, context, channelAccountId, status);
+    },
+
+    async disconnectAccount(context, channelAccountId, now) {
+      const scope = profileScopeOf(context);
+      await db.$transaction(async (tx) => {
+        // The status write carries the authorization check, so it runs first and a caller without the
+        // role reaches nothing. Both statements then commit together or neither does.
+        await setChannelAccountStatus(tx, context, channelAccountId, "DISCONNECTED");
+        const account = await tx.channelAccount.findUnique({
+          where: { workspaceId_businessProfileId_id: { ...scope, id: channelAccountId } },
+          select: { credential: { select: { id: true, purpose: true } } },
+        });
+        const credential = account?.credential;
+        if (credential !== null && credential !== undefined) {
+          // The purpose comes from the row rather than from a caller's constant: it is bound into the
+          // tombstone's authenticated data, and a mismatched one would write an unreadable record.
+          await revokeChannelCredential(tx, cipher, {
+            workspaceId: scope.workspaceId,
+            credentialId: credential.id,
+            // The column is the same closed set as `CredentialPurpose`; the cast is the Prisma enum
+            // crossing back into our own type, not a widening of it.
+            purpose: credential.purpose as CredentialPurpose,
+            now,
+          });
+        }
+      });
     },
 
     readCredential: async (context, input) =>

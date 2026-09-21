@@ -51,18 +51,31 @@ export async function writeChannelCredential(
 /**
  * Replaces the secret in place after a refresh or reconnect. The row keeps its identity, so the channel
  * account's reference and all audit history stay valid, and `refreshedAt` records the new mint time.
+ *
+ * A revoked credential is never rotated. Revocation is how a disconnect destroys a secret, and a write
+ * that cleared it would hand back a working token for an account somebody had just disconnected.
  */
+/**
+ * Whether the rotation applied. `REVOKED` means the credential was destroyed while the provider call was
+ * in flight, so there is nothing left to rotate and nothing was written.
+ */
+export type CredentialRotation = "ROTATED" | "REVOKED";
+
 export async function rotateChannelCredential(
   db: DbExecutor,
   cipher: CredentialCipher,
   input: NewCredential & { readonly credentialId: string; readonly refreshedAt: Date },
-): Promise<void> {
+): Promise<CredentialRotation> {
   const encrypted = cipher.encrypt(
     { workspaceId: input.workspaceId, credentialId: input.credentialId, purpose: input.purpose },
     input.token,
   );
-  await db.channelCredential.update({
-    where: { workspaceId_id: { workspaceId: input.workspaceId, id: input.credentialId } },
+  // Conditional on the credential still being live, in the database rather than in a prior read. A
+  // refresh calls the provider and comes back seconds later; a disconnect can land in that gap, and an
+  // unconditional write would then put a usable token back on a revoked credential and clear the
+  // revocation that destroyed it. The row count is the answer: nobody else has to be asked.
+  const rotated = await db.channelCredential.updateMany({
+    where: { workspaceId: input.workspaceId, id: input.credentialId, revokedAt: null },
     data: {
       purpose: input.purpose,
       keyId: encrypted.keyId,
@@ -72,9 +85,9 @@ export async function rotateChannelCredential(
       authTag: Buffer.from(encrypted.authTag),
       expiresAt: input.expiresAt,
       refreshedAt: input.refreshedAt,
-      revokedAt: null,
     },
   });
+  return rotated.count === 1 ? "ROTATED" : "REVOKED";
 }
 
 /**

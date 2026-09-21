@@ -156,6 +156,22 @@ function fakeStore() {
       }
       return Promise.resolve();
     },
+    // The real one is a single transaction; this fake applies both halves together for the same reason.
+    disconnectAccount: (context, channelAccountId, now) => {
+      const account = accounts.find((candidate) => candidate.id === channelAccountId && candidate.workspaceId === context.workspaceId);
+      if (account === undefined) {
+        // The real store's status write raises this, and the route turns it into a 404.
+        return Promise.reject(new TenantRecordNotFoundError("ChannelAccount"));
+      }
+      account.status = "DISCONNECTED";
+      const credential = account.credentialId === undefined ? undefined : credentials.get(account.credentialId);
+      if (credential !== undefined) {
+        credential.token = "";
+        credential.expiresAt = null;
+        credential.revokedAt = now;
+      }
+      return Promise.resolve();
+    },
     readCredential: (_context, input) => {
       const credential = credentials.get(input.credentialId);
       if (credential === undefined || credential.revokedAt !== null || credential.purpose !== input.purpose) {
@@ -165,13 +181,14 @@ function fakeStore() {
     },
     rotateCredential: (_context, input) => {
       const credential = credentials.get(input.credentialId);
-      if (credential !== undefined) {
-        credential.token = input.token;
-        credential.expiresAt = input.expiresAt;
-        credential.mintedAt = input.refreshedAt;
-        credential.revokedAt = null;
+      // Mirrors the conditional UPDATE: a revoked credential is never rotated, and the caller is told.
+      if (credential === undefined || credential.revokedAt !== null) {
+        return Promise.resolve("REVOKED" as const);
       }
-      return Promise.resolve();
+      credential.token = input.token;
+      credential.expiresAt = input.expiresAt;
+      credential.mintedAt = input.refreshedAt;
+      return Promise.resolve("ROTATED" as const);
     },
     revokeCredential: (_context, input) => {
       const credential = credentials.get(input.credentialId);
@@ -426,6 +443,39 @@ describe("instagram onboarding", () => {
     expect(fake.accounts).toHaveLength(1);
   });
 
+  it("drops a token that arrives from Meta after the account was disconnected", async () => {
+    const connectDeps = dependencies();
+    await startAndCallback(connectDeps);
+    const accountId = connectDeps.store === fake.store ? (fake.accounts[0]?.id ?? "") : "";
+    const credentialId = [...fake.credentials.keys()][0] ?? "";
+    const later = new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+    // The interleaving the review describes, made deterministic: the disconnect lands *while* Meta is
+    // answering, so the refresh returns holding a freshly minted token for an account that no longer
+    // exists. Writing it would undo the disconnect — a disconnected account with a working secret.
+    const refreshDeps: OnboardingDependencies = {
+      ...dependencies([], later),
+      oauth: {
+        ...dependencies([], later).oauth,
+        http: {
+          send: async () => {
+            await disconnectInstagramAccount(connectDeps, context(), accountId);
+            return { kind: "RESPONSE", status: 200, body: JSON.stringify({ access_token: "IGQVJresurrected", token_type: "bearer", expires_in: 5_184_000 }) };
+          },
+        },
+      },
+    };
+
+    const outcome = await refreshInstagramCredential(refreshDeps, context(), accountId);
+
+    expect(outcome).toBe("NO_CREDENTIAL");
+    const credential = fake.credentials.get(credentialId);
+    expect(credential?.revokedAt).not.toBeNull();
+    expect(credential?.token).not.toBe("IGQVJresurrected");
+    expect(credential?.expiresAt).toBeNull();
+    expect(fake.accounts[0]).toMatchObject({ status: "DISCONNECTED" });
+  });
+
   describe("token refresh", () => {
     const day = 24 * 60 * 60 * 1000;
 
@@ -558,7 +608,7 @@ describe("instagram routes", () => {
           ({
             store: {
               findAccountById: () => Promise.resolve(undefined),
-              setAccountStatus: () => Promise.reject(new TenantRecordNotFoundError("ChannelAccount")),
+              disconnectAccount: () => Promise.reject(new TenantRecordNotFoundError("ChannelAccount")),
             },
             logger: createLogger({ level: "error", sink: () => undefined }),
             now: () => NOW,
