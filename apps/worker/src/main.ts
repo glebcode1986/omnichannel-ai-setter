@@ -5,6 +5,7 @@ import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { loadWorkerEnv } from "./env";
+import { processGuards } from "./process-guards";
 import { createPlaceholderHandlers } from "./handlers";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
@@ -62,10 +63,11 @@ function main(): void {
     },
   });
 
-  process.on("uncaughtException", (error, origin) => {
-    logger.error("worker.fatal", { error, origin });
-    process.exit(1);
+  const guards = processGuards(logger, (code) => {
+    process.exit(code);
   });
+  process.on("uncaughtException", guards.onUncaughtException);
+  process.on("unhandledRejection", guards.onUnhandledRejection);
 
   let firstSignalAt: number | undefined;
   const onShutdownSignal = (signal: (typeof SHUTDOWN_SIGNALS)[number]): void => {
