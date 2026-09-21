@@ -133,6 +133,36 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     expect((await database.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope(), id: dismissed } }, select: { status: true } })).status).toBe("DISMISSED");
   }, 120_000);
 
+  it("does not let a fresh takeover inherit an earlier auto-resume deadline", async () => {
+    // The conversation was paused a minute ago and automation was due to resume shortly. A person then
+    // takes it over for real. Carrying that deadline forward would hand the conversation back to
+    // automation while the human is still in it — the one failure ADR-004 exists to prevent, arriving
+    // quietly and on a timer nobody set.
+    const resumeAt = new Date(Date.now() + 60_000);
+    await database.db.conversation.update({
+      where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+      data: {
+        takeoverState: "HUMAN_ACTIVE",
+        takeoverReason: "UNMATCHED_OUTBOUND_ECHO",
+        takeoverReviewMode: null,
+        humanTakeoverAt: new Date(Date.now() - 60_000),
+        takeoverPausedUntil: resumeAt,
+        takeoverActorKind: "SYSTEM",
+        takeoverActorUserId: null,
+      },
+    });
+
+    const draftId = await pendingDraft();
+    await resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" }));
+
+    const held = await database.db.conversation.findUniqueOrThrow({
+      where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+      select: { takeoverState: true, takeoverPausedUntil: true, takeoverActorUserId: true },
+    });
+    expect(held).toMatchObject({ takeoverState: "HUMAN_ACTIVE", takeoverActorUserId: workspace.ownerUserId });
+    expect(held.takeoverPausedUntil).toBeNull();
+  }, 120_000);
+
   it("reuses the first operation when a second click reaches an already scheduled draft", async () => {
     const draftId = await pendingDraft();
     const first = await resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" }));
