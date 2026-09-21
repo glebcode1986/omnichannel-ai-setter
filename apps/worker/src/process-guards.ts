@@ -7,16 +7,18 @@
  * time is unknown, so the process stops: continuing on unknown invariants is how a worker corrupts the
  * thing it was writing.
  *
- * An **unhandled rejection** is not that. Nothing was interrupted — a promise nobody awaited failed, so
- * the work it belonged to is lost and no invariant was left half-applied, because every durable write in
- * this system is a transaction or a conditional update. Meanwhile the shape this actually takes in
- * production is a background reconnect to a Redis that is down, which is precisely the outage this worker
- * is built to run through. Node's default promotes such a rejection to a fatal, which would turn a
- * dependency outage into a crash loop at the moment recovery matters most, and take every in-flight job
- * with it.
+ * An **unhandled rejection** is fatal too, with exactly one exemption, and the exemption is the point.
  *
- * It is still an error and still logged as one: a rejection nobody awaited is a bug even when it is
- * survivable, and it should be visible without being terminal.
+ * A rejection can escape after a partial write, and continuing then means processing policy-critical work
+ * on invariants nobody can vouch for. So "a promise failed, carry on" is the wrong default: unknown cause
+ * means stop, as everywhere else in this system.
+ *
+ * The one exception is a failure this worker can positively identify as its own Redis client reconnecting
+ * during an outage it is already in — see `redis-outage.ts` for how narrowly that is decided. That case is
+ * survived because the alternative is a crash loop during the outage the worker exists to ride out, and
+ * because the rejection comes from a socket that never carried a write.
+ *
+ * Both are logged as errors either way: a rejection nobody awaited is a bug even when it is survivable.
  *
  * Neither log carries the error itself. An error object serializes its message and its stack, and a
  * connection failure's message contains the host, the user and sometimes the password — a crash log is
@@ -37,7 +39,17 @@ export interface ProcessGuards {
   readonly onUnhandledRejection: (reason: unknown) => void;
 }
 
-export function processGuards(logger: Logger, exit: (code: number) => void): ProcessGuards {
+export interface ProcessGuardOptions {
+  readonly logger: Logger;
+  readonly exit: (code: number) => void;
+  /**
+   * Decides whether an escaped rejection is the one known survivable case. Default: nothing is, which is
+   * the correct answer for anything that has not positively identified itself.
+   */
+  readonly survivable?: (reason: unknown) => boolean;
+}
+
+export function processGuards({ logger, exit, survivable = () => false }: ProcessGuardOptions): ProcessGuards {
   return {
     onUncaughtException: (error, origin) => {
       logger.error("worker.fatal", { errorName: nameOf(error), ...codeOf(error), origin });
@@ -45,7 +57,13 @@ export function processGuards(logger: Logger, exit: (code: number) => void): Pro
     },
 
     onUnhandledRejection: (reason) => {
-      logger.error("worker.unhandled_rejection", { errorName: nameOf(reason), ...codeOf(reason) });
+      if (survivable(reason)) {
+        logger.error("worker.unhandled_rejection", { errorName: nameOf(reason), ...codeOf(reason), survived: true });
+        return;
+      }
+      // Unknown cause, so unknown state. Stop, exactly as for an uncaught exception.
+      logger.error("worker.fatal", { errorName: nameOf(reason), ...codeOf(reason), origin: "unhandledRejection" });
+      exit(1);
     },
   };
 }
