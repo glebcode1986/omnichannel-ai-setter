@@ -215,3 +215,24 @@ export interface IngestionStore {
   markOutboxDispatched(input: { readonly id: string; readonly now: Date }): Promise<void>;
   markOutboxFailed(input: { readonly id: string; readonly errorName: string; readonly retryAt: Date }): Promise<void>;
 }
+
+/**
+ * Why a webhook failed verification, as this application classifies it.
+ *
+ * A closed set owned here, not a string owned by an adapter. The adapter's own `reason` is free text
+ * produced from raw headers, query values and body bytes, so it can contain a bearer token, a signature
+ * or a fragment of a customer's message — and a structured log is the last place any of those should
+ * reach. The diagnostic value of that string is real but it is not worth the class of leak it opens, so
+ * it is deliberately discarded rather than sanitized: a heuristic redactor is a promise that the next
+ * unexpected format will also be caught, and it will not be.
+ *
+ * Keeping the VERIFIED-but-not-a-delivery case as its own code matters for the same reason. Folding it
+ * back into one label is how a future edit reintroduces "and a bit of detail about which" as free text.
+ */
+export const VERIFICATION_FAILURES = [
+  /** The adapter refused the request; why it refused is not recorded. */
+  "ADAPTER_REJECTED",
+  /** The signature was accepted, but the request is not a delivery. */
+  "VERIFIED_NON_POST",
+] as const;
+export type VerificationFailure = (typeof VERIFICATION_FAILURES)[number];
