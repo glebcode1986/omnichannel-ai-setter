@@ -6,6 +6,7 @@ import { createQueueProducer, createQueueWorkers, createRedisConnection } from "
 
 import { loadWorkerEnv } from "./env";
 import { processGuards } from "./process-guards";
+import { createRedisOutageWatch } from "./redis-outage";
 import { createPlaceholderHandlers } from "./handlers";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
@@ -37,10 +38,14 @@ function main(): void {
   }
 
   const logger = createLogger({ level: env.LOG_LEVEL, bindings: { service: "worker" } });
+  // Created before anything starts and told about each client as it is made, so the guards below can tell
+  // "our own Redis is reconnecting" from every other escaped rejection, which stays fatal.
+  const redisOutage = createRedisOutageWatch();
   const runtime = createWorkerRuntime({
     logger,
     startProcessors: () => {
       const connection = createRedisConnection(env.REDIS_URL, "worker", logger);
+      redisOutage.watch(connection);
       const workers = createQueueWorkers({ connection, logger, handlers: createPlaceholderHandlers() });
       const db = createDbClient({ connectionString: env.DATABASE_URL });
       const producer = createQueueProducer({ connection, logger });
@@ -63,8 +68,12 @@ function main(): void {
     },
   });
 
-  const guards = processGuards(logger, (code) => {
-    process.exit(code);
+  const guards = processGuards({
+    logger,
+    exit: (code) => {
+      process.exit(code);
+    },
+    survivable: (reason) => redisOutage.survivable(reason),
   });
   process.on("uncaughtException", guards.onUncaughtException);
   process.on("unhandledRejection", guards.onUnhandledRejection);
