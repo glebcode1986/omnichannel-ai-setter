@@ -49,6 +49,8 @@ interface HarnessOptions {
   readonly result?: SendResult;
   readonly claim?: ClaimOutcome;
   readonly maxAttempts?: number;
+  /** How far the clock moves between reads; 0 (the default) keeps it fixed. */
+  readonly clockStepMs?: number;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -57,6 +59,7 @@ function harness(options: HarnessOptions = {}) {
   const rescheduled: Date[] = [];
   const logs: string[] = [];
   let claims = 0;
+  let reads = 0;
 
   const dependencies: DeliveryDependencies = {
     store: {
@@ -86,7 +89,14 @@ function harness(options: HarnessOptions = {}) {
       warn: (event) => logs.push(event),
       error: (event) => logs.push(event),
     },
-    now: () => NOW,
+    // Advances by a fixed step on every read when a test asks for it. Nothing in production reads the
+    // clock twice expecting the same answer, and the deferral guard exists precisely because time passes
+    // between judging a reply and acting on the judgement.
+    now: () => {
+      const at = new Date(NOW.getTime() + reads * (options.clockStepMs ?? 0));
+      reads += 1;
+      return at;
+    },
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   };
   return { dependencies, settlements, sends, rescheduled, logs };
@@ -192,6 +202,18 @@ describe("the final gate runs before anything is claimed", () => {
     expect(outcome.status).toBe("CANCELLED");
   });
 
+  it("refuses a draft a person was asked to look at, however good the rest of the state is", async () => {
+    // The draft engine already decided this one needs a human. The coordinator does not re-judge that —
+    // it carries the decision forward — but it must not lose it either: every other gate here passes, so
+    // nothing else would stop the send.
+    const { dependencies, sends, settlements } = harness({ context: { ...context(), draftNeedsReview: true } });
+
+    await coordinateDelivery(dependencies, command());
+
+    expect(sends).toEqual([]);
+    expect(settlements[0]).toMatchObject({ kind: "HELD" });
+  });
+
   it("refuses a draft with no sendable text rather than sending an empty reply", async () => {
     const { dependencies, sends, settlements } = harness({ context: context({ text: "   " }) });
 
@@ -285,6 +307,31 @@ describe("quiet hours that begin during the delay", () => {
     expect(sends).toEqual([]);
     expect(outcome).toMatchObject({ status: "RESCHEDULED" });
     expect(rescheduled[0]?.toISOString()).toBe("2026-09-18T14:00:00.000Z");
+  });
+
+  it("sends rather than rescheduling when the quiet period ended while it was being judged", async () => {
+    // Ninety minutes pass between each read of the clock. The policy still sees a quiet period and picks
+    // 14:00; by the time that choice is acted on it is 15:00 and the instant has gone. Rescheduling to a
+    // moment in the past is a job that wakes immediately and does the same thing again — a reply that
+    // never leaves, for a rule that no longer applies.
+    const { dependencies, sends, rescheduled } = harness({ clockStepMs: 90 * 60_000 });
+
+    const outcome = await coordinateDelivery(
+      dependencies,
+      command({
+        limits: {
+          confidenceThreshold: 0.8,
+          mandatoryReviewReasons: [],
+          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
+          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
+        },
+        channelState: { window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") }, humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" } },
+      }),
+    );
+
+    expect(rescheduled).toEqual([]);
+    expect(sends).toHaveLength(1);
+    expect(outcome).toMatchObject({ status: "SENT" });
   });
 
   it("holds rather than deferring when waiting would miss the provider's deadline", async () => {
