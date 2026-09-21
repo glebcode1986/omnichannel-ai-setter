@@ -208,6 +208,45 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(facts.hits.find((hit) => hit.chunkId === semanticOnlyChunkId)?.semanticRank).toBeGreaterThan(0);
     });
 
+    it("reads the similarity floor as a similarity, not as a distance", async () => {
+      // Cosine 0.5 to the query vector: comfortably below the 0.55 floor, and comfortably above the 0.45
+      // that the same number would mean if it were sent as a distance ceiling by mistake. That mistake is
+      // invisible in ordinary use — it only ever admits *more* than it should, which looks like working
+      // retrieval right up until it quotes something unrelated as a fact.
+      const halfway = await seedKnowledgeDocument(database.db, {
+        workspaceId,
+        businessProfileId: profileB.businessProfileId,
+        title: "Halfway",
+        chunks: [{ content: "zamboni quokka xylitol", embedding: testVector({ 0: 1, 1: Math.sqrt(3) }) }],
+      });
+
+      const facts = await knowledge().search(
+        query({ scope: { workspaceId, businessProfileId: profileB.businessProfileId }, text: "zzzznomatch", embedding: vector(HOURS_AXIS) }),
+      );
+
+      expect(facts.hits.map((hit) => hit.chunkId)).not.toContain(halfway.chunkIds[0]);
+    });
+
+    it("fetches more candidates per list than it returns, or fusion has nothing to fuse", async () => {
+      const scope = { workspaceId, businessProfileId: profileB.businessProfileId };
+      // Three chunks, arranged so the right answer is second on both lists and first on neither.
+      const lexicalOnly = await seedKnowledgeDocument(database.db, { workspaceId, businessProfileId: profileB.businessProfileId, title: "Lexical", chunks: [{ content: "korrigan korrigan korrigan" }] });
+      const semanticOnly = await seedKnowledgeDocument(database.db, { workspaceId, businessProfileId: profileB.businessProfileId, title: "Semantic", chunks: [{ content: "utterly different wording", embedding: HOURS_AXIS }] });
+      const agreedOn = await seedKnowledgeDocument(database.db, { workspaceId, businessProfileId: profileB.businessProfileId, title: "Both", chunks: [{ content: "korrigan and a good deal of other text to dilute the rank", embedding: NEARLY_HOURS }] });
+
+      const wide = await knowledge().search(query({ scope, text: "korrigan", embedding: vector(HOURS_AXIS), limit: 8 }));
+      expect(wide.hits[0]?.chunkId).toBe(agreedOn.chunkIds[0]);
+      expect(wide.hits.map((hit) => hit.chunkId)).toEqual(expect.arrayContaining([lexicalOnly.chunkIds[0], semanticOnly.chunkIds[0]]));
+
+      const narrow = await knowledge().search(query({ scope, text: "korrigan", embedding: vector(HOURS_AXIS), limit: 1 }));
+
+      // Asking for one answer must not make each list fetch only one candidate: the chunk both lists
+      // agree on is first on neither, so it would never be seen, and the reply would be built on whatever
+      // one list happened to rank highest on its own.
+      expect(narrow.hits).toHaveLength(1);
+      expect(narrow.hits[0]?.chunkId).toBe(agreedOn.chunkIds[0]);
+    });
+
     it("keeps unrelated vectors out: a floor, not merely an ordering", async () => {
       const facts = await knowledge().search(query({ text: "zzzznomatch", embedding: vector(UNRELATED_AXIS) }));
 
@@ -287,6 +326,79 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
         await expect(knowledge().search(query({ text: hostile }))).resolves.toHaveProperty("hits");
       }
     });
+
+    it("survives a customer pasting a link, which is where the lexemes themselves carry operators", async () => {
+      // The cases above are punctuation the tokenizer discards. These are different and worse: the
+      // tokenizer keeps a URL as one lexeme, operators and all, so `a.com/b:z` re-enters the query as
+      // `'a.com/b' : 'z'` unless each lexeme is quoted on its way back in — and PostgreSQL then raises a
+      // syntax error rather than returning nothing. One customer link would become a retrieval outage.
+      for (const link of ["see a.com/b:z now", "see a.com/b!c now", "check a.com/p(1 please", "https://x.io/a?b=1&c=2"]) {
+        await expect(knowledge().search(query({ text: link }))).resolves.toHaveProperty("hits");
+      }
+    });
+
+    it("keeps the lexical score on a 0-1 scale even when a chunk repeats the query many times", async () => {
+      const repetitive = await seedKnowledgeDocument(database.db, {
+        workspaceId,
+        businessProfileId: profileB.businessProfileId,
+        title: "Repetitive",
+        // Unnormalized `ts_rank_cd` grows without bound with coverage; this body scores about 24 raw.
+        chunks: [{ content: "saturday opening hours price booking studio ".repeat(40) }],
+      });
+
+      const rows = await database.db.$queryRawUnsafe<{ chunk_id: string; score: number }[]>(
+        knowledgeLexicalSql(),
+        workspaceId,
+        profileB.businessProfileId,
+        "saturday opening hours price booking studio",
+        0,
+        20,
+      );
+
+      const hit = rows.find((row) => row.chunk_id === repetitive.chunkIds[0]);
+      // Without normalization this is ~24, and every floor a caller sets becomes meaningless: the same
+      // number means "barely relevant" for one chunk and "excluded" for another.
+      expect(hit?.score).toBeGreaterThan(0);
+      expect(hit?.score).toBeLessThanOrEqual(1);
+      for (const row of rows) {
+        expect(row.score).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it("breaks a tie by identifier, so the same question twice gives the same answer twice", async () => {
+      // Identical content scores identically, and PostgreSQL is then free to return either order. Rows
+      // are inserted in descending identifier order on purpose: if the query simply followed the scan,
+      // the result would come back in the order below rather than sorted.
+      const ids = ["01a0d100-0000-7000-8000-0000000000ff", "01a0d100-0000-7000-8000-0000000000aa", "01a0d100-0000-7000-8000-00000000005c"];
+      const document = await seedKnowledgeDocument(database.db, {
+        workspaceId,
+        businessProfileId: profileB.businessProfileId,
+        title: "Tied",
+        chunks: [{ content: "tiebreak marker phrase" }],
+      });
+      for (const [position, id] of ids.entries()) {
+        await database.db.$executeRawUnsafe(
+          `INSERT INTO "knowledge_chunks" ("id", "workspace_id", "document_id", "document_version", "ordinal", "content", "updated_at")
+           VALUES ($1, $2, $3, 1, $4, 'tiebreak marker phrase', NOW())`,
+          id,
+          workspaceId,
+          document.documentId,
+          position + 10,
+        );
+      }
+
+      const first = await database.db.$queryRawUnsafe<{ chunk_id: string }[]>(
+        knowledgeLexicalSql(),
+        workspaceId,
+        profileB.businessProfileId,
+        "tiebreak marker phrase",
+        0,
+        20,
+      );
+      const returned = first.map((row) => row.chunk_id).filter((id) => ids.includes(id));
+
+      expect(returned).toEqual([...ids].sort());
+    });
   });
 
   describe("embedding profiles", () => {
@@ -346,6 +458,30 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       expect(tone.hits.length).toBeGreaterThan(0);
       // The factual answer is "we do not know", even though a human once wrote one down as an example.
       expect(facts.hits).toHaveLength(0);
+    });
+
+    it("never teaches from an example somebody withdrew", async () => {
+      const marker = "withdrawn phrasing nobody should copy";
+      await seedStyleExample(database.db, {
+        workspaceId,
+        businessProfileId: profileB.businessProfileId,
+        inboundContext: "zylophone quokka inquiry",
+        outboundText: marker,
+        status: "ARCHIVED",
+      });
+      await seedStyleExample(database.db, {
+        workspaceId,
+        businessProfileId: profileB.businessProfileId,
+        inboundContext: "zylophone quokka inquiry",
+        outboundText: "the phrasing that is still approved",
+      });
+
+      const tone = await style().search(query({ scope: { workspaceId, businessProfileId: profileB.businessProfileId }, text: "zylophone quokka inquiry" }));
+
+      // Archiving an example is how a business retracts a way of speaking. An archived example that still
+      // reaches the model is the retraction failing silently, in the one place nobody re-reads.
+      expect(tone.hits.length).toBeGreaterThan(0);
+      expect(tone.hits.map((hit) => hit.outboundText)).not.toContain(marker);
     });
   });
 
