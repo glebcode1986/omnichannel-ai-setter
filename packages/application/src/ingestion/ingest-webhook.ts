@@ -89,8 +89,11 @@ export async function ingestWebhook(
     return { kind: "CHALLENGE", responseBody: verification.responseBody };
   }
   if (verification.status !== "VERIFIED" || request.webhook.method !== "POST") {
+    // The adapter's own `reason` never reaches the log. It is free text built from raw headers, query
+    // values and body bytes, so it can carry a bearer token, a signature or part of a customer's
+    // message; only this application's own closed classification is recorded.
     log.warn("ingestion.verification_failed", {
-      reason: verification.status === "REJECTED" ? verification.reason : "verified request was not a POST",
+      reasonCode: verification.status === "VERIFIED" ? ("VERIFIED_NON_POST" as const) : ("ADAPTER_REJECTED" as const),
     });
     return { kind: "UNAUTHORIZED" };
   }
