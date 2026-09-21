@@ -3,8 +3,8 @@
 **Last updated:** 2026-09-21 evening  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
 **Implementation:** Stage B complete; Stage C reliability implemented  
-**Independent review position:** current blocker is PR #65 / P2-03  
-**Active now:** Astra re-reviewing corrected PR #65 HEAD; Claude watcher armed for verdict  
+**Independent review position:** PR #65 / P2-03 is accepted; next review target is propagated PR #66 / P2-04  
+**Active now:** Claude propagating accepted #65 through #66 -> #72; Astra watcher armed on #66  
 **Stage D:** paused
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
@@ -40,7 +40,7 @@ Claude made disconnect transactional and made refresh fail closed after revocati
 
 Astra then found a reconnect regression: the account could become CONNECTED while its credential stayed revoked. Claude separated human reauthorization/restoration from ordinary rotation, protected against stale refresh, and Astra accepted #64.
 
-## Current blocker — PR #65 / P2-03
+## PR #65 / P2-03 — PASS
 
 Previous reviewed HEAD:
 `af2ba698819532ff860e84ff98ad648b5ece36bc`
@@ -70,7 +70,11 @@ Claude verification reported:
 - migration drift 0;
 - lint/boundaries clean.
 
-Astra has now been explicitly re-started on this exact SHA.
+Astra independently accepted this exact SHA:
+
+`ASTRA_REVIEW: PASS head=ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
+
+Claude is now explicitly re-started to propagate the accepted parent through #66 -> #72.
 
 ## Active commands posted
 
@@ -135,3 +139,17 @@ Stage I — Launch Readiness / staged Commercial Beta
 - Provider/webhook/job idempotency.
 - Model output advisory; application policy authoritative.
 - Secrets never enter prompts, client output, normal logs or plaintext audit.
+
+
+## Next review target — PR #66 / P2-04
+
+The currently visible #66 HEAD is stale relative to the accepted #65 correction.
+
+Claude has been explicitly instructed to normal-merge the accepted #65 HEAD into #66, verify, and publish a fresh:
+
+`CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P2-04`
+
+Astra watcher has been armed on #66 and must wait for that **new propagated HEAD** before reviewing.
+
+If #66 passes, continue strict dependency order:
+#67 -> #68 -> #69 -> #70 -> #71 -> #72.
