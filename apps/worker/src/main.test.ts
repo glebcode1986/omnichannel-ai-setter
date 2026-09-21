@@ -47,6 +47,15 @@ const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-pa
 /** The worker now needs a model key to start; no request is made unless a draft job runs. */
 const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 
+/**
+ * Everything the worker requires to boot, in one place.
+ *
+ * A branch that makes a new variable required extends this rather than each call site: these tests spawn
+ * the real entrypoint, so a missing variable fails them all with `worker.env_invalid` and says nothing
+ * about what they were actually checking.
+ */
+const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
+
 /** With Redis unreachable the only permitted stderr entry is the (URL-free) outage warning. */
 function expectOnlyRedisOutageOnStderr(stderr: string): void {
   expect(events(stderr).filter((event) => event !== "queue.redis_unavailable")).toEqual([]);
@@ -63,7 +72,7 @@ function events(output: string): string[] {
 describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   it("starts, then shuts down gracefully with exit code 0 on SIGTERM", async () => {
     let signalled = false;
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY }, (stdout, child) => {
+    const result = await runWorker({ ...VALID_ENV }, (stdout, child) => {
       if (!signalled && stdout.includes('"event":"worker.started"')) {
         signalled = true;
         child.kill("SIGTERM");
@@ -79,7 +88,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
   it("treats a burst of repeated signals (one Ctrl+C relayed by pnpm/watchers) as one graceful shutdown", async () => {
     let signalled = false;
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY }, (stdout, child) => {
+    const result = await runWorker({ ...VALID_ENV }, (stdout, child) => {
       if (!signalled && stdout.includes('"event":"worker.started"')) {
         signalled = true;
         child.kill("SIGINT");
@@ -99,7 +108,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     const result = await new Promise<ProcessResult>((resolve, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
         cwd: appDir,
-        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY },
+        env: { PATH: process.env.PATH ?? "", ...VALID_ENV, LOG_LEVEL: "debug" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stderr = "";
@@ -121,7 +130,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
         cwd: appDir,
         // Deliberately unreachable, whatever the environment provides: this test is about the outage.
-        env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", LOG_LEVEL: "debug", REDIS_URL: "redis://127.0.0.1:1" },
+        env: { PATH: process.env.PATH ?? "", ...VALID_ENV, LOG_LEVEL: "debug", REDIS_URL: "redis://127.0.0.1:1" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
@@ -152,7 +161,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
           // A preload that rejects once, with a TypeError carrying no error code. `tsx` comes first so
           // the preload itself can be TypeScript and stay inside this package's project.
           NODE_OPTIONS: "--import tsx --import ./src/testing/escaped-rejection.ts",
-          NODE_ENV: "test",
+          ...VALID_ENV,
           LOG_LEVEL: "debug",
           REDIS_URL: "redis://127.0.0.1:1",
         },
@@ -179,7 +188,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   }, 30_000);
 
   it("fails fast with exit code 1 and no value echo when the environment is invalid", async () => {
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "not-a-level-secret-ish", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY });
+    const result = await runWorker({ ...VALID_ENV, LOG_LEVEL: "not-a-level-secret-ish" });
 
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
@@ -189,7 +198,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
   }, 30_000);
 
   it("requires a Redis URL without echoing an invalid one", async () => {
-    const result = await runWorker({ NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL: "http://user:secret-pass@example.test", DATABASE_URL, ANTHROPIC_API_KEY });
+    const result = await runWorker({ ...VALID_ENV, REDIS_URL: "http://user:secret-pass@example.test" });
 
     expect(result.code).toBe(1);
     expect(events(result.stderr)).toEqual(["worker.env_invalid"]);
