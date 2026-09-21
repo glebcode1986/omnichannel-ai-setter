@@ -29,6 +29,7 @@ import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
 import { createDeliveryPolicyResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
+import { processGuards } from "./process-guards";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
@@ -159,10 +160,11 @@ function main(): void {
     },
   });
 
-  process.on("uncaughtException", (error, origin) => {
-    logger.error("worker.fatal", { error, origin });
-    process.exit(1);
+  const guards = processGuards(logger, (code) => {
+    process.exit(code);
   });
+  process.on("uncaughtException", guards.onUncaughtException);
+  process.on("unhandledRejection", guards.onUnhandledRejection);
 
   let firstSignalAt: number | undefined;
   const onShutdownSignal = (signal: (typeof SHUTDOWN_SIGNALS)[number]): void => {
