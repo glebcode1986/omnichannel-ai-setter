@@ -8,6 +8,7 @@ import {
   nextDeliveryStatus,
   outboxRetryDelayMs,
   sampleDelayMs,
+  VERIFICATION_FAILURES,
   type IngestionDependencies,
   type IngestionStore,
   type WebhookAccount,
@@ -93,6 +94,65 @@ describe("ingestWebhook early exits", () => {
     expect(await ingestWebhook(deps, request())).toEqual({ kind: "UNAUTHORIZED" });
     expect(normalizeWebhook).not.toHaveBeenCalled();
     expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("keeps the adapter's rejection detail out of the log entirely", async () => {
+    // The adapter sees raw headers, query values and body bytes, and its `reason` is free text it builds
+    // from them. Every canary below is something that has plausibly appeared in one: a bearer token, a
+    // signature, a query parameter and a fragment of a customer's message.
+    const canaries = [
+      "Bearer astra-canary-secret-7f3a9c",
+      "sha256=canary-signature-4b1d",
+      "canary-query-value-91ee",
+      "canary body fragment: my card number is",
+    ];
+    const normalizeWebhook = vi.fn(() => Promise.resolve([]));
+    const { deps, transaction, log } = dependencies({
+      account,
+      adapter: adapter({
+        verifyWebhook: () => Promise.resolve({ status: "REJECTED", reason: canaries.join(" | ") }),
+        normalizeWebhook,
+      }),
+    });
+
+    const result = await ingestWebhook(
+      deps,
+      request({
+        webhook: {
+          ...webhook,
+          headers: { authorization: canaries[0] ?? "", "x-hub-signature-256": canaries[1] ?? "" },
+          query: { token: canaries[2] ?? "" },
+          // Built without TextEncoder: this package is pure and has no Node.js types, which is the same
+          // rule that keeps the production code from reaching for anything platform-specific.
+          rawBody: Uint8Array.from([...(canaries[3] ?? "")], (character) => character.charCodeAt(0)),
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "UNAUTHORIZED" });
+    expect(normalizeWebhook).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+
+    // Everything that reached the log port, serialized whole: a canary hiding in a nested field or in an
+    // error's own properties would be missed by checking the top-level ones.
+    const emitted = JSON.stringify([...log.info.mock.calls, ...log.warn.mock.calls, ...log.error.mock.calls]);
+    for (const canary of canaries) {
+      expect(emitted).not.toContain(canary);
+    }
+    expect(log.warn).toHaveBeenCalledWith("ingestion.verification_failed", expect.objectContaining({ reasonCode: "ADAPTER_REJECTED" }));
+    // Only the closed code, and nothing shaped like the old free-text field beside it.
+    const failure = log.warn.mock.calls.find((call) => call[0] === "ingestion.verification_failed");
+    expect(Object.keys((failure?.[1] ?? {}) as Record<string, unknown>)).not.toContain("reason");
+  });
+
+  it("pins the verified-but-not-a-delivery case to its own closed code", async () => {
+    const { deps, log } = dependencies({ account, adapter: adapter() });
+
+    // Its own code, so a later edit cannot fold the two cases together and reach for free text to tell
+    // them apart again.
+    expect(await ingestWebhook(deps, request({ webhook: { ...webhook, method: "GET" } }))).toEqual({ kind: "UNAUTHORIZED" });
+    expect(log.warn).toHaveBeenCalledWith("ingestion.verification_failed", expect.objectContaining({ reasonCode: "VERIFIED_NON_POST" }));
+    expect(VERIFICATION_FAILURES).toEqual(["ADAPTER_REJECTED", "VERIFIED_NON_POST"]);
   });
 
   it("only accepts verified POSTs and reports normalization failures as invalid payloads", async () => {
