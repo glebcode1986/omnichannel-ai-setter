@@ -180,10 +180,21 @@ export async function generateDraft(
   if (result.rejection === undefined && first !== undefined) {
     dependencies.log.warn("ai.output_invalid", { ...fields, issues: first.issues, attempt: 1 });
     const repaired = await repair(dependencies, request, result, first.issues);
-    if (repaired !== undefined && repaired.parsed.ok) {
+    if (repaired.kind === "UNAVAILABLE") {
+      // The provider went away *during* the repair. Nothing was written and nothing was sent, so this is
+      // the same transient outage as a first-attempt failure and the queue may retry.
+      //
+      // Filing the first malformed output as a held draft instead would be permanent: the generation key
+      // makes the row idempotent, so a retry could never replace it with the draft the model would have
+      // produced once the provider came back. A momentary outage would have become a finished, unusable
+      // generation and a review item for a person, for no reason anyone could later reconstruct.
+      dependencies.log.warn("ai.model_unavailable", { ...fields, attempt: 2 });
+      return { status: "UNAVAILABLE" };
+    }
+    if (repaired.parsed.ok) {
       return persistDraft(dependencies, command, repaired.result, repaired.parsed.value, fields);
     }
-    if (repaired?.parsed.ok === false && repaired.result.rejection === undefined) {
+    if (repaired.result.rejection === undefined) {
       dependencies.log.warn("ai.output_invalid", { ...fields, issues: repaired.parsed.issues, attempt: 2 });
     }
     // A provider that refused on the second attempt refused; filing that as malformed output would put the
@@ -191,8 +202,8 @@ export async function generateDraft(
     return holdUnusable(
       dependencies,
       command,
-      repaired?.result ?? result,
-      repaired?.result.rejection === "REFUSAL" ? "UNSUPPORTED_CONTENT" : "INVALID_MODEL_OUTPUT",
+      repaired.result,
+      repaired.result.rejection === "REFUSAL" ? "UNSUPPORTED_CONTENT" : "INVALID_MODEL_OUTPUT",
       fields,
     );
   }
@@ -207,12 +218,24 @@ export async function generateDraft(
   );
 }
 
+/**
+ * What the one repair attempt produced.
+ *
+ * `UNAVAILABLE` is its own variant rather than an absent result, because the two mean opposite things to
+ * the caller: a repair that ran and failed is a finished generation to file, and a repair that could not
+ * run at all is a transient outage to retry. Collapsing them is how a provider timeout gets written down
+ * as the model's fault.
+ */
+type RepairOutcome =
+  | { readonly kind: "ATTEMPTED"; readonly result: ReplyGenerationResult; readonly parsed: ReturnType<typeof parseModelOutput> }
+  | { readonly kind: "UNAVAILABLE" };
+
 async function repair(
   dependencies: DraftGenerationDependencies,
   request: ReplyGenerationRequest,
   previous: ReplyGenerationResult,
   issues: readonly ModelOutputIssue[],
-): Promise<{ result: ReplyGenerationResult; parsed: ReturnType<typeof parseModelOutput> } | undefined> {
+): Promise<RepairOutcome> {
   // The model has already seen the fence marker, and this block is its own output: it is the most likely
   // text in the whole request to contain that marker. So the repair attempt gets a fresh nonce, checked
   // against the previous output as well as every other segment.
@@ -221,12 +244,13 @@ async function repair(
   try {
     const result = await dependencies.model.generate({ ...request, nonce, repair: { issues, previousOutput } });
     return {
+      kind: "ATTEMPTED",
       result,
       parsed: result.rejection === undefined ? parseModelOutput(result.output) : { ok: false, issues: [] },
     };
   } catch (error) {
     if (error instanceof ReplyModelUnavailableError) {
-      return undefined;
+      return { kind: "UNAVAILABLE" };
     }
     throw error;
   }
