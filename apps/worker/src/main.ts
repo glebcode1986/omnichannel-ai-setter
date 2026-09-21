@@ -1,5 +1,5 @@
 import { DEFAULT_BACKLOG_THRESHOLDS, dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
-import { createAnthropicReplyModel, createVoyageEmbeddingProvider } from "@omnichannel/ai";
+import { createAnthropicReplyModel } from "@omnichannel/ai";
 import {
   createAiDraftStore,
   createDbClient,
@@ -12,7 +12,6 @@ import {
   createCredentialCipher,
   createStyleRetriever,
   createSuspensionStore,
-  EMBEDDING_DIMENSIONS,
   countUnusableGenerations,
   findUnresolvedOperations,
   readReliabilitySnapshot,
@@ -23,6 +22,7 @@ import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger, type Logger } from "@omnichannel/observability";
 import { AI_DRAFT_GENERATION, createQueueMonitor, createQueueProducer, createQueueWorkers, createRedisConnection, DELIVERY, RECONCILIATION } from "@omnichannel/queue";
 
+import { createEmbeddings } from "./embeddings";
 import { loadWorkerEnv, type WorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
@@ -69,33 +69,6 @@ const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
 const DUPLICATE_SIGNAL_WINDOW_MS = 2_000;
 /** Bumped whenever the prompt changes, and persisted with every draft so output stays attributable. */
 const PROMPT_VERSION = "reply.v1";
-
-/**
- * A configured width that disagrees with the `vector(N)` column can never match a stored vector, so every
- * semantic query would fail and every draft would be held for review. That is a configuration mistake, and
- * it is caught here — but it does not stop the worker: taking ingestion down over a retrieval setting would
- * turn a degraded feature into an outage. Lexical-only is a supported mode, so it runs in that mode and
- * says so loudly.
- */
-function createEmbeddings(env: WorkerEnv, logger: Logger) {
-  if (env.VOYAGE_API_KEY === undefined) {
-    return undefined;
-  }
-  if (env.AI_EMBEDDING_DIMENSIONS !== EMBEDDING_DIMENSIONS) {
-    logger.error("worker.embedding_dimensions_mismatch", {
-      configured: env.AI_EMBEDDING_DIMENSIONS,
-      column: EMBEDDING_DIMENSIONS,
-    });
-    return undefined;
-  }
-  return createVoyageEmbeddingProvider({
-    apiKey: env.VOYAGE_API_KEY,
-    model: env.AI_EMBEDDING_MODEL,
-    dimensions: env.AI_EMBEDDING_DIMENSIONS,
-    revision: env.AI_EMBEDDING_REVISION,
-    logger,
-  });
-}
 
 /**
  * Without Meta app credentials there is no adapter, and delivery refuses with a named reason rather than

@@ -246,6 +246,32 @@ describe("Instagram after-window policy (ADR-014)", () => {
     expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
   });
 
+  it("does not reach for the human-agent path when the ordinary one is still open", () => {
+    const decision = decide({
+      // Everything the human-agent path needs is in place, and the window is open anyway. The reason
+      // this reply is held is low confidence, which a person handles with the ordinary reply box.
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+      draft: { usable: true, confidence: 0.1, reasonCodes: [], citedSourceIds: [], contentType: "TEXT" },
+    });
+
+    // A review mode is a promise about which button will work, not a statement about which paths exist.
+    // Offering the human-support path here would spend an exception the conversation does not need.
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
+    expect(decision.reasons).toContain("LOW_CONFIDENCE");
+  });
+
+  it("checks the channel can carry the kind of content the draft actually is", () => {
+    const template = { usable: true, confidence: 0.95, reasonCodes: [], citedSourceIds: ["chunk_1"], contentType: "TEMPLATE" } as const;
+
+    // A channel that accepts free text says nothing about whether it accepts templates, and the two are
+    // separate capabilities precisely because a provider can permit one and refuse the other.
+    expect(decide({ draft: template, capabilities: { ...NO_CAPABILITIES, text: true } }).reasons).toContain("UNSUPPORTED_MEDIA");
+    expect(decide({ draft: template, capabilities: { ...NO_CAPABILITIES, templates: true } }).reasons).not.toContain("UNSUPPORTED_MEDIA");
+    // And the reverse: templates permitted does not make a text reply sendable.
+    expect(decide({ capabilities: { ...NO_CAPABILITIES, templates: true } }).reasons).toContain("UNSUPPORTED_MEDIA");
+  });
+
   it("carries a WhatsApp policy without ever reaching the Instagram exception", () => {
     const decision = decide({
       window: closed,
