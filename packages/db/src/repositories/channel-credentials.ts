@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DbExecutor } from "../client";
 import type { CredentialCipher, CredentialPurpose } from "../credentials";
+import { TenantRecordNotFoundError } from "../errors";
 
 export interface StoredCredential {
   readonly credentialId: string;
@@ -51,18 +52,44 @@ export async function writeChannelCredential(
 /**
  * Replaces the secret in place after a refresh or reconnect. The row keeps its identity, so the channel
  * account's reference and all audit history stay valid, and `refreshedAt` records the new mint time.
+ *
+ * A revoked credential is never rotated. Revocation is how a disconnect destroys a secret, and a write
+ * that cleared it would hand back a working token for an account somebody had just disconnected.
  */
+/**
+ * Whether the rotation applied. `SUPERSEDED` means the credential this rotation was computed from is no
+ * longer the one in the database — destroyed by a disconnect, or replaced by a reconnect — so there is
+ * nothing to rotate and nothing was written.
+ */
+export type CredentialRotation = "ROTATED" | "SUPERSEDED";
+
 export async function rotateChannelCredential(
   db: DbExecutor,
   cipher: CredentialCipher,
-  input: NewCredential & { readonly credentialId: string; readonly refreshedAt: Date },
-): Promise<void> {
+  input: NewCredential & {
+    readonly credentialId: string;
+    readonly refreshedAt: Date;
+    /** The mint time this rotation was computed from; the write applies only if it is still current. */
+    readonly mintedAt?: Date;
+  },
+): Promise<CredentialRotation> {
   const encrypted = cipher.encrypt(
     { workspaceId: input.workspaceId, credentialId: input.credentialId, purpose: input.purpose },
     input.token,
   );
-  await db.channelCredential.update({
-    where: { workspaceId_id: { workspaceId: input.workspaceId, id: input.credentialId } },
+  // Conditional on the credential being exactly the one that was read, in the database rather than in a
+  // prior read. A refresh calls the provider and comes back seconds later, and two things can land in
+  // that gap: a disconnect, which revoked it — an unconditional write would put a usable token back and
+  // clear the revocation that destroyed it — or a reconnect, which re-authorized it with a newer token
+  // that this stale refresh must not overwrite. Matching the mint time covers both, and the row count is
+  // the answer, so nobody else has to be asked.
+  const rotated = await db.channelCredential.updateMany({
+    where: {
+      workspaceId: input.workspaceId,
+      id: input.credentialId,
+      revokedAt: null,
+      ...(input.mintedAt === undefined ? {} : { OR: [{ refreshedAt: input.mintedAt }, { refreshedAt: null, createdAt: input.mintedAt }] }),
+    },
     data: {
       purpose: input.purpose,
       keyId: encrypted.keyId,
@@ -72,9 +99,9 @@ export async function rotateChannelCredential(
       authTag: Buffer.from(encrypted.authTag),
       expiresAt: input.expiresAt,
       refreshedAt: input.refreshedAt,
-      revokedAt: null,
     },
   });
+  return rotated.count === 1 ? "ROTATED" : "SUPERSEDED";
 }
 
 /**
@@ -140,4 +167,46 @@ export async function readChannelCredential(
     { keyId: row.keyId, algorithm: row.algorithm, ciphertext: row.ciphertext, nonce: row.nonce, authTag: row.authTag },
   );
   return { credentialId: row.id, token, expiresAt: row.expiresAt, mintedAt: row.refreshedAt ?? row.createdAt };
+}
+
+/**
+ * Puts a freshly authorized secret back on an existing credential row, revoked or not.
+ *
+ * This is the one place a revocation is deliberately cleared, and the distinction from a rotation is the
+ * whole reason it is separate. A rotation continues a connection that already exists, so it must never
+ * revive what a disconnect destroyed. A restoration happens because a person just re-authorized the
+ * account and the provider issued a new token: reviving the row is the intent, the old ciphertext is
+ * overwritten in the same statement, and the caller runs it inside the transaction that marks the
+ * account connected.
+ *
+ * It throws when it matches nothing, so a reconnect that cannot restore the credential commits neither
+ * half — an account marked connected while its secret stays unreadable is the state this exists to make
+ * impossible.
+ */
+export async function restoreChannelCredential(
+  db: DbExecutor,
+  cipher: CredentialCipher,
+  input: NewCredential & { readonly credentialId: string; readonly restoredAt: Date },
+): Promise<void> {
+  const encrypted = cipher.encrypt(
+    { workspaceId: input.workspaceId, credentialId: input.credentialId, purpose: input.purpose },
+    input.token,
+  );
+  const restored = await db.channelCredential.updateMany({
+    where: { workspaceId: input.workspaceId, id: input.credentialId },
+    data: {
+      purpose: input.purpose,
+      keyId: encrypted.keyId,
+      algorithm: encrypted.algorithm,
+      ciphertext: Buffer.from(encrypted.ciphertext),
+      nonce: Buffer.from(encrypted.nonce),
+      authTag: Buffer.from(encrypted.authTag),
+      expiresAt: input.expiresAt,
+      refreshedAt: input.restoredAt,
+      revokedAt: null,
+    },
+  });
+  if (restored.count !== 1) {
+    throw new TenantRecordNotFoundError("ChannelCredential");
+  }
 }
