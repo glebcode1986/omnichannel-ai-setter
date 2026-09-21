@@ -4,8 +4,9 @@ import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCredentialCipher, CredentialCryptoError } from "./credentials";
+import { TenantRecordNotFoundError } from "./errors";
 import { createInstagramOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
-import { readChannelCredential } from "./repositories/channel-credentials";
+import { readChannelCredential, restoreChannelCredential } from "./repositories/channel-credentials";
 import { authorizeBusinessProfileAccess, type BusinessProfileContext } from "./tenancy";
 import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
 import { authorizeWorkspaceAccess } from "./tenancy";
@@ -314,7 +315,7 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
       refreshedAt: new Date(Date.now() + 1_000),
     });
 
-    expect(rotation).toBe("REVOKED");
+    expect(rotation).toBe("SUPERSEDED");
     const row = await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId } });
     expect(row.revokedAt).not.toBeNull();
     expect(row.expiresAt).toBeNull();
@@ -323,6 +324,117 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
     expect(Buffer.from(row.ciphertext).includes(Buffer.from(OTHER_TOKEN, "utf8"))).toBe(false);
     expect(Buffer.from(row.ciphertext).includes(Buffer.from(TOKEN, "utf8"))).toBe(false);
     expect((await db().channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true } })).status).toBe("DISCONNECTED");
+  });
+
+  it("reconnects a disconnected account with a usable new credential", async () => {
+    const external = unique("ig-account");
+    const { channelAccountId } = await connect(main, external);
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+    await store.disconnectAccount(main, channelAccountId, new Date());
+    expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toBeUndefined();
+
+    // A person re-authorizes: the provider issues a new token and the account comes back. Reviving the
+    // revoked row is the intent here, which is exactly what a refresh must never do.
+    const again = await connect(main, external, { token: OTHER_TOKEN, now: new Date(Date.now() + 1_000) });
+
+    expect(again.channelAccountId).toBe(channelAccountId);
+    const account = await db().channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true, credentialId: true } });
+    expect(account).toMatchObject({ status: "CONNECTED", credentialId });
+    // Connected *and* usable: an account marked connected beside an unreadable secret is the state this
+    // test exists for, and it is not visible from the account row alone.
+    expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toMatchObject({ token: OTHER_TOKEN });
+    const row = await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId } });
+    expect(row.revokedAt).toBeNull();
+    // The token the disconnect destroyed does not come back with it.
+    expect(Buffer.from(row.ciphertext).includes(Buffer.from(TOKEN, "utf8"))).toBe(false);
+  });
+
+  it("leaves a disconnected account disconnected when the reconnect cannot restore its secret", async () => {
+    const external = unique("ig-account");
+    const { channelAccountId } = await connect(main, external);
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+    await store.disconnectAccount(main, channelAccountId, new Date());
+
+    const failing = createInstagramOnboardingStore(db(), {
+      ...cipher,
+      encrypt: () => {
+        throw new Error("credential restore failed");
+      },
+    });
+    await expect(
+      failing.connectAccount(main, {
+        channel: "INSTAGRAM",
+        externalAccountId: external,
+        capabilities: { ...NO_CAPABILITIES, text: true },
+        purpose: PURPOSE,
+        token: OTHER_TOKEN,
+        expiresAt: EXPIRES,
+        now: new Date(),
+      }),
+    ).rejects.toThrow(/credential restore failed/);
+
+    // Fails closed: the account does not come back connected beside a secret nobody can read.
+    expect((await db().channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true } })).status).toBe("DISCONNECTED");
+    expect((await db().channelCredential.findUniqueOrThrow({ where: { id: credentialId }, select: { revokedAt: true } })).revokedAt).not.toBeNull();
+  });
+
+  it("refuses to report a restoration that matched nothing", async () => {
+    // The count check exists for the case the encrypt-failure test cannot reach: the write succeeds as a
+    // statement and changes no row. Reporting that as a restored credential would let a reconnect commit
+    // an account as connected beside a secret that was never written.
+    await expect(
+      restoreChannelCredential(db(), cipher, {
+        workspaceId: main.workspaceId,
+        credentialId: "01a0b40c-0000-7000-8000-0000000000ff",
+        purpose: PURPOSE,
+        token: OTHER_TOKEN,
+        expiresAt: EXPIRES,
+        restoredAt: new Date(),
+      }),
+    ).rejects.toThrow(TenantRecordNotFoundError);
+  });
+
+  it("does not let a refresh in flight overwrite a token a reconnect just authorized", async () => {
+    const external = unique("ig-account");
+    const { channelAccountId } = await connect(main, external);
+    const credentialId =
+      (
+        await db().channelAccount.findUniqueOrThrow({
+          where: { workspaceId_businessProfileId_id: { workspaceId: main.workspaceId, businessProfileId: main.businessProfileId, id: channelAccountId } },
+          select: { credentialId: true },
+        })
+      ).credentialId ?? "";
+    const beforeRefresh = await store.readCredential(main, { credentialId, purpose: PURPOSE });
+
+    // The other direction of the same race: the refresh read the old credential, and while Meta was
+    // answering a person disconnected and re-authorized. The refreshed token belongs to an authorization
+    // that has been replaced, so it must not land on top of the new one.
+    await store.disconnectAccount(main, channelAccountId, new Date());
+    await connect(main, external, { token: OTHER_TOKEN, now: new Date(Date.now() + 1_000) });
+
+    const rotation = await store.rotateCredential(main, {
+      credentialId,
+      purpose: PURPOSE,
+      token: "IGQVJstale-refresh",
+      expiresAt: EXPIRES,
+      refreshedAt: new Date(Date.now() + 2_000),
+      mintedAt: beforeRefresh?.mintedAt ?? new Date(0),
+    });
+
+    expect(rotation).toBe("SUPERSEDED");
+    expect(await store.readCredential(main, { credentialId, purpose: PURPOSE })).toMatchObject({ token: OTHER_TOKEN });
   });
 
   describe("connect state", () => {

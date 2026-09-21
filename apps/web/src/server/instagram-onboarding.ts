@@ -252,15 +252,19 @@ export async function refreshInstagramCredential(
     token: refreshed.value.accessToken,
     expiresAt: new Date(now.getTime() + refreshed.value.expiresInSeconds * 1000),
     refreshedAt: now,
+    // What this refresh was computed from. If the row has moved on since — disconnected, or
+    // re-authorized with a newer token — this write is stale and must not land.
+    mintedAt: stored.mintedAt,
   });
-  if (rotation === "REVOKED") {
-    // Somebody disconnected the account while Meta was answering. The new token is simply dropped: it
-    // was minted for a connection that no longer exists, and writing it would undo the disconnect.
+  if (rotation === "SUPERSEDED") {
+    // Somebody disconnected or reconnected the account while Meta was answering. The new token is
+    // dropped: it was minted for a state of the connection that no longer exists, and writing it would
+    // undo whatever replaced it.
     dependencies.logger.info("instagram.refresh_discarded", {
       workspaceId: context.workspaceId,
       businessProfileId: context.businessProfileId,
       channelAccountId,
-      reason: "credential revoked during refresh",
+      reason: "credential changed during refresh",
     });
     return "NO_CREDENTIAL";
   }

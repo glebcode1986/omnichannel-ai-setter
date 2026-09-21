@@ -23,6 +23,7 @@ import {
 import {
   readChannelCredential,
   revokeChannelCredential,
+  restoreChannelCredential,
   rotateChannelCredential,
   writeChannelCredential,
   type CredentialRotation,
@@ -88,7 +89,7 @@ export interface InstagramOnboardingStore {
     context: BusinessProfileContext,
     input: { readonly credentialId: string; readonly purpose: CredentialPurpose },
   ): Promise<StoredCredential | undefined>;
-  /** Returns `REVOKED` when the credential was destroyed while the provider call was in flight. */
+  /** Returns `SUPERSEDED` when the credential moved on while the provider call was in flight. */
   rotateCredential(
     context: BusinessProfileContext,
     input: {
@@ -97,6 +98,8 @@ export interface InstagramOnboardingStore {
       readonly token: string;
       readonly expiresAt: Date;
       readonly refreshedAt: Date;
+      /** The mint time the rotation was computed from; the write applies only if it is still current. */
+      readonly mintedAt?: Date;
     },
   ): Promise<CredentialRotation>;
   revokeCredential(
@@ -161,13 +164,19 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
           return { channelAccountId: account.id };
         }
         // Reconnect: the credential row keeps its identity so the account's history stays attached to it.
-        await rotateChannelCredential(tx, cipher, {
+        //
+        // Restored, not rotated. A rotation refuses a revoked credential on purpose — that is what stops
+        // a refresh in flight from resurrecting a token a disconnect destroyed — and a reconnect after a
+        // disconnect is exactly that case, except that here reviving the row is the point: a person has
+        // just re-authorized and the provider issued a new token. It throws if it restores nothing, so
+        // the account cannot end up connected beside a credential nobody can read.
+        await restoreChannelCredential(tx, cipher, {
           workspaceId: scope.workspaceId,
           credentialId: existingCredentialId,
           purpose: input.purpose,
           token: input.token,
           expiresAt: input.expiresAt,
-          refreshedAt: input.now,
+          restoredAt: input.now,
         });
         const account = await connectChannelAccount(tx, context, {
           channel: input.channel,

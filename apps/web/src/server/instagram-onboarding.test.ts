@@ -181,9 +181,13 @@ function fakeStore() {
     },
     rotateCredential: (_context, input) => {
       const credential = credentials.get(input.credentialId);
-      // Mirrors the conditional UPDATE: a revoked credential is never rotated, and the caller is told.
+      // Mirrors the conditional UPDATE: the row must still be the one the rotation was computed from —
+      // not revoked, and not re-minted since — and the caller is told when it is not.
       if (credential === undefined || credential.revokedAt !== null) {
-        return Promise.resolve("REVOKED" as const);
+        return Promise.resolve("SUPERSEDED" as const);
+      }
+      if (input.mintedAt !== undefined && credential.mintedAt.getTime() !== input.mintedAt.getTime()) {
+        return Promise.resolve("SUPERSEDED" as const);
       }
       credential.token = input.token;
       credential.expiresAt = input.expiresAt;
