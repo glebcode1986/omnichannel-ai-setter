@@ -439,6 +439,20 @@ describe("isWithinQuietHours", () => {
     expect(isWithinQuietHours(quiet, at("2026-09-19T07:00:00.000Z"))).toBe(false);
   });
 
+  it("reads midnight as the start of the day, not the end of it", () => {
+    // A quiet period that begins at midnight is the case that separates a 0-23 clock from a 1-24 one:
+    // rendered as 24:00 the current minute lands past every boundary, and a period starting at 00:00
+    // silently never applies. The midnight-spanning test above cannot see this — 24:00 is still after a
+    // 22:00 start, so that period answers the same either way.
+    const fromMidnight = toQuietHours("UTC", "00:00", "07:00");
+
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T00:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T06:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T07:00:00.000Z"))).toBe(false);
+    // And the same clock decides when the period ends, so the deferral instant moves with it.
+    expect(nextQuietHoursEnd(fromMidnight, at("2026-09-19T00:00:00.000Z")).toISOString()).toBe("2026-09-19T07:00:00.000Z");
+  });
+
   it("handles a period inside one day", () => {
     const quiet = toQuietHours("UTC", "09:00", "17:00");
 
