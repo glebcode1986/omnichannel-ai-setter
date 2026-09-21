@@ -26,7 +26,9 @@ export type {
   SourceEventKey,
   StoredMessageStatus,
   WebhookAccount,
+  VerificationFailure,
 } from "./ingestion/ports";
+export { VERIFICATION_FAILURES } from "./ingestion/ports";
 export { processEvent, type EventProcessingContext, type EventProcessingResult } from "./ingestion/process-event";
 export { isEligibleForInboundDebounce, nextDeliveryStatus, outboxRetryDelayMs, sampleDelayMs } from "./ingestion/rules";
 export {
