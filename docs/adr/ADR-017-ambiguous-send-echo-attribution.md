@@ -1,6 +1,8 @@
 # ADR-017: Attributing an unmatched outbound echo to an ambiguous send
 
-**Status:** Proposed — needs a product-owner decision (Issue #56).
+**Status:** Rejected for MVP by the product owner on 2026-09-20 (PR #72). The canonical record
+lives on the docs branch; this file is kept because the implementation it governs is here, and a
+rejected option is worth more in the repository than a gap where someone re-proposes it next year.
 
 ## Context
 
@@ -45,18 +47,27 @@ are not symmetric:
 The first looks clearly better, but it is a weakening of a human-takeover rule, and CLAUDE.md reserves
 those for the product owner rather than for the implementer.
 
-## Status of the implementation
+## Decision
 
-Not implemented. `createOperationEvidencePort` answers `UNKNOWN`, which routes every unresolvable send to a
-person after a grace period. That is the conservative behaviour and it is correct under ADR-013 as it
-stands; this ADR exists so the alternative is a decision someone made rather than a gap nobody noticed.
+**Rejected.** An ambiguous automated send is not settled from an unmatched outbound echo on timing or
+window heuristics. The stronger human-takeover invariant is preserved instead:
 
-## Consequences if accepted
+- a **correlated** echo may settle the app operation it is correlated to;
+- an **unmatched** echo is native or manual human activity, and takes over the conversation;
+- an **unresolved ambiguous** send is quarantined, reconciled and, failing that, put in front of a person;
+- **never** a blind retry.
 
-- the reconciliation evidence port gains a database-backed implementation reading recent unattributed
-  outbound echoes for the conversation;
-- ingestion must defer the takeover decision for an outbound echo until the ambiguity check has run, or
-  be able to reverse it — a takeover applied and then withdrawn is visible to the operator and must be
-  explained in the audit trail;
-- ADR-013 is amended rather than replaced: text matching remains insufficient, and correlation by
-  operation window becomes an additional, explicitly bounded form of evidence.
+The reasoning is the asymmetry the proposal understated. A missed takeover is not merely self-correcting
+on the next message — it is a window in which automation replies over a human who has already started
+answering, in a conversation the business believed a person had taken. Trading a certain protection for a
+probabilistic one, to spare a review item, is the wrong direction for a product whose whole promise is
+that a human can always take the conversation back.
+
+## What the code does
+
+Exactly this, and it did before the decision. `createOperationEvidencePort` answers `UNKNOWN` for
+Instagram, because Meta offers no lookup from a send request to a message, and every unresolvable send
+therefore reaches a person after a grace period. Nothing needed changing; what changed is that the
+alternative is now a decision on the record rather than an open question.
+
+`docs/specs/RELIABILITY_INCIDENTS.md` states the same rule in its reconciliation section.

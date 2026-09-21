@@ -113,9 +113,14 @@ guessing. Two tempting alternatives are rejected:
 
 - matching the reply's text against the thread — ADR-013 rules this out in as many words, and it breaks
   the moment two customers ask the same question;
-- treating an unattributed outbound echo as ours — genuinely promising, but ADR-013 currently reads an
-  unattributed echo as a human replying natively, which pauses automation. ADR-017 records the proposal;
-  it is a product-owner decision, not an implementation detail.
+- treating an unattributed outbound echo as ours — proposed and **rejected** by the product owner
+  (ADR-017). An unmatched echo stays what ADR-013 says it is: native or manual human activity, which
+  takes over the conversation. A missed takeover is not a review item saved, it is a window in which
+  automation replies over a person who has already started answering.
+
+So the settled rule is: a correlated echo may settle the operation it is correlated to; an unmatched echo
+means takeover; an unresolved ambiguous send is quarantined, reconciled and then put in front of a
+person; and a blind retry never happens.
 
 ## Backpressure and concurrency
 
@@ -196,4 +201,5 @@ Named so the gap is visible rather than assumed:
   incidents it is describing;
 - **transcription and third-party integration probes.** The component kinds exist; nothing produces them
   yet, because nothing in the product uses them yet;
-- **provider-side evidence for Instagram.** See ADR-017.
+- **provider-side evidence for Instagram.** There is none to have: Meta offers no lookup from a send
+  request to a message, and the one available substitute was rejected on purpose (ADR-017).
