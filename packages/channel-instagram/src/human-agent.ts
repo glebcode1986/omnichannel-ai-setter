@@ -10,6 +10,7 @@
 import type { ConversationPolicyContext, OutboundMessageCommand, SendResult } from "@omnichannel/channel-core";
 
 import type { ResolvedInstagramConfig } from "./config";
+import { checkCommandScope, checkContextMatchesCommand } from "./scope";
 import { checkSendableText, dispatch } from "./send";
 import { evaluateHumanAgentEligibility } from "./window";
 
@@ -29,6 +30,13 @@ export async function sendAsHumanAgent(
 ): Promise<SendResult> {
   if (actor.userId.trim().length === 0) {
     return { outcome: "REJECTED", retryable: false, code: "NO_HUMAN_ACTOR", message: "a human agent send requires an acting user" };
+  }
+  // Scope first, before content and before any credential is resolved. Eligibility computed from a
+  // context that belongs to another conversation would make the recheck below evidence about somebody
+  // else, and the human-support exception is not transferable between customers.
+  const foreign = checkCommandScope(config, command) ?? checkContextMatchesCommand(command, ctx);
+  if (foreign !== undefined) {
+    return foreign;
   }
   const checked = checkSendableText(command);
   if ("outcome" in checked) {
