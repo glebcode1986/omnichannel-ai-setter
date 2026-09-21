@@ -3,95 +3,76 @@
 > Read `docs/handoff/CURRENT_HANDOFF.md` first.
 > GitHub issues/specs are authoritative; chat is not.
 
-## Current state — 2026-09-21
+## Current state — 2026-09-21 evening
 
-Stage B and Stage C are implemented, but independent review is currently blocked at **PR #51** again because of a newly discovered worker failure-safety defect.
+Independent review has advanced through PR #64.
 
-### Exact review history that matters
+Accepted:
+- #51 PASS `b6e17347a91b4ce4552ce2251a3f5af05df67dfc`
+- #52 PASS `182150bc10a01eba0b9eaa57eb44c036b8e225d8`
+- #63 PASS `cd04a9972d25f8cf20edd57c5753c325130ee4de`
+- #64 PASS `f0dee940a1baf0f3c8d8615ef2090587bf2def01`
 
-- #49 — Astra PASS
-- #50 — Astra PASS
-- #51 schedule-clamp fix — PASS at `1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6`
-- #52 verification-log fix — PASS at `cbf6e119628bd924c8c59ff39949b3f839808349`
-- later parent changes moved current descendant HEADs
-- current #51 HEAD `b5063ab67e556132e9afbe5f006edebeb7714349` — **CHANGES_REQUESTED**
+## ACTIVE NOW — PR #65 / P2-03
 
-## ACTIVE NOW — explicit restart
+Current corrected HEAD:
+`ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
 
-Claude has been explicitly told to resume PR #51 R3 now.
+Previous Astra blocker:
+repair-stage model outage was incorrectly converted into a permanent HELD invalid-output draft, consuming the idempotent generation key.
 
-Astra watcher has been explicitly told:
-- do not re-review the currently rejected `b5063ab...`;
-- wait for the next new `CLAUDE_READY_FOR_ASTRA ... task=P1-04`;
-- then re-review #51 and continue strict dependency order on PASS.
+Current fix:
+- repair returns explicit ATTEMPTED vs UNAVAILABLE;
+- repair outage -> UNAVAILABLE;
+- no draft write;
+- queue retry remains possible;
+- one bounded repair preserved.
 
-PR #63 already has its own R2 scope/Human-Agent repair at `628c6026d151b613ba02be17beb7a4175cbfa579`, propagated through #72; keep it intact while #51 is fixed.
+Astra has been explicitly re-started on this exact SHA.
 
-## NEXT TASK — PR #51 R3 failure-safety correction
+## Claude action on verdict
 
-Current bad rule:
-a process-wide unhandled rejection is considered survivable when:
-- it carries a generic connection-level error code; and
-- one of the worker's Redis clients is currently not ready.
+### If PASS
+Propagate accepted #65 normally through:
 
-This does not identify the rejection's source. An unrelated PostgreSQL/HTTP/pipe/etc. failure with the same code during a Redis outage can be incorrectly ignored.
+#66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72
 
-### Required fix
+For each child:
+- merge parent normally;
+- run required verification;
+- publish fresh exact `CLAUDE_READY_FOR_ASTRA`;
+- do not rebase/force-push;
+- do not merge to main.
 
-1. Global `uncaughtException` = fatal.
-2. Global `unhandledRejection` = fatal after value-safe logging.
-3. Remove process-wide Redis-outage survivability inference.
-4. Handle the known BullMQ/ioredis reconnect rejection at the actual owned promise/emitter boundary.
-5. If ownership cannot be proven, fail/restart rather than guess.
-6. Preserve secret-safe logs.
-7. Add child-process adversarial regression:
-   - Redis unreachable;
-   - unrelated rejection uses the SAME network error code;
-   - unrelated rejection must still exit 1.
-8. Also pin code-less unrelated rejection and healthy-Redis same-code rejection as fatal.
+Then stand by for the next Astra blocker.
 
-Directive is posted on PR #51.
+### If CHANGES_REQUESTED
+Fix #65 itself first.
+Do not propagate the rejected implementation.
 
-Publish:
-`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P1-04`
+## Downstream heads are stale until accepted #65 propagation
 
-Astra re-reviews #51 first.
+#66 `ac7abda2dd860e729f3d520245cb52c7bb63b886`
+#67 `31f16449278fc9f871935b4316249295bbe7a866`
+#68 `8fef94d2172e3c75075457b7ad6d84a6096aa761`
+#69 `ebe10c7d51b13176e8da0a66b2518e8447563ecc`
+#70 `120b3a1be28cded029025701376934c4a40326b0`
+#71 `e995f3c36cb83ab29dcfb7c6f98cbafe382a9312`
+#72 `def2e0711b64ab46c185d7e863039102ae66f340`
 
-## Propagation rule
+## Stop condition
 
-Do **not** blindly propagate another rejected #51 implementation.
-
-After Astra PASS on the new exact #51 HEAD, propagate with normal merges through:
-
-#52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72.
-
-No rebase, no force-push, no merge to main.
-
-## Stage D stop condition
-
-Do not open Stage D UI PRs until the current #51 failure-safety blocker is resolved and review is moving cleanly again.
-
-## Mutation-test correction
-
-Earlier P2-04 through P2-07 mutation scores were invalid because the scratch harness ran on a red baseline and cross-package imports could resolve to original unmutated source.
-
-The harness has been repaired and now refuses to run unless baseline is green. Real survivors were re-run and genuine test gaps were closed.
-
-Do not quote old mutation counts as evidence.
-
-## Next feature train after review-safe Stage B/C
-
-Stage D Design Partner UI, then WhatsApp, privacy/security, commercial billing, Admin Operations and Launch Readiness per Master Issue #61.
+Do not open Stage D until the independent review queue has moved safely through the current Stage B/C stack.
 
 ## Hard invariants
 
-- tenant + Business Profile isolation
+- tenant + BP isolation
 - human activity wins
 - no stale send
 - no blind retry after ambiguity
 - no early delivery
 - unknown invariants fail closed
-- provider timing/window revalidation
+- transient infrastructure/provider failure stays retryable and must not become permanent customer state
 - queues are not sole durable intent
 - model output advisory
-- secrets never enter prompts/client output/normal logs/plaintext audit
+- secret-safe logging
