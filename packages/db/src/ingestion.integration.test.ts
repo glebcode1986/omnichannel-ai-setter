@@ -381,7 +381,11 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     expect(normalizeCalls).toBe(0);
     expect(await counts()).toEqual(before);
     expect(scheduled).toHaveLength(0);
-    expect(logs.find((line) => line.event === "ingestion.verification_failed")?.fields).toMatchObject({ reason: "invalid signature" });
+    const verificationFailure = logs.find((line) => line.event === "ingestion.verification_failed");
+    expect(verificationFailure?.fields).toMatchObject({ reasonCode: "ADAPTER_REJECTED" });
+    // End to end this time: the adapter's own rejection text must not survive anywhere in what was
+    // logged, whatever nesting it might have travelled in.
+    expect(JSON.stringify(logs)).not.toContain("invalid signature");
   });
 
   it("answers the subscription challenge and refuses malformed payloads without writing", async () => {
