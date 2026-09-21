@@ -18,7 +18,6 @@ import { randomUUID } from "node:crypto";
 import { createAiDraftHandler } from "./ai-draft-handler";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
-import { createRedisOutageWatch } from "./redis-outage";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
@@ -51,14 +50,10 @@ function main(): void {
   }
 
   const logger = createLogger({ level: env.LOG_LEVEL, bindings: { service: "worker" } });
-  // Created before anything starts and told about each client as it is made, so the guards below can tell
-  // "our own Redis is reconnecting" from every other escaped rejection, which stays fatal.
-  const redisOutage = createRedisOutageWatch();
   const runtime = createWorkerRuntime({
     logger,
     startProcessors: () => {
       const connection = createRedisConnection(env.REDIS_URL, "worker", logger);
-      redisOutage.watch(connection);
       const db = createDbClient({ connectionString: env.DATABASE_URL });
       // Provider choice is configuration: the model ID and key come from the validated environment, and
       // nothing below this line knows which provider is in use.
@@ -110,7 +105,6 @@ function main(): void {
     exit: (code) => {
       process.exit(code);
     },
-    survivable: (reason) => redisOutage.survivable(reason),
   });
   process.on("uncaughtException", guards.onUncaughtException);
   process.on("unhandledRejection", guards.onUnhandledRejection);

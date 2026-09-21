@@ -2,9 +2,8 @@ import type { Logger } from "@omnichannel/observability";
 import { describe, expect, it, vi } from "vitest";
 
 import { processGuards } from "./process-guards";
-import { createRedisOutageWatch } from "./redis-outage";
 
-function host(survivable?: (reason: unknown) => boolean) {
+function host() {
   const exits: number[] = [];
   const events: { event: string; fields: Record<string, unknown> }[] = [];
   const logger = {
@@ -21,7 +20,6 @@ function host(survivable?: (reason: unknown) => boolean) {
     exit: (code: number) => {
       exits.push(code);
     },
-    ...(survivable === undefined ? {} : { survivable }),
   });
   return { exits, events, guards };
 }
@@ -52,17 +50,21 @@ describe("what the worker does when an error escapes everything", () => {
     expect(events[0]).toMatchObject({ event: "worker.fatal", fields: { origin: "unhandledRejection" } });
   });
 
-  it("survives only the failure it can positively identify as its own reconnecting client", () => {
-    const { guards, exits, events } = host(() => true);
+  it("stops on a connection failure too, when nothing owned it", () => {
+    const { guards, exits, events } = host();
 
+    // A connection-shaped error that reached this handler was not contained by whatever produced it, so
+    // nobody can say what it belonged to. An error code and a dependency's state are circumstantial:
+    // two unrelated failures can share both, and excusing on that basis excuses the wrong one sooner or
+    // later. The worker stops and its supervisor starts it clean.
     guards.onUnhandledRejection(connectionFailure);
 
-    expect(exits).toEqual([]);
-    expect(events[0]).toMatchObject({ event: "worker.unhandled_rejection", fields: { errorCode: "ECONNREFUSED", survived: true } });
+    expect(exits).toEqual([1]);
+    expect(events[0]).toMatchObject({ event: "worker.fatal", fields: { errorCode: "ECONNREFUSED", origin: "unhandledRejection" } });
   });
 
   it("never writes the error itself into the log", () => {
-    const { guards, events } = host(() => true);
+    const { guards, events } = host();
 
     guards.onUncaughtException(connectionFailure, "uncaughtException");
     guards.onUnhandledRejection(connectionFailure);
@@ -76,38 +78,5 @@ describe("what the worker does when an error escapes everything", () => {
       expect(Object.keys(entry.fields)).not.toContain("error");
       expect(Object.keys(entry.fields)).not.toContain("stack");
     }
-  });
-});
-
-describe("deciding that a rejection is our own Redis reconnecting", () => {
-  const watch = (status: string) => {
-    const outage = createRedisOutageWatch();
-    outage.watch({ status });
-    return outage;
-  };
-
-  it("excuses a connection failure only while one of our clients is down", () => {
-    expect(watch("reconnecting").survivable(connectionFailure)).toBe(true);
-    expect(watch("end").survivable(connectionFailure)).toBe(true);
-    // The same error arriving while every client is healthy is not the reconnect case. Excusing it would
-    // mean excusing a connection error from anything at all, which is the blanket rule this replaced.
-    expect(watch("ready").survivable(connectionFailure)).toBe(false);
-  });
-
-  it("excuses nothing that is not a connection-level failure", () => {
-    const outage = watch("reconnecting");
-
-    // A rejected command carries no code; an application error that merely happened during the outage is
-    // still an application error, and its invariants are still unknown.
-    expect(outage.survivable(new Error("WRONGTYPE Operation against a key"))).toBe(false);
-    expect(outage.survivable(Object.assign(new Error("boom"), { code: "ERR_UNHANDLED" }))).toBe(false);
-    expect(outage.survivable(Object.assign(new Error("boom"), { code: 42 }))).toBe(false);
-    expect(outage.survivable("a string")).toBe(false);
-    expect(outage.survivable(undefined)).toBe(false);
-  });
-
-  it("excuses nothing at all before a client exists", () => {
-    // Nothing has been created yet, so nothing can be attributed to it.
-    expect(createRedisOutageWatch().survivable(connectionFailure)).toBe(false);
   });
 });
