@@ -56,10 +56,26 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
   const queues = new Map<string, Queue>();
   const replyCycles = createReplyCycleRegistry(options.connection, prefix);
 
+  /** Logged once per outage per queue: while Redis is unreachable every retry surfaces here. */
+  const failing = new Set<string>();
+
   const queueFor = (family: { readonly queueName: string }): Queue => {
     let queue = queues.get(family.queueName);
     if (queue === undefined) {
       queue = new Queue(family.queueName, { connection: options.connection, prefix });
+      // We construct this object, so its failures are ours to own. Without a listener BullMQ falls back
+      // to `console.error` with the raw error — unsanitized, and outside the structured log entirely.
+      queue.on("error", (error: Error) => {
+        if (!failing.has(family.queueName)) {
+          failing.add(family.queueName);
+          // Name and code only: a connection error's message carries the host and can carry a password.
+          options.logger.warn("queue.client_error", {
+            queue: family.queueName,
+            errorName: error.name,
+            errorCode: typeof (error as { code?: unknown }).code === "string" ? (error as { code?: string }).code : undefined,
+          });
+        }
+      });
       queues.set(family.queueName, queue);
     }
     return queue;
