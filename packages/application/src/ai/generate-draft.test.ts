@@ -488,6 +488,23 @@ describe("malformed output", () => {
     // Nothing was written, so the queue may safely retry the job.
     expect(saved).toHaveLength(0);
   });
+
+  it("does not turn an outage during the repair into a permanently unusable draft", async () => {
+    const { dependencies, requests, saved } = harness([
+      modelResult({ output: { reply: "hi", confidence: 2 } }),
+      new ReplyModelUnavailableError("timeout"),
+    ]);
+
+    const outcome = await generateDraft(dependencies, command());
+
+    // The provider went away *during* the repair, so nothing is known about what it would have produced.
+    // Filing the first malformed output would be permanent: the generation key makes the row idempotent,
+    // so a retry could never replace it with the draft the model writes once the provider is back. A
+    // momentary outage would have become a finished, unusable generation and a review item for a person.
+    expect(requests).toHaveLength(2);
+    expect(outcome).toEqual({ status: "UNAVAILABLE" });
+    expect(saved).toHaveLength(0);
+  });
 });
 
 describe("no transport authority", () => {
