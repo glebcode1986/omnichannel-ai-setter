@@ -191,16 +191,11 @@ export async function disconnectInstagramAccount(
   context: BusinessProfileContext,
   channelAccountId: string,
 ): Promise<void> {
-  const account = await dependencies.store.findAccountById(context, channelAccountId);
-  // Status first: it frees the live-account slots even if the credential write then fails.
-  await dependencies.store.setAccountStatus(context, channelAccountId, "DISCONNECTED");
-  if (account?.credentialId !== undefined) {
-    await dependencies.store.revokeCredential(context, {
-      credentialId: account.credentialId,
-      purpose: CREDENTIAL_PURPOSE,
-      now: dependencies.now(),
-    });
-  }
+  // One transaction, because the two halves cannot be allowed to disagree. Done separately, a failure
+  // between them leaves an account that reads as disconnected — slot freed, UI saying the connection is
+  // gone — while its encrypted token is still there and still usable. That is the half-state nobody goes
+  // looking for, so it is the one that must be impossible.
+  await dependencies.store.disconnectAccount(context, channelAccountId, dependencies.now());
   dependencies.logger.info("instagram.disconnected", {
     workspaceId: context.workspaceId,
     businessProfileId: context.businessProfileId,
@@ -251,13 +246,28 @@ export async function refreshInstagramCredential(
     });
     return "NEEDS_REAUTH";
   }
-  await dependencies.store.rotateCredential(context, {
+  const rotation = await dependencies.store.rotateCredential(context, {
     credentialId: stored.credentialId,
     purpose: CREDENTIAL_PURPOSE,
     token: refreshed.value.accessToken,
     expiresAt: new Date(now.getTime() + refreshed.value.expiresInSeconds * 1000),
     refreshedAt: now,
+    // What this refresh was computed from. If the row has moved on since — disconnected, or
+    // re-authorized with a newer token — this write is stale and must not land.
+    mintedAt: stored.mintedAt,
   });
+  if (rotation === "SUPERSEDED") {
+    // Somebody disconnected or reconnected the account while Meta was answering. The new token is
+    // dropped: it was minted for a state of the connection that no longer exists, and writing it would
+    // undo whatever replaced it.
+    dependencies.logger.info("instagram.refresh_discarded", {
+      workspaceId: context.workspaceId,
+      businessProfileId: context.businessProfileId,
+      channelAccountId,
+      reason: "credential changed during refresh",
+    });
+    return "NO_CREDENTIAL";
+  }
   return "REFRESHED";
 }
 
