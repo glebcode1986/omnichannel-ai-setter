@@ -152,14 +152,15 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(result.code).toBe(0);
   }, 30_000);
 
-  it("still dies on an escaped rejection that is not its own Redis reconnecting", async () => {
+  it("still dies on an escaped rejection carrying Redis's own error code from another source", async () => {
     const result = await new Promise<ProcessResult>((resolve, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
         cwd: appDir,
         env: {
           PATH: process.env.PATH ?? "",
-          // A preload that rejects once, with a TypeError carrying no error code. `tsx` comes first so
-          // the preload itself can be TypeScript and stay inside this package's project.
+          // A preload that rejects once, with `ECONNREFUSED` — the same code a reconnecting Redis client
+          // produces, from a source that has nothing to do with Redis. `tsx` comes first so the preload
+          // itself can be TypeScript and stay inside this package's project.
           NODE_OPTIONS: "--import tsx --import ./src/testing/escaped-rejection.ts",
           ...VALID_ENV,
           LOG_LEVEL: "debug",
@@ -180,8 +181,9 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       setTimeout(() => child.kill("SIGTERM"), 5_000);
     });
 
-    // Same unreachable Redis as the test above, so the only difference is where the rejection came from.
-    // An unknown cause means unknown state, and the worker stops rather than carrying on.
+    // Same unreachable Redis as the test above, and now the same error code as well, so the only
+    // difference left is the source — which nothing at the process level can see. An unknown cause means
+    // unknown state, and the worker stops rather than carrying on.
     expect(result.stderr).toContain("worker.fatal");
     expect(result.stderr).toContain("TypeError");
     expect(result.code).toBe(1);
