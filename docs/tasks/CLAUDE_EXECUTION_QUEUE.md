@@ -16,6 +16,17 @@ Stage B and Stage C are implemented, but independent review is currently blocked
 - later parent changes moved current descendant HEADs
 - current #51 HEAD `b5063ab67e556132e9afbe5f006edebeb7714349` — **CHANGES_REQUESTED**
 
+## ACTIVE NOW — explicit restart
+
+Claude has been explicitly told to resume PR #51 R3 now.
+
+Astra watcher has been explicitly told:
+- do not re-review the currently rejected `b5063ab...`;
+- wait for the next new `CLAUDE_READY_FOR_ASTRA ... task=P1-04`;
+- then re-review #51 and continue strict dependency order on PASS.
+
+PR #63 already has its own R2 scope/Human-Agent repair at `628c6026d151b613ba02be17beb7a4175cbfa579`, propagated through #72; keep it intact while #51 is fixed.
+
 ## NEXT TASK — PR #51 R3 failure-safety correction
 
 Current bad rule:
