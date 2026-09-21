@@ -58,6 +58,11 @@ describe("reciprocal rank fusion", () => {
     expect(fuseByReciprocalRank(lists, { limit: 2 }).map((entry) => entry.id)).toEqual(["a", "b"]);
     expect(fuseByReciprocalRank(lists, { limit: 0 })).toEqual([]);
     expect(fuseByReciprocalRank(lists, { limit: -5 })).toEqual([]);
+    // -1 rather than -5 on purpose: `slice(0, -5)` of three candidates is already empty, so a clamp that
+    // was quietly removed would still look correct. `slice(0, -1)` returns the first two, and a negative
+    // limit that returns results is how a "give me nothing" caller ends up handed a fact to quote.
+    expect(fuseByReciprocalRank(lists, { limit: -1 })).toEqual([]);
+    expect(fuseByReciprocalRank(lists, { limit: -0.5 })).toEqual([]);
     expect(fuseByReciprocalRank([[], []], { limit: 5 })).toEqual([]);
   });
 
