@@ -3,7 +3,7 @@
 **Last updated:** 2026-09-21  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
 **Implementation:** Stage B complete; Stage C reliability implemented; review catch-up currently blocked again at PR #51  
-**Immediate action:** fix process-wide unhandled-rejection source attribution on PR #51  
+**Immediate action:** Claude is explicitly re-started on PR #51 R3; Astra watcher is armed for the next new #51 HEAD  
 **Stage D:** still paused
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
@@ -178,3 +178,16 @@ Launch Readiness / staged Commercial Beta.
 - Model output is advisory; application policy authorizes.
 - Queues are execution mechanisms, not sole durable intent.
 - Secrets never enter prompts, client output, normal logs or plaintext audit.
+
+
+## Watcher / execution restart — 2026-09-21
+
+Two explicit GitHub commands were posted on PR #51:
+
+- **Claude:** resume immediately from the unresolved R3 source-attribution defect on current rejected HEAD `b5063ab67e556132e9afbe5f006edebeb7714349`; publish a new `CLAUDE_READY_FOR_ASTRA ... task=P1-04` exact HEAD.
+- **Astra watcher:** do not waste a re-review on the same rejected HEAD; automatically re-fetch/re-review the first newer #51 HEAD when Claude publishes the marker, then continue strict dependency order.
+
+P2-01 PR #63 also has a completed R2 correction waiting in the queue:
+`628c6026d151b613ba02be17beb7a4175cbfa579`
+
+That fix binds Human Agent eligibility to the actual outbound recipient/conversation and enforces adapter Workspace/BP/channel-account scope before credentials/HTTP. It has been propagated through #72, but Astra should review it only after the dependency queue passes #51 and #52.
