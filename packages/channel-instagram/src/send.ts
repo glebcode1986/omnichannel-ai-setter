@@ -13,6 +13,7 @@ import type { Logger } from "@omnichannel/observability";
 
 import { MAX_TEXT_BYTES, type ResolvedInstagramConfig } from "./config";
 import { classifyMetaError, formatErrorCode, parseMetaError, parseMetaSuccess } from "./errors";
+import { checkCommandScope } from "./scope";
 import type { InstagramHttpResult } from "./http";
 
 const SEND_TIMEOUT_MS = 10_000;
@@ -109,6 +110,12 @@ export function mapResult(result: InstagramHttpResult, logger?: Logger, operatio
 }
 
 export async function sendStandardText(config: ResolvedInstagramConfig, command: OutboundMessageCommand): Promise<SendResult> {
+  // The same boundary as the tagged path, for the same reason: without it a command naming another
+  // workspace's channel account is dispatched through this account's token.
+  const foreign = checkCommandScope(config, command);
+  if (foreign !== undefined) {
+    return foreign;
+  }
   const checked = checkSendableText(command);
   if ("outcome" in checked) {
     return checked;
