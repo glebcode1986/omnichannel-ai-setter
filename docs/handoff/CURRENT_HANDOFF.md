@@ -1,13 +1,13 @@
 # Current Handoff
 
-**Last updated:** 2026-09-20  
+**Last updated:** 2026-09-21  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
-**Implementation stage:** Stage B complete; Stage C reliability implemented in PR #72; independent review catch-up has advanced to PR #52  
-**Immediate correction:** PR #52 secret-safe webhook verification logging  
-**Do not start Stage D UI until:** #52 is corrected and propagated through the current stack
+**Implementation:** Stage B complete; Stage C reliability implemented; review catch-up currently blocked again at PR #51  
+**Immediate action:** fix process-wide unhandled-rejection source attribution on PR #51  
+**Stage D:** still paused
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
-> GitHub is canonical project memory. Chat history is not an execution contract. Fetch live PR HEADs before acting.
+> GitHub is canonical project memory. Fetch live PR HEADs before acting.
 
 ## Read order
 
@@ -17,188 +17,164 @@
 4. `CLAUDE.md`
 5. `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`
 6. Master Issue #61
-7. exact issue / PR / task contract
-8. relevant specs/ADRs
+7. current PR / issue / task contract
+8. relevant specs / ADRs
 
-## Executive status
+## What has happened since the previous handoff
 
-Claude has now implemented:
+### PR #51 scheduling bug was fixed and passed
+The earlier fail-unsafe 30-day -> 7-day clamp was corrected and independently accepted at:
 
-### Stage B — Instagram + shared AI
-- #63 Instagram transport
-- #64 Instagram onboarding/token lifecycle
-- #65 AI draft engine
-- #66 Knowledge/Style retrieval
-- #67 deterministic policy
-- #68 delivery coordinator
-- #69 human handoff / Review state machine
-- #70 eval harness / golden cases
-- #71 full Instagram vertical slice E2E
-
-### Stage C — reliability
-- #72 reliability / health / kill switches / backpressure / reconciliation / incident metrics
-
-PR #72 current snapshot HEAD:
-`c2c81a588f31985d0f5cbf58571e050978535e9e`
-
-Claude reports:
-- 851 baseline tests;
-- 70 E2E tests;
-- evals green;
-- migration drift 0;
-- real PostgreSQL + Redis verification;
-- kill switches at global/workspace/BP/channel-account scope;
-- durable reconciliation;
-- backlog-triggered bounded automation suspension;
-- health and incident state;
-- recovery re-enters the delivery coordinator instead of replaying sends.
-
-This is implementation evidence, not independent Astra acceptance yet.
-
-## Independent review state
-
-### Accepted
-- PR #49 — Astra PASS
-- PR #50 — Astra PASS at `3934d99e391337498e7446b8335b90a3f6518b2d`
-
-### PR #51 — PASS
-Astra accepted exact HEAD:
 `1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6`
 
-The fail-unsafe scheduling clamp is fixed: out-of-range future schedules are rejected before enqueue; exact-max/max+1/far-future/past-now/metadata consistency are pinned by real Redis regressions, and exact-head CI passed.
+That fix rejects unsupported future schedules before enqueue and pins exact-max/max+1/far-future/past-now/metadata consistency with real Redis tests.
 
-### Current blocker — PR #52 / P1-05
-Astra reviewed exact HEAD:
-`193ef5ce5950977cd3116bbda6dc3d8aa838ecfe`
+### PR #52 logging-security bug was fixed and passed
+Astra found that adapter-controlled `VerificationResult.REJECTED.reason` could leak bearer/signature/body/query data into structured logs.
 
-Blocking security finding: `VerificationResult.REJECTED.reason` is adapter-controlled free text and is currently copied into structured logs. Because adapters receive raw webhook headers/query/body, this can leak bearer tokens, signatures, body fragments or other sensitive values into logs.
+Claude fixed it by discarding the free text and logging only application-owned closed codes. Astra PASS:
 
-Required correction:
-- never log adapter free-form `verification.reason`;
-- replace it with an application-owned closed reason code/classification;
-- add a canary regression proving unique secret/body/header/query fragments cannot reach any structured log fields;
-- preserve `UNAUTHORIZED`, challenge ordering and verify-before-normalize/persist behavior.
+`cbf6e119628bd924c8c59ff39949b3f839808349`
 
-A focused directive is already posted on PR #52.
+### Claude corrected false mutation-test confidence
+Claude discovered that the old scratch mutation harness was invalid:
+- package `node_modules` symlinks made the architecture baseline red;
+- monorepo links pointed tests back to unmutated source;
+- therefore several earlier “all mutants killed” numbers were not real measurements.
 
-### Review queue after #52
-After #52 gets a new HEAD and PASS, Astra continues strictly:
+He repaired the harness, required a green baseline, re-ran the affected P2 tasks, and closed real test gaps. Examples found/fixed include:
+- retrieval similarity threshold interpreted incorrectly;
+- archived Style examples still eligible;
+- unsafe full-text query token handling;
+- candidate-cap/fusion edge cases;
+- policy capability mismatch;
+- quiet-hours midnight handling;
+- delivery coordinator losing review-required state;
+- deferral to an already-past instant.
 
-#63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72
+This produced many propagation comments and changing HEADs. This is review/test hardening, not a new product-scope expansion.
 
-Do not re-review #50 or #51 unless their accepted code changes.
+## Current blocker — PR #51 again
 
-## Current stack snapshot
+Current PR #51 HEAD:
+`b5063ab67e556132e9afbe5f006edebeb7714349`
 
-Fetch live values before modifying.
+A new worker-reliability defect was found while exact-head CI/review continued.
 
-- #50 `3934d99e391337498e7446b8335b90a3f6518b2d` — PASS
-- #51 `1fb13b1aef0dd8dac5d905a4af7169f9735a7ef6` — PASS
-- #52 `193ef5ce5950977cd3116bbda6dc3d8aa838ecfe` — CHANGES_REQUESTED
-- #63 `d117291dded9fff6c1f9ce421a5af4a21308dfba`
-- #64 `0fc59ff60e53f9c130de3d4d74215f6ec6b350f8`
-- #65 `99dc18aff9210318639da19d54bad759937b7432`
-- #66 `23dc6d0df7c39144962575face2f6d02c053efbd`
-- #67 `2ad689347a276fe50ef8a422f2a839002a268d0f`
-- #68 `73b7ce074d0f500e0a49a1cd6e70bf1e768fae05`
-- #69 `21e31fa3405d408e75b9f9bf777c58aee5ae7e9f`
-- #70 `cdbf9bd5924be99d2d24ae02dd7cfe2edebad310`
-- #71 `5126e4e6e81b41ebb47e680f8843b660ae4b8575`
-- #72 `c2c81a588f31985d0f5cbf58571e050978535e9e`
+### The issue
 
-## Product-owner decision from Stage C
+The worker originally crashed during a Redis reconnect because Node surfaced an unhandled promise rejection as fatal.
 
-ADR-017 proposal is **rejected for MVP**.
+Claude first made all unhandled rejections survivable. Astra correctly rejected that as too broad.
 
-Do not treat an unmatched outbound echo as proof that an ambiguous automated send succeeded.
+Claude narrowed it to:
+- connection-like error code; and
+- one of this worker's Redis clients currently not ready.
 
-Reason:
-- human activity always wins;
-- false attribution could suppress takeover after a real human reply;
-- false takeover / extra Review work is safer than letting AI continue after human intervention.
+Astra rejected the current rule too, because this is still **temporal correlation, not source attribution**.
 
-MVP behavior:
-- correlated outbound echo -> may settle the known app operation;
-- unmatched outbound echo -> human/native activity and takeover;
-- unresolved ambiguous send -> quarantine/reconciliation/manual Review;
+While Redis is down, an unrelated PostgreSQL/HTTP/pipe/logging rejection with `ECONNRESET`, `ETIMEDOUT`, `EPIPE`, etc. is still incorrectly treated as safe to continue.
+
+### Required correction
+
+- global `uncaughtException` remains fatal;
+- global `unhandledRejection` also remains fatal after secret-safe logging;
+- remove generic “survivable if Redis is down” logic from the process-wide handler;
+- contain the known BullMQ/ioredis reconnect rejection only at the actual promise/emitter boundary that owns it;
+- if true source ownership cannot be established, prefer process failure/restart over guessing;
+- add an adversarial child-process regression where Redis is down and an unrelated rejection carries the **same network code**; that unrelated failure must still terminate the worker.
+
+A focused R3 directive is posted on PR #51.
+
+## Review implications
+
+Exact-head review discipline matters.
+
+Earlier PASSes remain valid for the exact SHAs they reviewed, but current descendant HEADs moved because parent fixes were propagated.
+
+Current live stack snapshot:
+
+- #51 `b5063ab67e556132e9afbe5f006edebeb7714349` — **CHANGES_REQUESTED**
+- #52 `b02a022a971d86347cb06d4501ad319016d41cf4`
+- #63 `ee22dba13156a01f2fbbe1dbfbe5c83f59b7eef5`
+- #64 `e0a64ad75709b01415364bffafbd9048be0cfbd6`
+- #65 `76e64d60a1ec327ec960ad4ab22056d43c398fab`
+- #66 `98a6c5e545283a66a37abe9e22766f9bb3d87c4e`
+- #67 `aeebfa306243fc67da7b1d8ac03b33f90031a930`
+- #68 `7c637ede17b8e26349059a695a0501f2d281801d`
+- #69 `9ea56c6df978506c4ac6987ec50d03f4a43a24d1`
+- #70 `aac5a96061faa88f980d06292d2ba8168f30242b`
+- #71 `5a460881d2557d89cee7933a160908466a7fd7be`
+- #72 `60dd541055498cf8902ca4d49e596fe7e60211e3`
+
+Do not review downstream exact HEADs as accepted while #51 remains red.
+
+## Implementation status
+
+### Stage B implemented
+#63 -> #71:
+Instagram transport/onboarding, AI draft, Knowledge/Style retrieval, deterministic policy, delivery coordinator, human handoff/Review, eval harness, Instagram E2E slice.
+
+### Stage C implemented
+#72:
+health, scoped kill switches, backpressure, durable reconciliation, incidents/metrics, safe recovery.
+
+Latest Claude verification reported at #72:
+`pnpm verify` 894 tests passed on the current propagated head.
+
+This is implementation evidence, not independent acceptance of the whole current stack.
+
+## Product-owner decision preserved
+
+ADR-017 remains rejected for MVP:
+- unmatched outbound echo remains native/manual human activity;
+- ambiguous automated send stays quarantined unless authoritative correlation exists;
+- human takeover safety wins;
 - no blind retry.
-
-Canonical ADR:
-`docs/adr/ADR-017-ambiguous-send-echo-attribution.md`
 
 ## Immediate execution plan
 
-1. Claude fixes PR #52 secret-safe logging finding.
-2. Publish `CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P1-05`.
-3. Propagate with normal merges through #63 -> #72.
-4. Astra re-reviews #52.
-5. If PASS, Astra continues dependency order through #72.
-6. Only after that review debt is moving cleanly should new Stage D UI branches begin.
-
-No rebase / force-push of the published stack. No self-merge to main.
-
-## What is implemented but still not production-proven
-
-- Live Meta API traffic has not yet been exercised with real app credentials/test account.
-- Stage B/C downstream PRs are not independently accepted yet because review is blocked at #51.
-- Reliability notification transport/operator HTTP surface remain later UI/integration work.
-- Real production SLOs/load numbers are not yet established.
+1. Claude fixes current PR #51 source-attribution defect.
+2. Publish a new exact:
+   `CLAUDE_READY_FOR_ASTRA head=<sha> task=P1-04`
+3. Astra re-reviews #51 first.
+4. Only after PASS, propagate that accepted correction through #52 -> #72.
+5. Astra continues strict dependency order.
+6. Stage D stays paused until this lower-layer reliability issue is cleanly resolved.
 
 ## Remaining Commercial Beta path
 
-### Stage D — Design Partner UI
-#27 -> #58 -> #28 -> #29 -> #31 -> #32 -> #30 -> #33 -> #54 -> #55 -> #34 -> #35
+After review-safe Stage B/C:
 
-This creates:
-- app shell/onboarding;
-- EN/RU;
-- Inbox;
-- Review operations;
-- Knowledge/Style UI;
-- Test Drive / AI settings;
-- Leads;
-- customer identity/memory;
-- goals/followups/tasks;
-- Analytics/Audit;
-- responsive/accessibility E2E.
+### Stage D — Design Partner UI
+App shell/onboarding, EN/RU, Inbox, Review, Knowledge, Style, AI settings/Test Drive, Leads, memory/identity, follow-ups/tasks, Analytics/Audit, responsive/accessibility.
 
 ### Stage E — WhatsApp
-#18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24
+#18 -> #24.
 
 ### Stage F
-#57 privacy/security/export/retention/deletion
+Privacy/security/export/retention/deletion.
 
 ### Stage G
-commercial billing/entitlements/provider integration per #61
+Commercial billing/entitlements/provider integration.
 
 ### Stage H
-#59 Admin Operations
+Admin Operations.
 
 ### Stage I
-#60 Launch Readiness / release evidence / staged Commercial Beta
+Launch Readiness / staged Commercial Beta.
 
 ## Hard invariants
 
-Never trade these for speed:
-- Workspace + Business Profile isolation;
-- human activity wins over AI;
-- stale-action protection;
-- no blind retry after ambiguous external write;
-- no delivery earlier than durable declared schedule;
-- provider/webhook/job idempotency;
-- inbound survives downstream outages;
-- AUTOPILOT server-side, browser-independent;
-- model output advisory, application policy authoritative;
-- queues are execution mechanisms, not sole durable intent;
-- secrets stay out of prompts, client output, normal logs and plaintext audit.
-
-## Scope guard
-
-Do not block first Commercial Beta on:
-- full Booking/calendar;
-- public API/webhooks;
-- broad CRM catalog;
-- separate prospecting/acquisition product;
-- Telegram/Threads;
-- generated media replies;
-- universal cross-BP identity graph.
+- Workspace + Business Profile isolation.
+- Human activity always wins over AI.
+- No stale send.
+- No blind retry after ambiguous external write.
+- No delivery earlier than durable declared schedule.
+- Unknown process invariants fail closed.
+- Provider/webhook/job idempotency.
+- Inbound survives downstream outages.
+- AUTOPILOT is server-side.
+- Model output is advisory; application policy authorizes.
+- Queues are execution mechanisms, not sole durable intent.
+- Secrets never enter prompts, client output, normal logs or plaintext audit.
