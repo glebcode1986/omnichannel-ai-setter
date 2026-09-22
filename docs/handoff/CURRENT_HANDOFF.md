@@ -3,8 +3,8 @@
 **Last updated:** 2026-09-21 evening  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
 **Implementation:** Stage B complete; Stage C reliability implemented  
-**Independent review position:** PR #65 / P2-03 is accepted; next review target is PR #66 / P2-04 at propagated HEAD `061b7af36620713c00324a8982667f2477bb3e35`  
-**Active now:** propagation through #72 is complete; Astra was manually re-started on #66; Claude is standing by on the verdict  
+**Independent review position:** PR #66 / P2-04 is CHANGES_REQUESTED at `061b7af36620713c00324a8982667f2477bb3e35`
+**Active now:** Claude has a focused P2-04 language-wiring fix directive; hourly Astra/Claude watch is active
 **Stage D:** paused
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
@@ -141,19 +141,27 @@ Stage I — Launch Readiness / staged Commercial Beta
 - Secrets never enter prompts, client output, normal logs or plaintext audit.
 
 
-## Next review target — PR #66 / P2-04
+## Current blocker — PR #66 / P2-04
 
-Current exact HEAD:
+Astra reviewed exact HEAD:
 `061b7af36620713c00324a8982667f2477bb3e35`
 
-Claude has already published:
-`CLAUDE_READY_FOR_ASTRA head=061b7af36620713c00324a8982667f2477bb3e35 task=P2-04`
+Verdict:
+`ASTRA_REVIEW: CHANGES_REQUESTED head=061b7af36620713c00324a8982667f2477bb3e35`
 
-The prior watcher did not emit a verdict overnight, so Astra/Codex was explicitly re-started on this exact SHA on 2026-09-22 morning.
+Blocking gap:
+- SQL/db retrieval already supports optional `RetrievalQuery.language`;
+- canonical P2-04 contract requires Style language filtering with requested-language + NULL fallback;
+- production `DraftRetrievalQuery` does not carry language;
+- worker calls retrieval without language, so live multilingual Style retrieval effectively runs with `language=undefined` and can return the wrong-language examples.
 
-Claude is standing by:
-- PASS -> no gratuitous re-merge; let Astra continue to the already-propagated #67 current HEAD after live linkage check;
-- CHANGES_REQUESTED -> fix #66 first, then propagate only the accepted correction forward.
+Required fix is posted on PR #66:
+- carry normalized BCP-47-compatible language from the authoritative resolved StyleProfile / approved source through application -> worker -> retrieval;
+- requested language keeps matching + NULL examples and excludes other explicit languages;
+- no language preserves the full eligible Style corpus;
+- Knowledge behavior and tenant/BP boundaries remain unchanged;
+- add production-path regressions proving the language value is actually forwarded end-to-end.
 
-If #66 passes, continue strict dependency order:
-#67 -> #68 -> #69 -> #70 -> #71 -> #72.
+After Claude publishes a new exact P2-04 HEAD, Astra re-reviews #66 first. Only after PASS should the correction propagate through #67 -> #72.
+
+An hourly condition watch is active to inspect the repository, issue the next Claude/Astra directive when state changes, update canonical handoff/queue, and notify the user only on meaningful changes.
