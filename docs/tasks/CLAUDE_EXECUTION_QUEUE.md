@@ -51,15 +51,15 @@ Then stand by for the next Astra blocker.
 Fix #65 itself first.
 Do not propagate the rejected implementation.
 
-## Downstream heads are stale until accepted #65 propagation
+## Current propagated heads
 
-#66 `ac7abda2dd860e729f3d520245cb52c7bb63b886`
-#67 `31f16449278fc9f871935b4316249295bbe7a866`
-#68 `8fef94d2172e3c75075457b7ad6d84a6096aa761`
-#69 `ebe10c7d51b13176e8da0a66b2518e8447563ecc`
-#70 `120b3a1be28cded029025701376934c4a40326b0`
-#71 `e995f3c36cb83ab29dcfb7c6f98cbafe382a9312`
-#72 `def2e0711b64ab46c185d7e863039102ae66f340`
+#66 `061b7af36620713c00324a8982667f2477bb3e35`
+#67 `f3151481652593c50cf484cf6325f159b5d8197b`
+#68 `4ae263b0270bd56663557332c15d5e0a87950524`
+#69 `26490142964ac737df0540f7154aa2d7af27b2d9`
+#70 `4dc3367a510c5368f64ec51bb000d419242999fb`
+#71 `5710098ab098769a0618e8c164d5bd2fb3e7d616`
+#72 `b7f7411da74aab6c8966790650f2abf4eda17c59`
 
 ## Stop condition
 
@@ -79,16 +79,20 @@ Do not open Stage D until the independent review queue has moved safely through 
 - secret-safe logging
 
 
-## ACTIVE NOW — propagate accepted P2-03 into P2-04
+## ACTIVE NOW — independent P2-04 review
 
-Claude is explicitly instructed to:
-1. normal-merge accepted #65 into #66;
-2. verify #66;
-3. publish fresh `CLAUDE_READY_FOR_ASTRA ... task=P2-04`;
-4. continue propagation through #67 -> #72.
+Propagation is complete through #72.
 
-Astra watcher is explicitly instructed to ignore the stale #66 HEAD and review only the first fresh propagated P2-04 HEAD.
+Current review target:
+#66 `061b7af36620713c00324a8982667f2477bb3e35`
 
-If #66 passes, continue strict dependency order through #72.
+Claude published:
+`CLAUDE_READY_FOR_ASTRA head=061b7af36620713c00324a8982667f2477bb3e35 task=P2-04`
+
+The previous watcher did not produce a verdict, so Astra/Codex was explicitly re-started on this exact SHA on 2026-09-22 morning.
+
+Claude action:
+- PASS -> do not add redundant merge commits; confirm live linkage and let Astra continue to #67;
+- CHANGES_REQUESTED -> fix #66 first, verify, publish new P2-04 SHA, then propagate correction through #67 -> #72.
 
 No Stage D yet.
