@@ -3,8 +3,8 @@
 **Last updated:** 2026-09-21 evening  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
 **Implementation:** Stage B complete; Stage C reliability implemented  
-**Independent review position:** PR #65 / P2-03 is accepted; next review target is propagated PR #66 / P2-04  
-**Active now:** Claude propagating accepted #65 through #66 -> #72; Astra watcher armed on #66  
+**Independent review position:** PR #65 / P2-03 is accepted; next review target is PR #66 / P2-04 at propagated HEAD `061b7af36620713c00324a8982667f2477bb3e35`  
+**Active now:** propagation through #72 is complete; Astra was manually re-started on #66; Claude is standing by on the verdict  
 **Stage D:** paused
 
 > **NEW CHAT / NEW AGENT: START HERE.**  
@@ -74,7 +74,7 @@ Astra independently accepted this exact SHA:
 
 `ASTRA_REVIEW: PASS head=ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
 
-Claude is now explicitly re-started to propagate the accepted parent through #66 -> #72.
+Claude propagated the accepted parent through #66 -> #72 and published fresh exact heads.
 
 ## Active commands posted
 
@@ -96,17 +96,17 @@ Stand by on the #65 verdict.
 
 No rebase, no force-push, no merge to main, no Stage D yet.
 
-## Current downstream live heads before P2-03 propagation
+## Current propagated downstream heads
 
-These are **stale relative to the corrected #65 HEAD** and must not be independently accepted until propagation:
+All of these now contain the accepted #65 parent:
 
-- #66 `ac7abda2dd860e729f3d520245cb52c7bb63b886`
-- #67 `31f16449278fc9f871935b4316249295bbe7a866`
-- #68 `8fef94d2172e3c75075457b7ad6d84a6096aa761`
-- #69 `ebe10c7d51b13176e8da0a66b2518e8447563ecc`
-- #70 `120b3a1be28cded029025701376934c4a40326b0`
-- #71 `e995f3c36cb83ab29dcfb7c6f98cbafe382a9312`
-- #72 `def2e0711b64ab46c185d7e863039102ae66f340`
+- #66 `061b7af36620713c00324a8982667f2477bb3e35`
+- #67 `f3151481652593c50cf484cf6325f159b5d8197b`
+- #68 `4ae263b0270bd56663557332c15d5e0a87950524`
+- #69 `26490142964ac737df0540f7154aa2d7af27b2d9`
+- #70 `4dc3367a510c5368f64ec51bb000d419242999fb`
+- #71 `5710098ab098769a0618e8c164d5bd2fb3e7d616`
+- #72 `b7f7411da74aab6c8966790650f2abf4eda17c59`
 
 ## Implementation status
 
@@ -143,13 +143,17 @@ Stage I — Launch Readiness / staged Commercial Beta
 
 ## Next review target — PR #66 / P2-04
 
-The currently visible #66 HEAD is stale relative to the accepted #65 correction.
+Current exact HEAD:
+`061b7af36620713c00324a8982667f2477bb3e35`
 
-Claude has been explicitly instructed to normal-merge the accepted #65 HEAD into #66, verify, and publish a fresh:
+Claude has already published:
+`CLAUDE_READY_FOR_ASTRA head=061b7af36620713c00324a8982667f2477bb3e35 task=P2-04`
 
-`CLAUDE_READY_FOR_ASTRA head=<new-sha> task=P2-04`
+The prior watcher did not emit a verdict overnight, so Astra/Codex was explicitly re-started on this exact SHA on 2026-09-22 morning.
 
-Astra watcher has been armed on #66 and must wait for that **new propagated HEAD** before reviewing.
+Claude is standing by:
+- PASS -> no gratuitous re-merge; let Astra continue to the already-propagated #67 current HEAD after live linkage check;
+- CHANGES_REQUESTED -> fix #66 first, then propagate only the accepted correction forward.
 
 If #66 passes, continue strict dependency order:
 #67 -> #68 -> #69 -> #70 -> #71 -> #72.
