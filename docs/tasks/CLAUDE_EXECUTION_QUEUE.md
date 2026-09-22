@@ -79,20 +79,26 @@ Do not open Stage D until the independent review queue has moved safely through 
 - secret-safe logging
 
 
-## ACTIVE NOW — independent P2-04 review
+## ACTIVE NOW — fix P2-04 language wiring
 
-Propagation is complete through #72.
+Astra returned:
+`ASTRA_REVIEW: CHANGES_REQUESTED head=061b7af36620713c00324a8982667f2477bb3e35`
 
-Current review target:
-#66 `061b7af36620713c00324a8982667f2477bb3e35`
+Current blocker:
+the db retriever supports `RetrievalQuery.language`, but `DraftRetrievalQuery` and the live worker path drop the language, so Style language matching/fallback is not active in production.
 
-Claude published:
-`CLAUDE_READY_FOR_ASTRA head=061b7af36620713c00324a8982667f2477bb3e35 task=P2-04`
+Claude directive already posted:
+- carry normalized BCP-47-compatible language from the approved StyleProfile/source through the real application/worker retrieval path;
+- requested language -> matching explicit language + NULL fallback;
+- exclude other explicit languages;
+- no requested language -> full eligible Style corpus;
+- preserve Knowledge semantics, explicit override rules, tenant/BP isolation, and lexical-only embedding degradation;
+- add end-to-end production-path regressions.
 
-The previous watcher did not produce a verdict, so Astra/Codex was explicitly re-started on this exact SHA on 2026-09-22 morning.
+Publish:
+`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P2-04`
 
-Claude action:
-- PASS -> do not add redundant merge commits; confirm live linkage and let Astra continue to #67;
-- CHANGES_REQUESTED -> fix #66 first, verify, publish new P2-04 SHA, then propagate correction through #67 -> #72.
+Do not propagate the rejected #66 implementation farther. After Astra PASS, propagate only the accepted correction through #67 -> #72.
 
-No Stage D yet.
+Hourly review/build watch is active and may issue the next Claude/Astra directive when repository state materially changes.
+
