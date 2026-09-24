@@ -236,6 +236,42 @@ describe("Instagram after-window policy (ADR-014)", () => {
     expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
   });
 
+  it("does not read a lapsed eligibility as a current one", () => {
+    const decision = decide({
+      window: closed,
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
+      // The state says ELIGIBLE and the timestamp says otherwise. Whoever computed this — an adapter call,
+      // a cached row, an earlier step of this pipeline — did so before the exception lapsed.
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() - 1) },
+    });
+
+    // Eligibility is a fact about a moment, so a stale one is not a weaker form of approval either.
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
+  });
+
+  it("treats an eligibility expiring exactly now as expired", () => {
+    const decision = decide({
+      window: closed,
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
+      humanAgent: { state: "ELIGIBLE", expiresAt: NOW },
+    });
+
+    // The boundary falls closed, the same way the window's own expiry does.
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
+  });
+
+  it("drops a human-agent claim held against an eligibility that has since lapsed", () => {
+    const decision = decide({
+      takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() - 1) },
+    });
+
+    // Same promise as the UNAVAILABLE/EXPIRED case: the claim must not outlive what makes it usable,
+    // whichever shape the lapsed fact arrives in.
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "NORMAL" });
+  });
+
   it("does not offer the human-agent path when the business chose STANDARD_ONLY, even mid-claim", () => {
     const decision = decide({
       takeover: { state: "REVIEW_REQUIRED", reason: "HUMAN_AGENT_REVIEW", reviewMode: "HUMAN_AGENT", since: NOW },
