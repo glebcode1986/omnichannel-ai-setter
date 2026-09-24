@@ -108,6 +108,8 @@ export interface SeedStyleInput {
   readonly status?: "ACTIVE" | "ARCHIVED";
   readonly embedding?: readonly number[];
   readonly embeddingProfile?: string;
+  /** Stored exactly as given, so a test can also plant a spelling production would have normalized. */
+  readonly language?: string;
 }
 
 export async function seedStyleExample(db: DbClient, input: SeedStyleInput): Promise<string> {
@@ -115,8 +117,8 @@ export async function seedStyleExample(db: DbClient, input: SeedStyleInput): Pro
   await db.$executeRawUnsafe(
     `INSERT INTO "style_examples"
        ("id", "workspace_id", "business_profile_id", "inbound_context", "outbound_text", "provenance", "status",
-        "embedding_profile", "embedding", "created_at", "updated_at")
-     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", $7::"StyleExampleStatus", $8, $9::vector, NOW(), NOW())`,
+        "embedding_profile", "embedding", "language", "created_at", "updated_at")
+     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", $7::"StyleExampleStatus", $8, $9::vector, $10, NOW(), NOW())`,
     id,
     input.workspaceId,
     input.businessProfileId ?? null,
@@ -126,6 +128,7 @@ export async function seedStyleExample(db: DbClient, input: SeedStyleInput): Pro
     input.status ?? "ACTIVE",
     input.embedding === undefined ? null : (input.embeddingProfile ?? TEST_EMBEDDING_PROFILE),
     input.embedding === undefined ? null : `[${input.embedding.join(",")}]`,
+    input.language ?? null,
   );
   return id;
 }

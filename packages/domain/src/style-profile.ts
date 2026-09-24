@@ -11,6 +11,7 @@
  */
 import { literalGuard } from "./enum";
 import { DomainValidationError } from "./errors";
+import { canonicalLanguageTag } from "./language";
 
 export const REPLY_LENGTHS = ["SHORT", "MEDIUM", "LONG"] as const;
 export type ReplyLength = (typeof REPLY_LENGTHS)[number];
@@ -108,8 +109,22 @@ export function validateStyleProfile(profile: StyleProfile): StyleProfile {
     ...optional("signOff", trimmed(profile.signOff)),
     preferredPhrases: phrases(profile.preferredPhrases, "preferredPhrases"),
     avoidedPhrases: phrases(profile.avoidedPhrases, "avoidedPhrases"),
-    ...optional("language", trimmed(profile.language)),
+    ...optional("language", language(profile.language)),
   };
+}
+
+/**
+ * The business's language, canonicalized here because this is where it becomes authoritative. Style
+ * retrieval matches it by equality against the language each example was written in, so a profile saying
+ * `en-us` and an example saying `en-US` must arrive at the same spelling. A value that is not a BCP-47 tag
+ * is refused like every other invalid field here, rather than silently becoming "no preference".
+ */
+function language(value: string | undefined): string | undefined {
+  const canonical = canonicalLanguageTag(value);
+  if (canonical === null) {
+    throw new DomainValidationError("language", "must be a BCP-47 language tag");
+  }
+  return canonical;
 }
 
 function phrases(values: readonly string[], field: string): readonly string[] {
