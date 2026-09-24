@@ -207,7 +207,15 @@ function humanAgentPathAvailable(input: PolicyInput): boolean {
   const afterWindow = input.limits.afterWindow;
   // The human-support exception is Instagram's, and the union is what keeps it from being reachable on a
   // channel whose policy vocabulary does not contain it.
-  return afterWindow.channel === "INSTAGRAM" && afterWindow.policy === "HUMAN_ASSISTED_EXTENDED" && input.humanAgent.state === "ELIGIBLE";
+  if (afterWindow.channel !== "INSTAGRAM" || afterWindow.policy !== "HUMAN_ASSISTED_EXTENDED") {
+    return false;
+  }
+  // `ELIGIBLE` is a fact about a moment, and it arrives here already computed — from an adapter call, a
+  // cached row, a decision taken earlier in this pipeline. The same reasoning the window gate applies to
+  // its own expiry applies here: a lapsed exception read as current offers a review path the adapter
+  // re-checks and refuses at dispatch, which the operator discovers only by clicking it. An expiry
+  // exactly at `now` has passed.
+  return input.humanAgent.state === "ELIGIBLE" && input.humanAgent.expiresAt.getTime() > input.now.getTime();
 }
 
 /**
