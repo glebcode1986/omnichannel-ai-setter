@@ -1,0 +1,119 @@
+/**
+ * Versioned, runtime-validated job payloads. Payloads carry stable identifiers and correlation data only —
+ * never message text or other conversation content, which workers load from PostgreSQL when they run.
+ */
+import { isValidIdentifier } from "@omnichannel/domain";
+import { z } from "zod";
+
+export const MAX_SCHEDULE_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+
+const identifier = z.string().max(255).refine(isValidIdentifier, { message: "invalid identifier" });
+const timestamp = z.iso.datetime();
+
+/**
+ * Every payload names its Workspace and Business Profile (DATA_MODEL.md v0.4): execution scope and job
+ * identity depend on both. The queue does not authorize anything; workers revalidate against PostgreSQL.
+ */
+const envelope = {
+  schemaVersion: z.literal(1),
+  workspaceId: identifier,
+  businessProfileId: identifier,
+  /** Propagated through enqueue/process logs and downstream work (observability). */
+  correlationId: identifier,
+};
+
+/** Stage A: fires after the debounce window of the newest inbound message in a burst (DELAY_ENGINE.md). */
+export const inboundDebounceJobSchema = z.strictObject({
+  ...envelope,
+  channelAccountId: identifier,
+  conversationId: identifier,
+  /** Newest inbound message of the burst; it owns the reply cycle. */
+  anchorMessageId: identifier,
+  /** Platform time of the anchor message; later inbound messages supersede earlier anchors. */
+  anchorInboundAt: timestamp,
+});
+export type InboundDebounceJob = z.output<typeof inboundDebounceJobSchema>;
+
+export const AI_DRAFT_TRIGGERS = ["DEBOUNCE_ELAPSED", "MANUAL_REQUEST"] as const;
+
+export const aiDraftGenerationJobSchema = z
+  .strictObject({
+    ...envelope,
+    conversationId: identifier,
+    anchorMessageId: identifier,
+    trigger: z.enum(AI_DRAFT_TRIGGERS),
+    /** Required for MANUAL_REQUEST so each explicit request is its own job; absent otherwise. */
+    requestId: identifier.optional(),
+  })
+  .refine((job) => (job.trigger === "MANUAL_REQUEST") === (job.requestId !== undefined), {
+    message: "requestId is required for MANUAL_REQUEST and not allowed otherwise",
+    path: ["requestId"],
+  });
+export type AiDraftGenerationJob = z.output<typeof aiDraftGenerationJobSchema>;
+
+/** Stage B: delayed delivery of one logical outbound action (ADR-003, ADR-012). */
+export const deliveryJobSchema = z.strictObject({
+  ...envelope,
+  conversationId: identifier,
+  draftId: identifier,
+  /** DeliveryJobRecord row that owns the durable delivery state. */
+  deliveryJobId: identifier,
+  /** Stable idempotency identity of the outbound action; identical across retries and restarts. */
+  operationId: identifier,
+  /** Intended send time, recorded for audit alongside the selected delay. */
+  scheduledFor: timestamp,
+  selectedDelayMs: z.number().int().min(0).max(MAX_SCHEDULE_DELAY_MS),
+});
+export type DeliveryJob = z.output<typeof deliveryJobSchema>;
+
+export const RECONCILIATION_REASONS = [
+  /** The adapter reported AMBIGUOUS: the request may have reached the platform. */
+  "AMBIGUOUS_SEND_RESULT",
+  /** The delivery handler threw or returned an unreadable result, so whether a send happened is unknown. */
+  "DELIVERY_HANDLER_FAILED",
+  /** The worker running the delivery died or lost its lock mid-run; the job is failed, never re-run. */
+  "DELIVERY_STALLED",
+] as const;
+export type ReconciliationReason = (typeof RECONCILIATION_REASONS)[number];
+
+/** Follow-up for an outbound action whose outcome is unknown. Never a resend (ADR-012). */
+export const reconciliationJobSchema = z.strictObject({
+  ...envelope,
+  conversationId: identifier,
+  deliveryJobId: identifier,
+  operationId: identifier,
+  reason: z.enum(RECONCILIATION_REASONS),
+  detectedAt: timestamp,
+  providerRequestId: identifier.optional(),
+  providerCode: z.string().max(255).optional(),
+});
+export type ReconciliationJob = z.output<typeof reconciliationJobSchema>;
+
+export interface PayloadIssue {
+  readonly path: string;
+  readonly code: string;
+}
+
+/** Invalid job payload. Reports field paths and issue codes only, never payload values. */
+export class JobPayloadValidationError extends Error {
+  readonly jobName: string;
+  readonly issues: readonly PayloadIssue[];
+
+  constructor(jobName: string, issues: readonly PayloadIssue[]) {
+    super(`Invalid ${jobName} payload: ${issues.map((issue) => `${issue.path || "(root)"} [${issue.code}]`).join("; ")}`);
+    this.name = "JobPayloadValidationError";
+    this.jobName = jobName;
+    this.issues = issues;
+  }
+}
+
+export function parsePayload<T>(schema: z.ZodType<T>, jobName: string, input: unknown): T {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw new JobPayloadValidationError(
+      jobName,
+      result.error.issues.map((issue) => ({ path: issue.path.map(String).join("."), code: issue.code })),
+    );
+  }
+  return result.data;
+}

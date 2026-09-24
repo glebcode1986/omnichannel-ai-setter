@@ -16,7 +16,12 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
       const child = spawn(process.execPath, [outfile], {
         cwd: appDir,
-        env: { PATH: process.env.PATH ?? "", NODE_ENV: "production", LOG_LEVEL: "info" },
+        env: {
+          PATH: process.env.PATH ?? "",
+          NODE_ENV: "production",
+          LOG_LEVEL: "info",
+          REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
@@ -36,7 +41,10 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-    expect(result.stderr).toBe("");
+    // Without a reachable Redis the only stderr entry allowed is the URL-free outage warning.
+    for (const line of result.stderr.split("\n").filter((entry) => entry.trim().length > 0)) {
+      expect((JSON.parse(line) as { event: string }).event).toBe("queue.redis_unavailable");
+    }
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('"event":"worker.stopped"');
   }, 60_000);

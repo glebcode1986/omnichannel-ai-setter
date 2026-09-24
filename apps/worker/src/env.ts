@@ -1,10 +1,13 @@
 import { parseEnv, runtimeEnvSchema, type EnvSource } from "@omnichannel/env";
+import { z } from "zod";
 
 /**
- * Worker environment contract. Later issues extend this schema (e.g. Redis/PostgreSQL connection
- * settings in #4/#5) instead of reading `process.env` elsewhere.
+ * Worker environment contract. Later issues extend this schema instead of reading `process.env` elsewhere.
  */
-export const workerEnvSchema = runtimeEnvSchema;
+export const workerEnvSchema = runtimeEnvSchema.extend({
+  /** Redis for BullMQ scheduling and coordination (ADR-005); not the durable source of truth. */
+  REDIS_URL: z.url({ protocol: /^rediss?$/ }),
+});
 
 export type WorkerEnv = ReturnType<typeof loadWorkerEnv>;
 
