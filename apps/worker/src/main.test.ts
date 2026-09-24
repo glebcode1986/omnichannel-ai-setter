@@ -43,6 +43,7 @@ function runWorker(
 
 /** Real Redis when available; otherwise an unreachable address, which the worker must survive quietly. */
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-password@127.0.0.1:1/omnichannel";
 
 /**
  * Everything the worker requires to boot, in one place.
@@ -51,7 +52,7 @@ const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
  * the real entrypoint, so a missing variable fails them all with `worker.env_invalid` and says nothing
  * about what they were actually checking.
  */
-const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL };
+const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL };
 
 /**
  * With Redis unreachable the only permitted stderr entries are the (URL-free) outage warning and, if the

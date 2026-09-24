@@ -9,6 +9,8 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   DATABASE_URL: z.url({ protocol: /^postgres(?:ql)?$/ }),
   /** Auth.js secret used to sign/encrypt session cookies and tokens (ADR-009). */
   AUTH_SECRET: z.string().min(32),
+  /** Redis for enqueueing BullMQ work from webhook ingestion (ADR-005). */
+  REDIS_URL: z.url({ protocol: /^rediss?$/ }),
 });
 
 export type WebEnv = ReturnType<typeof loadWebEnv>;

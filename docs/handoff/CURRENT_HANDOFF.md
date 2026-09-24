@@ -83,6 +83,18 @@ See `docs/specs/PRODUCT_UX.md`, `ONBOARDING_UX.md`, `AI_CONFIGURATION_UX.md`, `K
 
 Read `PROJECT_CONTEXT.md`, this file, `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`, `docs/tasks/README.md`, relevant ADR/spec/research file and exact issue/task contract. Do not reconstruct architecture from chat history.
 
+## Phase 1 implementation stack (temporary review-lag mode, Issue #7)
+
+Implemented as stacked PRs awaiting independent review, in dependency order:
+
+1. #26 (#2): workspace scaffold.
+2. #49 (#3): domain + channel contracts.
+3. #50 (#4): Prisma/Auth.js/workspace isolation.
+4. #51 (#5): BullMQ delay primitives.
+5. #52 (#6): channel-neutral webhook ingestion with a transactional outbox, scoped to the Business Profile resolved from the channel account (see `docs/specs/ARCHITECTURE.md` implementation notes).
+
+Nothing is merged yet. Phase 2 stays gated on Phase 1 acceptance.
+
 ## Immediate next actions
 
 1. P1-01/#2 PR #26 is open; do not auto-merge.

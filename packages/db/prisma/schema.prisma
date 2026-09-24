@@ -144,6 +144,10 @@ enum OutboundTransportPath {
   HUMAN_AGENT
 }
 
+enum OutboxKind {
+  INBOUND_DEBOUNCE
+}
+
 enum ChannelEventType {
   INBOUND_MESSAGE
   OUTBOUND_ECHO
@@ -329,6 +333,7 @@ model BusinessProfile {
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
   automationPolicies AutomationPolicy[]
+  queueOutbox        QueueOutbox[]
 
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
@@ -419,6 +424,10 @@ model InboundEvent {
   occurredAt        DateTime         @map("occurred_at")
   receivedAt        DateTime         @default(now()) @map("received_at")
   processedAt       DateTime?        @map("processed_at")
+  /// Correlation ID of the webhook request that first recorded the event.
+  correlationId     String?          @map("correlation_id")
+  /// Audit of what ingestion did with the event (application IngestionOutcome).
+  outcome           String?
 
   channelAccount ChannelAccount @relation(fields: [workspaceId, businessProfileId, channelAccountId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
 
@@ -744,4 +753,36 @@ model AutomationPolicy {
   @@unique([workspaceId, businessProfileId], where: raw("channel_account_id IS NULL"), map: "automation_policies_profile_default_key")
   @@unique([workspaceId, businessProfileId, channelAccountId], map: "automation_policies_channel_override_key")
   @@map("automation_policies")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Transactional outbox (P1-05): queue work committed atomically with the state that requires it.
+// ---------------------------------------------------------------------------------------------------------
+
+model QueueOutbox {
+  id                String     @id @default(uuid(7))
+  workspaceId       String     @map("workspace_id")
+  /// Queue work is Business Profile scoped like the customer data it acts on (Issue #53).
+  businessProfileId String     @map("business_profile_id")
+  kind              OutboxKind
+  /// Logical work identity (e.g. one debounce per stored inbound message); duplicates are not added.
+  dedupeKey         String     @unique @map("dedupe_key")
+  correlationId     String     @map("correlation_id")
+  payload           Json
+  /// Selected delay, counted from created_at, applied when the job is enqueued.
+  delayMs           Int        @map("delay_ms")
+  /// Earliest time the next dispatch attempt may run.
+  availableAt       DateTime   @default(now()) @map("available_at")
+  /// Dispatcher lease; an expired lease makes the entry claimable again.
+  lockedUntil       DateTime?  @map("locked_until")
+  attempts          Int        @default(0)
+  lastErrorName     String?    @map("last_error_name")
+  dispatchedAt      DateTime?  @map("dispatched_at")
+  createdAt         DateTime   @default(now()) @map("created_at")
+  updatedAt         DateTime   @updatedAt @map("updated_at")
+
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([availableAt], where: raw("dispatched_at IS NULL"), map: "queue_outbox_pending_idx")
+  @@map("queue_outbox")
 }

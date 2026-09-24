@@ -1,15 +1,19 @@
+import { dispatchOutbox } from "@omnichannel/application";
+import { createDbClient, createIngestionStore } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { createLogger } from "@omnichannel/observability";
-import { createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
+import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { loadWorkerEnv } from "./env";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
 import { createPlaceholderHandlers } from "./handlers";
+import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"] as const;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
 /**
  * One Ctrl+C reaches the worker several times (terminal process group plus relays by pnpm/tsx), so
  * repeats within this window are the same request. A later signal while still stopping forces exit.
@@ -39,11 +43,22 @@ function main(): void {
     startProcessors: () => {
       const connection = createRedisConnection(env.REDIS_URL, "worker", logger);
       const workers = createQueueWorkers({ connection, logger, handlers: createPlaceholderHandlers() });
+      const db = createDbClient({ connectionString: env.DATABASE_URL });
+      const producer = createQueueProducer({ connection, logger });
+      const sweeper = startOutboxSweeper({
+        intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
+        sweep: () =>
+          dispatchOutbox({ store: createIngestionStore(db), scheduler: producer, log: logger, now: () => new Date() }),
+        logger,
+      });
       return {
         queueNames: workers.queueNames,
         async close() {
+          await sweeper.close();
           await workers.close();
+          await producer.close();
           await connection.quit().catch(() => connection.disconnect());
+          await db.$disconnect();
         },
       };
     },

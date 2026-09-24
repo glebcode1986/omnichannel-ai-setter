@@ -32,6 +32,7 @@ export {
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
+export { createIngestionStore } from "./ingestion-store";
 export * from "./repositories/channel-accounts";
 export * from "./repositories/contacts";
 export * from "./repositories/conversations";
@@ -51,6 +52,7 @@ export type {
   KnowledgeDocument,
   MemberBusinessProfileAccess,
   Message,
+  QueueOutbox,
   StyleExample,
   Workspace,
   WorkspaceMember,
