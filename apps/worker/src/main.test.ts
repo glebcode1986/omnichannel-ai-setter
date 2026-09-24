@@ -56,10 +56,27 @@ const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
  */
 const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
 
-/** With Redis unreachable the only permitted stderr entry is the (URL-free) outage warning. */
+/**
+ * With Redis unreachable the only permitted stderr entries are the (URL-free) outage warning and, if the
+ * process outlived its own shutdown deadline, the warning that says so.
+ *
+ * A linger is a handle some library kept open after everything the worker owns had already closed: not a
+ * failed shutdown, so the worker reports it and still exits 0 (see `shutdown.ts`). It is rare locally and
+ * has shown up on loaded CI runners. A genuine timeout is a different event, at error level, and would
+ * fail both this check and the exit code.
+ */
+const PERMITTED_STDERR_EVENTS = new Set(["queue.redis_unavailable", "worker.lingering_after_stop"]);
+
 function expectOnlyRedisOutageOnStderr(stderr: string): void {
-  expect(events(stderr).filter((event) => event !== "queue.redis_unavailable")).toEqual([]);
+  expect(events(stderr).filter((event) => !PERMITTED_STDERR_EVENTS.has(event))).toEqual([]);
   expect(stderr).not.toContain("127.0.0.1:1");
+}
+
+/** Started, asked to stop, and stopped — in that order, with nothing else on stdout and exit code 0. */
+function expectGracefulShutdown(result: ProcessResult): void {
+  expectOnlyRedisOutageOnStderr(result.stderr);
+  expect(result.code).toBe(0);
+  expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
 }
 
 function events(output: string): string[] {
@@ -79,9 +96,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       }
     });
 
-    expectOnlyRedisOutageOnStderr(result.stderr);
-    expect(result.code).toBe(0);
-    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    expectGracefulShutdown(result);
   }, 30_000);
 
   it("treats a burst of repeated signals (one Ctrl+C relayed by pnpm/watchers) as one graceful shutdown", async () => {
@@ -95,9 +110,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       }
     });
 
-    expectOnlyRedisOutageOnStderr(result.stderr);
-    expect(result.code).toBe(0);
-    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    expectGracefulShutdown(result);
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {
@@ -147,6 +160,45 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(result.stderr).not.toContain("worker.fatal");
     expect(result.code).toBe(0);
   }, 30_000);
+
+  it("reports — and survives — a handle that outlives its own shutdown", async () => {
+    const result = await new Promise<ProcessResult>((resolve, reject) => {
+      const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+        cwd: appDir,
+        env: {
+          PATH: process.env.PATH ?? "",
+          // A preload that holds the event loop open forever, the way a library's un-closed socket or
+          // child process does. `tsx` comes first so the preload can be TypeScript inside this project.
+          NODE_OPTIONS: "--import tsx --import ./src/testing/lingering-handle.ts",
+          ...VALID_ENV,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let signalled = false;
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        if (!signalled && stdout.includes('"event":"worker.started"')) {
+          signalled = true;
+          child.kill("SIGTERM");
+        }
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", reject);
+      child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+    });
+
+    // Everything the worker owns closed, so this is not a failed shutdown: it exits successfully and
+    // names what happened. Reporting failure here tells a supervisor a clean stop was a crash.
+    expect(result.code).toBe(0);
+    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    expect(result.stderr).toContain('"event":"worker.lingering_after_stop"');
+    expect(result.stderr).toContain('"trigger":"deadline"');
+    expect(result.stderr).not.toContain("worker.shutdown_timeout");
+  }, 40_000);
 
   it("still dies on an escaped rejection carrying Redis's own error code from another source", async () => {
     const result = await new Promise<ProcessResult>((resolve, reject) => {
