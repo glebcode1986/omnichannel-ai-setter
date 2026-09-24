@@ -58,11 +58,21 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       throw new NonRetryableJobError("conversation or anchor message not found for draft generation");
     }
 
+    // Workspace base, then this Business Profile's override, then the platform default underneath.
+    // Resolved before retrieval rather than after it, because its language decides which style examples
+    // are eligible at all — and a profile resolved only for the prompt left every production request
+    // searching the whole multilingual corpus.
+    const styleProfile = resolveStyleProfile(
+      await dependencies.styleProfiles.load({ workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }),
+      dependencies.platformStyleFallback,
+    );
+
     // Retrieval runs before generation (AI_ORCHESTRATION.md): the model is given the facts, never a way
     // to go and look for them.
     const retrieved = await retrieveDraftContext(dependencies.retrieval, {
       scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId },
       inbound: context.inbound,
+      ...(styleProfile.language === undefined ? {} : { language: styleProfile.language }),
     });
 
     const outcome = await generateDraft(dependencies.engine, {
@@ -73,11 +83,7 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       anchorStateVersion: context.snapshot.stateVersion,
       trigger: job.trigger,
       snapshot: context.snapshot,
-      // Workspace base, then this Business Profile's override, then the platform default underneath.
-      styleProfile: resolveStyleProfile(
-        await dependencies.styleProfiles.load({ workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }),
-        dependencies.platformStyleFallback,
-      ),
+      styleProfile,
       channel: "INSTAGRAM",
       capabilityHints: ["text"],
       inbound: context.inbound,
