@@ -4,6 +4,7 @@ import { createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { loadWorkerEnv } from "./env";
 import { processGuards } from "./process-guards";
+import { createShutdownSequence } from "./shutdown";
 import { createPlaceholderHandlers } from "./handlers";
 import { createWorkerRuntime } from "./worker-runtime";
 
@@ -57,37 +58,23 @@ function main(): void {
   process.on("uncaughtException", guards.onUncaughtException);
   process.on("unhandledRejection", guards.onUnhandledRejection);
 
-  let firstSignalAt: number | undefined;
-  const onShutdownSignal = (signal: (typeof SHUTDOWN_SIGNALS)[number]): void => {
-    if (firstSignalAt === undefined) {
-      firstSignalAt = Date.now();
-      // Guard against a processor that never finishes closing; unref so it cannot keep us alive.
-      setTimeout(() => {
-        logger.error("worker.shutdown_timeout", { signal, timeoutMs: SHUTDOWN_TIMEOUT_MS });
-        process.exit(1);
-      }, SHUTDOWN_TIMEOUT_MS).unref();
-
-      runtime.stop(signal).then(
-        () => {
-          process.exitCode = 0;
-        },
-        (error: unknown) => {
-          logger.error("worker.shutdown_failed", { signal, error });
-          process.exit(1);
-        },
-      );
-      return;
-    }
-
-    if (Date.now() - firstSignalAt < DUPLICATE_SIGNAL_WINDOW_MS) {
-      logger.debug("worker.duplicate_signal_ignored", { signal });
-      return;
-    }
-    // A deliberate later signal: either shutdown is slow, or it finished but a leaked handle keeps
-    // the process alive. Either way the operator asked twice, so exit now.
-    logger.warn(runtime.state === "stopped" ? "worker.lingering_after_stop" : "worker.forced_exit", { signal });
-    process.exit(1);
-  };
+  const onShutdownSignal = createShutdownSequence({
+    runtime,
+    logger,
+    exit: (code) => {
+      process.exit(code);
+    },
+    setExitCode: (code) => {
+      process.exitCode = code;
+    },
+    now: () => Date.now(),
+    schedule: (ms, run) => {
+      // Unref'd: the deadline bounds the wait, it must never be the reason the process is still alive.
+      setTimeout(run, ms).unref();
+    },
+    timeoutMs: SHUTDOWN_TIMEOUT_MS,
+    duplicateWindowMs: DUPLICATE_SIGNAL_WINDOW_MS,
+  });
 
   for (const signal of SHUTDOWN_SIGNALS) {
     process.on(signal, onShutdownSignal);
