@@ -1,0 +1,246 @@
+/**
+ * PostgreSQL implementations of the application's `KnowledgeRetriever` and `StyleRetriever` ports.
+ *
+ * This file runs SQL. It never calls an AI provider: query vectors arrive as data on the query, which is
+ * what keeps `packages/db` free of any embedding dependency (ADR-010 as amended, enforced by
+ * `pnpm lint:boundaries`).
+ *
+ * Both retrievers follow the same shape — run the lexical list, run the semantic list, fuse by reciprocal
+ * rank — but they stay separate functions returning separate types. Factoring them into one generic
+ * "retrieve anything" helper would produce exactly the shared code path along which a style example could
+ * one day be returned as factual support.
+ */
+import {
+  fuseByReciprocalRank,
+  RetrievalUnavailableError,
+  type KnowledgeHit,
+  type KnowledgeRetrievalResult,
+  type KnowledgeRetriever,
+  type RankedCandidate,
+  type RetrievalDiagnostics,
+  type RetrievalQuery,
+  type StyleHit,
+  type StyleRetrievalResult,
+  type StyleRetriever,
+} from "@omnichannel/application";
+
+import type { DbClient } from "../client";
+import {
+  candidateLimit,
+  DEFAULT_MIN_LEXICAL_SCORE,
+  DEFAULT_MIN_SIMILARITY,
+  EMBEDDING_DIMENSIONS,
+  knowledgeLexicalSql,
+  knowledgeProfileProbeSql,
+  knowledgeSemanticSql,
+  styleLexicalSql,
+  styleProfileProbeSql,
+  styleSemanticSql,
+  toVectorLiteral,
+} from "./sql";
+
+/**
+ * Exact vector scans are linear in corpus size, so the default 5 s interactive-transaction budget is
+ * raised: a slow retrieval should fail as a retrieval outage with the draft held for review, not as a
+ * surprising transaction abort part-way through the fusion.
+ */
+const RETRIEVAL_TRANSACTION = { isolationLevel: "RepeatableRead", timeout: 15_000, maxWait: 5_000 } as const;
+
+interface KnowledgeRow {
+  readonly chunk_id: string;
+  readonly document_id: string;
+  readonly document_version: number;
+  readonly content: string;
+  readonly document_title: string;
+  readonly source_type: string;
+  readonly profile_scoped: boolean;
+  readonly score: number;
+}
+
+interface StyleRow {
+  readonly example_id: string;
+  readonly inbound_context: string;
+  readonly outbound_text: string;
+  readonly provenance: string;
+  readonly profile_scoped: boolean;
+  readonly score: number;
+}
+
+export function createKnowledgeRetriever(db: DbClient): KnowledgeRetriever {
+  return {
+    async search(query: RetrievalQuery): Promise<KnowledgeRetrievalResult> {
+      const { lexical, semantic, diagnostics } = await runLists<KnowledgeRow>(db, query, {
+        lexical: knowledgeLexicalSql(),
+        semantic: knowledgeSemanticSql(),
+        probe: knowledgeProfileProbeSql(),
+      });
+
+      const byId = new Map<string, KnowledgeRow>();
+      for (const row of [...lexical, ...semantic]) {
+        byId.set(row.chunk_id, row);
+      }
+      const fused = fuseByReciprocalRank([lexical.map(knowledgeCandidate), semantic.map(knowledgeCandidate)], { limit: query.limit });
+
+      const hits: KnowledgeHit[] = [];
+      for (const entry of fused) {
+        const row = byId.get(entry.id);
+        if (row === undefined) {
+          continue;
+        }
+        hits.push({
+          chunkId: row.chunk_id,
+          documentId: row.document_id,
+          documentTitle: row.document_title,
+          documentVersion: row.document_version,
+          sourceType: row.source_type,
+          scopeLevel: row.profile_scoped ? "BUSINESS_PROFILE" : "WORKSPACE",
+          text: row.content,
+          score: entry.score,
+          ...(entry.ranks[0] === undefined ? {} : { lexicalRank: entry.ranks[0] }),
+          ...(entry.ranks[1] === undefined ? {} : { semanticRank: entry.ranks[1] }),
+        });
+      }
+      return { hits, diagnostics };
+    },
+  };
+}
+
+export function createStyleRetriever(db: DbClient): StyleRetriever {
+  return {
+    async search(query: RetrievalQuery): Promise<StyleRetrievalResult> {
+      const { lexical, semantic, diagnostics } = await runLists<StyleRow>(db, query, {
+        lexical: styleLexicalSql(),
+        semantic: styleSemanticSql(),
+        probe: styleProfileProbeSql(),
+        // Appended to each statement's own parameter list; `undefined` means the caller expressed no
+        // language preference, and the predicate then keeps every example.
+        extraParam: query.language ?? null,
+      });
+
+      const byId = new Map<string, StyleRow>();
+      for (const row of [...lexical, ...semantic]) {
+        byId.set(row.example_id, row);
+      }
+      const fused = fuseByReciprocalRank([lexical.map(styleCandidate), semantic.map(styleCandidate)], { limit: query.limit });
+
+      const hits: StyleHit[] = [];
+      for (const entry of fused) {
+        const row = byId.get(entry.id);
+        // The database enum admits only verified human sources, so no provenance filter is needed here.
+        // A value outside it would mean the enum grew; dropping the row is safer than trusting the name.
+        if (row === undefined || (row.provenance !== "HUMAN_TYPED" && row.provenance !== "HUMAN_EDITED_DRAFT")) {
+          continue;
+        }
+        hits.push({
+          exampleId: row.example_id,
+          scopeLevel: row.profile_scoped ? "BUSINESS_PROFILE" : "WORKSPACE",
+          inboundContext: row.inbound_context,
+          outboundText: row.outbound_text,
+          provenance: row.provenance,
+          score: entry.score,
+        });
+      }
+      return { hits, diagnostics };
+    },
+  };
+}
+
+const knowledgeCandidate = (row: KnowledgeRow): RankedCandidate => ({
+  id: row.chunk_id,
+  scopeLevel: row.profile_scoped ? "BUSINESS_PROFILE" : "WORKSPACE",
+});
+
+const styleCandidate = (row: StyleRow): RankedCandidate => ({
+  id: row.example_id,
+  scopeLevel: row.profile_scoped ? "BUSINESS_PROFILE" : "WORKSPACE",
+});
+
+/**
+ * Runs both lists in one transaction and reports what each contributed.
+ *
+ * A database failure becomes `RetrievalUnavailableError` rather than an empty list, because the caller's
+ * whole safety argument rests on telling "the business has no such fact" apart from "we could not look".
+ */
+async function runLists<Row>(
+  db: DbClient,
+  query: RetrievalQuery,
+  sql: { readonly lexical: string; readonly semantic: string; readonly probe: string; readonly extraParam?: string | null },
+): Promise<{ lexical: Row[]; semantic: Row[]; diagnostics: RetrievalDiagnostics }> {
+  const take = candidateLimit(query.limit);
+  const minLexical = query.thresholds?.minLexicalScore ?? DEFAULT_MIN_LEXICAL_SCORE;
+  const minSimilarity = query.thresholds?.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+  // A vector of the wrong width cannot be compared with the column at all. That is a misconfiguration,
+  // not an outage, and it must not throw away a lexical list that would have worked: the semantic side is
+  // skipped and the reason is recorded, exactly as for a failing embedding provider.
+  // Present only for the style queries, whose statements end with a language parameter.
+  const extra = sql.extraParam === undefined ? [] : [sql.extraParam];
+  const usable = query.embedding !== undefined && query.embedding.values.length === EMBEDDING_DIMENSIONS;
+  const vector = usable && query.embedding !== undefined ? toVectorLiteral(query.embedding.values) : undefined;
+
+  try {
+    // One REPEATABLE READ transaction so both lists and the probe see the same snapshot. The isolation
+    // level is the point: under PostgreSQL's default READ COMMITTED every statement takes a fresh snapshot,
+    // so a document activated between the two queries would produce a fused result that never existed at
+    // any single instant, and the profile probe could contradict the semantic list it is explaining. These
+    // are read-only queries, so the stricter level costs nothing and cannot fail on a write conflict.
+    const { lexical, semantic, profilePresent } = await db.$transaction(async (tx) => {
+      const lexicalRows =
+        query.text === ""
+          ? []
+          : await tx.$queryRawUnsafe<Row[]>(
+              sql.lexical,
+              query.scope.workspaceId,
+              query.scope.businessProfileId,
+              query.text,
+              minLexical,
+              take,
+              ...extra,
+            );
+      const semanticRows =
+        vector === undefined || query.embedding === undefined
+          ? []
+          : await tx.$queryRawUnsafe<Row[]>(
+              sql.semantic,
+              query.scope.workspaceId,
+              query.scope.businessProfileId,
+              vector,
+              query.embedding.profile,
+              // The floor is a similarity; the query orders by distance, so it travels as a distance ceiling.
+              1 - minSimilarity,
+              take,
+              ...extra,
+            );
+      // Only on the empty path, and only when a vector was actually supplied: one cheap existence check
+      // that separates "nothing was similar enough" from "this corpus is not embedded under this profile".
+      const probed =
+        vector === undefined || query.embedding === undefined || semanticRows.length > 0
+          ? undefined
+          : await tx.$queryRawUnsafe<{ present: boolean }[]>(
+              sql.probe,
+              query.scope.workspaceId,
+              query.scope.businessProfileId,
+              query.embedding.profile,
+              ...extra,
+            );
+      return { lexical: lexicalRows, semantic: semanticRows, profilePresent: probed?.[0]?.present };
+    }, RETRIEVAL_TRANSACTION);
+
+    return {
+      lexical,
+      semantic,
+      diagnostics: {
+        lexicalCandidates: lexical.length,
+        semanticCandidates: semantic.length,
+        ...(query.embedding === undefined
+          ? { semanticSkipped: "NO_EMBEDDING" as const }
+          : !usable
+            ? { semanticSkipped: "PROVIDER_ERROR" as const }
+            : profilePresent === false
+              ? { semanticSkipped: "PROFILE_MISMATCH" as const }
+              : {}),
+      },
+    };
+  } catch (error) {
+    throw new RetrievalUnavailableError(error instanceof Error ? error.name : "query_failed");
+  }
+}

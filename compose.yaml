@@ -1,7 +1,8 @@
 # Local development/test infrastructure. Credentials are fake, local-only defaults — never reuse them.
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector's own image: the same PostgreSQL 17 plus the `vector` extension retrieval needs (ADR-011).
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: omnichannel
       POSTGRES_PASSWORD: omnichannel-local-only

@@ -21,6 +21,18 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
    */
   AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
   /**
+   * Embeddings provider. Optional on purpose: with no key the worker runs lexical-only retrieval, which is
+   * a supported configuration rather than a degraded one — a missed fact produces MISSING_FACT and human
+   * review, never an invented answer. Requiring a key would make an embeddings outage a boot failure.
+   */
+  VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
+  AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
+  /** Must match the `vector(N)` column; changing it needs a migration and a controlled re-embedding. */
+  AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
+  /** Bumped by hand to force new vectors to be treated as a separate profile. */
+  AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
+
+  /**
    * The platform's voice of last resort, used only where a business has configured no StyleProfile of its
    * own. A tenant's persona lives in `style_profiles` and is resolved per Business Profile; this is a safe
    * default for an unconfigured workspace, never the authoritative voice for one (decision on PR #65).

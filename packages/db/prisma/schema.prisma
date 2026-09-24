@@ -652,7 +652,11 @@ model AiDraft {
   intent             String?
   suggestedLeadStage LeadStage?    @map("suggested_lead_stage")
   suggestedAction    String?       @map("suggested_action")
+  /// What the model said it relied on: always a subset of what retrieval supplied.
   factualSourceIds   String[]      @default([]) @map("factual_source_ids")
+  /// What retrieval supplied and at what score, plus whether the corpus was reachable at all. Kept apart
+  /// from `factual_source_ids` so a reviewer can tell "no such fact" from "we could not look" (RETRIEVAL.md).
+  retrieval          Json?
   status             AiDraftStatus @default(PENDING)
   modelProvider      String        @map("model_provider")
   modelName          String        @map("model_name")
@@ -756,14 +760,18 @@ model KnowledgeChunk {
   ordinal          Int
   content          String
   tokenCount       Int?     @map("token_count")
-  /// Embedding profile/version once embedded; the vector column is added with retrieval (ADR-011).
+  /// Embedding profile/version; set exactly when `embedding` is set (CHECK), so vectors from two models
+  /// can never be compared (ADR-011). Changing dimensions is a migration plus controlled re-embedding.
   embeddingProfile String?  @map("embedding_profile")
+  /// pgvector column; read and written only through raw SQL in `src/retrieval`.
+  embedding        Unsupported("vector(1024)")?
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   document KnowledgeDocument @relation(fields: [workspaceId, documentId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([workspaceId, documentId, documentVersion, ordinal], map: "knowledge_chunks_position_key")
+  @@index([workspaceId, documentId, documentVersion], map: "knowledge_chunks_scope_idx")
   @@map("knowledge_chunks")
 }
 
@@ -811,7 +819,13 @@ model StyleExample {
   sourceDraftId     String?                @map("source_draft_id")
   approvedByUserId  String?                @map("approved_by_user_id")
   status            StyleExampleStatus     @default(ACTIVE)
+  /// BCP-47 tag of the example's language. NULL means language-agnostic: such an example is a fallback
+  /// that matches any language rather than a wrong-language match (product-owner decision on PR #66).
+  language          String?
+  /// Set exactly when `embedding` is set (CHECK), as for knowledge chunks.
   embeddingProfile  String?                @map("embedding_profile")
+  /// pgvector column; read and written only through raw SQL in `src/retrieval`.
+  embedding         Unsupported("vector(1024)")?
   createdAt         DateTime               @default(now()) @map("created_at")
   updatedAt         DateTime               @updatedAt @map("updated_at")
 
@@ -822,6 +836,7 @@ model StyleExample {
   approvedByUser  User?            @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@index([workspaceId, businessProfileId, status])
+  @@index([workspaceId, businessProfileId, language], map: "style_examples_language_idx")
   @@map("style_examples")
 }
 

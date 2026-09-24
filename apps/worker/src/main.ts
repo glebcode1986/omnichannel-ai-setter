@@ -5,13 +5,16 @@ import {
   createDbClient,
   createDraftContextStore,
   createIngestionStore,
+  createKnowledgeRetriever,
   createStyleProfileStore,
+  createStyleRetriever,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
+import { createEmbeddings } from "./embeddings";
 import { loadWorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
@@ -64,6 +67,12 @@ function main(): void {
         maxOutputTokens: env.AI_REPLY_MAX_OUTPUT_TOKENS,
         logger,
       });
+      // No embeddings key means lexical-only retrieval, which is supported: retrieval still runs and a
+      // fact it misses becomes MISSING_FACT and human review rather than an invented answer.
+      const embeddings = createEmbeddings(env, logger);
+      // Stated at boot, not inferred from silence: lexical-only is a supported mode, but an operator has
+      // to be able to see which mode a worker is actually in before a customer asks a factual question.
+      logger.info("worker.retrieval_mode", { semantic: embeddings !== undefined, lexical: true });
       const generateDraft = createAiDraftHandler({
         engine: {
           model: replyModel,
@@ -76,6 +85,12 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
+        retrieval: {
+          knowledge: createKnowledgeRetriever(db),
+          style: createStyleRetriever(db),
+          ...(embeddings === undefined ? {} : { embeddings }),
+          log: logger,
+        },
         styleProfiles: createStyleProfileStore(db),
         platformStyleFallback: resolveStyleProfile([{ persona: env.AI_PERSONA }]),
         logger,

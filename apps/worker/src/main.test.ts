@@ -72,11 +72,19 @@ function expectOnlyRedisOutageOnStderr(stderr: string): void {
   expect(stderr).not.toContain("127.0.0.1:1");
 }
 
-/** Started, asked to stop, and stopped — in that order, with nothing else on stdout and exit code 0. */
-function expectGracefulShutdown(result: ProcessResult): void {
+/**
+ * Everything the worker says on stdout from a clean boot to a clean stop.
+ *
+ * The retrieval mode is stated before `worker.started`, so an operator reading the log from the top can
+ * see which mode it is in without waiting for a customer question.
+ */
+const GRACEFUL_LIFECYCLE = ["worker.retrieval_mode", "worker.started", "worker.stopping", "worker.stopped"] as const;
+
+/** A graceful stop: exit code 0, nothing unexpected on stderr, and exactly `expected` on stdout. */
+function expectGracefulShutdown(result: ProcessResult, expected: readonly string[] = GRACEFUL_LIFECYCLE): void {
   expectOnlyRedisOutageOnStderr(result.stderr);
   expect(result.code).toBe(0);
-  expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+  expect(events(result.stdout)).toEqual(expected);
 }
 
 function events(output: string): string[] {
@@ -194,7 +202,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     // Everything the worker owns closed, so this is not a failed shutdown: it exits successfully and
     // names what happened. Reporting failure here tells a supervisor a clean stop was a crash.
     expect(result.code).toBe(0);
-    expect(events(result.stdout)).toEqual(["worker.started", "worker.stopping", "worker.stopped"]);
+    expect(events(result.stdout)).toEqual(GRACEFUL_LIFECYCLE);
     expect(result.stderr).toContain('"event":"worker.lingering_after_stop"');
     expect(result.stderr).toContain('"trigger":"deadline"');
     expect(result.stderr).not.toContain("worker.shutdown_timeout");

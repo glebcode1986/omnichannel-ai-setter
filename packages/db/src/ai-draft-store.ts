@@ -39,6 +39,8 @@ export function createAiDraftStore(db: DbClient): AiDraftStore {
         suggestedLeadStage: input.suggestedLeadStage !== undefined && isLeadStage(input.suggestedLeadStage) ? input.suggestedLeadStage : undefined,
         suggestedAction: input.suggestedAction,
         factualSourceIds: [...input.factualSourceIds],
+        // The audit record of what retrieval supplied, and whether it could be reached at all.
+        retrieval: input.retrieval as object,
         status: input.status,
         modelProvider: input.provider,
         modelName: input.model,

@@ -12,5 +12,13 @@ export {
   PROVIDER_NAME,
   type AnthropicReplyModelConfig,
 } from "./reply-model";
+export {
+  createVoyageEmbeddingProvider,
+  DEFAULT_EMBEDDING_DIMENSIONS,
+  EMBEDDING_PROVIDER_NAME,
+  embeddingProfileId,
+  VOYAGE_EMBEDDINGS_URL,
+  type VoyageEmbeddingConfig,
+} from "./embedding-provider";
 export { createFetchModelHttpPort, type ModelHttpPort, type ModelHttpRequest, type ModelHttpResult } from "./transport";
 export { AI_DRAFT_JSON_SCHEMA } from "./wire-schema";

@@ -31,6 +31,7 @@ export const REASON_CODES = [
   "QUIET_HOURS",
   "RATE_LIMITED",
   "SUPERSEDED_BY_NEWER_INBOUND",
+  "RETRIEVAL_UNAVAILABLE",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const isReasonCode = literalGuard(REASON_CODES);

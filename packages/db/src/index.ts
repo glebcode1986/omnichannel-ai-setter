@@ -36,6 +36,19 @@ export {
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
 export { createIngestionStore } from "./ingestion-store";
+export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
+export {
+  seedKnowledge,
+  seedStyleExample,
+  type SeededKnowledge,
+  type SeedKnowledgeInput,
+  type SeedStyleExampleInput,
+} from "./retrieval/seed";
+export {
+  DEFAULT_MIN_LEXICAL_SCORE,
+  DEFAULT_MIN_SIMILARITY,
+  EMBEDDING_DIMENSIONS,
+} from "./retrieval/sql";
 export { createStyleProfileStore, type StyleProfileQuery, type StyleProfileStore } from "./style-profile-store";
 export {
   createCredentialCipher,

@@ -18,7 +18,6 @@ import { parseModelOutput, type AiDraftOutput, type ModelOutputIssue } from "./m
 import type {
   AiDraftStore,
   DraftConversationSnapshot,
-  KnowledgeSegment,
   PersistedDraft,
   ReplyGenerationRequest,
   ReplyGenerationResult,
@@ -26,6 +25,7 @@ import type {
   SaveDraftInput,
 } from "./ports";
 import { ReplyModelUnavailableError } from "./ports";
+import type { DraftRetrievalContext } from "../retrieval/ports";
 import { containsNonce, sanitizeUntrustedText } from "./sanitize";
 
 export interface DraftLogPort {
@@ -81,8 +81,13 @@ export interface DraftGenerationCommand {
   readonly capabilityHints: readonly string[];
   readonly inbound: readonly ReplyGenerationRequest["inbound"][number][];
   readonly history: readonly ReplyGenerationRequest["history"][number][];
-  readonly knowledge: readonly KnowledgeSegment[];
-  readonly style: readonly ReplyGenerationRequest["style"][number][];
+  /**
+   * What retrieval produced: the chunks and examples the model sees, and the record of what was supplied
+   * and whether the corpus was reachable. One object rather than separate fields, so the prompt and the
+   * stored provenance cannot describe different things. Required rather than optional: a caller that
+   * omitted it would silently claim the business had been consulted when it had not.
+   */
+  readonly retrieval: DraftRetrievalContext;
   /** Distinguishes repeated manual requests; a retried queue job reuses the same value. */
   readonly requestId?: string;
 }
@@ -255,8 +260,8 @@ function buildRequest(dependencies: DraftGenerationDependencies, command: DraftG
   const sanitize = <T extends { readonly text: string }>(segment: T): T => ({ ...segment, text: sanitizeUntrustedText(segment.text) });
   const inbound = command.inbound.map(sanitize);
   const history = command.history.map(sanitize);
-  const knowledge = command.knowledge.map(sanitize);
-  const style = command.style.map(sanitize);
+  const knowledge = command.retrieval.knowledge.map(sanitize);
+  const style = command.retrieval.style.map(sanitize);
 
   const nonce = freshNonce(
     dependencies,
@@ -303,7 +308,7 @@ function persistDraft(
   output: AiDraftOutput,
   fields: Readonly<Record<string, unknown>>,
 ): Promise<DraftGenerationOutcome> {
-  const supplied = new Set(command.knowledge.map((chunk) => chunk.chunkId));
+  const supplied = new Set(command.retrieval.knowledge.map((chunk) => chunk.chunkId));
   const claimed = [...new Set(output.factual_source_ids)];
   const factualSourceIds = claimed.filter((id) => supplied.has(id));
   const fabricatedSources = claimed.length !== factualSourceIds.length;
@@ -312,6 +317,9 @@ function persistDraft(
     dependencies.log.warn("ai.unsupported_sources", { ...fields, claimed: claimed.length, supplied: supplied.size });
   }
 
+  // A model cannot know the corpus was unreachable, so it cannot account for it: only this layer can.
+  // The draft is still written — not every message needs a business fact — but never without review.
+  const retrievalUnavailable = command.retrieval.supplied.status === "UNAVAILABLE";
   // Manual assistance, by definition: the person asked for help writing, and they send it themselves.
   // This is what keeps an "ask AI" click in mode OFF from ever becoming an automatic send.
   const humanRequested = isHumanRequested(command.trigger);
@@ -319,6 +327,7 @@ function persistDraft(
   const needsReview =
     output.needs_review ||
     fabricatedSources ||
+    retrievalUnavailable ||
     humanRequested ||
     reasonCodes.some((code) => (MANDATORY_REVIEW_REASON_CODES as readonly ReasonCode[]).includes(code));
 
@@ -329,11 +338,18 @@ function persistDraft(
     // Stored verbatim: advisory, and never reconciled with needs_review for tidiness.
     modelSuggestsSend: output.should_send,
     needsReview,
-    reasonCodes: fabricatedSources ? [...new Set<ReasonCode>([...reasonCodes, "MISSING_FACT"])] : reasonCodes,
+    reasonCodes: [
+      ...new Set<ReasonCode>([
+        ...reasonCodes,
+        ...(fabricatedSources ? (["MISSING_FACT"] as const) : []),
+        ...(retrievalUnavailable ? (["RETRIEVAL_UNAVAILABLE"] as const) : []),
+      ]),
+    ],
     ...(output.intent === null ? {} : { intent: output.intent }),
     ...(output.lead_stage === null ? {} : { suggestedLeadStage: output.lead_stage }),
     ...(output.suggested_action === null ? {} : { suggestedAction: output.suggested_action }),
     factualSourceIds,
+    retrieval: command.retrieval.supplied,
     status: "PENDING",
   }).then((draft) => {
     dependencies.log.info("ai.draft_generated", { ...fields, aiDraftId: draft.aiDraftId, needsReview });
@@ -357,6 +373,7 @@ function holdUnusable(
     needsReview: true,
     reasonCodes: [reason],
     factualSourceIds: [],
+    retrieval: command.retrieval.supplied,
     status: "HELD",
   }).then((draft) => {
     dependencies.log.warn("ai.draft_held", { ...fields, aiDraftId: draft.aiDraftId, reasonCodes: [reason] });

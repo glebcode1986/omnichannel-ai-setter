@@ -62,7 +62,7 @@ const request = (overrides: Partial<ReplyGenerationRequest> = {}): ReplyGenerati
   capabilityHints: ["text"],
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
   history: [],
-  knowledge: [{ chunkId: "chunk_1", provenance: "doc_1#1", text: "Saturday hours are 10:00-18:00." }],
+  knowledge: [{ chunkId: "chunk_1", text: "Saturday hours are 10:00-18:00." }],
   style: [{ exampleId: "style_1", text: "Hey! We're open 10 to 6." }],
   ...overrides,
 });

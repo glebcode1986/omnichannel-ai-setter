@@ -13,6 +13,10 @@
 import type { ChannelType } from "@omnichannel/channel-core";
 import type { AiMode, ReasonCode, StyleProfile } from "@omnichannel/domain";
 
+import type { KnowledgeSegment, StyleSegment, SuppliedRetrieval } from "../retrieval/ports";
+
+export type { KnowledgeSegment, StyleSegment };
+
 /** Where the generation happens; the Business Profile is the customer-data boundary. */
 export interface GenerationScope {
   readonly workspaceId: string;
@@ -29,22 +33,6 @@ export interface ConversationSegment {
   readonly provenance: string;
   readonly text: string;
   readonly occurredAt: Date;
-}
-
-/** A retrieved knowledge chunk. Only these may back a factual claim. */
-export interface KnowledgeSegment {
-  readonly chunkId: string;
-  readonly provenance: string;
-  readonly text: string;
-}
-
-/**
- * A human-written example used for tone. Deliberately a different type from knowledge: style can never
- * satisfy a factual requirement, and keeping the types apart makes that structural.
- */
-export interface StyleSegment {
-  readonly exampleId: string;
-  readonly text: string;
 }
 
 export interface ReplyGenerationRequest {
@@ -164,7 +152,10 @@ export interface SaveDraftInput {
   readonly intent?: string;
   readonly suggestedLeadStage?: string;
   readonly suggestedAction?: string;
+  /** What the model said it relied on: a subset of what retrieval supplied, never more. */
   readonly factualSourceIds: readonly string[];
+  /** What retrieval supplied and at what score, so a reviewer can tell a miss from an outage. */
+  readonly retrieval: SuppliedRetrieval;
   readonly status: "PENDING" | "HELD";
   readonly provider: string;
   readonly model: string;

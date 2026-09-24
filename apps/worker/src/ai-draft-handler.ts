@@ -5,7 +5,13 @@
  * output and what gets stored are the application's decisions; whether anything is ever sent is the policy
  * engine's and the delivery coordinator's, neither of which this path can reach.
  */
-import { generateDraft, type DraftGenerationDependencies, type DraftTrigger } from "@omnichannel/application";
+import {
+  generateDraft,
+  retrieveDraftContext,
+  type DraftGenerationDependencies,
+  type DraftRetrievalDependencies,
+  type DraftTrigger,
+} from "@omnichannel/application";
 import type { DraftContextStore, StyleProfileStore } from "@omnichannel/db";
 import { resolveStyleProfile, type StyleProfile } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
@@ -14,6 +20,12 @@ import { NonRetryableJobError, type InboundDebounceJob } from "@omnichannel/queu
 export interface AiDraftHandlerDependencies {
   readonly engine: DraftGenerationDependencies;
   readonly context: DraftContextStore;
+  /**
+   * Required. An optional dependency here would need a default retrieval record, and every possible
+   * default is a lie: "OK" claims the business was consulted, "UNAVAILABLE" claims an outage that did not
+   * happen. A caller that genuinely does not retrieve has to say which it means.
+   */
+  readonly retrieval: DraftRetrievalDependencies;
   readonly styleProfiles: StyleProfileStore;
   /**
    * The platform's voice of last resort, used only where a business has configured nothing. It is a safe
@@ -46,6 +58,23 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       throw new NonRetryableJobError("conversation or anchor message not found for draft generation");
     }
 
+    // Workspace base, then this Business Profile's override, then the platform default underneath.
+    // Resolved before retrieval rather than after it, because its language decides which style examples
+    // are eligible at all — and a profile resolved only for the prompt left every production request
+    // searching the whole multilingual corpus.
+    const styleProfile = resolveStyleProfile(
+      await dependencies.styleProfiles.load({ workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }),
+      dependencies.platformStyleFallback,
+    );
+
+    // Retrieval runs before generation (AI_ORCHESTRATION.md): the model is given the facts, never a way
+    // to go and look for them.
+    const retrieved = await retrieveDraftContext(dependencies.retrieval, {
+      scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId },
+      inbound: context.inbound,
+      ...(styleProfile.language === undefined ? {} : { language: styleProfile.language }),
+    });
+
     const outcome = await generateDraft(dependencies.engine, {
       scope: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, conversationId: job.conversationId },
       anchorMessageId: job.anchorMessageId,
@@ -54,19 +83,12 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       anchorStateVersion: context.snapshot.stateVersion,
       trigger: job.trigger,
       snapshot: context.snapshot,
-      // Workspace base, then this Business Profile's override, then the platform default underneath.
-      styleProfile: resolveStyleProfile(
-        await dependencies.styleProfiles.load({ workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }),
-        dependencies.platformStyleFallback,
-      ),
+      styleProfile,
       channel: "INSTAGRAM",
       capabilityHints: ["text"],
       inbound: context.inbound,
       history: context.history,
-      // Retrieval lands with P2-04; until then the model works from the conversation alone and must say so
-      // rather than invent business facts.
-      knowledge: [],
-      style: [],
+      retrieval: retrieved,
     });
 
     if (outcome.status === "UNAVAILABLE") {

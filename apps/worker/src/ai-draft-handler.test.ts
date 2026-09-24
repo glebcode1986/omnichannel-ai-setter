@@ -1,4 +1,10 @@
-import { ReplyModelUnavailableError, type DraftGenerationDependencies } from "@omnichannel/application";
+import {
+  RetrievalUnavailableError,
+  ReplyModelUnavailableError,
+  type DraftGenerationDependencies,
+  type DraftRetrievalDependencies,
+  type ReplyGenerationRequest,
+} from "@omnichannel/application";
 import type { DraftContext, DraftContextStore } from "@omnichannel/db";
 import { resolveStyleProfile } from "@omnichannel/domain";
 import { createLogger } from "@omnichannel/observability";
@@ -23,16 +29,65 @@ const context: DraftContext = {
   history: [],
 };
 
-function harness(overrides: { context?: DraftContext | undefined; generate?: DraftGenerationDependencies["model"]["generate"] } = {}) {
+const retrievalDependencies = (overrides: Partial<DraftRetrievalDependencies> = {}): DraftRetrievalDependencies => ({
+  knowledge: {
+    search: () =>
+      Promise.resolve({
+        hits: [
+          {
+            chunkId: "chunk_1",
+            documentId: "doc_1",
+            documentTitle: "Hours",
+            documentVersion: 1,
+            sourceType: "MANUAL",
+            scopeLevel: "WORKSPACE",
+            text: "Saturday hours are 10:00-18:00.",
+            score: 0.03,
+            lexicalRank: 1,
+          },
+        ],
+        diagnostics: { lexicalCandidates: 1, semanticCandidates: 0 },
+      }),
+  },
+  style: {
+    search: () =>
+      Promise.resolve({
+        hits: [
+          {
+            exampleId: "style_1",
+            scopeLevel: "WORKSPACE",
+            inboundContext: "open saturday?",
+            outboundText: "Hey! 10 till 6",
+            provenance: "HUMAN_TYPED",
+            score: 0.016,
+          },
+        ],
+        diagnostics: { lexicalCandidates: 1, semanticCandidates: 0 },
+      }),
+  },
+  log: { info: () => undefined, warn: () => undefined },
+  ...overrides,
+});
+
+function harness(
+  overrides: {
+    context?: DraftContext | undefined;
+    generate?: DraftGenerationDependencies["model"]["generate"];
+    retrieval?: DraftRetrievalDependencies;
+    styleProfiles?: { load: () => Promise<readonly { readonly persona?: string; readonly language?: string }[]> };
+  } = {},
+) {
   const saved: unknown[] = [];
+  const requests: ReplyGenerationRequest[] = [];
   const logs: string[] = [];
   const store: DraftContextStore = { load: () => Promise.resolve("context" in overrides ? overrides.context : context) };
   const engine: DraftGenerationDependencies = {
     model: {
       generate:
         overrides.generate ??
-        (() =>
-          Promise.resolve({
+        ((request) => {
+          requests.push(request);
+          return Promise.resolve({
             output: {
               reply: "We open at 10.",
               confidence: 0.8,
@@ -47,7 +102,8 @@ function harness(overrides: { context?: DraftContext | undefined; generate?: Dra
             provider: "anthropic",
             model: "claude-opus-5",
             latencyMs: 12,
-          })),
+          });
+        }),
     },
     drafts: {
       saveDraft: (input) => {
@@ -64,12 +120,91 @@ function harness(overrides: { context?: DraftContext | undefined; generate?: Dra
   const handler = createAiDraftHandler({
     engine,
     context: store,
-    styleProfiles: { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
+    retrieval: overrides.retrieval ?? retrievalDependencies(),
+    styleProfiles: overrides.styleProfiles ?? { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
     platformStyleFallback: resolveStyleProfile([{ persona: "Platform default assistant." }]),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
-  return { handler, saved, logs };
+  return { handler, saved, logs, requests };
 }
+
+describe("the language the reply is written in", () => {
+  // The production path this guards: the resolved StyleProfile's language has to reach style retrieval.
+  // Before this fix the handler resolved the profile *after* retrieval and passed none, so every real
+  // request searched the whole multilingual style corpus and could imitate the wrong language.
+  const capturing = () => {
+    const styleQueries: { language?: string }[] = [];
+    const knowledgeQueries: { language?: string }[] = [];
+    const base = retrievalDependencies();
+    const retrieval: DraftRetrievalDependencies = {
+      ...base,
+      knowledge: {
+        search: (query) => {
+          knowledgeQueries.push(query);
+          return base.knowledge.search(query);
+        },
+      },
+      style: {
+        search: (query) => {
+          styleQueries.push(query);
+          return base.style.search(query);
+        },
+      },
+    };
+    return { retrieval, styleQueries, knowledgeQueries };
+  };
+
+  it("forwards the business's language to style retrieval", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant." }, { language: "fr" }]) },
+    });
+
+    await handler(job);
+
+    expect(styleQueries).toHaveLength(1);
+    expect(styleQueries[0]?.language).toBe("fr");
+  });
+
+  it("forwards it in canonical form, whatever spelling the profile was stored in", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      // BCP-47 is case-insensitive; the example rows are canonical, so the request has to be too, or a
+      // correct configuration would miss its own examples.
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant.", language: "en-us" }]) },
+    });
+
+    await handler(job);
+
+    expect(styleQueries[0]?.language).toBe("en-US");
+  });
+
+  it("asks for no language when the business has none, keeping the whole corpus", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({ retrieval });
+
+    await handler(job);
+
+    // Absent, not empty: filtering on a preference nobody expressed would silently shrink the corpus.
+    expect(styleQueries[0]).not.toHaveProperty("language");
+  });
+
+  it("never gives the language to knowledge retrieval", async () => {
+    const { retrieval, knowledgeQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant.", language: "fr" }]) },
+    });
+
+    await handler(job);
+
+    // A fact is a fact whatever language it was written in. Filtering facts by language would hide a
+    // correct English price from a French reply and produce MISSING_FACT for no reason.
+    expect(knowledgeQueries[0]).not.toHaveProperty("language");
+  });
+});
 
 describe("ai draft handler", () => {
   it("loads the conversation, generates and persists one draft", async () => {
@@ -109,6 +244,28 @@ describe("ai draft handler", () => {
 
     expect(generate).not.toHaveBeenCalled();
     expect(saved).toHaveLength(0);
+  });
+
+  it("retrieves facts and tone before asking the model, and records what it supplied", async () => {
+    const { handler, saved, requests } = harness();
+
+    await handler(job);
+
+    // The model is given the facts; it is never given a way to go and look for them.
+    expect(requests[0]?.knowledge).toEqual([{ chunkId: "chunk_1", text: "Saturday hours are 10:00-18:00." }]);
+    expect(requests[0]?.style).toEqual([{ exampleId: "style_1", text: "Hey! 10 till 6" }]);
+    expect(saved[0]).toMatchObject({ retrieval: { status: "OK", knowledge: [{ chunkId: "chunk_1", documentId: "doc_1" }] } });
+  });
+
+  it("marks the draft for review when the factual corpus cannot be reached", async () => {
+    const { handler, saved } = harness({
+      retrieval: retrievalDependencies({ knowledge: { search: () => Promise.reject(new RetrievalUnavailableError("down")) } }),
+    });
+
+    await handler(job);
+
+    expect(saved[0]).toMatchObject({ needsReview: true, retrieval: { status: "UNAVAILABLE" } });
+    expect((saved[0] as { reasonCodes: string[] }).reasonCodes).toContain("RETRIEVAL_UNAVAILABLE");
   });
 
   it("carries the debounce job's identifiers into a draft job", () => {
