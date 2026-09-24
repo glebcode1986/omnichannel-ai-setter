@@ -46,6 +46,16 @@ export interface DraftRetrievalQuery {
   readonly scope: RetrievalScope;
   /** The customer messages this reply answers. Their text is used only as search terms. */
   readonly inbound: readonly ConversationSegment[];
+  /**
+   * The language the reply will be written in, from the resolved StyleProfile — the business's own
+   * configuration, never inferred from the customer's words. Canonical BCP-47 by then: the profile is
+   * where it is normalized.
+   *
+   * It reaches **style** retrieval only. An example written in one language teaches the wrong rhythm for
+   * a reply in another, but a fact is a fact whatever language it was written in, so knowledge retrieval
+   * is deliberately not given it.
+   */
+  readonly language?: string;
 }
 
 const DEFAULT_KNOWLEDGE_LIMIT = 8;
@@ -86,7 +96,11 @@ export async function retrieveDraftContext(
   // the two failures are graded differently and one must not cancel the other.
   const [factual, tone] = await Promise.allSettled([
     dependencies.knowledge.search({ ...base, limit: dependencies.knowledgeLimit ?? DEFAULT_KNOWLEDGE_LIMIT }),
-    dependencies.style.search({ ...base, limit: dependencies.styleLimit ?? DEFAULT_STYLE_LIMIT }),
+    dependencies.style.search({
+      ...base,
+      limit: dependencies.styleLimit ?? DEFAULT_STYLE_LIMIT,
+      ...(query.language === undefined ? {} : { language: query.language }),
+    }),
   ]);
 
   let knowledgeHits: readonly KnowledgeHit[] = [];
