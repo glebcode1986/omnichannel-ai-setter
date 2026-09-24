@@ -60,6 +60,28 @@ export function classifyMetaError(error: MetaError): boolean {
   return error.transient;
 }
 
+/**
+ * The token endpoint on api.instagram.com answers with a flat envelope instead of the nested one every
+ * graph.instagram.com endpoint uses. Code written against only the nested shape reads `undefined` here.
+ */
+const flatErrorBodySchema = z.looseObject({
+  error_type: z.string().optional(),
+  code: z.number().optional(),
+  error_message: z.string().optional(),
+});
+
+export function parseTokenEndpointError(body: string): MetaError | undefined {
+  const nested = parseMetaError(body);
+  if (nested !== undefined) {
+    return nested;
+  }
+  const parsed = flatErrorBodySchema.safeParse(safeJson(body));
+  if (!parsed.success || (parsed.data.error_type === undefined && parsed.data.code === undefined)) {
+    return undefined;
+  }
+  return { ...(parsed.data.code === undefined ? {} : { code: parsed.data.code }), transient: false };
+}
+
 export function parseMetaError(body: string): MetaError | undefined {
   const parsed = errorBodySchema.safeParse(safeJson(body));
   if (!parsed.success) {

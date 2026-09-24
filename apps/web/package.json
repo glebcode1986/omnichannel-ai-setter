@@ -14,6 +14,7 @@
     "@auth/prisma-adapter": "2.11.3",
     "@omnichannel/application": "workspace:*",
     "@omnichannel/channel-core": "workspace:*",
+    "@omnichannel/channel-instagram": "workspace:*",
     "@omnichannel/db": "workspace:*",
     "@omnichannel/domain": "workspace:*",
     "@omnichannel/env": "workspace:*",

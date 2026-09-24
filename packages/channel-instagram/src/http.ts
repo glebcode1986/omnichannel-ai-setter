@@ -5,10 +5,10 @@
  */
 export interface InstagramHttpRequest {
   readonly url: string;
-  readonly method: "POST";
+  readonly method: "GET" | "POST";
   readonly headers: Readonly<Record<string, string>>;
-  /** Already-serialized JSON body. */
-  readonly body: string;
+  /** Already-serialized body; absent on GET. */
+  readonly body?: string;
   readonly timeoutMs: number;
 }
 
@@ -47,7 +47,7 @@ export function createFetchHttpPort(): InstagramHttpPort {
         const response = await fetch(request.url, {
           method: request.method,
           headers: { ...request.headers },
-          body: request.body,
+          ...(request.body === undefined ? {} : { body: request.body }),
           signal: controller.signal,
         });
         // A body read can fail after a successful status; the send still happened, so it stays ambiguous.

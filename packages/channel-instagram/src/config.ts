@@ -12,6 +12,14 @@ import type { InstagramHttpPort } from "./http";
 
 /** Instagram API with Instagram Login is served from graph.instagram.com. */
 export const DEFAULT_GRAPH_HOST = "graph.instagram.com";
+/**
+ * The login flow spans three hosts, which is easy to get wrong: the person authorizes on www.instagram.com,
+ * the code is exchanged on api.instagram.com, and everything after that (long-lived token, refresh, /me and
+ * all data) is graph.instagram.com. Meta's older reference page still shows api.instagram.com/oauth/authorize
+ * from the retired Basic Display API; that host does not serve this flow.
+ */
+export const DEFAULT_OAUTH_AUTHORIZE_HOST = "www.instagram.com";
+export const DEFAULT_OAUTH_TOKEN_HOST = "api.instagram.com";
 /** Current Graph API version (v26.0, released 2026-07-29). Meta deprecates versions after two years. */
 export const DEFAULT_GRAPH_VERSION = "v26.0";
 /** Standard automated messaging window: 24 hours from the person's last message. */

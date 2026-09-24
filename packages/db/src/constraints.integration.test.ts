@@ -287,7 +287,15 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
   it("rejects cross-Business-Profile and cross-Workspace references even when repositories are bypassed", async () => {
     const draftInA2 = await newDraft(a2);
     const credentialInB = await db().channelCredential.create({
-      data: { workspaceId: b.workspaceId, keyId: "fake-key", algorithm: "fake", ciphertext: Buffer.from("fake"), nonce: Buffer.from("fake") },
+      // A complete envelope: the schema now refuses anything that is not one (see the envelope check below).
+      data: {
+        workspaceId: b.workspaceId,
+        keyId: "fake-key",
+        algorithm: "aes-256-gcm",
+        ciphertext: Buffer.from("fake"),
+        nonce: Buffer.alloc(12, 1),
+        authTag: Buffer.alloc(16, 2),
+      },
     });
     const memberOfB = await db().workspaceMember.findFirstOrThrow({ where: { workspaceId: b.workspaceId } });
     const documentInB = await db().knowledgeDocument.create({ data: { workspaceId: b.workspaceId, title: "t", sourceType: "MANUAL" } });
@@ -571,6 +579,76 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     await expect(db().conversation.update({ where: { id: a2.conversationId }, data: { businessProfileId: a1.businessProfileId } })).rejects.toThrow();
     await expect(db().contact.update({ where: { id: a2.contactId }, data: { businessProfileId: a1.businessProfileId } })).rejects.toThrow();
     expect((await db().conversation.findUniqueOrThrow({ where: { id: a2.conversationId } })).businessProfileId).toBe(a2.businessProfileId);
+  });
+
+  it("refuses a stored credential that is not a complete AES-256-GCM envelope", async () => {
+    const envelope = (overrides: Record<string, unknown> = {}) => ({
+      workspaceId: a.workspaceId,
+      purpose: "INSTAGRAM_ACCESS_TOKEN",
+      keyId: "k1",
+      algorithm: "aes-256-gcm",
+      ciphertext: Buffer.from("ciphertext"),
+      nonce: Buffer.alloc(12, 1),
+      authTag: Buffer.alloc(16, 2),
+      ...overrides,
+    });
+
+    await expect(db().channelCredential.create({ data: envelope() })).resolves.toBeDefined();
+    // A row that names a weaker algorithm, drops authentication or resizes the nonce cannot exist at all.
+    for (const invalid of [
+      { algorithm: "aes-256-cbc" },
+      { authTag: null },
+      { authTag: Buffer.alloc(8, 2) },
+      { nonce: Buffer.alloc(16, 1) },
+      { ciphertext: Buffer.alloc(0) },
+      { purpose: "" },
+    ]) {
+      await expectCheckViolation(db().channelCredential.create({ data: envelope(invalid) }), "channel_credentials_envelope_check");
+    }
+  });
+
+  it("keeps credential lifetimes moving forward", async () => {
+    const past = new Date(Date.now() - 60_000);
+    const base = {
+      workspaceId: a.workspaceId,
+      purpose: "INSTAGRAM_ACCESS_TOKEN",
+      keyId: "k1",
+      algorithm: "aes-256-gcm",
+      ciphertext: Buffer.from("ciphertext"),
+      nonce: Buffer.alloc(12, 1),
+      authTag: Buffer.alloc(16, 2),
+    };
+
+    for (const invalid of [{ expiresAt: past }, { refreshedAt: past }, { revokedAt: past }]) {
+      await expectCheckViolation(db().channelCredential.create({ data: { ...base, ...invalid } }), "channel_credentials_lifetime_check");
+    }
+  });
+
+  it("keeps a connect state short-lived, single-use and hash-sized", async () => {
+    const state = (overrides: Record<string, unknown> = {}) => ({
+      id: unique("state"),
+      workspaceId: a.workspaceId,
+      businessProfileId: a1.businessProfileId,
+      userId: a.ownerUserId,
+      channel: "INSTAGRAM" as const,
+      nonceHash: Buffer.alloc(32, 9),
+      requestedScopes: ["instagram_business_basic"],
+      expiresAt: new Date(Date.now() + 60_000),
+      ...overrides,
+    });
+
+    await expect(db().channelConnectState.create({ data: state() })).resolves.toBeDefined();
+    for (const invalid of [
+      { expiresAt: new Date(Date.now() - 60_000) },
+      { consumedAt: new Date(Date.now() - 60_000) },
+      { nonceHash: Buffer.alloc(16, 9) },
+    ]) {
+      await expectCheckViolation(db().channelConnectState.create({ data: state(invalid) }), "channel_connect_states_lifetime_check");
+    }
+    // A state cannot point at a Business Profile of another Workspace.
+    await expect(
+      db().channelConnectState.create({ data: state({ businessProfileId: b1.businessProfileId }) }),
+    ).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
   });
 
   it("preserves audit history instead of cascading deletes", async () => {

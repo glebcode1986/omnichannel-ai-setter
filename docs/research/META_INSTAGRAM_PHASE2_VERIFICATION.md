@@ -51,6 +51,29 @@ Do not implement a background AI worker that automatically attaches HUMAN_AGENT 
 - **Standard window.** 24 hours from the person's last message. It is opened or reset by the person messaging, tapping a CTA, clicking a click-to-Instagram ad or an ig.me link, reacting to a message, or commenting on a post.
 - **Human Agent.** 7 days from the person's message, for human support only, gated by App Review (App dashboard → App review → Permissions & Features → Human Agent). On `graph.instagram.com` it is sent as a **top-level `"tag": "HUMAN_AGENT"` field with no `messaging_type`** (Messenger requires `messaging_type`; Instagram does not). Meta's policy names "automated messages" and "content unrelated to the user inquiry" as disallowed usages. The 2026-04-27 removal of several message tags did **not** include HUMAN_AGENT.
 
+## OAuth and token lifecycle (verified 2026-09-17, during P2-02)
+
+The login flow spans **three hosts**, which is the single easiest thing to get wrong:
+
+| Step | Request |
+| --- | --- |
+| Authorize | `GET https://www.instagram.com/oauth/authorize` with `client_id`, `redirect_uri`, `response_type=code`, `scope`, `state`, and optionally `force_reauth` |
+| Exchange code | `POST https://api.instagram.com/oauth/access_token`, form-encoded, with `client_id`, `client_secret`, `grant_type=authorization_code`, `redirect_uri`, `code` |
+| Long-lived token | `GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=…&access_token=…` |
+| Refresh | `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=…` |
+| Identity | `GET https://graph.instagram.com/<version>/me?fields=id,user_id,username,name,account_type` |
+
+- Meta's older reference page still documents `api.instagram.com/oauth/authorize` and the scope `instagram_basic`. That is **Basic Display API residue** and does not serve this flow; the business-login page is authoritative.
+- The exchange response is **wrapped in a `data` array**: `{"data":[{"access_token":…,"user_id":…,"permissions":…}]}`. Code written against a flat body silently reads `undefined`.
+- `permissions` is the **authoritative list of what the person actually granted**; they may deselect a permission on the consent screen and still return a valid code.
+- The authorization code is valid for **one hour and single-use**, and Meta appends `#_` to the redirect, which is not part of the code.
+- Business-login tokens are **short-lived (1 hour)**; the long-lived token lasts **60 days**. A refresh requires the token to be **at least 24 hours old and not yet expired** — so a token minted seconds ago cannot be refreshed, and one not refreshed within 60 days can only be replaced by a new login.
+- `me` returns **both** `id` (app-scoped) and `user_id` (the professional account ID used by `/<IG_ID>/messages`). Persisting `id` produces an onboarding that appears to work and then fails every send.
+- The token endpoint reports errors in a **flat** envelope — `{"error_type":…,"code":…,"error_message":…}` — unlike every `graph.instagram.com` endpoint, which uses the nested `{"error":{…}}` shape.
+- A denied authorization redirects with `error=access_denied&error_reason=user_denied&error_description=…`. That text is Meta-authored and untrusted; it is never reflected into a page or a URL.
+- **Human Agent approval is not discoverable through any API** on this path. Meta documents the feature and its App Review requirement but exposes no status endpoint, so approval is operator-entered configuration that defaults to "unknown" (which keeps the tagged send path closed).
+- Token invalidation surfaces as code `190` with subcodes such as 458 (app removed), 460 (password changed), 463 (expired) and 467 (invalid), and as codes 10 / 200–299 when a permission was revoked.
+
 ## Divergences from this repository's earlier assumptions (2026-09-17)
 
 1. **Instagram has no delivery webhook at all.** `message_deliveries` and `message_reads` are Messenger-only; Instagram reports reads as `messaging_seen`. An Instagram adapter that never emits `DELIVERY_STATUS` is therefore conformant, not incomplete.
