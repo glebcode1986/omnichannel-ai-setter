@@ -67,6 +67,7 @@ import {
   type Message,
   type QuietHours,
   type WorkspaceId,
+  canonicalLanguageTag,
 } from "./index";
 
 const NUL = String.fromCharCode(0);
@@ -549,5 +550,29 @@ describe("nextQuietHoursEnd", () => {
     // Exactly at the end, the next end is a day away — never the instant itself, which would let a caller
     // schedule for a time that has already passed.
     expect(nextQuietHoursEnd(quiet, now).getTime()).toBeGreaterThan(now.getTime());
+  });
+});
+
+describe("canonicalLanguageTag", () => {
+  it("gives one spelling to every way of writing the same tag", () => {
+    // BCP-47 is case-insensitive; style retrieval compares by equality, so both sides must meet here.
+    expect(canonicalLanguageTag("en-us")).toBe("en-US");
+    expect(canonicalLanguageTag("EN-US")).toBe("en-US");
+    expect(canonicalLanguageTag(" fr ")).toBe("fr");
+    expect(canonicalLanguageTag("zh-hans-cn")).toBe("zh-Hans-CN");
+  });
+
+  it("treats a blank tag as no preference and refuses something that is not a tag", () => {
+    expect(canonicalLanguageTag(undefined)).toBeUndefined();
+    expect(canonicalLanguageTag("   ")).toBeUndefined();
+    // Refused, never guessed: the caller decides what an invalid tag means at its own boundary.
+    expect(canonicalLanguageTag("not a language!")).toBeNull();
+  });
+
+  it("makes a StyleProfile refuse an invalid language rather than silently dropping it", () => {
+    expect(() => resolveStyleProfile([{ persona: "Studio assistant.", language: "not a language!" }])).toThrow(
+      expect.objectContaining({ name: "DomainValidationError", field: "language" }),
+    );
+    expect(resolveStyleProfile([{ persona: "Studio assistant.", language: "en-us" }]).language).toBe("en-US");
   });
 });

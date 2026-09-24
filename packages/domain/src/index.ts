@@ -18,6 +18,7 @@ export * from "./errors";
 export * from "./handoff";
 export * from "./human-takeover";
 export * from "./ids";
+export * from "./language";
 export * from "./lead";
 export * from "./message";
 export * from "./reason-codes";
