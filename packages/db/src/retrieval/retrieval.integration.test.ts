@@ -1,5 +1,5 @@
 import type { EmbeddingVector, RetrievalQuery } from "@omnichannel/application";
-import { RetrievalUnavailableError } from "@omnichannel/application";
+import { RetrievalUnavailableError, retrieveDraftContext } from "@omnichannel/application";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDbClient } from "../client";
@@ -482,6 +482,87 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       // reaches the model is the retraction failing silently, in the one place nobody re-reads.
       expect(tone.hits.length).toBeGreaterThan(0);
       expect(tone.hits.map((hit) => hit.outboundText)).not.toContain(marker);
+    });
+  });
+
+  describe("style language", () => {
+    // A dedicated profile and a phrase nothing else in the suite uses, so each result below is about
+    // language and nothing else. Seeded canonical, as the production write path stores it.
+    const phrase = "glockenspiel booking question";
+    let english: string;
+    let french: string;
+    let agnostic: string;
+    let archivedFrench: string;
+    let otherProfileFrench: string;
+
+    beforeAll(async () => {
+      const scope = { workspaceId, businessProfileId: profileB.businessProfileId };
+      english = await seedStyleExample(database.db, { ...scope, inboundContext: phrase, outboundText: "EN reply", language: "en-US" });
+      french = await seedStyleExample(database.db, { ...scope, inboundContext: phrase, outboundText: "FR reply", language: "fr" });
+      agnostic = await seedStyleExample(database.db, { ...scope, inboundContext: phrase, outboundText: "agnostic reply" });
+      archivedFrench = await seedStyleExample(database.db, { ...scope, inboundContext: phrase, outboundText: "archived FR", language: "fr", status: "ARCHIVED" });
+      // Another profile in the same workspace, in the requested language: a language match must never widen scope.
+      otherProfileFrench = await seedStyleExample(database.db, {
+        workspaceId,
+        businessProfileId: profileA.businessProfileId,
+        inboundContext: phrase,
+        outboundText: "other profile FR",
+        language: "fr",
+      });
+    });
+
+    const ids = async (language?: string) =>
+      (
+        await retrieveDraftContext(
+          { knowledge: knowledge(), style: style(), log: { info: () => undefined, warn: () => undefined }, styleLimit: 20 },
+          {
+            scope: { workspaceId, businessProfileId: profileB.businessProfileId },
+            inbound: [{ kind: "INBOUND", provenance: "m1", text: phrase, occurredAt: new Date() }],
+            ...(language === undefined ? {} : { language }),
+          },
+        )
+      ).style.map((hit) => hit.exampleId);
+
+    it("keeps the requested language and the language-agnostic examples, and nothing else", async () => {
+      const found = await ids("fr");
+
+      expect(found).toEqual(expect.arrayContaining([french, agnostic]));
+      // An example written in another language teaches the wrong rhythm for this reply.
+      expect(found).not.toContain(english);
+    });
+
+    it("behaves the same way for another language", async () => {
+      const found = await ids("en-US");
+
+      expect(found).toEqual(expect.arrayContaining([english, agnostic]));
+      expect(found).not.toContain(french);
+    });
+
+    it("keeps the whole eligible corpus when no language is requested", async () => {
+      // Filtering on a preference nobody expressed would silently shrink it.
+      expect(await ids()).toEqual(expect.arrayContaining([english, french, agnostic]));
+    });
+
+    it("still excludes archived examples and other Business Profiles, whatever their language", async () => {
+      const found = [...(await ids("fr")), ...(await ids())];
+
+      expect(found).not.toContain(archivedFrench);
+      expect(found).not.toContain(otherProfileFrench);
+    });
+
+    it("does not let a language shape knowledge retrieval", async () => {
+      const facts = await retrieveDraftContext(
+        { knowledge: knowledge(), style: style(), log: { info: () => undefined, warn: () => undefined } },
+        {
+          scope: { workspaceId, businessProfileId: profileA.businessProfileId },
+          inbound: [{ kind: "INBOUND", provenance: "m1", text: "saturday opening hours", occurredAt: new Date() }],
+          language: "fr",
+        },
+      );
+
+      // The English opening-hours fact still answers a French reply: a fact is a fact whatever language
+      // it was written in.
+      expect(facts.knowledge.map((hit) => hit.chunkId)).toContain(baseChunkId);
     });
   });
 

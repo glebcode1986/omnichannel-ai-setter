@@ -74,6 +74,7 @@ function harness(
     context?: DraftContext | undefined;
     generate?: DraftGenerationDependencies["model"]["generate"];
     retrieval?: DraftRetrievalDependencies;
+    styleProfiles?: { load: () => Promise<readonly { readonly persona?: string; readonly language?: string }[]> };
   } = {},
 ) {
   const saved: unknown[] = [];
@@ -120,12 +121,90 @@ function harness(
     engine,
     context: store,
     retrieval: overrides.retrieval ?? retrievalDependencies(),
-    styleProfiles: { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
+    styleProfiles: overrides.styleProfiles ?? { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
     platformStyleFallback: resolveStyleProfile([{ persona: "Platform default assistant." }]),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
   return { handler, saved, logs, requests };
 }
+
+describe("the language the reply is written in", () => {
+  // The production path this guards: the resolved StyleProfile's language has to reach style retrieval.
+  // Before this fix the handler resolved the profile *after* retrieval and passed none, so every real
+  // request searched the whole multilingual style corpus and could imitate the wrong language.
+  const capturing = () => {
+    const styleQueries: { language?: string }[] = [];
+    const knowledgeQueries: { language?: string }[] = [];
+    const base = retrievalDependencies();
+    const retrieval: DraftRetrievalDependencies = {
+      ...base,
+      knowledge: {
+        search: (query) => {
+          knowledgeQueries.push(query);
+          return base.knowledge.search(query);
+        },
+      },
+      style: {
+        search: (query) => {
+          styleQueries.push(query);
+          return base.style.search(query);
+        },
+      },
+    };
+    return { retrieval, styleQueries, knowledgeQueries };
+  };
+
+  it("forwards the business's language to style retrieval", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant." }, { language: "fr" }]) },
+    });
+
+    await handler(job);
+
+    expect(styleQueries).toHaveLength(1);
+    expect(styleQueries[0]?.language).toBe("fr");
+  });
+
+  it("forwards it in canonical form, whatever spelling the profile was stored in", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      // BCP-47 is case-insensitive; the example rows are canonical, so the request has to be too, or a
+      // correct configuration would miss its own examples.
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant.", language: "en-us" }]) },
+    });
+
+    await handler(job);
+
+    expect(styleQueries[0]?.language).toBe("en-US");
+  });
+
+  it("asks for no language when the business has none, keeping the whole corpus", async () => {
+    const { retrieval, styleQueries } = capturing();
+    const { handler } = harness({ retrieval });
+
+    await handler(job);
+
+    // Absent, not empty: filtering on a preference nobody expressed would silently shrink the corpus.
+    expect(styleQueries[0]).not.toHaveProperty("language");
+  });
+
+  it("never gives the language to knowledge retrieval", async () => {
+    const { retrieval, knowledgeQueries } = capturing();
+    const { handler } = harness({
+      retrieval,
+      styleProfiles: { load: () => Promise.resolve([{ persona: "Studio assistant.", language: "fr" }]) },
+    });
+
+    await handler(job);
+
+    // A fact is a fact whatever language it was written in. Filtering facts by language would hide a
+    // correct English price from a French reply and produce MISSING_FACT for no reason.
+    expect(knowledgeQueries[0]).not.toHaveProperty("language");
+  });
+});
 
 describe("ai draft handler", () => {
   it("loads the conversation, generates and persists one draft", async () => {

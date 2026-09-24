@@ -16,6 +16,8 @@
  */
 import { randomUUID } from "node:crypto";
 
+import { canonicalLanguageTag } from "@omnichannel/domain";
+
 import type { DbClient } from "../client";
 import { profileScopeOf, type BusinessProfileContext } from "../tenancy";
 
@@ -106,9 +108,22 @@ export async function seedStyleExample(db: DbClient, context: BusinessProfileCon
     input.inboundContext,
     input.outboundText,
     input.provenance ?? "HUMAN_TYPED",
-    input.language ?? null,
+    language(input.language),
     input.embedding === undefined ? null : (input.embeddingProfile ?? null),
     input.embedding === undefined ? null : `[${input.embedding.join(",")}]`,
   );
   return id;
+}
+
+/**
+ * The example's language in canonical form, so the equality in the style query meets the same spelling
+ * the StyleProfile produces. An invalid tag is refused rather than stored: a row nobody's request can ever
+ * match is a style example that silently never teaches anything.
+ */
+function language(tag: string | undefined): string | null {
+  const canonical = canonicalLanguageTag(tag);
+  if (canonical === null) {
+    throw new RangeError("style example language must be a BCP-47 language tag");
+  }
+  return canonical ?? null;
 }
