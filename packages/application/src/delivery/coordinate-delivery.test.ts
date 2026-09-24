@@ -3,9 +3,15 @@ import type { SendResult } from "@omnichannel/channel-core";
 import { describe, expect, it } from "vitest";
 
 import { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies } from "./coordinate-delivery";
-import type { ClaimOutcome, DeliverySendContext, DeliverySettlement } from "./ports";
+import type { ClaimOutcome, DeliverySendContext, DeliverySettlement, DeliveryStateGuard } from "./ports";
 
 const NOW = new Date("2026-09-18T12:00:00.000Z");
+
+/**
+ * A guard is opaque to the coordinator, so a label standing in for one is enough — and it is what lets a
+ * test prove *which* read a claim was made against, which is the whole question here.
+ */
+const guard = (label: string): DeliveryStateGuard => ({ label }) as unknown as DeliveryStateGuard;
 
 const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendContext => ({
   deliveryJobId: "djob_1",
@@ -25,6 +31,7 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   account: "CONNECTED",
   draftNeedsReview: false,
   alreadySent: false,
+  guard: guard("read_1"),
   ...overrides,
 });
 
@@ -51,6 +58,13 @@ interface HarnessOptions {
   readonly maxAttempts?: number;
   /** How far the clock moves between reads; 0 (the default) keeps it fixed. */
   readonly clockStepMs?: number;
+  /**
+   * What each successive read returns, standing in for a conversation that changes while it is being
+   * judged. The last entry is reused once the list runs out.
+   */
+  readonly reads?: readonly (DeliverySendContext | undefined)[];
+  /** What each successive claim answers; the last entry is reused once the list runs out. */
+  readonly claims?: readonly ClaimOutcome[];
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -60,12 +74,25 @@ function harness(options: HarnessOptions = {}) {
   const logs: string[] = [];
   let claims = 0;
   let reads = 0;
+  let loads = 0;
+
+  const claimedAgainst: (DeliveryStateGuard | undefined)[] = [];
 
   const dependencies: DeliveryDependencies = {
     store: {
-      loadForSend: () => Promise.resolve("context" in options ? options.context : context()),
-      claim: () => {
+      loadForSend: () => {
+        loads += 1;
+        if (options.reads !== undefined) {
+          return Promise.resolve(options.reads[Math.min(loads, options.reads.length) - 1]);
+        }
+        return Promise.resolve("context" in options ? options.context : context());
+      },
+      claim: (claimed) => {
         claims += 1;
+        claimedAgainst.push(claimed.guard);
+        if (options.claims !== undefined) {
+          return Promise.resolve(options.claims[Math.min(claims, options.claims.length) - 1] ?? { kind: "NOT_CLAIMABLE", status: "SENDING" });
+        }
         // The database decides the winner; only the first caller can ever be told it owns the send.
         return Promise.resolve(options.claim ?? (claims === 1 ? { kind: "CLAIMED" } : { kind: "NOT_CLAIMABLE", status: "SENDING" }));
       },
@@ -99,7 +126,7 @@ function harness(options: HarnessOptions = {}) {
     },
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   };
-  return { dependencies, settlements, sends, rescheduled, logs };
+  return { dependencies, settlements, sends, rescheduled, logs, claimedAgainst };
 }
 
 describe("the happy path is the only path to a send", () => {
@@ -147,6 +174,101 @@ describe("two workers racing one delivery", () => {
 
     expect(outcome).toEqual({ status: "NOT_CLAIMABLE" });
     expect(sends).toEqual([]);
+  });
+});
+
+describe("the state moving between the judgement and the claim", () => {
+  it("claims against the state it judged, not merely against the operation", async () => {
+    const { dependencies, claimedAgainst } = harness();
+
+    await coordinateDelivery(dependencies, command());
+
+    // Without this, the claim is conditional on a row and not on the approval, and every test below
+    // describes something the database would have allowed.
+    expect(claimedAgainst).toEqual([guard("read_1")]);
+  });
+
+  it("sends nothing when a customer message lands in the gap, and cancels on what replaced the approval", async () => {
+    const { dependencies, sends, settlements, logs } = harness({
+      // The first read is a perfectly valid state. Between it and the claim the customer writes again, so
+      // the claim is refused and the second read is what actually decides.
+      reads: [context(), context({ replyCycle: "SUPERSEDED", guard: guard("read_2") })],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(sends).toEqual([]);
+    expect(outcome).toMatchObject({ status: "CANCELLED", reasons: ["SUPERSEDED_BY_NEWER_INBOUND"] });
+    expect(settlements).toEqual([{ kind: "CANCELLED", status: "CANCELLED_SUPERSEDED", reasons: ["SUPERSEDED_BY_NEWER_INBOUND"] }]);
+    expect(logs).toContain("delivery.state_changed");
+  });
+
+  it("sends nothing when a colleague takes the conversation over in the gap", async () => {
+    const { dependencies, sends, settlements } = harness({
+      reads: [
+        context(),
+        context({ takeover: { state: "HUMAN_ACTIVE", reason: "HUMAN_SENT_FROM_INBOX", since: NOW }, guard: guard("read_2") }),
+      ],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(sends).toEqual([]);
+    expect(outcome.status).toBe("CANCELLED");
+    expect(settlements).toEqual([{ kind: "CANCELLED", status: "CANCELLED_HUMAN_TAKEOVER", reasons: ["HUMAN_TAKEOVER"] }]);
+  });
+
+  it("re-claims against the state it re-read, never against the one that was overtaken", async () => {
+    const { dependencies, sends, claimedAgainst } = harness({
+      // The change was benign — something moved that the gates do not care about — so the send still goes.
+      reads: [context(), context({ guard: guard("read_2") })],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    await coordinateDelivery(dependencies, command());
+
+    expect(claimedAgainst).toEqual([guard("read_1"), guard("read_2")]);
+    expect(sends).toHaveLength(1);
+  });
+
+  it("hands the job back to the queue rather than guessing when the state keeps moving", async () => {
+    const { dependencies, sends, rescheduled, settlements } = harness({
+      // A conversation being actively written in. Each read is valid and each claim is overtaken.
+      claims: [{ kind: "STATE_CHANGED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    // Nothing sent, nothing settled: this call simply could not establish that the approval still held.
+    expect(sends).toEqual([]);
+    expect(settlements).toEqual([]);
+    expect(rescheduled).toEqual([NOW]);
+    expect(outcome).toEqual({ status: "RESCHEDULED", notBefore: NOW });
+  });
+
+  it("stops when the delivery disappears between the refused claim and the re-read", async () => {
+    const { dependencies, sends } = harness({
+      reads: [context(), undefined],
+      claims: [{ kind: "STATE_CHANGED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(outcome).toEqual({ status: "NOT_CLAIMABLE" });
+    expect(sends).toEqual([]);
+  });
+
+  it("keeps telling a lost race apart from an overtaken one", async () => {
+    const { dependencies, sends, rescheduled } = harness({ claims: [{ kind: "NOT_CLAIMABLE", status: "SENDING" }] });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    // Another worker owning the send is final; it must not be re-read and retried like a moved state.
+    expect(outcome).toEqual({ status: "NOT_CLAIMABLE" });
+    expect(sends).toEqual([]);
+    expect(rescheduled).toEqual([]);
   });
 });
 

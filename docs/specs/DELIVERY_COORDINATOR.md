@@ -49,6 +49,28 @@ Any failed gate cancels/holds without sending.
 
 Exactly one worker/caller may transition a delivery from a claimable state into SENDING. Stable `operationId` and database constraints guard the logical action independently of BullMQ retries.
 
+**The claim is conditional on the state the revalidation was made against, not only on the delivery row.**
+Revalidating and then claiming takes time, and the conversation does not wait: a newer inbound, a human
+takeover, an automation-policy edit or a draft rewrite can commit in between. A claim conditional only on
+the delivery's own status succeeds in all of those cases and sends on an approval that has already been
+withdrawn — the delivery row was never what authorized the send.
+
+The claim therefore re-asserts, in the same statement that takes the send, every fact the revalidation
+rested on: the reply cycle (no qualifying inbound after the draft anchor), the conversation's own state
+(takeover, AI enabled, open/closed, mode override, and its state version for anything else that moves),
+the draft (text, review flag, and that it has not already produced a message), the channel account's
+health, and the automation-policy rows the mode and limits were read from. A claim whose facts no longer
+match is refused as **state-changed** rather than as a lost race: nothing is claimed, nothing is sent, and
+no attempt is counted.
+
+A refused claim is re-read and re-judged, and normally the change is exactly what now cancels or holds the
+delivery. A bounded number of passes applies; past it the job returns to the queue rather than being
+decided from a snapshot that is already old.
+
+This binding reaches as far as the claim and no further. Once the claim succeeds the message is being
+handed to a provider and cannot be recalled, which is why the binding belongs at the claim rather than
+anywhere earlier.
+
 ## Send result handling
 
 - `ACCEPTED`: persist platform message ID, message record and SENT state.

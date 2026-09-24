@@ -1,4 +1,4 @@
-import type { DeliveryChannelState, DeliveryDependencies, PolicyLimits } from "@omnichannel/application";
+import type { DeliveryChannelState, DeliveryDependencies, DeliveryStateGuard, PolicyLimits } from "@omnichannel/application";
 import { createLogger } from "@omnichannel/observability";
 import type { DeliveryJob } from "@omnichannel/queue";
 import { describe, expect, it } from "vitest";
@@ -54,6 +54,8 @@ function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; pol
           account: "CONNECTED",
           draftNeedsReview: false,
           alreadySent: false,
+          // Opaque by design: this handler never looks inside one, it only lets the store see it again.
+          guard: {} as DeliveryStateGuard,
         }),
       claim: () => Promise.resolve({ kind: "CLAIMED" }),
       settle: () => Promise.resolve(),

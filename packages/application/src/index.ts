@@ -120,6 +120,7 @@ export type {
   DeliverySendContext,
   DeliverySendPort,
   DeliverySettlement,
+  DeliveryStateGuard,
   DeliveryStore,
   HeldStatus,
 } from "./delivery/ports";

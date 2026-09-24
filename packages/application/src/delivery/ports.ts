@@ -24,6 +24,19 @@ export type DeliveryAuthority =
       readonly approvedAt: Date;
     };
 
+/**
+ * An opaque description of the live state a send was authorized against.
+ *
+ * `loadForSend` produces it and `claim` re-asserts it, in the same statement that takes the send. Nothing in
+ * between may read it, and the type makes sure nothing can: a check the coordinator performed on it would be
+ * a read followed by an act, which is exactly the gap this exists to close. The coordinator's only duty is to
+ * carry it back unchanged.
+ */
+declare const stateGuard: unique symbol;
+export interface DeliveryStateGuard {
+  readonly [stateGuard]: never;
+}
+
 /** Everything the coordinator re-reads immediately before claiming. Never cached from scheduling time. */
 export interface DeliverySendContext {
   readonly deliveryJobId: string;
@@ -45,6 +58,8 @@ export interface DeliverySendContext {
   readonly draftNeedsReview: boolean;
   /** True once any outbound message already exists for this draft: the send already happened. */
   readonly alreadySent: boolean;
+  /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
+  readonly guard: DeliveryStateGuard;
 }
 
 /** How a delivery ended. One shape per durable outcome, so an impossible pair cannot be written. */
@@ -62,16 +77,27 @@ export type ClaimOutcome =
   /** This worker owns the send. Exactly one caller can ever receive this for one operation. */
   | { readonly kind: "CLAIMED" }
   /** Another worker owns it, or it has already finished. Either way this worker must not send. */
-  | { readonly kind: "NOT_CLAIMABLE"; readonly status: DeliveryJobStatus };
+  | { readonly kind: "NOT_CLAIMABLE"; readonly status: DeliveryJobStatus }
+  /**
+   * The state the approval rested on moved between the read and the claim — a customer wrote again, a
+   * colleague took the conversation over, the business changed its automation. Nothing was claimed and
+   * nothing was sent. The caller must re-read and re-judge before it may try again.
+   */
+  | { readonly kind: "STATE_CHANGED" };
 
 export interface DeliveryStore {
   /** Re-reads live state. Returns undefined when the job or its conversation no longer exists. */
   loadForSend(operationId: string): Promise<DeliverySendContext | undefined>;
   /**
-   * Atomically moves one claimable delivery into SENDING. The database decides the winner, not the caller:
-   * two workers racing the same operation must see one `CLAIMED` and one `NOT_CLAIMABLE`.
+   * Atomically moves one claimable delivery into SENDING — and only while the state it was judged against is
+   * still the live state.
+   *
+   * The database decides the winner *and* the freshness, in one statement: two workers racing the same
+   * operation see one `CLAIMED` and one `NOT_CLAIMABLE`, and a claim whose context has been overtaken sees
+   * `STATE_CHANGED` instead of a send. Taking the whole context rather than an id is the point — a claim
+   * that has not read the state it is claiming against cannot be expressed.
    */
-  claim(operationId: string, claimedAt: Date): Promise<ClaimOutcome>;
+  claim(context: DeliverySendContext, claimedAt: Date): Promise<ClaimOutcome>;
   /** Writes the terminal (or retryable) outcome, and the sent message when there is one. */
   settle(operationId: string, settlement: DeliverySettlement, at: Date): Promise<void>;
   /** Returns a claimed delivery to SCHEDULED for a later attempt, without counting it as a failure. */
