@@ -29,6 +29,8 @@ import {
   isSameChannelIdentity,
   isStaleAnchor,
   isValidIdentifier,
+  isWithinQuietHours,
+  nextQuietHoursEnd,
   MANDATORY_REVIEW_REASON_CODES,
   NO_CAPABILITIES,
   PLATFORM_STYLE_FALLBACK,
@@ -418,6 +420,65 @@ function captureDomainError(action: () => unknown): DomainValidationError {
   throw new Error("expected a DomainValidationError");
 }
 
+describe("isWithinQuietHours", () => {
+  const at = (iso: string) => new Date(iso);
+
+  it("compares the wall clock a person in that zone would read, not UTC", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // 21:30 UTC is 23:30 in Berlin in September: quiet. A UTC comparison would say otherwise.
+    expect(isWithinQuietHours(quiet, at("2026-09-18T21:30:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T12:00:00.000Z"))).toBe(false);
+  });
+
+  it("handles a period that spans midnight", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+
+    expect(isWithinQuietHours(quiet, at("2026-09-18T23:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T00:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T06:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-19T07:00:00.000Z"))).toBe(false);
+  });
+
+  it("reads midnight as the start of the day, not the end of it", () => {
+    // A quiet period that begins at midnight is the case that separates a 0-23 clock from a 1-24 one:
+    // rendered as 24:00 the current minute lands past every boundary, and a period starting at 00:00
+    // silently never applies. The midnight-spanning test above cannot see this — 24:00 is still after a
+    // 22:00 start, so that period answers the same either way.
+    const fromMidnight = toQuietHours("UTC", "00:00", "07:00");
+
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T00:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T06:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(fromMidnight, at("2026-09-19T07:00:00.000Z"))).toBe(false);
+    // And the same clock decides when the period ends, so the deferral instant moves with it.
+    expect(nextQuietHoursEnd(fromMidnight, at("2026-09-19T00:00:00.000Z")).toISOString()).toBe("2026-09-19T07:00:00.000Z");
+  });
+
+  it("handles a period inside one day", () => {
+    const quiet = toQuietHours("UTC", "09:00", "17:00");
+
+    expect(isWithinQuietHours(quiet, at("2026-09-18T08:59:00.000Z"))).toBe(false);
+    // Start is inclusive and end exclusive, so a period can never swallow the whole day.
+    expect(isWithinQuietHours(quiet, at("2026-09-18T09:00:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T16:59:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-09-18T17:00:00.000Z"))).toBe(false);
+  });
+
+  it("follows the zone across a daylight-saving change", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // Berlin is UTC+2 in summer and UTC+1 in winter; the same UTC instant falls on different sides.
+    expect(isWithinQuietHours(quiet, at("2026-10-24T20:30:00.000Z"))).toBe(true);
+    expect(isWithinQuietHours(quiet, at("2026-11-24T20:30:00.000Z"))).toBe(false);
+    expect(isWithinQuietHours(quiet, at("2026-11-24T21:30:00.000Z"))).toBe(true);
+  });
+
+  it("keeps midnight at the start of the day rather than the end", () => {
+    // An `hourCycle` that renders midnight as 24 would put 00:30 outside a 22:00-07:00 period.
+    expect(isWithinQuietHours(toQuietHours("UTC", "22:00", "07:00"), at("2026-09-19T00:30:00.000Z"))).toBe(true);
+  });
+});
+
 describe("resolveStyleProfile", () => {
   it("merges field by field, so a narrow override does not reset the rest", () => {
     const base = { persona: "We are Studio Alpha.", tone: "warm", emoji: "FREELY" as const, replyLength: "MEDIUM" as const };
@@ -455,6 +516,40 @@ describe("resolveStyleProfile", () => {
 
     expect(resolved.tone).toBeUndefined();
     expect(resolved.preferredPhrases).toEqual(["happy to help"]);
+  });
+});
+
+describe("nextQuietHoursEnd", () => {
+  it("returns the next end of the period, in the period's own zone", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // 21:30 UTC is 23:30 Berlin, so the period ends at 07:00 Berlin the next morning = 05:00 UTC.
+    expect(nextQuietHoursEnd(quiet, new Date("2026-09-18T21:30:00.000Z")).toISOString()).toBe("2026-09-19T05:00:00.000Z");
+  });
+
+  it("is total: outside the period it answers the next end rather than failing", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+
+    // Midday is outside, and the next 07:00 is tomorrow's.
+    expect(nextQuietHoursEnd(quiet, new Date("2026-09-18T12:00:00.000Z")).toISOString()).toBe("2026-09-19T07:00:00.000Z");
+  });
+
+  it("lands on the right instant across a daylight-saving change", () => {
+    const quiet = toQuietHours("Europe/Berlin", "22:00", "07:00");
+
+    // Berlin goes UTC+2 -> UTC+1 during the night of 25 October 2026, inside this period. Naive local-date
+    // arithmetic lands an hour out; the answer must still be 07:00 Berlin, which is 06:00 UTC.
+    const end = nextQuietHoursEnd(quiet, new Date("2026-10-24T22:30:00.000Z"));
+    expect(end.toISOString()).toBe("2026-10-25T06:00:00.000Z");
+  });
+
+  it("always answers a moment in the future", () => {
+    const quiet = toQuietHours("UTC", "22:00", "07:00");
+    const now = new Date("2026-09-19T07:00:00.000Z");
+
+    // Exactly at the end, the next end is a day away — never the instant itself, which would let a caller
+    // schedule for a time that has already passed.
+    expect(nextQuietHoursEnd(quiet, now).getTime()).toBeGreaterThan(now.getTime());
   });
 });
 
