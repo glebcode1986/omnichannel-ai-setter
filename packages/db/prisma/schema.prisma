@@ -158,6 +158,11 @@ enum ChannelEventType {
   CONVERSATION_POLICY
 }
 
+enum AiDraftTrigger {
+  AUTOMATIC
+  HUMAN_REQUEST
+}
+
 enum AiDraftStatus {
   PENDING
   HELD
@@ -192,6 +197,18 @@ enum KnowledgeDocumentStatus {
   DRAFT
   ACTIVE
   ARCHIVED
+}
+
+enum ReplyLength {
+  SHORT
+  MEDIUM
+  LONG
+}
+
+enum EmojiUsage {
+  NONE
+  SPARING
+  FREELY
 }
 
 enum StyleExampleProvenance {
@@ -237,6 +254,7 @@ model User {
   createdKnowledgeDocuments KnowledgeDocument[]
   approvedStyleExamples     StyleExample[]
   channelConnectStates      ChannelConnectState[]
+  requestedAiDrafts         AiDraft[]             @relation("DraftRequestedBy")
 
   @@map("users")
 }
@@ -293,6 +311,7 @@ model Workspace {
   channelCredentials ChannelCredential[]
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
+  styleProfiles      StyleProfile[]
 
   @@map("workspaces")
 }
@@ -333,6 +352,7 @@ model BusinessProfile {
   contacts           Contact[]
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
+  styleProfiles      StyleProfile[]
   automationPolicies AutomationPolicy[]
   queueOutbox        QueueOutbox[]
   connectStates      ChannelConnectState[]
@@ -615,8 +635,16 @@ model AiDraft {
   anchorMessageId    String        @map("anchor_message_id")
   /// Conversation state_version the draft was generated for; the draft is stale once it moves on.
   anchorStateVersion Int           @map("anchor_state_version")
-  text               String
-  structuredOutput   Json          @map("structured_output")
+  /// Identity of one logical generation; a retried job reuses it instead of creating a second draft.
+  generationKey      String        @map("generation_key")
+  /// Whether automation or a person asked for this draft. Mode OFF permits only the latter, so the two
+  /// must stay distinguishable in the audit trail (product-owner decision on PR #65).
+  trigger            AiDraftTrigger @default(AUTOMATIC)
+  /// The workspace member who asked; NULL for anything automation started (CHECK enforces the pairing).
+  requestedByUserId  String?       @map("requested_by_user_id")
+  /// Null only for a held generation whose output was unusable; the row still records what was attempted.
+  text               String?
+  structuredOutput   Json?         @map("structured_output")
   confidence         Float
   modelSuggestsSend  Boolean       @map("model_suggests_send")
   needsReview        Boolean       @map("needs_review")
@@ -632,9 +660,16 @@ model AiDraft {
   schemaVersion      String        @map("schema_version")
   providerRequestId  String?       @map("provider_request_id")
   latencyMs          Int?          @map("latency_ms")
+  /// Normalized provider usage, for cost analysis. Cache columns exist so enabling prompt caching later
+  /// cannot silently under-report input cost.
+  inputTokens        Int?          @map("input_tokens")
+  outputTokens       Int?          @map("output_tokens")
+  cacheReadTokens    Int?          @map("cache_read_tokens")
+  cacheWriteTokens   Int?          @map("cache_write_tokens")
   createdAt          DateTime      @default(now()) @map("created_at")
   updatedAt          DateTime      @updatedAt @map("updated_at")
 
+  requestedByUser User?            @relation("DraftRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   conversation  Conversation       @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "ai_drafts_conversation_fkey")
   anchorMessage Message            @relation("DraftAnchor", fields: [workspaceId, businessProfileId, conversationId, anchorMessageId], references: [workspaceId, businessProfileId, conversationId, id], onDelete: Restrict, onUpdate: Restrict, map: "ai_drafts_anchor_message_fkey")
   sentMessage   Message?           @relation("DraftSend")
@@ -642,6 +677,9 @@ model AiDraft {
   styleExamples StyleExample[]
 
   @@unique([workspaceId, businessProfileId, id])
+  /// One draft per logical generation, so a retried job is idempotent.
+  @@unique([workspaceId, businessProfileId, generationKey], map: "ai_drafts_generation_key")
+  @@index([requestedByUserId], map: "ai_drafts_requested_by_user_id_idx")
   @@index([conversationId, createdAt])
   @@index([workspaceId, businessProfileId, status])
   @@map("ai_drafts")
@@ -727,6 +765,38 @@ model KnowledgeChunk {
 
   @@unique([workspaceId, documentId, documentVersion, ordinal], map: "knowledge_chunks_position_key")
   @@map("knowledge_chunks")
+}
+
+/// How a business sounds: Workspace base when `business_profile_id` is NULL, a Business Profile override
+/// when it is set (product-owner decision on PR #65). Customer-owned configuration, never platform config.
+model StyleProfile {
+  id                String        @id @default(uuid(7))
+  workspaceId       String        @map("workspace_id")
+  /// Absent for the Workspace base voice; set for one Business Profile's override of it.
+  businessProfileId String?       @map("business_profile_id")
+  /// Trusted business instructions. Never customer text, and never a source of facts.
+  persona           String?
+  tone              String?
+  replyLength       ReplyLength?  @map("reply_length")
+  emoji             EmojiUsage?
+  greeting          String?
+  signOff           String?       @map("sign_off")
+  preferredPhrases  String[]      @default([]) @map("preferred_phrases")
+  avoidedPhrases    String[]      @default([]) @map("avoided_phrases")
+  /// BCP-47 tag; NULL means the business has no fixed language.
+  language          String?
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict, map: "style_profiles_business_profile_fkey")
+
+  /// One base voice per Workspace and one override per Business Profile. Partial, because in a plain
+  /// unique index a NULL never equals another NULL, so a Workspace could accumulate any number of "base"
+  /// rows and the resolution order would stop being defined.
+  @@unique([workspaceId], where: raw("business_profile_id IS NULL"), map: "style_profiles_workspace_base_key")
+  @@unique([workspaceId, businessProfileId], where: raw("business_profile_id IS NOT NULL"), map: "style_profiles_business_profile_key")
+  @@map("style_profiles")
 }
 
 model StyleExample {

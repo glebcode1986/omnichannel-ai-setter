@@ -34,21 +34,33 @@ export const inboundDebounceJobSchema = z.strictObject({
 });
 export type InboundDebounceJob = z.output<typeof inboundDebounceJobSchema>;
 
-export const AI_DRAFT_TRIGGERS = ["DEBOUNCE_ELAPSED", "MANUAL_REQUEST"] as const;
+export const AI_DRAFT_TRIGGERS = ["AUTOMATIC", "HUMAN_REQUEST"] as const;
 
-export const aiDraftGenerationJobSchema = z
-  .strictObject({
-    ...envelope,
-    conversationId: identifier,
-    anchorMessageId: identifier,
-    trigger: z.enum(AI_DRAFT_TRIGGERS),
-    /** Required for MANUAL_REQUEST so each explicit request is its own job; absent otherwise. */
-    requestId: identifier.optional(),
-  })
-  .refine((job) => (job.trigger === "MANUAL_REQUEST") === (job.requestId !== undefined), {
-    message: "requestId is required for MANUAL_REQUEST and not allowed otherwise",
-    path: ["requestId"],
-  });
+/**
+ * Why the draft was asked for, and on whose authority.
+ *
+ * A discriminated union rather than a flag plus optional fields: mode OFF permits a draft only when an
+ * authorized person asked for it, so "a human asked" must be impossible to express without naming the
+ * person. An inbound-triggered job has no user to name, so it cannot produce the human variant even by
+ * accident, and the schema rejects one that tries.
+ */
+export const aiDraftTriggerSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("AUTOMATIC"), reason: z.literal("DEBOUNCE_ELAPSED") }),
+  z.strictObject({
+    kind: z.literal("HUMAN_REQUEST"),
+    requestedByUserId: identifier,
+    requestedAt: timestamp,
+    /** Each explicit request is its own generation; a retried job reuses this value. */
+    requestId: identifier,
+  }),
+]);
+
+export const aiDraftGenerationJobSchema = z.strictObject({
+  ...envelope,
+  conversationId: identifier,
+  anchorMessageId: identifier,
+  trigger: aiDraftTriggerSchema,
+});
 export type AiDraftGenerationJob = z.output<typeof aiDraftGenerationJobSchema>;
 
 /** Stage B: delayed delivery of one logical outbound action (ADR-003, ADR-012). */

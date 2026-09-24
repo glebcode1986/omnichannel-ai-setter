@@ -1,10 +1,16 @@
 /**
  * @omnichannel/ai
  *
- * Model-provider implementations of application-owned AI ports (reply generation, embeddings).
- * Provider SDK types stay private to this package. Never sends channel messages and never decides auto-send eligibility.
- *
- * Placeholder module created by the Phase 1 scaffold (issue #2); implementation lands in Phase 2.
- * Allowed workspace dependencies are enforced by `pnpm lint:boundaries` (see docs/specs/REPOSITORY_LAYOUT.md).
+ * Concrete model-provider implementations of the ports declared by `@omnichannel/application` (ADR-010).
+ * Provider wire formats, prompts and error shapes stay inside this package; application and domain code see
+ * only the normalized port. The provider and model are configuration supplied by the composition root.
  */
-export {};
+export {
+  ANTHROPIC_API_VERSION,
+  ANTHROPIC_MESSAGES_URL,
+  createAnthropicReplyModel,
+  PROVIDER_NAME,
+  type AnthropicReplyModelConfig,
+} from "./reply-model";
+export { createFetchModelHttpPort, type ModelHttpPort, type ModelHttpRequest, type ModelHttpResult } from "./transport";
+export { AI_DRAFT_JSON_SCHEMA } from "./wire-schema";
