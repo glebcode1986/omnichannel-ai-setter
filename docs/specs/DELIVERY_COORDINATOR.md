@@ -64,6 +64,18 @@ and then the draft, the channel account and the automation-policy rows the decis
 conditional UPDATE evaluated. Whichever side takes the conversation's lock first happens first, and the
 other sees the result: the claim and a conflicting change have a total order rather than a race.
 
+Row locks cannot cover a row that does not exist yet, and an automation policy created during the delay is
+exactly that — an override inserted while a claim is in flight changes the mode and the limits it was
+judged against, and a predicate evaluated from an earlier snapshot cannot see it. The claim therefore also
+locks the **Business Profile** row, which every automation-policy row references by foreign key: inserting
+one takes a key-share lock on that row, which the claim's own lock conflicts with. The boundary is
+enforced by the schema rather than by a convention every present and future policy writer must remember.
+Its cost is that claims within one Business Profile serialize, which a handful of short statements can
+afford and an unrecallable reply cannot do without.
+
+A deadlock broken by the server, or a lost write conflict, establishes nothing: it is reported as a moved
+state, so the caller re-reads and re-judges. Every other failure still propagates.
+
 Everything the revalidation judged comes from that one read. The limits and the mode are read from the same
 policy rows the claim binds, and the live channel facts (window, human-support exception, dispatch deadline)
 are derived from the same context rather than fetched separately, so nothing judged can describe a different

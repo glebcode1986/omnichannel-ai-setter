@@ -29,7 +29,14 @@
  * from a member context, exactly as for ingestion and draft generation. Every statement is still bounded by
  * the operation ID, which is unique across the table.
  */
-import type { DeliverySendContext, DeliveryStateGuard, DeliverySettlement, DeliveryStore, PolicyLimits } from "@omnichannel/application";
+import type {
+  ClaimOutcome,
+  DeliverySendContext,
+  DeliveryStateGuard,
+  DeliverySettlement,
+  DeliveryStore,
+  PolicyLimits,
+} from "@omnichannel/application";
 import { isReasonCode, toQuietHours, type DeliveryJobStatus } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
@@ -179,95 +186,18 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
 
     async claim(context, claimedAt) {
       const guard = openGuard(context.guard);
-      return db.$transaction(
-        async (tx) => {
-          // The conversation row, locked and held to commit. This is the boundary `appendInboundMessage`
-          // already takes before writing a customer message, and taking the same one is what puts this claim
-          // and that message into a definite order instead of a race: whichever transaction gets the lock
-          // first happens first, and the other sees the result. A takeover or any other write to the
-          // conversation conflicts with this lock for the same reason.
-          //
-          // Without it the predicates below would be evaluated from the statement's own snapshot and would
-          // not serialize against anything: a message committing after that snapshot and before this
-          // transaction commits would be invisible, and the send would go out behind it.
-          const locked = await tx.$queryRaw<{ id: string }[]>`
-            SELECT "id" FROM "conversations"
-            WHERE "workspace_id" = ${guard.workspaceId}
-              AND "business_profile_id" = ${guard.businessProfileId}
-              AND "id" = ${context.conversationId}
-            FOR UPDATE`;
-          if (locked.length === 0) {
-            // The conversation is gone; there is nothing left to send into.
-            return { kind: "NOT_CLAIMABLE", status: "SENT" };
-          }
-
-          // The rows the decision read that the conversation's lock does not cover, in a fixed order so two
-          // claims can never take them the other way round. The draft is locked outright because rewriting
-          // it changes what would be sent; the account and the policy rows are shared, so concurrent claims
-          // do not block each other and only a writer does.
-          await tx.$queryRaw`SELECT "id" FROM "ai_drafts" WHERE "id" = ${context.draftId} FOR UPDATE`;
-          await tx.$queryRaw`SELECT "id" FROM "channel_accounts" WHERE "id" = ${guard.channelAccountId} FOR SHARE`;
-          await tx.$queryRaw`
-            SELECT "id" FROM "automation_policies"
-            WHERE "workspace_id" = ${guard.workspaceId}
-              AND "business_profile_id" = ${guard.businessProfileId}
-              AND ("channel_account_id" = ${guard.channelAccountId} OR "channel_account_id" IS NULL)
-            FOR SHARE`;
-
-          // One conditional UPDATE, evaluated on a snapshot taken after those locks are held. Every
-          // predicate in it is part of the concurrency control: the status decides which worker wins, and
-          // the rest decides whether the approval is still the live state.
-          const claimed = await tx.deliveryJobRecord.updateMany({
-            where: {
-              operationId: context.operationId,
-              status: CLAIMABLE,
-              draft: {
-                text: guard.draftText,
-                needsReview: guard.draftNeedsReview,
-                // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
-                sentMessage: { is: null },
-                conversation: {
-                  stateVersion: guard.conversationStateVersion,
-                  status: guard.conversationStatus,
-                  takeoverState: guard.takeoverState,
-                  aiEnabled: guard.aiEnabled,
-                  modeOverride: guard.modeOverride,
-                  // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
-                  // this reply answers a question that has moved on, whatever any version counter says.
-                  messages: { none: { direction: "IN", aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
-                  channelIdentity: {
-                    channelAccount: {
-                      status: guard.accountStatus,
-                      businessProfile: {
-                        AND: [
-                          policyUnchanged(guard.channelAccountId, guard.accountPolicyAt),
-                          policyUnchanged(null, guard.defaultPolicyAt),
-                        ],
-                      },
-                    },
-                  },
-                },
-              },
-            },
-            data: { status: "SENDING", claimedAt, attemptCount: { increment: 1 } },
-          });
-          if (claimed.count === 1) {
-            return { kind: "CLAIMED" };
-          }
-
-          // Zero rows has two causes worth telling apart, and the row's own status separates them: still
-          // claimable means the state moved under this worker, anything else means the delivery is not its
-          // to take. Read inside the same transaction, so it describes the same instant as the refusal.
-          const current = await tx.deliveryJobRecord.findUnique({ where: { operationId: context.operationId }, select: { status: true } });
-          if (current === null) {
-            return { kind: "NOT_CLAIMABLE", status: "SENT" };
-          }
-            return current.status === CLAIMABLE ? { kind: "STATE_CHANGED" } : { kind: "NOT_CLAIMABLE", status: current.status };
-          },
-        // A claim that cannot get the conversation's lock in this time gives up rather than waiting
-        // indefinitely. Failing the attempt is safe — nothing has been sent — and the job is retried.
-        { timeout: 15_000 },
-      );
+      try {
+        return await claimInside(db, context, guard, claimedAt);
+      } catch (error) {
+        // Postgres broke a deadlock, or the transaction lost a write conflict. Either way this worker
+        // established nothing: it has not claimed and it has not sent. Reporting it as a moved state is
+        // what it is — the caller re-reads and re-judges — and it keeps an unknown outcome out of a path
+        // whose whole contract is that nothing ambiguous reaches the adapter.
+        if (isWriteConflict(error)) {
+          return { kind: "STATE_CHANGED" };
+        }
+        throw error;
+      }
     },
 
     async settle(operationId, settlement, at) {
@@ -316,6 +246,132 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
       });
     },
   };
+}
+
+/**
+ * The claim itself: locks the rows the decision was made against, in a fixed order, then takes the send.
+ *
+ * Kept whole and separate so the ordering reads as one sequence — the order is part of the argument, not
+ * an accident of where statements happened to be written.
+ */
+async function claimInside(
+  db: DbClient,
+  context: DeliverySendContext,
+  guard: SendStateGuard,
+  claimedAt: Date,
+): Promise<ClaimOutcome> {
+  return db.$transaction(
+  async (tx) => {
+    // The Business Profile row, locked first because it is the coarsest of these and a consistent
+    // order is what keeps two claims from deadlocking against each other.
+    //
+    // It is here for a case no row lock on the policy rows themselves can cover: a policy row that
+    // did not exist when the state was read. `FOR SHARE` on rows that exist cannot block the
+    // *creation* of one, and an account override inserted while this claim is in flight changes the
+    // mode and the limits it was judged against. Every `automation_policies` row carries a foreign
+    // key to this row, so inserting one takes a `KEY SHARE` lock on it — which `FOR UPDATE` here
+    // conflicts with. The boundary is therefore enforced by the foreign key rather than by asking
+    // every present and future policy writer to remember a convention.
+    //
+    // The cost is that claims within one Business Profile serialize. They are a handful of short
+    // statements, and a reply that cannot be taken back is worth more than that concurrency.
+    await tx.$queryRaw`
+      SELECT "id" FROM "business_profiles"
+      WHERE "workspace_id" = ${guard.workspaceId} AND "id" = ${guard.businessProfileId}
+      FOR UPDATE`;
+
+    // The conversation row, locked and held to commit. This is the boundary `appendInboundMessage`
+    // already takes before writing a customer message, and taking the same one is what puts this claim
+    // and that message into a definite order instead of a race: whichever transaction gets the lock
+    // first happens first, and the other sees the result. A takeover or any other write to the
+    // conversation conflicts with this lock for the same reason.
+    //
+    // Without it the predicates below would be evaluated from the statement's own snapshot and would
+    // not serialize against anything: a message committing after that snapshot and before this
+    // transaction commits would be invisible, and the send would go out behind it.
+    const locked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "conversations"
+      WHERE "workspace_id" = ${guard.workspaceId}
+        AND "business_profile_id" = ${guard.businessProfileId}
+        AND "id" = ${context.conversationId}
+      FOR UPDATE`;
+    if (locked.length === 0) {
+      // The conversation is gone; there is nothing left to send into.
+      return { kind: "NOT_CLAIMABLE", status: "SENT" };
+    }
+
+    // The rows the decision read that the conversation's lock does not cover, in a fixed order so two
+    // claims can never take them the other way round. The draft is locked outright because rewriting
+    // it changes what would be sent; the account and the policy rows are shared, so concurrent claims
+    // do not block each other and only a writer does.
+    await tx.$queryRaw`SELECT "id" FROM "ai_drafts" WHERE "id" = ${context.draftId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "channel_accounts" WHERE "id" = ${guard.channelAccountId} FOR SHARE`;
+    await tx.$queryRaw`
+      SELECT "id" FROM "automation_policies"
+      WHERE "workspace_id" = ${guard.workspaceId}
+        AND "business_profile_id" = ${guard.businessProfileId}
+        AND ("channel_account_id" = ${guard.channelAccountId} OR "channel_account_id" IS NULL)
+      FOR SHARE`;
+
+    // One conditional UPDATE, evaluated on a snapshot taken after those locks are held. Every
+    // predicate in it is part of the concurrency control: the status decides which worker wins, and
+    // the rest decides whether the approval is still the live state.
+    const claimed = await tx.deliveryJobRecord.updateMany({
+      where: {
+        operationId: context.operationId,
+        status: CLAIMABLE,
+        draft: {
+          text: guard.draftText,
+          needsReview: guard.draftNeedsReview,
+          // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
+          sentMessage: { is: null },
+          conversation: {
+            stateVersion: guard.conversationStateVersion,
+            status: guard.conversationStatus,
+            takeoverState: guard.takeoverState,
+            aiEnabled: guard.aiEnabled,
+            modeOverride: guard.modeOverride,
+            // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
+            // this reply answers a question that has moved on, whatever any version counter says.
+            messages: { none: { direction: "IN", aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
+            channelIdentity: {
+              channelAccount: {
+                status: guard.accountStatus,
+                businessProfile: {
+                  AND: [
+                    policyUnchanged(guard.channelAccountId, guard.accountPolicyAt),
+                    policyUnchanged(null, guard.defaultPolicyAt),
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+      data: { status: "SENDING", claimedAt, attemptCount: { increment: 1 } },
+    });
+    if (claimed.count === 1) {
+      return { kind: "CLAIMED" };
+    }
+
+    // Zero rows has two causes worth telling apart, and the row's own status separates them: still
+    // claimable means the state moved under this worker, anything else means the delivery is not its
+    // to take. Read inside the same transaction, so it describes the same instant as the refusal.
+    const current = await tx.deliveryJobRecord.findUnique({ where: { operationId: context.operationId }, select: { status: true } });
+    if (current === null) {
+      return { kind: "NOT_CLAIMABLE", status: "SENT" };
+    }
+    return current.status === CLAIMABLE ? { kind: "STATE_CHANGED" } : { kind: "NOT_CLAIMABLE", status: current.status };
+    },
+    // A claim that cannot get its locks in this time gives up rather than waiting indefinitely. Failing
+    // the attempt is safe — nothing has been sent — and the job is retried.
+    { timeout: 15_000 },
+  );
+}
+
+/** A deadlock broken by the server, or a lost write conflict: nothing was established either way. */
+function isWriteConflict(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "P2034";
 }
 
 /**

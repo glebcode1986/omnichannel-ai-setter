@@ -605,6 +605,46 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
      * This is what makes the interleaving below deterministic rather than hopeful: the test does not sleep
      * and guess, it waits for the server to say the race is arranged, and fails if it never is.
      */
+    /**
+     * A client whose claim pauses once it holds the conversation's lock, so another transaction can be
+     * shown to wait on it. Nothing in the store knows about this: the seam is the client it was handed.
+     */
+    const pausingClient = (gate: () => Promise<void>, onPause: () => void): DbClient => {
+      let paused = false;
+      return new Proxy(database.db, {
+        get(target, property, receiver) {
+          if (property !== "$transaction") {
+            const value: unknown = Reflect.get(target, property, receiver);
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+          }
+          return async (run: (tx: unknown) => Promise<unknown>, options: unknown) =>
+            target.$transaction(async (tx) => {
+              const gated = new Proxy(tx, {
+                get(txTarget, txProperty, txReceiver) {
+                  if (txProperty !== "$queryRaw") {
+                    return Reflect.get(txTarget, txProperty, txReceiver) as unknown;
+                  }
+                  // Bound to the transaction client: Prisma's own methods carry state through `this`.
+                  const raw = (Reflect.get(txTarget, txProperty, txReceiver) as (...a: unknown[]) => Promise<unknown>).bind(txTarget);
+                  return async (...args: unknown[]) => {
+                    const result: unknown = await raw(...args);
+                    // Paused once the conversation is locked: that is the boundary the writers below
+                    // take, so this is the moment at which they must be seen to wait.
+                    if (!paused && JSON.stringify(args).includes("conversations")) {
+                      paused = true;
+                      onPause();
+                      await gate();
+                    }
+                    return result;
+                  };
+                },
+              });
+              return run(gated);
+            }, options as Parameters<typeof target.$transaction>[1]);
+        },
+      });
+    };
+
     /** Waits for the in-process pause to be reached, so the other side is started only once it is. */
     const waitForClaimPaused = async (isPaused: () => boolean): Promise<void> => {
       for (let attempt = 0; attempt < 400 && !isPaused(); attempt += 1) {
@@ -749,38 +789,13 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
-      // A client whose claim pauses once it holds the conversation's lock, so the other side can be shown
-      // to block on it. Nothing in the store knows about this: the seam is the client it was handed.
       let paused = false;
-      const pausing = new Proxy(database.db, {
-        get(target, property, receiver) {
-          if (property !== "$transaction") {
-            const value: unknown = Reflect.get(target, property, receiver);
-            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-          }
-          return async (run: (tx: unknown) => Promise<unknown>, options: unknown) =>
-            target.$transaction(async (tx) => {
-              const gated = new Proxy(tx, {
-                get(txTarget, txProperty, txReceiver) {
-                  if (txProperty !== "$queryRaw") {
-                    return Reflect.get(txTarget, txProperty, txReceiver) as unknown;
-                  }
-                  // Bound to the transaction client: Prisma's own methods carry state through `this`.
-                  const raw = (Reflect.get(txTarget, txProperty, txReceiver) as (...a: unknown[]) => Promise<unknown>).bind(txTarget);
-                  return async (...args: unknown[]) => {
-                    const result: unknown = await raw(...args);
-                    if (!paused) {
-                      paused = true;
-                      await held;
-                    }
-                    return result;
-                  };
-                },
-              });
-              return run(gated);
-            }, options as Parameters<typeof target.$transaction>[1]);
+      const pausing = pausingClient(
+        () => held,
+        () => {
+          paused = true;
         },
-      });
+      );
 
       const context = await createDeliveryStore(database.db).loadForSend(operationId);
       if (context === undefined) {
@@ -819,6 +834,135 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       await writing;
       // Both orders are total. This one put the claim first, and the message is simply after it.
       expect(await statusOf(operationId)).toBe("SENDING");
+    }, 120_000);
+
+    /**
+     * The phantom: a policy row that did not exist when the state was read.
+     *
+     * No `FOR SHARE` on rows that exist can block the *creation* of one, and the claim's own predicate is
+     * evaluated from a statement snapshot — so if the claim is blocked inside its UPDATE (on the delivery
+     * row, say) the insert can commit underneath it and stay invisible. The interleaving below is exactly
+     * that: the claim is made to block inside its UPDATE, and the insert is then attempted.
+     */
+    const insertWhileClaimBlocked = async (
+      operationId: string,
+      insert: () => Promise<unknown>,
+    ): Promise<{ claimed: ClaimOutcome; insertBlocked: boolean }> => {
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+
+      // Holds the delivery row, so the claim reaches its UPDATE and stops there — snapshot taken, work
+      // not finished. This is the window the review describes.
+      let releaseJob = (): void => {};
+      const jobHeld = new Promise<void>((resolve) => {
+        releaseJob = resolve;
+      });
+      let jobLocked = (): void => {};
+      const jobLockHeld = new Promise<void>((resolve) => {
+        jobLocked = resolve;
+      });
+      const holder = rival.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "delivery_jobs" WHERE "operation_id" = ${operationId} FOR UPDATE`;
+          jobLocked();
+          await jobHeld;
+        },
+        { timeout: 60_000, maxWait: 60_000 },
+      );
+      await jobLockHeld;
+
+      const claiming = store.claim(context, NOW);
+      await waitForBlockedBackend();
+
+      // The insert now attempts to commit while the claim is in flight.
+      let settled = false;
+      const inserting = insert().then((value) => {
+        settled = true;
+        return value;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const insertBlocked = !settled;
+
+      releaseJob();
+      await holder;
+      const claimed = await claiming;
+      await inserting;
+      return { claimed, insertBlocked };
+    };
+
+    it("does not let a policy override appear underneath a claim that is already in flight", async () => {
+      const { operationId } = await sendable();
+      await database.db.automationPolicy.deleteMany({ where: { ...scope() } });
+      await database.db.automationPolicy.create({
+        data: { ...scope(), channelAccountId: null, mode: "AUTOPILOT", mandatoryReviewReasons: [] },
+      });
+
+      const { claimed, insertBlocked } = await insertWhileClaimBlocked(operationId, () =>
+        database.db.automationPolicy.create({
+          data: { ...scope(), channelAccountId: profile.channelAccount.id, mode: "OFF", mandatoryReviewReasons: [] },
+        }),
+      );
+
+      // Blocked, so the two have an order: the override is after the claim rather than invisible to it.
+      // Every `automation_policies` row references the Business Profile, so its insert must take a key
+      // share lock on the row this claim holds — the foreign key is what makes that true, not a
+      // convention a future writer could forget.
+      expect(insertBlocked).toBe(true);
+      expect(claimed).toEqual({ kind: "CLAIMED" });
+    }, 180_000);
+
+    it("does not let a Business Profile default appear underneath a claim that is already in flight", async () => {
+      const { operationId } = await sendable();
+      // Nothing but the conversation's own override authorizes this send, so a default appearing now
+      // would change the limits it was judged against.
+      await database.db.automationPolicy.deleteMany({ where: { ...scope() } });
+
+      const { claimed, insertBlocked } = await insertWhileClaimBlocked(operationId, () =>
+        database.db.automationPolicy.create({
+          data: { ...scope(), channelAccountId: null, mode: "OFF", confidenceThreshold: 0.99, mandatoryReviewReasons: [] },
+        }),
+      );
+
+      expect(insertBlocked).toBe(true);
+      expect(claimed).toEqual({ kind: "CLAIMED" });
+    }, 180_000);
+
+    it("reports a broken deadlock as a moved state rather than letting it escape", async () => {
+      const { operationId } = await sendable();
+      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+      // The server's own answer when it breaks a deadlock or loses a write conflict. Raised here rather
+      // than provoked against a real server because which side is chosen as the victim is the server's
+      // decision, not something a test can pin down — and what needs proving is what this store does
+      // with the answer, not that PostgreSQL produces it.
+      const failingWith = (error: Error): DbClient =>
+        new Proxy(database.db, {
+          get(target, property, receiver) {
+            if (property !== "$transaction") {
+              const value: unknown = Reflect.get(target, property, receiver);
+              return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+            }
+            return () => Promise.reject(error);
+          },
+        });
+
+      const claimed = await createDeliveryStore(failingWith(Object.assign(new Error("deadlock detected"), { code: "P2034" }))).claim(context, NOW);
+
+      // Nothing was claimed and nothing was sent, so this is a state the caller must re-read — not an
+      // exception on the one path whose whole contract is that nothing unknown reaches the adapter.
+      expect(claimed).toEqual({ kind: "STATE_CHANGED" });
+      expect(await statusOf(operationId)).toBe("SCHEDULED");
+
+      // And only that answer. Everything else still fails loudly: a store that reported every failure as
+      // a moved state would turn a broken database into a delivery that quietly never happens.
+      await expect(createDeliveryStore(failingWith(new Error("connection terminated"))).claim(context, NOW)).rejects.toThrow(
+        "connection terminated",
+      );
     }, 120_000);
 
     it("reads the limits from the same policy row its guard binds", async () => {
@@ -887,9 +1031,10 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const reads = trimmed.filter((statement) => statement.startsWith("SELECT"));
       expect(reads.length).toBeGreaterThan(0);
       expect(reads.every((read) => /FOR (UPDATE|SHARE)$/.test(read))).toBe(true);
-      // The conversation is locked first, and it is the boundary an inbound writer takes too.
-      expect(reads[0]).toContain('"conversations"');
-      expect(reads[0]).toContain("FOR UPDATE");
+      // The Business Profile is locked first — the coarsest, so two claims cannot deadlock on ordering —
+      // and the conversation, the boundary an inbound writer takes, is locked before anything is decided.
+      expect(reads[0]).toContain('"business_profiles"');
+      expect(reads.some((read) => read.includes('"conversations"') && read.includes("FOR UPDATE"))).toBe(true);
       await logged.$disconnect();
     }, 120_000);
   });
