@@ -7,6 +7,7 @@ import {
   coordinateDelivery,
   noRetrieval,
   type ClaimOutcome,
+  type DeliveryChannelStatePort,
   type DeliveryCommand,
   type DeliverySendPort,
   type DeliverySettlement,
@@ -304,13 +305,16 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     const command = (operationId: string): DeliveryCommand => ({
       operationId,
       correlationId: `corr_${operationId}`,
-      limits: { confidenceThreshold: 0.8, mandatoryReviewReasons: [], afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" } },
-      channelState: {
-        window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
-        humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
-      },
       authority: { kind: "AUTOMATED" },
     });
+
+    /** An open window, so nothing here turns on the channel's own clock. */
+    const channel: DeliveryChannelStatePort = {
+      stateFor: () => ({
+        window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+        humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+      }),
+    };
 
     /** Commits `change` once, after the first read has returned and before any claim is attempted. */
     const storePausedAfterFirstRead = (change: () => Promise<unknown>): DeliveryStore => {
@@ -338,7 +342,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         },
       };
       const outcome = await coordinateDelivery(
-        { store: storePausedAfterFirstRead(change), sender, log: { info: () => {}, warn: () => {}, error: () => {} }, now: () => NOW },
+        { store: storePausedAfterFirstRead(change), sender, channel, log: { info: () => {}, warn: () => {}, error: () => {} }, now: () => NOW },
         command(operationId),
       );
       return { outcome, sends };
@@ -595,6 +599,263 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       expect(await statusOf(operationId)).toBe("SCHEDULED");
     }, 120_000);
 
+    /**
+     * Waits until PostgreSQL itself reports a backend blocked on a lock.
+     *
+     * This is what makes the interleaving below deterministic rather than hopeful: the test does not sleep
+     * and guess, it waits for the server to say the race is arranged, and fails if it never is.
+     */
+    /** Waits for the in-process pause to be reached, so the other side is started only once it is. */
+    const waitForClaimPaused = async (isPaused: () => boolean): Promise<void> => {
+      for (let attempt = 0; attempt < 400 && !isPaused(); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      if (!isPaused()) {
+        throw new Error("the claim never reached its pause");
+      }
+    };
+
+    const waitForBlockedBackend = async (): Promise<void> => {
+      for (let attempt = 0; attempt < 400; attempt += 1) {
+        const rows = await database.db.$queryRaw<{ blocked: number }[]>`
+          SELECT count(*)::int AS "blocked" FROM pg_stat_activity
+          WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'`;
+        if ((rows[0]?.blocked ?? 0) > 0) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error("no backend ever blocked on a lock: the interleaving under test did not happen");
+    };
+
+    /**
+     * Runs a claim while `write` is committing, and returns what the claim decided.
+     *
+     * The interleaving is arranged, not hoped for: the writer signals once it holds its lock and has
+     * written, the claim is started only then, and the writer commits only once PostgreSQL reports a
+     * backend blocked on a lock. So the conflicting transaction is genuinely mid-flight while the claim
+     * runs, which is the case a statement snapshot cannot see.
+     */
+    const claimAgainstAnInFlightWriter = async (
+      operationId: string,
+      write: (tx: Parameters<Parameters<typeof rival.$transaction>[0]>[0]) => Promise<unknown>,
+    ) => {
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+
+      let release = (): void => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let acquired = (): void => {};
+      const lockHeld = new Promise<void>((resolve) => {
+        acquired = resolve;
+      });
+      const writer = rival.$transaction(
+        async (tx) => {
+          await write(tx);
+          acquired();
+          await held;
+        },
+        { timeout: 60_000, maxWait: 60_000 },
+      );
+      await lockHeld;
+
+      const claiming = store.claim(context, NOW);
+      await waitForBlockedBackend();
+      release();
+      await writer;
+      return claiming;
+    };
+
+    const inFlightWriters: readonly {
+      readonly what: string;
+      readonly write: (tx: Parameters<Parameters<typeof rival.$transaction>[0]>[0], anchoredAt: Date) => Promise<unknown>;
+    }[] = [
+      {
+        what: "a customer message",
+        write: async (tx, anchoredAt) => {
+          // Exactly how ingestion writes one: the conversation locked first, held to commit.
+          await tx.$queryRaw`
+            SELECT "id" FROM "conversations"
+            WHERE "workspace_id" = ${scope().workspaceId}
+              AND "business_profile_id" = ${scope().businessProfileId}
+              AND "id" = ${profile.conversationId}
+            FOR UPDATE`;
+          await tx.message.create({
+            data: {
+              ...scope(),
+              channelAccountId: profile.channelAccount.id,
+              conversationId: profile.conversationId,
+              direction: "IN",
+              source: "PARTICIPANT",
+              kind: "TEXT",
+              text: "actually, never mind",
+              occurredAt: new Date(anchoredAt.getTime() + 1_000),
+            },
+          });
+          return tx.conversation.update({
+            where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+            data: { stateVersion: { increment: 1 } },
+          });
+        },
+      },
+      {
+        what: "a human takeover",
+        write: (tx) =>
+          tx.conversation.update({
+            where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+            data: { takeoverState: "HUMAN_ACTIVE", takeoverReason: "HUMAN_SENT_FROM_INBOX", humanTakeoverAt: NOW },
+          }),
+      },
+      {
+        what: "a rewrite of the draft",
+        write: (tx) =>
+          tx.aiDraft.updateMany({
+            where: { ...scope(), conversationId: profile.conversationId },
+            data: { text: "We open at 11 on Saturday." },
+          }),
+      },
+      {
+        what: "the account losing its authorization",
+        write: (tx) => tx.channelAccount.update({ where: { id: profile.channelAccount.id }, data: { status: "NEEDS_REAUTH" } }),
+      },
+      {
+        what: "an edit to the automation policy",
+        write: (tx) =>
+          tx.automationPolicy.updateMany({ where: { ...scope() }, data: { confidenceThreshold: 0.95 } }),
+      },
+    ];
+
+    for (const { what, write } of inFlightWriters) {
+      it(`cannot claim while ${what} is being committed, and refuses once it lands`, async () => {
+        const { operationId, anchoredAt } = await sendable();
+
+        const claimed = await claimAgainstAnInFlightWriter(operationId, (tx) => write(tx, anchoredAt));
+
+        // The conflicting state won the order and the claim saw it. Evaluated from a statement snapshot
+        // this returned CLAIMED, and the reply went out behind the change.
+        expect(claimed).toEqual({ kind: "STATE_CHANGED" });
+        expect(await statusOf(operationId)).toBe("SCHEDULED");
+      }, 120_000);
+    }
+
+    it("makes a customer message wait while a claim is in progress, so neither sees half of the other", async () => {
+      const { operationId, anchoredAt } = await sendable();
+      let release = (): void => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // A client whose claim pauses once it holds the conversation's lock, so the other side can be shown
+      // to block on it. Nothing in the store knows about this: the seam is the client it was handed.
+      let paused = false;
+      const pausing = new Proxy(database.db, {
+        get(target, property, receiver) {
+          if (property !== "$transaction") {
+            const value: unknown = Reflect.get(target, property, receiver);
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+          }
+          return async (run: (tx: unknown) => Promise<unknown>, options: unknown) =>
+            target.$transaction(async (tx) => {
+              const gated = new Proxy(tx, {
+                get(txTarget, txProperty, txReceiver) {
+                  if (txProperty !== "$queryRaw") {
+                    return Reflect.get(txTarget, txProperty, txReceiver) as unknown;
+                  }
+                  // Bound to the transaction client: Prisma's own methods carry state through `this`.
+                  const raw = (Reflect.get(txTarget, txProperty, txReceiver) as (...a: unknown[]) => Promise<unknown>).bind(txTarget);
+                  return async (...args: unknown[]) => {
+                    const result: unknown = await raw(...args);
+                    if (!paused) {
+                      paused = true;
+                      await held;
+                    }
+                    return result;
+                  };
+                },
+              });
+              return run(gated);
+            }, options as Parameters<typeof target.$transaction>[1]);
+        },
+      });
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+      const claiming = createDeliveryStore(pausing).claim(context, NOW);
+      await waitForClaimPaused(() => paused);
+
+      // The customer's message now arrives, through the same boundary ingestion uses.
+      const writing = rival.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT "id" FROM "conversations"
+          WHERE "workspace_id" = ${scope().workspaceId}
+            AND "business_profile_id" = ${scope().businessProfileId}
+            AND "id" = ${profile.conversationId}
+          FOR UPDATE`;
+        await tx.message.create({
+          data: {
+            ...scope(),
+            channelAccountId: profile.channelAccount.id,
+            conversationId: profile.conversationId,
+            direction: "IN",
+            source: "PARTICIPANT",
+            kind: "TEXT",
+            text: "one more thing",
+            occurredAt: new Date(anchoredAt.getTime() + 2_000),
+          },
+        });
+      });
+      // It blocks: the claim holds the boundary, so the message cannot land underneath a decision that
+      // has already been taken against the state without it.
+      await waitForBlockedBackend();
+      release();
+
+      expect(await claiming).toEqual({ kind: "CLAIMED" });
+      await writing;
+      // Both orders are total. This one put the claim first, and the message is simply after it.
+      expect(await statusOf(operationId)).toBe("SENDING");
+    }, 120_000);
+
+    it("reads the limits from the same policy row its guard binds", async () => {
+      const { operationId } = await sendable();
+      await database.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+        data: { modeOverride: null },
+      });
+      await database.db.automationPolicy.deleteMany({ where: { ...scope() } });
+      await database.db.automationPolicy.create({
+        data: {
+          ...scope(),
+          channelAccountId: profile.channelAccount.id,
+          mode: "AUTOPILOT",
+          confidenceThreshold: 0.42,
+          mandatoryReviewReasons: ["MISSING_FACT", "not-a-reason-code"],
+          quietHoursTimeZone: "Europe/Berlin",
+          quietHoursStart: "22:00",
+          quietHoursEnd: "08:00",
+          instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED",
+        },
+      });
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+
+      // The limits and the mode come out of one row, read once. A caller that fetched them separately
+      // could judge against one version of the business's settings while the claim bound another.
+      expect(context?.mode).toBe("AUTOPILOT");
+      expect(context?.limits).toEqual({
+        confidenceThreshold: 0.42,
+        // Narrowed by the domain's own guard: a code the engine does not know is not a gate.
+        mandatoryReviewReasons: ["MISSING_FACT"],
+        quietHours: { timeZone: "Europe/Berlin", start: "22:00", end: "08:00" },
+        afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" },
+      });
+    }, 120_000);
+
     it("takes the claim in a single statement, so nothing can commit between the check and the write", async () => {
       const { operationId } = await sendable();
       const statements: string[] = [];
@@ -615,11 +876,20 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const claimed = await store.claim(context, NOW);
 
       expect(claimed).toEqual({ kind: "CLAIMED" });
-      const writes = statements.filter((statement) => statement.startsWith("UPDATE"));
+      // Trimmed first: a multi-line statement is still one statement.
+      const trimmed = statements.map((statement) => statement.trim());
+      const writes = trimmed.filter((statement) => statement.startsWith("UPDATE"));
       // One UPDATE carrying its own conditions. A select-then-update would put the whole race back.
       expect(writes).toHaveLength(1);
       expect(writes[0]).toContain("WHERE");
-      expect(statements.filter((statement) => statement.startsWith("SELECT"))).toEqual([]);
+      // Every read before it acquires a lock and holds it to commit. An ordinary SELECT here would be a
+      // fact read outside the boundary, which is the thing a concurrent writer can invalidate.
+      const reads = trimmed.filter((statement) => statement.startsWith("SELECT"));
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.every((read) => /FOR (UPDATE|SHARE)$/.test(read))).toBe(true);
+      // The conversation is locked first, and it is the boundary an inbound writer takes too.
+      expect(reads[0]).toContain('"conversations"');
+      expect(reads[0]).toContain("FOR UPDATE");
       await logged.$disconnect();
     }, 120_000);
   });

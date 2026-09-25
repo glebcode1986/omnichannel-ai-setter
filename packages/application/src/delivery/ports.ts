@@ -8,7 +8,7 @@
 import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/channel-core";
 import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode } from "@omnichannel/domain";
 
-import type { AccountHealth, HumanAgentAvailability, ReplyCycleState } from "../policy/inputs";
+import type { AccountHealth, HumanAgentAvailability, PolicyLimits, ReplyCycleState } from "../policy/inputs";
 
 /** Who authorized this delivery. Automation cannot produce the human variant: it has no actor to name. */
 export type DeliveryAuthority =
@@ -41,6 +41,8 @@ export interface DeliveryStateGuard {
 export interface DeliverySendContext {
   readonly deliveryJobId: string;
   readonly operationId: string;
+  /** The tenant this delivery belongs to; channel rules are evaluated within it, never across it. */
+  readonly workspaceId: string;
   readonly draftId: string;
   readonly conversationId: string;
   readonly channel: ChannelType;
@@ -58,8 +60,30 @@ export interface DeliverySendContext {
   readonly draftNeedsReview: boolean;
   /** True once any outbound message already exists for this draft: the send already happened. */
   readonly alreadySent: boolean;
+  /**
+   * The automation limits this send must satisfy.
+   *
+   * Read here, with everything else, rather than passed in by the caller. The limits and the mode come out
+   * of the same policy rows, and a caller that read them separately would be judging one version of the
+   * business's settings while the claim bound another — two reads, one of them unguarded.
+   */
+  readonly limits: PolicyLimits;
+  /** The customer's own last message: where a provider's messaging window starts counting. */
+  readonly lastInboundAt?: Date;
   /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
   readonly guard: DeliveryStateGuard;
+}
+
+/**
+ * The live channel facts a send depends on — the messaging window, the human-support exception, the
+ * provider's own dispatch deadline.
+ *
+ * Derived from a context rather than read on its own, so the window and the state the claim binds come
+ * from the same instant. Channel-specific rules live behind this port: answering "may a reply still be
+ * sent?" is a channel question, and it must not require the credentials needed to actually send one.
+ */
+export interface DeliveryChannelStatePort {
+  stateFor(context: DeliverySendContext): DeliveryChannelState;
 }
 
 /** How a delivery ended. One shape per durable outcome, so an impossible pair cannot be written. */

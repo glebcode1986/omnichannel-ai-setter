@@ -115,6 +115,7 @@ export type {
   ClaimOutcome,
   DeliveryAuthority,
   DeliveryChannelState,
+  DeliveryChannelStatePort,
   DeliveryLogPort,
   DeliverySendCommand,
   DeliverySendContext,

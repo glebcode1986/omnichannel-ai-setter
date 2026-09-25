@@ -29,11 +29,19 @@
  * from a member context, exactly as for ingestion and draft generation. Every statement is still bounded by
  * the operation ID, which is unique across the table.
  */
-import type { DeliverySendContext, DeliveryStateGuard, DeliverySettlement, DeliveryStore } from "@omnichannel/application";
-import type { DeliveryJobStatus } from "@omnichannel/domain";
+import type { DeliverySendContext, DeliveryStateGuard, DeliverySettlement, DeliveryStore, PolicyLimits } from "@omnichannel/application";
+import { isReasonCode, toQuietHours, type DeliveryJobStatus } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
-import type { AiMode, ChannelAccountStatus, ConversationStatus, TakeoverState } from "./generated/prisma/enums";
+import type {
+  AiMode,
+  ChannelAccountStatus,
+  ChannelType,
+  ConversationStatus,
+  InstagramAfterWindowPolicy,
+  TakeoverState,
+  WhatsAppAfterWindowPolicy,
+} from "./generated/prisma/enums";
 
 /** States a scheduled delivery may still be claimed from. Anything else is finished or in flight. */
 const CLAIMABLE: DeliveryJobStatus = "SCHEDULED";
@@ -46,6 +54,9 @@ const CLAIMABLE: DeliveryJobStatus = "SCHEDULED";
  * field that stops being asserted here is a way for a decision to be made on a fact that has since changed.
  */
 interface SendStateGuard {
+  /** The scope every locking statement carries, so a lock can never reach another tenant's row. */
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
   readonly channelAccountId: string;
   /** Advanced by every new customer message, and by any future writer of conversation-level state. */
   readonly conversationStateVersion: number;
@@ -100,6 +111,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
                   takeoverState: true,
                   modeOverride: true,
                   stateVersion: true,
+                  lastInboundAt: true,
                   // The conversation reaches its account through the identity's composite key.
                   channelIdentity: { select: { externalUserId: true, channelAccount: { select: { channel: true, status: true } } } },
                 },
@@ -122,10 +134,12 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         select: { id: true },
       });
       const policies = await automationPolicies(db, scope, conversation.channelAccountId);
+      const effective = policies.account ?? policies.default;
 
       const context: DeliverySendContext = {
         deliveryJobId: job.id,
         operationId: job.operationId,
+        workspaceId: job.workspaceId,
         draftId: job.draftId,
         conversationId: conversation.id,
         channel: conversation.channelIdentity.channelAccount.channel,
@@ -134,7 +148,9 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         ...(job.draft.text === null ? {} : { text: job.draft.text }),
         status: job.status,
         attemptCount: job.attemptCount,
-        mode: resolveMode(policies, conversation.modeOverride),
+        mode: conversation.modeOverride ?? effective?.mode ?? "OFF",
+        limits: limitsFrom(effective, conversation.channelIdentity.channelAccount.channel),
+        ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
         aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
         takeover: takeoverStateOf(conversation.takeoverState),
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
@@ -143,6 +159,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         // The draft's own sent message is the durable record that the logical action already happened.
         alreadySent: job.draft.sentMessage !== null,
         guard: sealGuard({
+          ...scope,
           channelAccountId: conversation.channelAccountId,
           conversationStateVersion: conversation.stateVersion,
           conversationStatus: conversation.status,
@@ -162,55 +179,95 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
 
     async claim(context, claimedAt) {
       const guard = openGuard(context.guard);
-      // One conditional UPDATE, and every predicate in it is part of the concurrency control: the status
-      // decides which worker wins, and the rest decides whether the approval is still the live state.
-      // Whichever transaction commits first flips the row; anything else matches zero rows.
-      const claimed = await db.deliveryJobRecord.updateMany({
-        where: {
-          operationId: context.operationId,
-          status: CLAIMABLE,
-          draft: {
-            text: guard.draftText,
-            needsReview: guard.draftNeedsReview,
-            // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
-            sentMessage: { is: null },
-            conversation: {
-              stateVersion: guard.conversationStateVersion,
-              status: guard.conversationStatus,
-              takeoverState: guard.takeoverState,
-              aiEnabled: guard.aiEnabled,
-              modeOverride: guard.modeOverride,
-              // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
-              // this reply answers a question that has moved on, whatever any version counter says.
-              messages: { none: { direction: "IN", aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
-              channelIdentity: {
-                channelAccount: {
-                  status: guard.accountStatus,
-                  businessProfile: {
-                    AND: [
-                      policyUnchanged(guard.channelAccountId, guard.accountPolicyAt),
-                      policyUnchanged(null, guard.defaultPolicyAt),
-                    ],
+      return db.$transaction(
+        async (tx) => {
+          // The conversation row, locked and held to commit. This is the boundary `appendInboundMessage`
+          // already takes before writing a customer message, and taking the same one is what puts this claim
+          // and that message into a definite order instead of a race: whichever transaction gets the lock
+          // first happens first, and the other sees the result. A takeover or any other write to the
+          // conversation conflicts with this lock for the same reason.
+          //
+          // Without it the predicates below would be evaluated from the statement's own snapshot and would
+          // not serialize against anything: a message committing after that snapshot and before this
+          // transaction commits would be invisible, and the send would go out behind it.
+          const locked = await tx.$queryRaw<{ id: string }[]>`
+            SELECT "id" FROM "conversations"
+            WHERE "workspace_id" = ${guard.workspaceId}
+              AND "business_profile_id" = ${guard.businessProfileId}
+              AND "id" = ${context.conversationId}
+            FOR UPDATE`;
+          if (locked.length === 0) {
+            // The conversation is gone; there is nothing left to send into.
+            return { kind: "NOT_CLAIMABLE", status: "SENT" };
+          }
+
+          // The rows the decision read that the conversation's lock does not cover, in a fixed order so two
+          // claims can never take them the other way round. The draft is locked outright because rewriting
+          // it changes what would be sent; the account and the policy rows are shared, so concurrent claims
+          // do not block each other and only a writer does.
+          await tx.$queryRaw`SELECT "id" FROM "ai_drafts" WHERE "id" = ${context.draftId} FOR UPDATE`;
+          await tx.$queryRaw`SELECT "id" FROM "channel_accounts" WHERE "id" = ${guard.channelAccountId} FOR SHARE`;
+          await tx.$queryRaw`
+            SELECT "id" FROM "automation_policies"
+            WHERE "workspace_id" = ${guard.workspaceId}
+              AND "business_profile_id" = ${guard.businessProfileId}
+              AND ("channel_account_id" = ${guard.channelAccountId} OR "channel_account_id" IS NULL)
+            FOR SHARE`;
+
+          // One conditional UPDATE, evaluated on a snapshot taken after those locks are held. Every
+          // predicate in it is part of the concurrency control: the status decides which worker wins, and
+          // the rest decides whether the approval is still the live state.
+          const claimed = await tx.deliveryJobRecord.updateMany({
+            where: {
+              operationId: context.operationId,
+              status: CLAIMABLE,
+              draft: {
+                text: guard.draftText,
+                needsReview: guard.draftNeedsReview,
+                // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
+                sentMessage: { is: null },
+                conversation: {
+                  stateVersion: guard.conversationStateVersion,
+                  status: guard.conversationStatus,
+                  takeoverState: guard.takeoverState,
+                  aiEnabled: guard.aiEnabled,
+                  modeOverride: guard.modeOverride,
+                  // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
+                  // this reply answers a question that has moved on, whatever any version counter says.
+                  messages: { none: { direction: "IN", aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
+                  channelIdentity: {
+                    channelAccount: {
+                      status: guard.accountStatus,
+                      businessProfile: {
+                        AND: [
+                          policyUnchanged(guard.channelAccountId, guard.accountPolicyAt),
+                          policyUnchanged(null, guard.defaultPolicyAt),
+                        ],
+                      },
+                    },
                   },
                 },
               },
             },
-          },
-        },
-        data: { status: "SENDING", claimedAt, attemptCount: { increment: 1 } },
-      });
-      if (claimed.count === 1) {
-        return { kind: "CLAIMED" };
-      }
+            data: { status: "SENDING", claimedAt, attemptCount: { increment: 1 } },
+          });
+          if (claimed.count === 1) {
+            return { kind: "CLAIMED" };
+          }
 
-      // Zero rows has two causes worth telling apart, and the row's own status separates them: still
-      // claimable means the state moved under this worker, anything else means the delivery is not its to
-      // take. Neither sends, so a race between this read and the update above can only mislabel a refusal.
-      const current = await db.deliveryJobRecord.findUnique({ where: { operationId: context.operationId }, select: { status: true } });
-      if (current === null) {
-        return { kind: "NOT_CLAIMABLE", status: "SENT" };
-      }
-      return current.status === CLAIMABLE ? { kind: "STATE_CHANGED" } : { kind: "NOT_CLAIMABLE", status: current.status };
+          // Zero rows has two causes worth telling apart, and the row's own status separates them: still
+          // claimable means the state moved under this worker, anything else means the delivery is not its
+          // to take. Read inside the same transaction, so it describes the same instant as the refusal.
+          const current = await tx.deliveryJobRecord.findUnique({ where: { operationId: context.operationId }, select: { status: true } });
+          if (current === null) {
+            return { kind: "NOT_CLAIMABLE", status: "SENT" };
+          }
+            return current.status === CLAIMABLE ? { kind: "STATE_CHANGED" } : { kind: "NOT_CLAIMABLE", status: current.status };
+          },
+        // A claim that cannot get the conversation's lock in this time gives up rather than waiting
+        // indefinitely. Failing the attempt is safe — nothing has been sent — and the job is retried.
+        { timeout: 15_000 },
+      );
     },
 
     async settle(operationId, settlement, at) {
@@ -317,9 +374,48 @@ async function anchorTime(db: DbClient, scope: { workspaceId: string; businessPr
   return draft.anchorMessage.occurredAt;
 }
 
+/** The automation-policy fields a delivery decision reads, and the timestamp its guard binds. */
 interface PolicyRow {
+  readonly channelAccountId: string | null;
   readonly mode: AiMode;
   readonly updatedAt: Date;
+  readonly confidenceThreshold: number;
+  readonly mandatoryReviewReasons: readonly string[];
+  readonly quietHoursTimeZone: string | null;
+  readonly quietHoursStart: string | null;
+  readonly quietHoursEnd: string | null;
+  readonly instagramAfterWindowPolicy: InstagramAfterWindowPolicy;
+  readonly whatsappAfterWindowPolicy: WhatsAppAfterWindowPolicy;
+}
+
+/**
+ * The limits this delivery must satisfy, from the row the mode itself came from.
+ *
+ * Built here rather than by the caller because the limits, the mode and the guard all have to describe one
+ * read of one row. A caller that fetched them separately could judge a draft against yesterday's threshold
+ * while the claim bound today's row, and nothing in the types would say so.
+ *
+ * No policy row at all means the Business Profile never opted into automation. The mode is then `OFF`, the
+ * engine cancels, and these values are never the reason: they exist only so the shape is total.
+ */
+function limitsFrom(policy: PolicyRow | undefined, channel: ChannelType): PolicyLimits {
+  const afterWindow: PolicyLimits["afterWindow"] =
+    channel === "INSTAGRAM"
+      ? { channel: "INSTAGRAM", policy: policy?.instagramAfterWindowPolicy ?? "STANDARD_ONLY" }
+      : { channel: "WHATSAPP", policy: policy?.whatsappAfterWindowPolicy ?? "SERVICE_WINDOW_ONLY" };
+  return {
+    confidenceThreshold: policy?.confidenceThreshold ?? 1,
+    // Narrowed with the domain's own guard: a code the engine does not know is not a gate, and treating an
+    // unrecognised string as one would block sends for a reason nobody can act on.
+    mandatoryReviewReasons: (policy?.mandatoryReviewReasons ?? []).filter(isReasonCode),
+    ...(policy?.quietHoursTimeZone === null ||
+    policy?.quietHoursTimeZone === undefined ||
+    policy.quietHoursStart === null ||
+    policy.quietHoursEnd === null
+      ? {}
+      : { quietHours: toQuietHours(policy.quietHoursTimeZone, policy.quietHoursStart, policy.quietHoursEnd) }),
+    afterWindow,
+  };
 }
 
 /** The two rows a conversation's automation can come from: its own account's, and the profile default. */
@@ -330,23 +426,23 @@ async function automationPolicies(
 ): Promise<{ readonly account?: PolicyRow; readonly default?: PolicyRow }> {
   const rows = await db.automationPolicy.findMany({
     where: { ...scope, OR: [{ channelAccountId }, { channelAccountId: null }] },
-    select: { channelAccountId: true, mode: true, updatedAt: true },
+    select: {
+      channelAccountId: true,
+      mode: true,
+      updatedAt: true,
+      confidenceThreshold: true,
+      mandatoryReviewReasons: true,
+      quietHoursTimeZone: true,
+      quietHoursStart: true,
+      quietHoursEnd: true,
+      instagramAfterWindowPolicy: true,
+      whatsappAfterWindowPolicy: true,
+    },
   });
   return {
     account: rows.find((row) => row.channelAccountId === channelAccountId),
     default: rows.find((row) => row.channelAccountId === null),
   };
-}
-
-/** Conversation override, then a channel-account policy, then the Business Profile default, then OFF. */
-function resolveMode(
-  policies: { readonly account?: PolicyRow; readonly default?: PolicyRow },
-  override: AiMode | null,
-): DeliverySendContext["mode"] {
-  if (override !== null) {
-    return override;
-  }
-  return policies.account?.mode ?? policies.default?.mode ?? "OFF";
 }
 
 /**

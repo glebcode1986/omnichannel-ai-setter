@@ -55,8 +55,21 @@ takeover, an automation-policy edit or a draft rewrite can commit in between. A 
 the delivery's own status succeeds in all of those cases and sends on an approval that has already been
 withdrawn — the delivery row was never what authorized the send.
 
-The claim therefore re-asserts, in the same statement that takes the send, every fact the revalidation
-rested on: the reply cycle (no qualifying inbound after the draft anchor), the conversation's own state
+**The claim serializes against the writers of those facts.** A conditional statement is not enough on its
+own: under PostgreSQL's READ COMMITTED the joined rows are evaluated from the statement's own snapshot, so
+a conflicting transaction can still commit after that snapshot is taken and before the claim commits, and
+the claim would not see it. The claim therefore runs in a transaction that first locks the conversation row
+— the same lock a writer takes before recording a customer message, and the same row a takeover updates —
+and then the draft, the channel account and the automation-policy rows the decision read. Only then is the
+conditional UPDATE evaluated. Whichever side takes the conversation's lock first happens first, and the
+other sees the result: the claim and a conflicting change have a total order rather than a race.
+
+Everything the revalidation judged comes from that one read. The limits and the mode are read from the same
+policy rows the claim binds, and the live channel facts (window, human-support exception, dispatch deadline)
+are derived from the same context rather than fetched separately, so nothing judged can describe a different
+instant from what is bound.
+
+The claim re-asserts, in the same statement that takes the send, every fact the revalidation rested on: the reply cycle (no qualifying inbound after the draft anchor), the conversation's own state
 (takeover, AI enabled, open/closed, mode override, and its state version for anything else that moves),
 the draft (text, review flag, and that it has not already produced a message), the channel account's
 health, and the automation-policy rows the mode and limits were read from. A claim whose facts no longer

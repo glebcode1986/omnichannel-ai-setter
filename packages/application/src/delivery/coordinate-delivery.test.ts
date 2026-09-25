@@ -3,7 +3,8 @@ import type { SendResult } from "@omnichannel/channel-core";
 import { describe, expect, it } from "vitest";
 
 import { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies } from "./coordinate-delivery";
-import type { ClaimOutcome, DeliverySendContext, DeliverySettlement, DeliveryStateGuard } from "./ports";
+import type { ClaimOutcome, DeliveryChannelState, DeliverySendContext, DeliverySettlement, DeliveryStateGuard } from "./ports";
+import type { PolicyLimits } from "../policy/inputs";
 
 const NOW = new Date("2026-09-18T12:00:00.000Z");
 
@@ -13,9 +14,21 @@ const NOW = new Date("2026-09-18T12:00:00.000Z");
  */
 const guard = (label: string): DeliveryStateGuard => ({ label }) as unknown as DeliveryStateGuard;
 
+const limits: PolicyLimits = {
+  confidenceThreshold: 0.8,
+  mandatoryReviewReasons: ["MISSING_FACT"],
+  afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
+};
+
+const channelState: DeliveryChannelState = {
+  window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+  humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+};
+
 const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendContext => ({
   deliveryJobId: "djob_1",
   operationId: "op_1",
+  workspaceId: "ws_1",
   draftId: "draft_1",
   conversationId: "conv_1",
   channel: "INSTAGRAM",
@@ -31,6 +44,7 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   account: "CONNECTED",
   draftNeedsReview: false,
   alreadySent: false,
+  limits,
   guard: guard("read_1"),
   ...overrides,
 });
@@ -38,21 +52,14 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
 const command = (overrides: Partial<DeliveryCommand> = {}): DeliveryCommand => ({
   operationId: "op_1",
   correlationId: "corr_1",
-  limits: {
-    confidenceThreshold: 0.8,
-    mandatoryReviewReasons: ["MISSING_FACT"],
-    afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-  },
-  channelState: {
-    window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
-    humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
-  },
   authority: { kind: "AUTOMATED" },
   ...overrides,
 });
 
 interface HarnessOptions {
   readonly context?: DeliverySendContext | undefined;
+  /** The live channel facts this run should derive from whatever context it read. */
+  readonly channelState?: DeliveryChannelState;
   readonly result?: SendResult;
   readonly claim?: ClaimOutcome;
   readonly maxAttempts?: number;
@@ -105,6 +112,7 @@ function harness(options: HarnessOptions = {}) {
         return Promise.resolve();
       },
     },
+    channel: { stateFor: () => options.channelState ?? channelState },
     sender: {
       send: (input) => {
         sends.push({ operationId: input.operationId, text: input.text });
@@ -312,12 +320,11 @@ describe("the final gate runs before anything is claimed", () => {
   });
 
   it("cancels when the messaging window closed during the delay", async () => {
-    const { dependencies, sends, settlements } = harness();
+    const { dependencies, sends, settlements } = harness({
+      channelState: { window: { state: "NOT_ELIGIBLE", reason: "closed" }, humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" } },
+    });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({ channelState: { window: { state: "NOT_ELIGIBLE", reason: "closed" }, humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" } } }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(sends).toEqual([]);
     expect(settlements[0]).toMatchObject({ kind: "CANCELLED", status: "CANCELLED_POLICY" });
@@ -409,22 +416,17 @@ describe("send outcomes", () => {
   });
 });
 
+const quietHourLimits: PolicyLimits = { ...limits, mandatoryReviewReasons: [], quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" } };
+const openWindow: DeliveryChannelState = {
+  window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") },
+  humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+};
+
 describe("quiet hours that begin during the delay", () => {
   it("waits for the quiet period to end instead of sending or failing", async () => {
-    const { dependencies, sends, rescheduled } = harness();
+    const { dependencies, sends, rescheduled } = harness({ context: context({ limits: quietHourLimits }), channelState: openWindow });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: { window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") }, humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" } },
-      }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(sends).toEqual([]);
     expect(outcome).toMatchObject({ status: "RESCHEDULED" });
@@ -436,20 +438,13 @@ describe("quiet hours that begin during the delay", () => {
     // 14:00; by the time that choice is acted on it is 15:00 and the instant has gone. Rescheduling to a
     // moment in the past is a job that wakes immediately and does the same thing again — a reply that
     // never leaves, for a rule that no longer applies.
-    const { dependencies, sends, rescheduled } = harness({ clockStepMs: 90 * 60_000 });
+    const { dependencies, sends, rescheduled } = harness({
+      clockStepMs: 90 * 60_000,
+      context: context({ limits: quietHourLimits }),
+      channelState: openWindow,
+    });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: { window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") }, humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" } },
-      }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(rescheduled).toEqual([]);
     expect(sends).toHaveLength(1);
@@ -457,24 +452,12 @@ describe("quiet hours that begin during the delay", () => {
   });
 
   it("holds rather than deferring when waiting would miss the provider's deadline", async () => {
-    const { dependencies, sends, settlements, rescheduled } = harness();
+    const { dependencies, sends, settlements, rescheduled } = harness({
+      context: context({ limits: quietHourLimits }),
+      channelState: { ...openWindow, dispatchDeadline: new Date(NOW.getTime() + 25_000) },
+    });
 
-    await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: {
-          window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") },
-          humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
-          dispatchDeadline: new Date(NOW.getTime() + 25_000),
-        },
-      }),
-    );
+    await coordinateDelivery(dependencies, command());
 
     expect(rescheduled).toEqual([]);
     expect(sends).toEqual([]);

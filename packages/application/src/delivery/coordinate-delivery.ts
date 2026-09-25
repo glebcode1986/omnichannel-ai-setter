@@ -33,11 +33,11 @@ import { sendDisposition, type SendResult } from "@omnichannel/channel-core";
 import type { ReasonCode } from "@omnichannel/domain";
 
 import { evaluatePolicy } from "../policy/evaluate";
-import type { PolicyInput, PolicyLimits } from "../policy/inputs";
+import type { PolicyInput } from "../policy/inputs";
 import type {
   CancelledStatus,
   DeliveryAuthority,
-  DeliveryChannelState,
+  DeliveryChannelStatePort,
   DeliveryLogPort,
   DeliverySendContext,
   DeliverySendPort,
@@ -48,6 +48,8 @@ import type {
 export interface DeliveryDependencies {
   readonly store: DeliveryStore;
   readonly sender: DeliverySendPort;
+  /** Derives the live channel facts from the state just read, so the window and the claim share an instant. */
+  readonly channel: DeliveryChannelStatePort;
   readonly log: DeliveryLogPort;
   readonly now: () => Date;
   /** Bounded by the queue's own attempt policy; this is the coordinator's own ceiling on retryable sends. */
@@ -57,8 +59,6 @@ export interface DeliveryDependencies {
 export interface DeliveryCommand {
   readonly operationId: string;
   readonly correlationId: string;
-  readonly limits: PolicyLimits;
-  readonly channelState: DeliveryChannelState;
   readonly authority: DeliveryAuthority;
 }
 
@@ -98,7 +98,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
   }
 
   for (let pass = 1; ; pass += 1) {
-    const preflight = revalidate(dependencies, command, context);
+    const preflight = revalidate(dependencies, context);
     if (preflight !== undefined) {
       // Settled without claiming: a gate that fails here must never reach the adapter at all.
       await dependencies.store.settle(command.operationId, preflight.settlement, dependencies.now());
@@ -106,7 +106,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
       return preflight.outcome;
     }
 
-    const deferral = deferralFor(dependencies, command, context);
+    const deferral = deferralFor(dependencies, context);
     if (deferral !== undefined) {
       await dependencies.store.reschedule(command.operationId, deferral);
       dependencies.log.info("delivery.deferred", { ...fields, notBefore: deferral.toISOString() });
@@ -223,7 +223,6 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
  */
 function revalidate(
   dependencies: DeliveryDependencies,
-  command: DeliveryCommand,
   context: DeliverySendContext,
 ): { readonly settlement: DeliverySettlement; readonly outcome: DeliveryOutcome; readonly reasons: readonly ReasonCode[] } | undefined {
   if (context.alreadySent || context.status === "SENT") {
@@ -243,7 +242,7 @@ function revalidate(
     };
   }
 
-  const decision = evaluatePolicy(policyInputFor(dependencies, command, context));
+  const decision = evaluatePolicy(policyInputFor(dependencies, context));
   if (decision.action === "SCHEDULE") {
     return undefined;
   }
@@ -266,15 +265,18 @@ function revalidate(
  * A `SCHEDULE` whose `notBefore` is still ahead means quiet hours began during the delay. Sending now would
  * ignore the business's own setting; failing would waste a perfectly good draft. It waits instead.
  */
-function deferralFor(dependencies: DeliveryDependencies, command: DeliveryCommand, context: DeliverySendContext): Date | undefined {
-  const decision = evaluatePolicy(policyInputFor(dependencies, command, context));
+function deferralFor(dependencies: DeliveryDependencies, context: DeliverySendContext): Date | undefined {
+  const decision = evaluatePolicy(policyInputFor(dependencies, context));
   if (decision.action !== "SCHEDULE" || decision.notBefore === undefined) {
     return undefined;
   }
   return decision.notBefore.getTime() > dependencies.now().getTime() ? decision.notBefore : undefined;
 }
 
-function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCommand, context: DeliverySendContext): PolicyInput {
+function policyInputFor(dependencies: DeliveryDependencies, context: DeliverySendContext): PolicyInput {
+  // Both from the read the claim will bind: the limits the store returned with the state, and the channel
+  // facts derived from that same state. Nothing here was read at a different moment from anything else.
+  const channelState = dependencies.channel.stateFor(context);
   return {
     mode: context.mode,
     aiEnabled: context.aiEnabled,
@@ -291,12 +293,12 @@ function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCom
       contentType: "TEXT",
     },
     retrieval: { suppliedSourceIds: [], corpusReachable: true },
-    limits: command.limits,
+    limits: context.limits,
     account: context.account,
     capabilities: { text: true, image: false, video: false, audio: false, document: false, interactive: false, templates: false, reactions: false, readReceipts: false, typingIndicator: false },
-    window: command.channelState.window,
-    humanAgent: command.channelState.humanAgent,
-    ...(command.channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: command.channelState.dispatchDeadline }),
+    window: channelState.window,
+    humanAgent: channelState.humanAgent,
+    ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),
     replyCycle: context.replyCycle,
     now: dependencies.now(),
   };

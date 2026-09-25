@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
 import { createDeliveryHandler } from "./delivery-handler";
-import { createDeliveryPolicyResolver } from "./delivery-policy";
+import { createChannelStateResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -108,10 +108,10 @@ function main(): void {
             send: () =>
               Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is registered for delivery" }),
           },
+          channel: createChannelStateResolver(() => new Date()),
           log: logger,
           now: () => new Date(),
         },
-        conversationPolicy: createDeliveryPolicyResolver(db, () => new Date()),
         logger,
       });
       const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft, deliver) });
