@@ -3,13 +3,32 @@ import type { SendResult } from "@omnichannel/channel-core";
 import { describe, expect, it } from "vitest";
 
 import { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies } from "./coordinate-delivery";
-import type { ClaimOutcome, DeliverySendContext, DeliverySettlement } from "./ports";
+import type { ClaimOutcome, DeliveryChannelState, DeliverySendContext, DeliverySettlement, DeliveryStateGuard } from "./ports";
+import type { PolicyLimits } from "../policy/inputs";
 
 const NOW = new Date("2026-09-18T12:00:00.000Z");
+
+/**
+ * A guard is opaque to the coordinator, so a label standing in for one is enough — and it is what lets a
+ * test prove *which* read a claim was made against, which is the whole question here.
+ */
+const guard = (label: string): DeliveryStateGuard => ({ label }) as unknown as DeliveryStateGuard;
+
+const limits: PolicyLimits = {
+  confidenceThreshold: 0.8,
+  mandatoryReviewReasons: ["MISSING_FACT"],
+  afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
+};
+
+const channelState: DeliveryChannelState = {
+  window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
+  humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+};
 
 const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendContext => ({
   deliveryJobId: "djob_1",
   operationId: "op_1",
+  workspaceId: "ws_1",
   draftId: "draft_1",
   conversationId: "conv_1",
   channel: "INSTAGRAM",
@@ -25,32 +44,34 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   account: "CONNECTED",
   draftNeedsReview: false,
   alreadySent: false,
+  limits,
+  guard: guard("read_1"),
   ...overrides,
 });
 
 const command = (overrides: Partial<DeliveryCommand> = {}): DeliveryCommand => ({
   operationId: "op_1",
   correlationId: "corr_1",
-  limits: {
-    confidenceThreshold: 0.8,
-    mandatoryReviewReasons: ["MISSING_FACT"],
-    afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-  },
-  channelState: {
-    window: { state: "OPEN_FREEFORM", expiresAt: new Date(NOW.getTime() + 3_600_000) },
-    humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
-  },
   authority: { kind: "AUTOMATED" },
   ...overrides,
 });
 
 interface HarnessOptions {
   readonly context?: DeliverySendContext | undefined;
+  /** The live channel facts this run should derive from whatever context it read. */
+  readonly channelState?: DeliveryChannelState;
   readonly result?: SendResult;
   readonly claim?: ClaimOutcome;
   readonly maxAttempts?: number;
   /** How far the clock moves between reads; 0 (the default) keeps it fixed. */
   readonly clockStepMs?: number;
+  /**
+   * What each successive read returns, standing in for a conversation that changes while it is being
+   * judged. The last entry is reused once the list runs out.
+   */
+  readonly reads?: readonly (DeliverySendContext | undefined)[];
+  /** What each successive claim answers; the last entry is reused once the list runs out. */
+  readonly claims?: readonly ClaimOutcome[];
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -60,12 +81,25 @@ function harness(options: HarnessOptions = {}) {
   const logs: string[] = [];
   let claims = 0;
   let reads = 0;
+  let loads = 0;
+
+  const claimedAgainst: (DeliveryStateGuard | undefined)[] = [];
 
   const dependencies: DeliveryDependencies = {
     store: {
-      loadForSend: () => Promise.resolve("context" in options ? options.context : context()),
-      claim: () => {
+      loadForSend: () => {
+        loads += 1;
+        if (options.reads !== undefined) {
+          return Promise.resolve(options.reads[Math.min(loads, options.reads.length) - 1]);
+        }
+        return Promise.resolve("context" in options ? options.context : context());
+      },
+      claim: (claimed) => {
         claims += 1;
+        claimedAgainst.push(claimed.guard);
+        if (options.claims !== undefined) {
+          return Promise.resolve(options.claims[Math.min(claims, options.claims.length) - 1] ?? { kind: "NOT_CLAIMABLE", status: "SENDING" });
+        }
         // The database decides the winner; only the first caller can ever be told it owns the send.
         return Promise.resolve(options.claim ?? (claims === 1 ? { kind: "CLAIMED" } : { kind: "NOT_CLAIMABLE", status: "SENDING" }));
       },
@@ -78,6 +112,7 @@ function harness(options: HarnessOptions = {}) {
         return Promise.resolve();
       },
     },
+    channel: { stateFor: () => options.channelState ?? channelState },
     sender: {
       send: (input) => {
         sends.push({ operationId: input.operationId, text: input.text });
@@ -99,7 +134,7 @@ function harness(options: HarnessOptions = {}) {
     },
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
   };
-  return { dependencies, settlements, sends, rescheduled, logs };
+  return { dependencies, settlements, sends, rescheduled, logs, claimedAgainst };
 }
 
 describe("the happy path is the only path to a send", () => {
@@ -150,6 +185,101 @@ describe("two workers racing one delivery", () => {
   });
 });
 
+describe("the state moving between the judgement and the claim", () => {
+  it("claims against the state it judged, not merely against the operation", async () => {
+    const { dependencies, claimedAgainst } = harness();
+
+    await coordinateDelivery(dependencies, command());
+
+    // Without this, the claim is conditional on a row and not on the approval, and every test below
+    // describes something the database would have allowed.
+    expect(claimedAgainst).toEqual([guard("read_1")]);
+  });
+
+  it("sends nothing when a customer message lands in the gap, and cancels on what replaced the approval", async () => {
+    const { dependencies, sends, settlements, logs } = harness({
+      // The first read is a perfectly valid state. Between it and the claim the customer writes again, so
+      // the claim is refused and the second read is what actually decides.
+      reads: [context(), context({ replyCycle: "SUPERSEDED", guard: guard("read_2") })],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(sends).toEqual([]);
+    expect(outcome).toMatchObject({ status: "CANCELLED", reasons: ["SUPERSEDED_BY_NEWER_INBOUND"] });
+    expect(settlements).toEqual([{ kind: "CANCELLED", status: "CANCELLED_SUPERSEDED", reasons: ["SUPERSEDED_BY_NEWER_INBOUND"] }]);
+    expect(logs).toContain("delivery.state_changed");
+  });
+
+  it("sends nothing when a colleague takes the conversation over in the gap", async () => {
+    const { dependencies, sends, settlements } = harness({
+      reads: [
+        context(),
+        context({ takeover: { state: "HUMAN_ACTIVE", reason: "HUMAN_SENT_FROM_INBOX", since: NOW }, guard: guard("read_2") }),
+      ],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(sends).toEqual([]);
+    expect(outcome.status).toBe("CANCELLED");
+    expect(settlements).toEqual([{ kind: "CANCELLED", status: "CANCELLED_HUMAN_TAKEOVER", reasons: ["HUMAN_TAKEOVER"] }]);
+  });
+
+  it("re-claims against the state it re-read, never against the one that was overtaken", async () => {
+    const { dependencies, sends, claimedAgainst } = harness({
+      // The change was benign — something moved that the gates do not care about — so the send still goes.
+      reads: [context(), context({ guard: guard("read_2") })],
+      claims: [{ kind: "STATE_CHANGED" }, { kind: "CLAIMED" }],
+    });
+
+    await coordinateDelivery(dependencies, command());
+
+    expect(claimedAgainst).toEqual([guard("read_1"), guard("read_2")]);
+    expect(sends).toHaveLength(1);
+  });
+
+  it("hands the job back to the queue rather than guessing when the state keeps moving", async () => {
+    const { dependencies, sends, rescheduled, settlements } = harness({
+      // A conversation being actively written in. Each read is valid and each claim is overtaken.
+      claims: [{ kind: "STATE_CHANGED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    // Nothing sent, nothing settled: this call simply could not establish that the approval still held.
+    expect(sends).toEqual([]);
+    expect(settlements).toEqual([]);
+    expect(rescheduled).toEqual([NOW]);
+    expect(outcome).toEqual({ status: "RESCHEDULED", notBefore: NOW });
+  });
+
+  it("stops when the delivery disappears between the refused claim and the re-read", async () => {
+    const { dependencies, sends } = harness({
+      reads: [context(), undefined],
+      claims: [{ kind: "STATE_CHANGED" }],
+    });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    expect(outcome).toEqual({ status: "NOT_CLAIMABLE" });
+    expect(sends).toEqual([]);
+  });
+
+  it("keeps telling a lost race apart from an overtaken one", async () => {
+    const { dependencies, sends, rescheduled } = harness({ claims: [{ kind: "NOT_CLAIMABLE", status: "SENDING" }] });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    // Another worker owning the send is final; it must not be re-read and retried like a moved state.
+    expect(outcome).toEqual({ status: "NOT_CLAIMABLE" });
+    expect(sends).toEqual([]);
+    expect(rescheduled).toEqual([]);
+  });
+});
+
 describe("the final gate runs before anything is claimed", () => {
   const blocked = async (overrides: Partial<DeliverySendContext>, expected: ReasonCode) => {
     const { dependencies, sends, settlements } = harness({ context: context(overrides) });
@@ -190,12 +320,11 @@ describe("the final gate runs before anything is claimed", () => {
   });
 
   it("cancels when the messaging window closed during the delay", async () => {
-    const { dependencies, sends, settlements } = harness();
+    const { dependencies, sends, settlements } = harness({
+      channelState: { window: { state: "NOT_ELIGIBLE", reason: "closed" }, humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" } },
+    });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({ channelState: { window: { state: "NOT_ELIGIBLE", reason: "closed" }, humanAgent: { state: "UNAVAILABLE", reason: "EXPIRED" } } }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(sends).toEqual([]);
     expect(settlements[0]).toMatchObject({ kind: "CANCELLED", status: "CANCELLED_POLICY" });
@@ -287,22 +416,17 @@ describe("send outcomes", () => {
   });
 });
 
+const quietHourLimits: PolicyLimits = { ...limits, mandatoryReviewReasons: [], quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" } };
+const openWindow: DeliveryChannelState = {
+  window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") },
+  humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+};
+
 describe("quiet hours that begin during the delay", () => {
   it("waits for the quiet period to end instead of sending or failing", async () => {
-    const { dependencies, sends, rescheduled } = harness();
+    const { dependencies, sends, rescheduled } = harness({ context: context({ limits: quietHourLimits }), channelState: openWindow });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: { window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") }, humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" } },
-      }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(sends).toEqual([]);
     expect(outcome).toMatchObject({ status: "RESCHEDULED" });
@@ -314,20 +438,13 @@ describe("quiet hours that begin during the delay", () => {
     // 14:00; by the time that choice is acted on it is 15:00 and the instant has gone. Rescheduling to a
     // moment in the past is a job that wakes immediately and does the same thing again — a reply that
     // never leaves, for a rule that no longer applies.
-    const { dependencies, sends, rescheduled } = harness({ clockStepMs: 90 * 60_000 });
+    const { dependencies, sends, rescheduled } = harness({
+      clockStepMs: 90 * 60_000,
+      context: context({ limits: quietHourLimits }),
+      channelState: openWindow,
+    });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: { window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") }, humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" } },
-      }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
     expect(rescheduled).toEqual([]);
     expect(sends).toHaveLength(1);
@@ -335,24 +452,12 @@ describe("quiet hours that begin during the delay", () => {
   });
 
   it("holds rather than deferring when waiting would miss the provider's deadline", async () => {
-    const { dependencies, sends, settlements, rescheduled } = harness();
+    const { dependencies, sends, settlements, rescheduled } = harness({
+      context: context({ limits: quietHourLimits }),
+      channelState: { ...openWindow, dispatchDeadline: new Date(NOW.getTime() + 25_000) },
+    });
 
-    await coordinateDelivery(
-      dependencies,
-      command({
-        limits: {
-          confidenceThreshold: 0.8,
-          mandatoryReviewReasons: [],
-          afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" },
-          quietHours: { timeZone: "UTC", start: "11:00", end: "14:00" },
-        },
-        channelState: {
-          window: { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-30T00:00:00.000Z") },
-          humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
-          dispatchDeadline: new Date(NOW.getTime() + 25_000),
-        },
-      }),
-    );
+    await coordinateDelivery(dependencies, command());
 
     expect(rescheduled).toEqual([]);
     expect(sends).toEqual([]);
