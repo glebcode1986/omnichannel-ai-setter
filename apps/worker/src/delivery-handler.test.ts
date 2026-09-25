@@ -1,4 +1,4 @@
-import type { DeliveryChannelState, DeliveryDependencies, PolicyLimits } from "@omnichannel/application";
+import type { DeliveryChannelState, DeliveryDependencies, DeliverySendContext, DeliveryStateGuard, PolicyLimits } from "@omnichannel/application";
 import { createLogger } from "@omnichannel/observability";
 import type { DeliveryJob } from "@omnichannel/queue";
 import { describe, expect, it } from "vitest";
@@ -31,41 +31,45 @@ const channelState: DeliveryChannelState = {
   humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
 };
 
-function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; policy?: boolean } = {}) {
+function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; deliverable?: boolean } = {}) {
   const logs: string[] = [];
+  const sendContext: DeliverySendContext = {
+    deliveryJobId: "djob_1",
+    operationId: "op_1",
+    workspaceId: "ws_1",
+    draftId: "draft_1",
+    conversationId: "conv_1",
+    channel: "INSTAGRAM",
+    recipientExternalId: "ig-user-1",
+    channelAccountId: "ca_1",
+    text: "We open at 10 on Saturday.",
+    status: "SCHEDULED",
+    attemptCount: 0,
+    mode: "AUTOPILOT",
+    aiEnabled: true,
+    takeover: { state: "NONE" },
+    replyCycle: "OWNED",
+    account: "CONNECTED",
+    draftNeedsReview: false,
+    alreadySent: false,
+    limits,
+    // Opaque by design: this handler never looks inside one, it only lets the store see it again.
+    guard: {} as DeliveryStateGuard,
+  };
   const engine: DeliveryDependencies = {
     store: {
-      loadForSend: () =>
-        Promise.resolve({
-          deliveryJobId: "djob_1",
-          operationId: "op_1",
-          draftId: "draft_1",
-          conversationId: "conv_1",
-          channel: "INSTAGRAM",
-          recipientExternalId: "ig-user-1",
-          channelAccountId: "ca_1",
-          text: "We open at 10 on Saturday.",
-          status: "SCHEDULED",
-          attemptCount: 0,
-          mode: "AUTOPILOT",
-          aiEnabled: true,
-          takeover: { state: "NONE" },
-          replyCycle: "OWNED",
-          account: "CONNECTED",
-          draftNeedsReview: false,
-          alreadySent: false,
-        }),
+      loadForSend: () => Promise.resolve(overrides.deliverable === false ? undefined : sendContext),
       claim: () => Promise.resolve({ kind: "CLAIMED" }),
       settle: () => Promise.resolve(),
       reschedule: () => Promise.resolve(),
     },
     sender: { send: overrides.send ?? (() => Promise.resolve({ outcome: "ACCEPTED", platformMessageId: "mid_1" })) },
+    channel: { stateFor: () => channelState },
     log: { info: () => undefined, warn: () => undefined, error: () => undefined },
     now: () => NOW,
   };
   const handler = createDeliveryHandler({
     engine,
-    conversationPolicy: () => Promise.resolve(overrides.policy === false ? undefined : { limits, channelState }),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
   return { handler, logs };
@@ -88,7 +92,7 @@ describe("delivery handler", () => {
   });
 
   it("reports a skip when nothing was sent, so the queue never treats it as an attempt", async () => {
-    const { handler } = harness({ policy: false });
+    const { handler } = harness({ deliverable: false });
 
     expect(await handler(job)).toMatchObject({ status: "NOT_CLAIMED", retryable: false });
   });

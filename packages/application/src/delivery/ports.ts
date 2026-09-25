@@ -8,7 +8,7 @@
 import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/channel-core";
 import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode } from "@omnichannel/domain";
 
-import type { AccountHealth, HumanAgentAvailability, ReplyCycleState } from "../policy/inputs";
+import type { AccountHealth, HumanAgentAvailability, PolicyLimits, ReplyCycleState } from "../policy/inputs";
 
 /** Who authorized this delivery. Automation cannot produce the human variant: it has no actor to name. */
 export type DeliveryAuthority =
@@ -24,10 +24,25 @@ export type DeliveryAuthority =
       readonly approvedAt: Date;
     };
 
+/**
+ * An opaque description of the live state a send was authorized against.
+ *
+ * `loadForSend` produces it and `claim` re-asserts it, in the same statement that takes the send. Nothing in
+ * between may read it, and the type makes sure nothing can: a check the coordinator performed on it would be
+ * a read followed by an act, which is exactly the gap this exists to close. The coordinator's only duty is to
+ * carry it back unchanged.
+ */
+declare const stateGuard: unique symbol;
+export interface DeliveryStateGuard {
+  readonly [stateGuard]: never;
+}
+
 /** Everything the coordinator re-reads immediately before claiming. Never cached from scheduling time. */
 export interface DeliverySendContext {
   readonly deliveryJobId: string;
   readonly operationId: string;
+  /** The tenant this delivery belongs to; channel rules are evaluated within it, never across it. */
+  readonly workspaceId: string;
   readonly draftId: string;
   readonly conversationId: string;
   readonly channel: ChannelType;
@@ -45,6 +60,30 @@ export interface DeliverySendContext {
   readonly draftNeedsReview: boolean;
   /** True once any outbound message already exists for this draft: the send already happened. */
   readonly alreadySent: boolean;
+  /**
+   * The automation limits this send must satisfy.
+   *
+   * Read here, with everything else, rather than passed in by the caller. The limits and the mode come out
+   * of the same policy rows, and a caller that read them separately would be judging one version of the
+   * business's settings while the claim bound another — two reads, one of them unguarded.
+   */
+  readonly limits: PolicyLimits;
+  /** The customer's own last message: where a provider's messaging window starts counting. */
+  readonly lastInboundAt?: Date;
+  /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
+  readonly guard: DeliveryStateGuard;
+}
+
+/**
+ * The live channel facts a send depends on — the messaging window, the human-support exception, the
+ * provider's own dispatch deadline.
+ *
+ * Derived from a context rather than read on its own, so the window and the state the claim binds come
+ * from the same instant. Channel-specific rules live behind this port: answering "may a reply still be
+ * sent?" is a channel question, and it must not require the credentials needed to actually send one.
+ */
+export interface DeliveryChannelStatePort {
+  stateFor(context: DeliverySendContext): DeliveryChannelState;
 }
 
 /** How a delivery ended. One shape per durable outcome, so an impossible pair cannot be written. */
@@ -62,16 +101,27 @@ export type ClaimOutcome =
   /** This worker owns the send. Exactly one caller can ever receive this for one operation. */
   | { readonly kind: "CLAIMED" }
   /** Another worker owns it, or it has already finished. Either way this worker must not send. */
-  | { readonly kind: "NOT_CLAIMABLE"; readonly status: DeliveryJobStatus };
+  | { readonly kind: "NOT_CLAIMABLE"; readonly status: DeliveryJobStatus }
+  /**
+   * The state the approval rested on moved between the read and the claim — a customer wrote again, a
+   * colleague took the conversation over, the business changed its automation. Nothing was claimed and
+   * nothing was sent. The caller must re-read and re-judge before it may try again.
+   */
+  | { readonly kind: "STATE_CHANGED" };
 
 export interface DeliveryStore {
   /** Re-reads live state. Returns undefined when the job or its conversation no longer exists. */
   loadForSend(operationId: string): Promise<DeliverySendContext | undefined>;
   /**
-   * Atomically moves one claimable delivery into SENDING. The database decides the winner, not the caller:
-   * two workers racing the same operation must see one `CLAIMED` and one `NOT_CLAIMABLE`.
+   * Atomically moves one claimable delivery into SENDING — and only while the state it was judged against is
+   * still the live state.
+   *
+   * The database decides the winner *and* the freshness, in one statement: two workers racing the same
+   * operation see one `CLAIMED` and one `NOT_CLAIMABLE`, and a claim whose context has been overtaken sees
+   * `STATE_CHANGED` instead of a send. Taking the whole context rather than an id is the point — a claim
+   * that has not read the state it is claiming against cannot be expressed.
    */
-  claim(operationId: string, claimedAt: Date): Promise<ClaimOutcome>;
+  claim(context: DeliverySendContext, claimedAt: Date): Promise<ClaimOutcome>;
   /** Writes the terminal (or retryable) outcome, and the sent message when there is one. */
   settle(operationId: string, settlement: DeliverySettlement, at: Date): Promise<void>;
   /** Returns a claimed delivery to SCHEDULED for a later attempt, without counting it as a failure. */
