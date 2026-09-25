@@ -40,7 +40,7 @@ import { createDebounceHandler } from "./debounce-handler";
 import { createInstagramDeliverySender } from "./instagram-sender";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
-import { createDeliveryPolicyResolver } from "./delivery-policy";
+import { createChannelStateResolver, createSuspensionResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -158,10 +158,11 @@ function main(): void {
         engine: {
           store: createDeliveryStore(db),
           sender: createSender(env, db, logger),
+          channel: createChannelStateResolver(() => new Date()),
           log: logger,
           now: () => new Date(),
         },
-        conversationPolicy: createDeliveryPolicyResolver(db, () => new Date()),
+        outboundSuspension: createSuspensionResolver(db, () => new Date()),
         logger,
       });
       const reconcile = createReconcileHandler({

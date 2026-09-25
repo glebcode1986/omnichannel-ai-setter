@@ -105,6 +105,20 @@ Nothing is merged yet.
 
 8. P2-02 (#9): Instagram Login onboarding and token lifecycle — connect/callback/disconnect routes, encrypted credential storage, single-use OAuth state and refresh handling. The adapter is still not registered in `apps/web`; that wiring belongs to the vertical slice (#16), which can now resolve real credentials.
 
+11. P2-05 (#12), PR #67: the deterministic policy engine. Human Agent eligibility is current-only — an `ELIGIBLE` fact whose `expiresAt` has passed (including exactly at `now`) never opens the after-window path.
+12. P2-06 (#13), PR #68: the delivery coordinator and final pre-send revalidation.
+13. P2-07 (#14), PR #69: human handoff and the review state machine.
+14. P2-08 (#15), PR #70: the AI evaluation harness and golden conversations.
+15. P2-09 (#16), PR #71: the Instagram vertical slice.
+16. P3-03 (#56), PR #72: reliability controls, health, kill switch and reconciliation. ADR-017 is **Rejected**: an unmatched echo stays native human activity, and an unresolved ambiguous send is quarantined and put in front of a person rather than retried blind.
+
+**Delivery send authority is bound to the claim (#13 / PR #68).** The final pre-send revalidation is no
+longer separated from the claim by an unguarded gap: the claim's own statement re-asserts every fact the
+revalidation rested on — reply cycle, conversation state and version, draft, account health and the
+automation-policy rows the mode and limits came from. A claim whose facts have moved is refused as
+state-changed, re-read and re-judged, and the change is normally what then cancels or holds the delivery.
+Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.md`.
+
 ## Immediate next actions
 
 1. P1-01/#2 PR #26 is open; do not auto-merge.

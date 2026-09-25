@@ -1,16 +1,17 @@
 /**
- * The live facts a delivery decision rests on, read at send time.
+ * The live channel facts a delivery decision rests on, derived from the state the claim will bind.
  *
- * Everything here is deliberately re-read rather than carried from when the job was scheduled. The delay
- * is where a conversation changes, so an automation policy edited during it, a window that closed, or a
- * provider deadline that has since passed must all be visible to the coordinator — which is the only layer
- * allowed to act on them.
+ * These used to be read from the database here, before the coordinator read anything. That was a second
+ * read of the same conversation and the same policy rows, a moment earlier — so the window a reply was
+ * judged against and the state its claim bound could describe two different instants, and nothing in
+ * between could tell. The coordinator now hands over the context it read, and everything below is derived
+ * from it: one read, one judgement, one guard.
  *
  * Window evaluation uses the Instagram adapter's own rules rather than a second copy of them, but through
  * the narrow `WindowInputs` shape: answering "may a reply still be sent?" must not require the credentials
  * needed to actually send one.
  */
-import type { DeliveryChannelState, PolicyInput, PolicyLimits } from "@omnichannel/application";
+import type { DeliveryChannelState, DeliveryChannelStatePort, DeliverySendContext, PolicyInput } from "@omnichannel/application";
 import {
   evaluateHumanAgentEligibility,
   evaluateStandardWindow,
@@ -18,14 +19,7 @@ import {
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
 import { createSuspensionStore, type DbClient } from "@omnichannel/db";
-import {
-  activeSuspension,
-  isReasonCode,
-  toBusinessProfileId,
-  toChannelAccountId,
-  toQuietHours,
-  toWorkspaceId,
-} from "@omnichannel/domain";
+import { activeSuspension, toBusinessProfileId, toChannelAccountId, toWorkspaceId } from "@omnichannel/domain";
 import type { DeliveryJob } from "@omnichannel/queue";
 
 /** Defaults used where an account has not recorded its own; the adapter owns the verified values. */
@@ -34,96 +28,74 @@ const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowM
   humanAgentWindowMs: 7 * 24 * 60 * 60 * 1000,
 };
 
-export interface ResolvedDeliveryPolicy {
-  readonly limits: PolicyLimits;
-  readonly channelState: DeliveryChannelState;
-  /** Present when a kill switch covers this send; the coordinator passes it to the policy engine. */
-  readonly outboundSuspended?: PolicyInput["outboundSuspended"];
-}
-
-export function createDeliveryPolicyResolver(db: DbClient, now: () => Date) {
+/**
+ * Whether a kill switch covers this send.
+ *
+ * Deliberately not part of the state the claim binds. Every other fact a delivery rests on is something
+ * *about the conversation*, read once and re-asserted as the send is taken; this one is an operator's
+ * decision about the system, and it is read for the run rather than for the conversation. It is still
+ * read here, with everything else the decision rests on, so the switch is honoured by the same gate that
+ * honours every other rule — a separate check closer to the wire is how a switch acquires a path around
+ * it.
+ */
+export function createSuspensionResolver(db: DbClient, now: () => Date) {
   const suspensions = createSuspensionStore(db);
 
-  return async function resolve(job: DeliveryJob): Promise<ResolvedDeliveryPolicy | undefined> {
+  return async function resolve(job: DeliveryJob): Promise<PolicyInput["outboundSuspended"] | undefined> {
     const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
     const conversation = await db.conversation.findUnique({
       where: { workspaceId_businessProfileId_id: { ...scope, id: job.conversationId } },
-      select: {
-        id: true,
-        channelAccountId: true,
-        lastInboundAt: true,
-        channelIdentity: { select: { externalUserId: true, channelAccount: { select: { status: true } } } },
-      },
+      select: { channelAccountId: true },
     });
     if (conversation === null) {
       return undefined;
     }
 
-    const policies = await db.automationPolicy.findMany({
-      where: { ...scope, OR: [{ channelAccountId: conversation.channelAccountId }, { channelAccountId: null }] },
-    });
-    // A channel-account override wins over the Business Profile default, exactly as for mode resolution.
-    const policy = policies.find((row) => row.channelAccountId === conversation.channelAccountId) ?? policies.find((row) => row.channelAccountId === null);
-    if (policy === undefined) {
-      // No policy row means the profile never opted into automation, so there is nothing to deliver.
-      return undefined;
-    }
-
-    const windowInputs: WindowInputs = {
-      ...DEFAULT_WINDOW,
-      connectionState: conversation.channelIdentity.channelAccount.status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
-      // Approval is a live capability, not a stored boolean to be trusted; unknown fails closed.
-      humanAgentApproval: "UNKNOWN",
-    };
-    const ctx = {
-      workspaceId: job.workspaceId,
-      channelAccountId: conversation.channelAccountId,
-      conversationId: conversation.id,
-      participantExternalId: conversation.channelIdentity.externalUserId,
-      ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
-      now: now(),
-    };
-
-    // Read here, with everything else the decision rests on, so the switch is honoured by the same gate
-    // that honours every other rule. A separate check closer to the wire is how a switch acquires a path
-    // around it.
-    //
     // The identifiers go through the domain's own constructors rather than a cast: these three decide
     // which switches cover this send, and a blank or swapped one would silently widen or narrow that
     // answer. A cast would make the type-checker agree to exactly the mistake worth catching.
-    const suspensionTarget = {
+    const target = {
       workspaceId: toWorkspaceId(scope.workspaceId),
       businessProfileId: toBusinessProfileId(scope.businessProfileId),
       channelAccountId: toChannelAccountId(conversation.channelAccountId),
     };
     const covering = await suspensions.loadCovering({ ...scope, channelAccountId: conversation.channelAccountId });
-    const suspended = activeSuspension(suspensionTarget, covering, ctx.now);
+    const suspended = activeSuspension(target, covering, now());
+    return suspended === undefined ? undefined : { scope: suspended.scope, reason: suspended.reason };
+  };
+}
 
-    const eligibility = evaluateHumanAgentEligibility(ctx, windowInputs);
-    const timing = instagramTimingPolicy();
-    return {
-      limits: {
-        confidenceThreshold: policy.confidenceThreshold,
-        // Narrowed with the domain's own guard: a code the engine does not know is not a gate, and
-        // treating an unrecognised string as one would block sends for a reason nobody can act on.
-        mandatoryReviewReasons: policy.mandatoryReviewReasons.filter(isReasonCode),
-        ...(policy.quietHoursTimeZone === null || policy.quietHoursStart === null || policy.quietHoursEnd === null
-          ? {}
-          : { quietHours: toQuietHours(policy.quietHoursTimeZone, policy.quietHoursStart, policy.quietHoursEnd) }),
-        afterWindow: { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
-      },
-      ...(suspended === undefined ? {} : { outboundSuspended: { scope: suspended.scope, reason: suspended.reason } }),
-      channelState: {
+export function createChannelStateResolver(now: () => Date): DeliveryChannelStatePort {
+  return {
+    stateFor(context: DeliverySendContext): DeliveryChannelState {
+      const windowInputs: WindowInputs = {
+        ...DEFAULT_WINDOW,
+        connectionState: context.account === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
+        // Approval is a live capability, not a stored boolean to be trusted; unknown fails closed.
+        humanAgentApproval: "UNKNOWN",
+      };
+      const ctx = {
+        workspaceId: context.workspaceId,
+        channelAccountId: context.channelAccountId,
+        conversationId: context.conversationId,
+        participantExternalId: context.recipientExternalId,
+        ...(context.lastInboundAt === undefined ? {} : { lastInboundAt: context.lastInboundAt }),
+        now: now(),
+      };
+
+      const eligibility = evaluateHumanAgentEligibility(ctx, windowInputs);
+      const timing = instagramTimingPolicy();
+      return {
         window: evaluateStandardWindow(ctx, windowInputs),
         humanAgent:
           eligibility.state === "ELIGIBLE"
             ? { state: "ELIGIBLE", expiresAt: eligibility.expiresAt }
             : { state: "UNAVAILABLE", reason: eligibility.state === "NOT_APPROVED" ? "NOT_APPROVED" : eligibility.state === "EXPIRED" ? "EXPIRED" : "UNKNOWN" },
         // Measured from the customer's own message, which is where the provider's clock starts.
-        ...(conversation.lastInboundAt === null
+        ...(context.lastInboundAt === undefined
           ? {}
-          : { dispatchDeadline: new Date(conversation.lastInboundAt.getTime() + timing.automatedDispatchTargetMs) }),
-      },
-    };
+          : { dispatchDeadline: new Date(context.lastInboundAt.getTime() + timing.automatedDispatchTargetMs) }),
+      };
+    },
   };
 }

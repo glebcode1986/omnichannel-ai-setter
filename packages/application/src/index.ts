@@ -115,11 +115,13 @@ export type {
   ClaimOutcome,
   DeliveryAuthority,
   DeliveryChannelState,
+  DeliveryChannelStatePort,
   DeliveryLogPort,
   DeliverySendCommand,
   DeliverySendContext,
   DeliverySendPort,
   DeliverySettlement,
+  DeliveryStateGuard,
   DeliveryStore,
   HeldStatus,
 } from "./delivery/ports";

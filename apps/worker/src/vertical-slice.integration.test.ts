@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDraftDisposition } from "./draft-disposition";
 import { createDeliveryHandler } from "./delivery-handler";
-import { createDeliveryPolicyResolver } from "./delivery-policy";
+import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 import { createChannelAccount } from "@omnichannel/db";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, createBusinessProfile, createWorkspaceWithOwner } from "@omnichannel/db";
@@ -121,12 +121,23 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
       engine: {
         store: createDeliveryStore(infra.db),
         sender: { send: () => Promise.resolve(result) },
+        channel: createChannelStateResolver(() => NOW),
         log: infra.logger,
         now: () => NOW,
       },
-      conversationPolicy: createDeliveryPolicyResolver(infra.db, () => NOW),
+      outboundSuspension: () => Promise.resolve(undefined),
       logger: infra.logger,
     });
+
+  /** Reads the live state and claims against it, which is the only way a claim can be made. */
+  const claimFresh = async (operationId: string, claimedAt: Date = NOW) => {
+    const store = createDeliveryStore(infra.db);
+    const context = await store.loadForSend(operationId);
+    if (context === undefined) {
+      throw new Error(`no delivery context for ${operationId}`);
+    }
+    return store.claim(context, claimedAt);
+  };
 
   const deliveryJob = (operationId: string, forConversationId = conversationId) => ({
     schemaVersion: 1 as const,
@@ -225,7 +236,7 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
     expect(attempt).toMatchObject({ status: "SEND_RESULT" });
     expect(await statusOf(operationId)).toBe("HELD_AMBIGUOUS");
     // Never claimable again: the customer may already have the reply.
-    expect(await createDeliveryStore(infra.db).claim(operationId, NOW)).toMatchObject({ kind: "NOT_CLAIMABLE" });
+    expect(await claimFresh(operationId)).toMatchObject({ kind: "NOT_CLAIMABLE" });
   }, 180_000);
 
   it("holds a definite rejection with the provider's own code", async () => {
@@ -254,10 +265,11 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
               return Promise.resolve({ outcome: "ACCEPTED", platformMessageId: `mid-race-${String(sends)}` });
             },
           },
+          channel: createChannelStateResolver(() => NOW),
           log: infra.logger,
           now: () => NOW,
         },
-        conversationPolicy: createDeliveryPolicyResolver(infra.db, () => NOW),
+        outboundSuspension: () => Promise.resolve(undefined),
         logger: infra.logger,
       });
 
@@ -272,7 +284,7 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
     const own = await freshConversation();
     const draftId = await draft(own);
     const { operationId } = await scheduleAutomatedDelivery(infra.db, { ...scope, draftId, correlationId: "corr-stalled", delayMs: 1_000, now: NOW });
-    await createDeliveryStore(infra.db).claim(operationId, new Date(NOW.getTime() - 10 * 60_000));
+    await claimFresh(operationId, new Date(NOW.getTime() - 10 * 60_000));
 
     const recovered = await recoverStaleSendingDeliveries(infra.db, 5 * 60_000, NOW);
 

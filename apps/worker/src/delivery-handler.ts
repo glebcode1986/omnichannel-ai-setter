@@ -9,39 +9,30 @@
  * unknown outcome, and an unknown outcome is quarantined rather than retried (ADR-012). So the coordinator's
  * own settlement is always what reaches the database, and the queue is only ever told what already happened.
  */
-import { coordinateDelivery, type DeliveryChannelState, type DeliveryCommand, type DeliveryDependencies, type PolicyLimits } from "@omnichannel/application";
+import { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies } from "@omnichannel/application";
 import type { Logger } from "@omnichannel/observability";
 import type { DeliveryAttemptResult, DeliveryJob } from "@omnichannel/queue";
 
 export interface DeliveryHandlerDependencies {
   readonly engine: DeliveryDependencies;
-  /** Resolves the automation limits and the live channel state for one conversation, at send time. */
-  readonly conversationPolicy: (job: DeliveryJob) => Promise<
-    | {
-        readonly limits: PolicyLimits;
-        readonly channelState: DeliveryChannelState;
-        /** Present when a kill switch covers this send; carried straight through to the policy engine. */
-        readonly outboundSuspended?: DeliveryCommand["outboundSuspended"];
-      }
-    | undefined
-  >;
+  /**
+   * Whether a kill switch covers this send. Read per run rather than with the conversation's state: it is
+   * an operator's decision about the system, not a fact about the conversation the claim binds.
+   */
+  readonly outboundSuspension: (job: DeliveryJob) => Promise<DeliveryCommand["outboundSuspended"] | undefined>;
   readonly logger: Logger;
 }
 
 export function createDeliveryHandler(dependencies: DeliveryHandlerDependencies) {
   return async function deliver(job: DeliveryJob): Promise<DeliveryAttemptResult> {
-    const policy = await dependencies.conversationPolicy(job);
-    if (policy === undefined) {
-      // No conversation, no policy, nothing to send. Retrying cannot conjure one.
-      return { status: "NOT_CLAIMED", retryable: false, reason: "the conversation is no longer deliverable" };
-    }
-
+    // No limits and no channel facts are read here any more. They come out of the coordinator's own read,
+    // so what a send is judged against and what its claim binds cannot describe two different instants.
+    // The kill switch is the exception, and deliberately: it is not a fact about this conversation.
+    const suspended = await dependencies.outboundSuspension(job);
     const outcome = await coordinateDelivery(dependencies.engine, {
       operationId: job.operationId,
       correlationId: job.correlationId,
-      limits: policy.limits,
-      channelState: policy.channelState,
-      ...(policy.outboundSuspended === undefined ? {} : { outboundSuspended: policy.outboundSuspended }),
+      ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
       // A queue job is automation by construction: there is no acting human to name here, and the type
       // makes claiming one impossible rather than merely wrong.
       authority: { kind: "AUTOMATED" },
