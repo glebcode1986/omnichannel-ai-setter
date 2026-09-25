@@ -2,6 +2,23 @@
 
 > Stable handoff page for the human programmer supervising Claude. Always read this file together with the linked task contract and GitHub issue. Chat history is not the execution source of truth.
 
+## Material state — 2026-09-24
+
+The sections below are the original launch plan and are kept as written. Where the stack actually stands:
+
+Phase 1 and Phase 2 are implemented as one stacked chain of unmerged PRs, `#26 -> ... -> #51 -> #52 -> #63
+-> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`, each branch based on its parent and each
+awaiting independent review in dependency order. Nothing is merged to `main`.
+
+The earliest unresolved review gate is **PR #68 / P2-06**, where independent review found that the send
+claim was conditional only on the delivery row and not on the state the pre-send revalidation was made
+against. That is corrected on #68: the claim now re-asserts the judged facts in the same statement, and a
+claim overtaken by a newer inbound, a takeover, a policy edit or a draft rewrite is refused rather than
+sent. `docs/specs/DELIVERY_COORDINATOR.md` records the rule.
+
+#69–#72 stay unchanged until the corrected #68 head is independently accepted; only the accepted
+correction is then propagated downstream with ordinary merges.
+
 ## Current task — RUNNING / FIRST
 
 ### P1-01 — Issue #2: Scaffold pnpm workspace and baseline tooling

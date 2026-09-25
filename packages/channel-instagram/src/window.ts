@@ -12,6 +12,17 @@ import type { ConversationPolicyContext, WindowDecision } from "@omnichannel/cha
 import type { ResolvedInstagramConfig } from "./config";
 
 /**
+ * Only the facts a window decision actually rests on. Narrower than the full adapter config on purpose:
+ * eligibility is a question about time and account state, so answering it must not require credentials or
+ * an HTTP port — a caller that only wants to know whether a reply is still permitted should not have to
+ * hold the means to send one.
+ */
+export type WindowInputs = Pick<
+  ResolvedInstagramConfig,
+  "connectionState" | "standardWindowMs" | "humanAgentApproval" | "humanAgentWindowMs"
+>;
+
+/**
  * Human Agent eligibility is deliberately NOT a WindowDecision: it must be impossible to pass it where an
  * automated-send decision is expected.
  */
@@ -21,7 +32,7 @@ export type HumanAgentEligibility =
   | { readonly state: "NOT_APPROVED"; readonly reason: string }
   | { readonly state: "UNKNOWN"; readonly reason: string };
 
-export function evaluateStandardWindow(ctx: ConversationPolicyContext, config: ResolvedInstagramConfig): WindowDecision {
+export function evaluateStandardWindow(ctx: ConversationPolicyContext, config: WindowInputs): WindowDecision {
   if (config.connectionState !== "CONNECTED") {
     // Fail closed: we cannot know the platform state through a broken connection.
     return { state: "UNKNOWN", reason: "channel account is not connected" };
@@ -36,7 +47,7 @@ export function evaluateStandardWindow(ctx: ConversationPolicyContext, config: R
     : { state: "NOT_ELIGIBLE", reason: "standard messaging window closed" };
 }
 
-export function evaluateHumanAgentEligibility(ctx: ConversationPolicyContext, config: ResolvedInstagramConfig): HumanAgentEligibility {
+export function evaluateHumanAgentEligibility(ctx: ConversationPolicyContext, config: WindowInputs): HumanAgentEligibility {
   if (config.connectionState !== "CONNECTED") {
     return { state: "UNKNOWN", reason: "channel account is not connected" };
   }

@@ -13,6 +13,7 @@
   "dependencies": {
     "@omnichannel/ai": "workspace:*",
     "@omnichannel/application": "workspace:*",
+    "@omnichannel/channel-instagram": "workspace:*",
     "@omnichannel/db": "workspace:*",
     "@omnichannel/domain": "workspace:*",
     "@omnichannel/env": "workspace:*",

@@ -7,6 +7,7 @@ import {
   createIngestionStore,
   createKnowledgeRetriever,
   createStyleProfileStore,
+  createDeliveryStore,
   createStyleRetriever,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
@@ -19,6 +20,8 @@ import { loadWorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
+import { createDeliveryHandler } from "./delivery-handler";
+import { createChannelStateResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -95,7 +98,23 @@ function main(): void {
         platformStyleFallback: resolveStyleProfile([{ persona: env.AI_PERSONA }]),
         logger,
       });
-      const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft) });
+      const deliver = createDeliveryHandler({
+        engine: {
+          store: createDeliveryStore(db),
+          sender: {
+            // The adapter registry arrives with the vertical slice (#16). Until an account's credentials
+            // can be resolved here, delivery refuses rather than pretending: a rejection that names the
+            // reason is safe, and an accepted send that never happened would not be.
+            send: () =>
+              Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is registered for delivery" }),
+          },
+          channel: createChannelStateResolver(() => new Date()),
+          log: logger,
+          now: () => new Date(),
+        },
+        logger,
+      });
+      const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft, deliver) });
       const producer = createQueueProducer({ connection, logger });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
