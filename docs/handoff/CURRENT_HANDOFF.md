@@ -1,14 +1,14 @@
 # Current Handoff
 
-**Last updated:** 2026-09-21 evening  
+**Last updated:** 2026-09-26  
 **Repository:** `glebcode1986/omnichannel-ai-setter`  
-**Implementation:** Stage B complete; Stage C reliability implemented  
-**Independent review position:** PR #66 / P2-04 is CHANGES_REQUESTED at `061b7af36620713c00324a8982667f2477bb3e35`
-**Active now:** Claude has a focused P2-04 language-wiring fix directive; hourly Astra/Claude watch is active
-**Stage D:** paused
+**Implementation:** Stage B complete in code; Stage C reliability complete in code  
+**Independent review:** accepted through PR #68 / P2-06; current blocker is PR #69 / P2-07  
+**Active now:** Claude has a fresh P2-07 human-approved-delivery directive; Astra watcher is armed for the next corrected #69 HEAD  
+**Stage D:** paused until the Stage B/C review train clears
 
-> **NEW CHAT / NEW AGENT: START HERE.**  
-> GitHub is canonical project memory. Fetch live PR HEADs before acting.
+> **NEW CHAT / NEW AGENT: START HERE.**
+> GitHub is canonical project memory. Fetch live PR HEADs and latest review markers before acting.
 
 ## Read order
 
@@ -21,147 +21,124 @@
 7. current PR / issue / task contract
 8. relevant specs / ADRs
 
-## Review progress
+## Independent review progress
 
-Accepted in current dependency chain:
-- PR #49 — PASS
-- PR #50 — PASS
-- PR #51 — PASS at `b6e17347a91b4ce4552ce2251a3f5af05df67dfc`
-- PR #52 — PASS at `182150bc10a01eba0b9eaa57eb44c036b8e225d8`
-- PR #63 — PASS at `cd04a9972d25f8cf20edd57c5753c325130ee4de`
-- PR #64 — PASS at `f0dee940a1baf0f3c8d8615ef2090587bf2def01`
+Current accepted chain includes:
 
-### What #64 fixed before PASS
-Astra found two credential-lifecycle problems:
-- disconnect was not atomic with credential destruction;
-- refresh could resurrect a revoked token.
+- PR #51 / P1-04 — accepted failure-safety, schedule-range and later shutdown hardening
+- PR #52 / P1-05 — accepted secret-safe verification logging
+- PR #63 / P2-01 — accepted Instagram adapter + scope/Human-Agent binding
+- PR #64 / P2-02 — accepted credential lifecycle/reconnect safety
+- PR #65 / P2-03 — accepted AI draft repair-stage UNAVAILABLE/no-write behavior
+- PR #66 / P2-04 — accepted retrieval/style-language production wiring; current propagated HEAD `9976cfc86ea17410e8058d1b39b7a81b5feedea3`
+- PR #67 / P2-05 — accepted deterministic policy / stale Human Agent eligibility guard; current HEAD `d38dbd4948ad75e01571d4f274e5308b4d46f19d`
+- PR #68 / P2-06 — accepted delivery coordinator serialization/claim correction at `fb35665209b90c82bc10f3068450111e75f83299`
 
-Claude made disconnect transactional and made refresh fail closed after revocation.
+### What #68 fixed before PASS
 
-Astra then found a reconnect regression: the account could become CONNECTED while its credential stayed revoked. Claude separated human reauthorization/restoration from ordinary rotation, protected against stale refresh, and Astra accepted #64.
+Astra found several progressively deeper send-authority races:
 
-## PR #65 / P2-03 — PASS
+1. revalidation state could change after read but before delivery-row claim;
+2. a larger conditional WHERE still did not serialize concurrent writers under READ COMMITTED;
+3. an absent automation-policy row could be inserted as a phantom while a claim was in progress.
 
-Previous reviewed HEAD:
-`af2ba698819532ff860e84ff98ad648b5ece36bc`
+Final accepted design:
+- claim shares real row locks with inbound/takeover/draft/account/existing-policy writers;
+- Business Profile is locked FOR UPDATE to serialize creation of previously absent policy rows through FK key-share conflict;
+- policy/channel facts come from the coordinator's single guarded read;
+- atomic claim reasserts the exact state used for revalidation.
 
-Astra found that:
-1. first model output is malformed;
-2. repair attempt hits transient provider unavailability;
-3. code incorrectly persisted a permanent `HELD / INVALID_MODEL_OUTPUT` draft;
-4. generation idempotency then prevented a later retry from replacing it.
+This is independently accepted at:
+`ASTRA_REVIEW: PASS head=fb35665209b90c82bc10f3068450111e75f83299`
 
-Claude fixed the owning PR.
+## Current blocker — PR #69 / P2-07
 
-Current exact HEAD:
-`ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
+Current live HEAD:
+`d8b56c91d710a435e7b2614f69fcd39297357f68`
 
-Fix:
-- repair returns a discriminated outcome;
-- repair-stage provider outage returns `UNAVAILABLE`;
-- no draft is written;
-- idempotency key remains available for a later queue retry;
-- bounded one-repair behavior remains intact;
-- malformed/refusal/valid repaired outcomes remain distinct.
+Astra verdict:
+`ASTRA_REVIEW: CHANGES_REQUESTED head=d8b56c91d710a435e7b2614f69fcd39297357f68`
 
-Claude verification reported:
-- `pnpm verify` 580 passed;
-- `pnpm test:e2e` 28 passed;
-- migration drift 0;
-- lint/boundaries clean.
+### Blocking defect
 
-Astra independently accepted this exact SHA:
+Human Review approval is not durable delivery authority.
 
-`ASTRA_REVIEW: PASS head=ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`
+Current flow:
+- `resolveReview` receives a human actor + `reviewMode`;
+- it schedules an ordinary delivery without persisting that authority/intent;
+- it separately sets `HUMAN_ACTIVE`;
+- worker later constructs every queued send as `authority: AUTOMATED`.
 
-Claude propagated the accepted parent through #66 -> #72 and published fresh exact heads.
+Consequences:
+- a human-approved DRAFT-mode reply can be blocked by its own takeover;
+- HUMAN_AGENT review cannot reach the adapter as a deliberate human action;
+- schedule vs takeover is race-dependent;
+- a reviewed send can be misclassified as automation.
 
-## Active commands posted
+### Required correction now assigned to Claude
 
-On PR #65:
+The P2-07 fix directive on PR #69 requires:
 
-### Astra
-Re-review exact HEAD `ed3a7b0f1ed56ae36bce9f903db47fd7202aba12`.
+- durable delivery authority: `AUTOMATED | HUMAN_APPROVED`;
+- human approver user id + approval timestamp;
+- durable normal-vs-HUMAN_AGENT reviewed transport intent;
+- only authenticated USER may create HUMAN_APPROVED authority;
+- review scheduling + HUMAN_ACTIVE takeover committed atomically;
+- worker consumes persisted authority instead of inventing AUTOMATED;
+- authority/intent bound to the final claim/revalidation guard;
+- HUMAN_AGENT still requires fresh eligibility immediately before dispatch;
+- new inbound/newer human activity/policy/account/window changes remain fail-closed;
+- sent-message/audit provenance reflects reviewed-human vs automated path;
+- real DB + queue + coordinator E2E regressions, not only schedule stubs.
 
-If PASS, wait for Claude to propagate accepted parent, then continue:
-#66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72.
+Claude must publish:
 
-Do not review stale downstream HEADs before propagation.
+`CLAUDE_READY_FOR_ASTRA head=<new-full-sha> task=P2-07`
 
-### Claude
-Stand by on the #65 verdict.
+Astra watcher is explicitly armed to ignore the rejected old SHA and re-review only the first corrected exact #69 HEAD.
 
-- PASS -> normal-merge accepted #65 through #66 -> #72, verify each, publish fresh exact markers.
-- CHANGES_REQUESTED -> fix #65 itself first; do not propagate rejected code.
+## Current downstream heads
 
-No rebase, no force-push, no merge to main, no Stage D yet.
+These descendants contain the rejected/current #69 parent and are not independently cleared yet:
 
-## Current propagated downstream heads
+- #70 / P2-08: `41a926047e10985e7e8a4ebbfd73f8094b8b253a`
+- #71 / P2-09: `b0a606917a28b2702b88c061c22bfec96f6effdd`
+- #72 / P3-03: `1f90fe1a532d88b11d72c592ff2288a81af08ba5`
 
-All of these now contain the accepted #65 parent:
-
-- #66 `061b7af36620713c00324a8982667f2477bb3e35`
-- #67 `f3151481652593c50cf484cf6325f159b5d8197b`
-- #68 `4ae263b0270bd56663557332c15d5e0a87950524`
-- #69 `26490142964ac737df0540f7154aa2d7af27b2d9`
-- #70 `4dc3367a510c5368f64ec51bb000d419242999fb`
-- #71 `5710098ab098769a0618e8c164d5bd2fb3e7d616`
-- #72 `b7f7411da74aab6c8966790650f2abf4eda17c59`
+After #69 PASS, normal-merge the accepted correction through #70 -> #71 -> #72, verify each exact HEAD, then continue independent review in order.
 
 ## Implementation status
 
 ### Stage B implemented
-Instagram transport/onboarding, AI draft engine, factual/style retrieval, deterministic policy, delivery coordinator, human handoff/Review, eval harness, Instagram E2E.
+Instagram transport/onboarding, AI draft engine, Knowledge/Style retrieval, deterministic policy, delivery coordinator, Human Handoff/Review, evaluation harness, Instagram vertical slice E2E.
 
 ### Stage C implemented
 Reliability/health, scoped kill switches, backpressure, reconciliation, incident state and safe recovery.
 
-Latest propagated Stage C verification before current #65 fix reported 910 passing tests on #72. This is implementation evidence, not independent acceptance of the whole stack.
+The latest #72 propagated implementation passed its local/full verification before the current #69 review blocker, but Stage C is not independently review-cleared until its parent chain is accepted.
 
-## Remaining path after review-safe Stage B/C
+## Remaining Commercial Beta path
 
-Stage D — Design Partner UI  
-Stage E — WhatsApp  
-Stage F — privacy/security/export/retention/deletion  
-Stage G — billing/entitlements  
-Stage H — Admin Operations  
-Stage I — Launch Readiness / staged Commercial Beta
+After review-safe Stage B/C:
+
+- Stage D — Design Partner UI
+- Stage E — WhatsApp
+- Stage F — privacy/security/export/retention/deletion
+- Stage G — billing/entitlements
+- Stage H — Admin Operations
+- Stage I — Launch Readiness / staged Commercial Beta
 
 ## Hard invariants
 
-- Workspace + Business Profile isolation.
-- Human activity wins over AI.
-- No stale send.
-- No blind retry after ambiguous write.
-- No early delivery.
-- Unknown invariants fail closed.
-- Transient provider outage must remain retryable, not be converted into permanent business state.
-- Provider/webhook/job idempotency.
-- Model output advisory; application policy authoritative.
-- Secrets never enter prompts, client output, normal logs or plaintext audit.
-
-
-## Current blocker — PR #66 / P2-04
-
-Astra reviewed exact HEAD:
-`061b7af36620713c00324a8982667f2477bb3e35`
-
-Verdict:
-`ASTRA_REVIEW: CHANGES_REQUESTED head=061b7af36620713c00324a8982667f2477bb3e35`
-
-Blocking gap:
-- SQL/db retrieval already supports optional `RetrievalQuery.language`;
-- canonical P2-04 contract requires Style language filtering with requested-language + NULL fallback;
-- production `DraftRetrievalQuery` does not carry language;
-- worker calls retrieval without language, so live multilingual Style retrieval effectively runs with `language=undefined` and can return the wrong-language examples.
-
-Required fix is posted on PR #66:
-- carry normalized BCP-47-compatible language from the authoritative resolved StyleProfile / approved source through application -> worker -> retrieval;
-- requested language keeps matching + NULL examples and excludes other explicit languages;
-- no language preserves the full eligible Style corpus;
-- Knowledge behavior and tenant/BP boundaries remain unchanged;
-- add production-path regressions proving the language value is actually forwarded end-to-end.
-
-After Claude publishes a new exact P2-04 HEAD, Astra re-reviews #66 first. Only after PASS should the correction propagate through #67 -> #72.
-
-An hourly condition watch is active to inspect the repository, issue the next Claude/Astra directive when state changes, update canonical handoff/queue, and notify the user only on meaningful changes.
+- Workspace + Business Profile isolation
+- human activity always wins
+- explicit human action is required for HUMAN_APPROVED/HUMAN_AGENT
+- no stale send
+- no blind retry after ambiguous external write
+- no early delivery
+- unknown invariants fail closed
+- transient provider failure remains retryable and does not become permanent customer state
+- provider/webhook/job idempotency
+- queues are execution mechanisms, not sole durable intent
+- model output is advisory; application policy authorizes
+- secrets never enter prompts, client output, normal logs or plaintext audit
