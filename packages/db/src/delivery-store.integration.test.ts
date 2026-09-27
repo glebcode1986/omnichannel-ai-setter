@@ -305,7 +305,6 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     const command = (operationId: string): DeliveryCommand => ({
       operationId,
       correlationId: `corr_${operationId}`,
-      authority: { kind: "AUTOMATED" },
     });
 
     /** An open window, so nothing here turns on the channel's own clock. */
@@ -519,6 +518,17 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         change: () =>
           database.db.automationPolicy.create({ data: { ...scope(), channelAccountId: null, mode: "OFF", mandatoryReviewReasons: [] } }),
       },
+      {
+        // Nothing rewrites an authority today — it is granted once, when the delivery is scheduled. The
+        // claim binds it anyway, so a send cannot outlive the approval it names whatever a later feature
+        // decides it may edit.
+        what: "the approval it names being rewritten",
+        change: () =>
+          database.db.deliveryJobRecord.updateMany({
+            where: { ...scope() },
+            data: { authority: "HUMAN_APPROVED", approvedActorKind: "SYSTEM", approvedAt: NOW, approvedReviewMode: "NORMAL" },
+          }),
+      },
     ];
 
     for (const { what, change } of overtakenBy) {
@@ -567,6 +577,37 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
 
       // Claiming here would put the same reply in front of the customer twice, and nothing can take the
       // first one back (ADR-012).
+      expect(refused).toEqual({ kind: "STATE_CHANGED" });
+      expect(await statusOf(operationId)).toBe("SCHEDULED");
+    }, 120_000);
+
+    it("refuses a claim when the conversation changed hands without changing state", async () => {
+      const { operationId } = await sendable();
+      // Already owned by someone when the state is read, so the state itself does not move below — only
+      // who holds it. Whether an approval may send now depends on exactly that, so it has to be bound.
+      const holder = {
+        takeoverState: "HUMAN_ACTIVE",
+        takeoverReason: "HUMAN_SENT_FROM_INBOX",
+        humanTakeoverAt: NOW,
+        takeoverPausedUntil: null,
+        takeoverActorUserId: null,
+      } as const;
+      await database.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+        data: { ...holder, takeoverActorKind: "SYSTEM" },
+      });
+      const store = createDeliveryStore(database.db);
+      const stale = await store.loadForSend(operationId);
+      if (stale === undefined) {
+        throw new Error("no delivery context");
+      }
+      await database.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+        data: { ...holder, takeoverActorKind: "NATIVE_APP" },
+      });
+
+      const refused = await store.claim(stale, NOW);
+
       expect(refused).toEqual({ kind: "STATE_CHANGED" });
       expect(await statusOf(operationId)).toBe("SCHEDULED");
     }, 120_000);

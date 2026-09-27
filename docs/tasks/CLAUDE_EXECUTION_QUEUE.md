@@ -10,7 +10,12 @@ Phase 1 and Phase 2 are implemented as one stacked chain of unmerged PRs, `#26 -
 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`, each branch based on its parent and each
 awaiting independent review in dependency order. Nothing is merged to `main`.
 
-The earliest unresolved review gate is **PR #68 / P2-06**, where independent review found that the send
+The earliest unresolved review gate is **PR #69 / P2-07**, where independent review found that the review
+queue scheduled a delivery without the authority the person had just granted, so every reviewed reply was
+executed as automation. The authority is now persisted with the delivery and read from there; see
+`docs/specs/HUMAN_HANDOFF.md`. #68 / P2-06 was accepted at `fb35665` and propagated.
+
+Previously the earliest gate was **PR #68 / P2-06**, where independent review found that the send
 claim was conditional only on the delivery row and not on the state the pre-send revalidation was made
 against. That is corrected on #68: the claim now re-asserts the judged facts in the same statement, and a
 claim overtaken by a newer inbound, a takeover, a policy edit or a draft rewrite is refused rather than

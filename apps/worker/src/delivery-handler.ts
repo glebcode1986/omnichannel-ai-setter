@@ -20,14 +20,12 @@ export interface DeliveryHandlerDependencies {
 
 export function createDeliveryHandler(dependencies: DeliveryHandlerDependencies) {
   return async function deliver(job: DeliveryJob): Promise<DeliveryAttemptResult> {
-    // No limits and no channel facts are read here any more. They come out of the coordinator's own read,
-    // so what a send is judged against and what its claim binds cannot describe two different instants.
+    // No limits, no channel facts and no authority are supplied here. They come out of the coordinator's
+    // own read, so what a send is judged against and what its claim binds cannot describe two different
+    // instants — and a queue job cannot name an authority it was never granted, nor lose one that was.
     const outcome = await coordinateDelivery(dependencies.engine, {
       operationId: job.operationId,
       correlationId: job.correlationId,
-      // A queue job is automation by construction: there is no acting human to name here, and the type
-      // makes claiming one impossible rather than merely wrong.
-      authority: { kind: "AUTOMATED" },
     });
 
     dependencies.logger.info("worker.delivery", {

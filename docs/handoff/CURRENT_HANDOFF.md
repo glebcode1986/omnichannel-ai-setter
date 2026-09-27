@@ -112,6 +112,16 @@ Nothing is merged yet.
 15. P2-09 (#16), PR #71: the Instagram vertical slice.
 16. P3-03 (#56), PR #72: reliability controls, health, kill switch and reconciliation. ADR-017 is **Rejected**: an unmatched echo stays native human activity, and an unresolved ambiguous send is quarantined and put in front of a person rather than retried blind.
 
+**A reviewed reply carries the authority the person granted (#14 / PR #69).** Approving or editing a draft
+persists *who* approved it, *when*, and *which send* they authorized on the delivery row, and the
+coordinator reads it from there with everything else it judges. The worker can no longer construct an
+authority, which is how a human's approval was silently downgraded to automation — the reply then met the
+gates that exist to ask for a human, and the Human Agent transport path was unreachable. Scheduling the
+send and taking the conversation are now one write, so there is no moment in which an approved delivery
+exists with nobody owning the conversation. The policy engine judges "may this be sent on this authority":
+an approval answers the gates that ask for a human and none of those about what is possible or permitted,
+and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
+
 **Delivery send authority is bound to the claim (#13 / PR #68).** The final pre-send revalidation is no
 longer separated from the claim by an unguarded gap: the claim's own statement re-asserts every fact the
 revalidation rested on — reply cycle, conversation state and version, draft, account health and the

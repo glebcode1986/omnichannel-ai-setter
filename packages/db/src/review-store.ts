@@ -11,6 +11,8 @@
 import type { ReviewClaim, ReviewStore, StyleLearningStore } from "@omnichannel/application";
 import { randomUUID } from "node:crypto";
 
+import type { Actor, SendAuthority } from "@omnichannel/domain";
+
 import type { DbClient } from "./client";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
@@ -42,7 +44,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
       });
     },
 
-    async scheduleDelivery(draftId, at) {
+    async scheduleApprovedDelivery({ draftId, conversationId, authority, at }) {
       const operationId = randomUUID();
       const draft = await db.aiDraft.findUniqueOrThrow({
         where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } },
@@ -53,6 +55,10 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         // rather than creating a second logical send.
         return { operationId: draft.deliveryJob.operationId };
       }
+      // One transaction for the send and the ownership it creates. Separately, a worker could pick the job
+      // up after the delivery row existed and before anyone owned the conversation — and judge a
+      // deliberate human action as ordinary automation, on the standard transport, which is exactly the
+      // bypass ADR-014 forbids. Neither half is observable without the other.
       await db.$transaction(async (tx) => {
         await tx.deliveryJobRecord.create({
           data: {
@@ -64,9 +70,14 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
             // A human has already decided, so there is no human-like delay left to simulate.
             scheduledFor: at,
             selectedDelayMs: 0,
+            ...authorityFieldsFor(authority),
           },
         });
         await tx.aiDraft.update({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, data: { status: "SCHEDULED" } });
+        await tx.conversation.update({
+          where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+          data: takeoverFieldsFor(authority, at),
+        });
       });
       return { operationId };
     },
@@ -82,16 +93,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
       await db.conversation.update({
         where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
         data: keepOwnership
-          ? {
-              takeoverState: "HUMAN_ACTIVE",
-              takeoverReason: "HUMAN_SENT_FROM_INBOX",
-              takeoverReviewMode: null,
-              humanTakeoverAt: at,
-              takeoverActorKind: actor.kind,
-              ...(actor.kind === "USER" ? { takeoverActorUserId: actor.userId } : { takeoverActorUserId: null }),
-              // A fresh human action clears any earlier auto-resume deadline rather than inheriting it.
-              takeoverPausedUntil: null,
-            }
+          ? humanOwnership(actor, at)
           : {
               takeoverState: "NONE",
               takeoverReason: null,
@@ -104,6 +106,45 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
       });
     },
   };
+}
+
+/** The conversation belongs to this person from now on, with any earlier auto-resume deadline cleared. */
+function humanOwnership(actor: Actor, at: Date) {
+  return {
+    takeoverState: "HUMAN_ACTIVE",
+    takeoverReason: "HUMAN_SENT_FROM_INBOX",
+    takeoverReviewMode: null,
+    humanTakeoverAt: at,
+    takeoverActorKind: actor.kind,
+    ...(actor.kind === "USER" ? { takeoverActorUserId: actor.userId } : { takeoverActorUserId: null }),
+    // A fresh human action clears any earlier auto-resume deadline rather than inheriting it.
+    takeoverPausedUntil: null,
+  } as const;
+}
+
+function takeoverFieldsFor(authority: SendAuthority, at: Date) {
+  // Approving a reply is taking the conversation: the person who just spoke for the business owns it.
+  return authority.kind === "HUMAN_APPROVED" ? humanOwnership(authority.actor, at) : humanOwnership({ kind: "SYSTEM" }, at);
+}
+
+/**
+ * The approval, written out in full or not at all.
+ *
+ * The table's own CHECK constraint says the same thing, which is deliberate: an authority half-recorded
+ * here would be one the send path has to guess at, and a guess is how an automated send acquires a
+ * person's name.
+ */
+function authorityFieldsFor(authority: SendAuthority) {
+  if (authority.kind !== "HUMAN_APPROVED") {
+    return { authority: "AUTOMATED" } as const;
+  }
+  return {
+    authority: "HUMAN_APPROVED",
+    approvedActorKind: authority.actor.kind,
+    approvedByUserId: authority.actor.kind === "USER" ? authority.actor.userId : null,
+    approvedAt: authority.approvedAt,
+    approvedReviewMode: authority.reviewMode,
+  } as const;
 }
 
 /**

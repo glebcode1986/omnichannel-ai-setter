@@ -37,15 +37,18 @@ import type {
   DeliveryStore,
   PolicyLimits,
 } from "@omnichannel/application";
-import { isReasonCode, toQuietHours, type DeliveryJobStatus } from "@omnichannel/domain";
+import { isReasonCode, toQuietHours, toUserId, type Actor, type DeliveryJobStatus, type TakeoverReason } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
 import type {
+  ActorKind,
   AiMode,
   ChannelAccountStatus,
   ChannelType,
   ConversationStatus,
+  DeliveryAuthorityKind,
   InstagramAfterWindowPolicy,
+  ReviewMode,
   TakeoverState,
   WhatsAppAfterWindowPolicy,
 } from "./generated/prisma/enums";
@@ -69,6 +72,14 @@ interface SendStateGuard {
   readonly conversationStateVersion: number;
   readonly conversationStatus: ConversationStatus;
   readonly takeoverState: TakeoverState;
+  /**
+   * Who owns the conversation, not merely that somebody does.
+   *
+   * Whether a human-active takeover blocks this send depends on whether it is the one that authorized it,
+   * so a takeover changing hands between the read and the claim changes the decision.
+   */
+  readonly takeoverActorKind: ActorKind | null;
+  readonly takeoverActorUserId: string | null;
   readonly aiEnabled: boolean;
   readonly modeOverride: AiMode | null;
   readonly accountStatus: ChannelAccountStatus;
@@ -85,6 +96,18 @@ interface SendStateGuard {
    */
   readonly accountPolicyAt: Date | null;
   readonly defaultPolicyAt: Date | null;
+  /**
+   * The approval this send was judged under, re-asserted like everything else.
+   *
+   * Nothing rewrites these today — an authority is granted once, when the delivery is scheduled. Binding
+   * them anyway costs one predicate and means a send cannot outlive the approval it names, whatever a
+   * later feature decides it may edit.
+   */
+  readonly authority: DeliveryAuthorityKind;
+  readonly approvedActorKind: ActorKind | null;
+  readonly approvedByUserId: string | null;
+  readonly approvedAt: Date | null;
+  readonly approvedReviewMode: ReviewMode | null;
 }
 
 const sealGuard = (guard: SendStateGuard): DeliveryStateGuard => guard as unknown as DeliveryStateGuard;
@@ -103,6 +126,11 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           attemptCount: true,
           workspaceId: true,
           businessProfileId: true,
+          authority: true,
+          approvedActorKind: true,
+          approvedByUserId: true,
+          approvedAt: true,
+          approvedReviewMode: true,
           draft: {
             select: {
               text: true,
@@ -119,6 +147,11 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
                   modeOverride: true,
                   stateVersion: true,
                   lastInboundAt: true,
+                  takeoverReason: true,
+                  takeoverReviewMode: true,
+                  humanTakeoverAt: true,
+                  takeoverActorKind: true,
+                  takeoverActorUserId: true,
                   // The conversation reaches its account through the identity's composite key.
                   channelIdentity: { select: { externalUserId: true, channelAccount: { select: { channel: true, status: true } } } },
                 },
@@ -159,7 +192,8 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         limits: limitsFrom(effective, conversation.channelIdentity.channelAccount.channel),
         ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
         aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
-        takeover: takeoverStateOf(conversation.takeoverState),
+        takeover: takeoverStateOf(conversation),
+        authority: authorityOf(job),
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
         account: conversation.channelIdentity.channelAccount.status,
         draftNeedsReview: job.draft.needsReview,
@@ -179,6 +213,13 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           anchorAt,
           accountPolicyAt: policies.account?.updatedAt ?? null,
           defaultPolicyAt: policies.default?.updatedAt ?? null,
+          takeoverActorKind: conversation.takeoverActorKind,
+          takeoverActorUserId: conversation.takeoverActorUserId,
+          authority: job.authority,
+          approvedActorKind: job.approvedActorKind,
+          approvedByUserId: job.approvedByUserId,
+          approvedAt: job.approvedAt,
+          approvedReviewMode: job.approvedReviewMode,
         }),
       };
       return context;
@@ -320,6 +361,11 @@ async function claimInside(
       where: {
         operationId: context.operationId,
         status: CLAIMABLE,
+        authority: guard.authority,
+        approvedActorKind: guard.approvedActorKind,
+        approvedByUserId: guard.approvedByUserId,
+        approvedAt: guard.approvedAt,
+        approvedReviewMode: guard.approvedReviewMode,
         draft: {
           text: guard.draftText,
           needsReview: guard.draftNeedsReview,
@@ -329,6 +375,8 @@ async function claimInside(
             stateVersion: guard.conversationStateVersion,
             status: guard.conversationStatus,
             takeoverState: guard.takeoverState,
+            takeoverActorKind: guard.takeoverActorKind,
+            takeoverActorUserId: guard.takeoverActorUserId,
             aiEnabled: guard.aiEnabled,
             modeOverride: guard.modeOverride,
             // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
@@ -415,11 +463,71 @@ function statusFieldsFor(settlement: DeliverySettlement, at: Date) {
   }
 }
 
-function takeoverStateOf(state: string): DeliverySendContext["takeover"] {
-  if (state === "HUMAN_ACTIVE") {
-    return { state: "HUMAN_ACTIVE", reason: "HUMAN_CLAIMED", since: new Date(0) };
+/**
+ * The conversation's ownership as the policy engine reads it.
+ *
+ * The actor is carried, not dropped: whether a human-active takeover blocks a send now depends on whether
+ * it is the one that authorized it. Everything else is read from the row rather than assumed, so a
+ * decision is never made against a takeover reason this file invented.
+ */
+function takeoverStateOf(conversation: {
+  takeoverState: TakeoverState;
+  takeoverReason: TakeoverReason | null;
+  takeoverReviewMode: ReviewMode | null;
+  humanTakeoverAt: Date | null;
+  takeoverActorKind: ActorKind | null;
+  takeoverActorUserId: string | null;
+}): DeliverySendContext["takeover"] {
+  const since = conversation.humanTakeoverAt ?? new Date(0);
+  if (conversation.takeoverState === "HUMAN_ACTIVE") {
+    const actor = actorOf(conversation.takeoverActorKind, conversation.takeoverActorUserId);
+    return {
+      state: "HUMAN_ACTIVE",
+      reason: conversation.takeoverReason ?? "HUMAN_CLAIMED",
+      since,
+      ...(actor === undefined ? {} : { actor }),
+    };
   }
-  return state === "REVIEW_REQUIRED" ? { state: "REVIEW_REQUIRED", reason: "MANDATORY_REVIEW", reviewMode: "NORMAL", since: new Date(0) } : { state: "NONE" };
+  if (conversation.takeoverState === "REVIEW_REQUIRED") {
+    return {
+      state: "REVIEW_REQUIRED",
+      reason: conversation.takeoverReason ?? "MANDATORY_REVIEW",
+      reviewMode: conversation.takeoverReviewMode ?? "NORMAL",
+      since,
+    };
+  }
+  return { state: "NONE" };
+}
+
+function actorOf(kind: ActorKind | null, userId: string | null): Actor | undefined {
+  if (kind === null) {
+    return undefined;
+  }
+  return kind === "USER" ? (userId === null ? undefined : { kind: "USER", userId: toUserId(userId) }) : { kind };
+}
+
+/**
+ * Who authorized this delivery, as recorded when it was scheduled.
+ *
+ * Read rather than assumed. The whole reason it is a column is that the send happens in another process,
+ * long after the person clicked: an authority reconstructed here would be automation wearing a human's
+ * name, or — what actually happened before — a human's approval quietly downgraded to automation.
+ *
+ * A HUMAN_APPROVED row without its actor, moment or review mode cannot exist: the table's CHECK
+ * constraint forbids it. If one somehow did, this falls back to automation, which is the strict reading.
+ */
+function authorityOf(job: {
+  authority: DeliveryAuthorityKind;
+  approvedActorKind: ActorKind | null;
+  approvedByUserId: string | null;
+  approvedAt: Date | null;
+  approvedReviewMode: ReviewMode | null;
+}): DeliverySendContext["authority"] {
+  const actor = actorOf(job.approvedActorKind, job.approvedByUserId);
+  if (job.authority !== "HUMAN_APPROVED" || actor === undefined || job.approvedAt === null || job.approvedReviewMode === null) {
+    return { kind: "AUTOMATED" };
+  }
+  return { kind: "HUMAN_APPROVED", actor, approvedAt: job.approvedAt, reviewMode: job.approvedReviewMode };
 }
 
 async function anchorTime(db: DbClient, scope: { workspaceId: string; businessProfileId: string }, draftId: string): Promise<Date> {

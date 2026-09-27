@@ -14,7 +14,7 @@
  *   business sounds; it does not make the claims inside it true. Promoting human text into the factual
  *   corpus would let one hurried message become evidence for every later answer.
  */
-import type { Actor, ReviewMode } from "@omnichannel/domain";
+import type { Actor, ReviewMode, SendAuthority } from "@omnichannel/domain";
 
 export type ReviewAction =
   /** Send the draft exactly as the model wrote it. */
@@ -46,8 +46,22 @@ export interface ReviewStore {
   claimReview(draftId: string, actor: Actor, at: Date): Promise<ReviewClaim>;
   /** Persists the human's final wording and marks the draft's source as human. */
   recordHumanEdit(draftId: string, text: string, actor: Actor, at: Date): Promise<void>;
-  /** Hands the draft to the delivery coordinator. Returns the operation that now owns the send. */
-  scheduleDelivery(draftId: string, at: Date): Promise<{ readonly operationId: string }>;
+  /**
+   * Hands the draft to the delivery coordinator, **with the authority the person just granted**, and takes
+   * the conversation for them — in one write. Returns the operation that now owns the send.
+   *
+   * One write because the two halves are one fact. Scheduling the send and recording who owns the
+   * conversation used to be separate, and a worker that picked the job up in between saw an approved send
+   * with nobody owning the conversation. That is the window in which a deliberate human action can be
+   * mistaken for ordinary automation, which is precisely the bypass ADR-014 forbids — so it is closed by
+   * construction rather than by being narrow.
+   */
+  scheduleApprovedDelivery(input: {
+    readonly draftId: string;
+    readonly conversationId: string;
+    readonly authority: SendAuthority;
+    readonly at: Date;
+  }): Promise<{ readonly operationId: string }>;
   /** Ends the draft and any pending delivery without sending. */
   dismiss(draftId: string, actor: Actor, at: Date, note?: string): Promise<void>;
   /** Records the new ownership produced by the handoff state machine. */
@@ -134,8 +148,22 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
 
   // The one route out. Whether it is actually sent is still the coordinator's decision, made against live
   // state — including, for a human-support exception, eligibility re-checked immediately before dispatch.
-  const { operationId } = await dependencies.reviews.scheduleDelivery(command.draftId, at);
-  await dependencies.reviews.setTakeover(command.scope.conversationId, command.actor, at, true);
+  //
+  // What travels with it is the authority: who approved this, when, and which send they authorized. It is
+  // persisted with the delivery rather than passed along in memory, because the send happens later, in
+  // another process, and an approval that only existed in this call would arrive there as automation.
+  const authority: SendAuthority = {
+    kind: "HUMAN_APPROVED",
+    actor: command.actor,
+    approvedAt: at,
+    reviewMode: command.reviewMode,
+  };
+  const { operationId } = await dependencies.reviews.scheduleApprovedDelivery({
+    draftId: command.draftId,
+    conversationId: command.scope.conversationId,
+    authority,
+    at,
+  });
   dependencies.log.info("review.scheduled", { ...fields, operationId, edited, reviewMode: command.reviewMode });
   return { status: "SCHEDULED", operationId, edited };
 }
