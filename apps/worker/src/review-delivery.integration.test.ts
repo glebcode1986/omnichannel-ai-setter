@@ -51,6 +51,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
   let scope: { workspaceId: string; businessProfileId: string };
   let channelAccountId: string;
   let approver: Actor;
+  let approverId: string;
   let colleague: Actor;
   let seq = 0;
 
@@ -59,6 +60,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     const owner = await infra.db.user.create({ data: { name: "Review Owner", email: "review-owner@example.test" } });
     const other = await infra.db.user.create({ data: { name: "Colleague", email: "review-colleague@example.test" } });
     approver = { kind: "USER", userId: toUserId(owner.id) };
+    approverId = owner.id;
     colleague = { kind: "USER", userId: toUserId(other.id) };
 
     const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Review Workspace", ownerUserId: owner.id });
@@ -221,7 +223,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     expect(sends).toHaveLength(1);
     expect(sends[0]?.authority).toEqual({
       kind: "HUMAN_APPROVED",
-      actor: approver,
+      approvedByUserId: approverId,
       approvedAt: NOW,
       reviewMode: "NORMAL",
     });
@@ -288,7 +290,18 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     const draftId = await pendingDraft(conversationId, messageId);
     const operationId = scheduledOperation(await approve(conversationId, draftId));
 
-    await createReviewStore(infra.db, context).setTakeover(conversationId, colleague, new Date(NOW.getTime() + 1_000), true);
+    // The colleague takes it the way the inbox does: the ownership write, on its own.
+    await infra.db.conversation.update({
+      where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+      data: {
+        takeoverState: "HUMAN_ACTIVE",
+        takeoverReason: "HUMAN_SENT_FROM_INBOX",
+        humanTakeoverAt: new Date(NOW.getTime() + 1_000),
+        takeoverActorKind: "USER",
+        takeoverActorUserId: colleague.kind === "USER" ? colleague.userId : null,
+        takeoverPausedUntil: null,
+      },
+    });
     const { run, sends } = deliver(conversationId, operationId);
     await run();
 
@@ -345,6 +358,111 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     });
     expect(job).toMatchObject({ authority: "HUMAN_APPROVED", approvedReviewMode: "NORMAL" });
     expect(conversation).toMatchObject({ takeoverState: "HUMAN_ACTIVE", takeoverActorUserId: job.approvedByUserId });
+  }, 180_000);
+
+  for (const actor of [{ kind: "SYSTEM" }, { kind: "NATIVE_APP" }] as const) {
+    it(`refuses an approval from ${actor.kind} and leaves no trace of it`, async () => {
+      const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+      const draftId = await pendingDraft(conversationId, messageId);
+
+      const outcome = await approve(conversationId, draftId, { actor });
+
+      // Human activity for the purpose of takeover is not the authority to send. Neither of these can look
+      // at a draft and decide it may go out, so there is nothing to schedule and nothing to own — and the
+      // draft is still waiting for a person, not stranded as claimed.
+      expect(outcome).toMatchObject({ status: "REJECTED" });
+      expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(0);
+      const draft = await infra.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
+      expect(draft.status).toBe("PENDING");
+      const conversation = await infra.db.conversation.findUniqueOrThrow({
+        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+        select: { takeoverState: true },
+      });
+      expect(conversation.takeoverState).toBe("NONE");
+    }, 180_000);
+  }
+
+  it("refuses to approve a draft from one conversation while taking another", async () => {
+    const mine = await freshConversation({ mode: "DRAFT" });
+    const theirs = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(mine.conversationId, mine.messageId);
+
+    // The draft belongs to `mine`; the command names `theirs`. Both are in this Business Profile, so
+    // nothing about tenancy stops it: the delivery path derives the recipient from the draft, so this
+    // would take ownership of one conversation and send into another.
+    const outcome = await approve(theirs.conversationId, draftId);
+
+    expect(outcome).toMatchObject({ status: "REJECTED" });
+    expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(0);
+    for (const conversationId of [mine.conversationId, theirs.conversationId]) {
+      const conversation = await infra.db.conversation.findUniqueOrThrow({
+        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+        select: { takeoverState: true },
+      });
+      expect(conversation.takeoverState).toBe("NONE");
+    }
+    const draft = await infra.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
+    expect(draft.status).toBe("PENDING");
+  }, 180_000);
+
+  it("strands nothing when the decision fails part-way, and the retry still works", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
+
+    // A client whose last write inside the decision fails. The claim, the authority and the delivery row
+    // have all been written by then, which is exactly the shape of the old bug: separately, the draft
+    // would be left CLAIMED with no delivery, and every retry told somebody had already resolved it.
+    const failing = new Proxy(infra.db, {
+      get(target, property, receiver) {
+        if (property !== "$transaction") {
+          const value: unknown = Reflect.get(target, property, receiver);
+          return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        }
+        return (run: (tx: unknown) => Promise<unknown>, options: unknown) =>
+          target.$transaction(async (tx) => {
+            const gated = new Proxy(tx, {
+              get(txTarget, txProperty, txReceiver) {
+                if (txProperty !== "conversation") {
+                  return Reflect.get(txTarget, txProperty, txReceiver) as unknown;
+                }
+                return { update: () => Promise.reject(new Error("the ownership write failed")) };
+              },
+            });
+            return run(gated);
+          }, options as Parameters<typeof target.$transaction>[1]);
+      },
+    });
+
+    await expect(
+      resolveReview(
+        { ...reviewDependencies(), reviews: createReviewStore(failing, context) },
+        { scope: { ...scope, conversationId }, draftId, actor: approver, action: { kind: "APPROVE" }, reviewMode: "NORMAL" },
+      ),
+    ).rejects.toThrow("the ownership write failed");
+
+    // Nothing of it survived: no delivery, no claim, no ownership. The decision is one write or none.
+    expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(0);
+    const afterFailure = await infra.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
+    expect(afterFailure.status).toBe("PENDING");
+
+    // And the person can simply click again.
+    const operationId = scheduledOperation(await approve(conversationId, draftId));
+    const { run, sends } = deliver(conversationId, operationId);
+    await run();
+    expect(sends).toHaveLength(1);
+    expect(await statusOf(operationId)).toBe("SENT");
+  }, 180_000);
+
+  it("answers a retry of a decision that already committed with the same operation", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
+
+    const first = scheduledOperation(await approve(conversationId, draftId));
+    const again = await approve(conversationId, draftId);
+
+    // The same logical send, so it is told so rather than refused. Reporting a decision and committing it
+    // cannot disagree, whatever the network did to the first answer.
+    expect(again).toMatchObject({ status: "SCHEDULED", operationId: first });
   }, 180_000);
 
   it("keeps automation automated: a delivery nobody approved reaches the adapter as such", async () => {

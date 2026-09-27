@@ -1,65 +1,93 @@
 /**
  * PostgreSQL implementation of the review queue's ports (HUMAN_HANDOFF.md, ADR-004).
  *
- * The claim is the same idea as the delivery coordinator's, for the same reason: two colleagues opening one
- * queue is normal, both acting on the same item is not, and only the database can decide which click
- * counted. A conditional `UPDATE` from `PENDING` to `CLAIMED` can succeed exactly once.
+ * Each of the three decisions a person can make is one transaction, and each begins with the same
+ * conditional `UPDATE` from `PENDING`: two colleagues opening one queue is normal, both acting on the same
+ * item is not, and only the database can decide which click counted.
+ *
+ * The transaction holds the *whole* decision, not the claim alone. Claiming separately left a window in
+ * which a crash or a failed dependency stranded a draft as `CLAIMED` with nothing done — a review item
+ * nobody could act on again, because the retry is told somebody already resolved it. So the claim, the
+ * person's final wording, the authority they granted, the delivery, the draft's new status and the
+ * conversation's ownership commit together or not at all.
+ *
+ * Every decision also checks that the draft and the conversation named belong together. Without it, a
+ * malformed or hostile command could approve a draft from one conversation while taking ownership of
+ * another in the same Business Profile: the delivery path derives the recipient from the draft, so the
+ * authority and the reply would describe two different actions.
  *
  * Unlike delivery, these operations are taken on behalf of a signed-in member, so every one of them is
  * scoped by an authorized `BusinessProfileContext` rather than by a queue job's own row.
  */
-import type { ReviewClaim, ReviewStore, StyleLearningStore } from "@omnichannel/application";
+import type { ReviewDecision, ReviewStore, StyleLearningStore } from "@omnichannel/application";
 import { randomUUID } from "node:crypto";
 
 import type { Actor, SendAuthority } from "@omnichannel/domain";
 
-import type { DbClient } from "./client";
+import type { DbClient, DbExecutor } from "./client";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export function createReviewStore(db: DbClient, context: BusinessProfileContext): ReviewStore {
   const scope = profileScopeOf(context);
+  const draftKey = (draftId: string) => ({ workspaceId_businessProfileId_id: { ...scope, id: draftId } });
+  const conversationKey = (conversationId: string) => ({ workspaceId_businessProfileId_id: { ...scope, id: conversationId } });
+
+  /**
+   * The draft this decision is about, and whether the command describes a single coherent action.
+   *
+   * Returns the refusal rather than throwing, because "somebody else got there first" and "these two rows
+   * do not belong together" are both ordinary answers a caller has to render.
+   */
+  const openDecision = async (
+    tx: DbExecutor,
+    input: { readonly draftId: string; readonly conversationId: string },
+  ): Promise<{ readonly refusal: ReviewDecision } | { readonly operationId: string | undefined }> => {
+    const draft = await tx.aiDraft.findUnique({
+      where: draftKey(input.draftId),
+      select: { conversationId: true, deliveryJob: { select: { operationId: true } } },
+    });
+    if (draft === null) {
+      return { refusal: { kind: "GONE" } };
+    }
+    if (draft.conversationId !== input.conversationId) {
+      return { refusal: { kind: "FOREIGN_CONVERSATION" } };
+    }
+    return { operationId: draft.deliveryJob?.operationId };
+  };
+
+  /** One conditional UPDATE: only a draft still waiting for a decision can be claimed, and only once. */
+  const winClaim = async (tx: DbExecutor, draftId: string, at: Date): Promise<boolean> => {
+    const claimed = await tx.aiDraft.updateMany({ where: { ...scope, id: draftId, status: "PENDING" }, data: { status: "CLAIMED", updatedAt: at } });
+    return claimed.count === 1;
+  };
 
   return {
-    async claimReview(draftId, actor, at): Promise<ReviewClaim> {
-      // One conditional UPDATE: only a draft still waiting for a decision can be claimed, and only once.
-      const claimed = await db.aiDraft.updateMany({
-        where: { ...scope, id: draftId, status: "PENDING" },
-        data: { status: "CLAIMED", updatedAt: at },
-      });
-      if (claimed.count === 1) {
-        void actor;
-        return { kind: "CLAIMED" };
-      }
-      const existing = await db.aiDraft.findUnique({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
-      return existing === null ? { kind: "GONE" } : { kind: "ALREADY_RESOLVED" };
-    },
+    async resolveApproval({ draftId, conversationId, authority, editedText, at }) {
+      return db.$transaction(async (tx) => {
+        const opened = await openDecision(tx, { draftId, conversationId });
+        if ("refusal" in opened) {
+          return opened.refusal;
+        }
+        if (opened.operationId !== undefined) {
+          // One delivery per draft, enforced by a unique index. A second click — or a retry of a decision
+          // that already committed — is the same logical send, so it is told so rather than refused.
+          return { kind: "SCHEDULED", operationId: opened.operationId };
+        }
+        if (!(await winClaim(tx, draftId, at))) {
+          return { kind: "ALREADY_RESOLVED" };
+        }
 
-    async recordHumanEdit(draftId, text, actor, at) {
-      await db.aiDraft.update({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } },
-        // The human's wording replaces the model's, and the draft records who wrote it. The model's own
-        // structured output is left untouched: it is evidence about what the model produced, not about
-        // what was sent.
-        data: { text, updatedAt: at, ...(actor.kind === "USER" ? { requestedByUserId: actor.userId, trigger: "HUMAN_REQUEST" } : {}) },
-      });
-    },
+        if (editedText !== undefined) {
+          // The human's wording replaces the model's, and the draft records who wrote it. The model's own
+          // structured output is left untouched: it is evidence about what the model produced, not about
+          // what was sent.
+          await tx.aiDraft.update({
+            where: draftKey(draftId),
+            data: { text: editedText, updatedAt: at, requestedByUserId: approverOf(authority), trigger: "HUMAN_REQUEST" },
+          });
+        }
 
-    async scheduleApprovedDelivery({ draftId, conversationId, authority, at }) {
-      const operationId = randomUUID();
-      const draft = await db.aiDraft.findUniqueOrThrow({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } },
-        select: { conversationId: true, deliveryJob: { select: { operationId: true } } },
-      });
-      if (draft.deliveryJob !== null) {
-        // One delivery per draft, enforced by a unique index: a second click reuses the first operation
-        // rather than creating a second logical send.
-        return { operationId: draft.deliveryJob.operationId };
-      }
-      // One transaction for the send and the ownership it creates. Separately, a worker could pick the job
-      // up after the delivery row existed and before anyone owned the conversation — and judge a
-      // deliberate human action as ordinary automation, on the standard transport, which is exactly the
-      // bypass ADR-014 forbids. Neither half is observable without the other.
-      await db.$transaction(async (tx) => {
+        const operationId = randomUUID();
         await tx.deliveryJobRecord.create({
           data: {
             ...scope,
@@ -73,36 +101,44 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
             ...authorityFieldsFor(authority),
           },
         });
-        await tx.aiDraft.update({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, data: { status: "SCHEDULED" } });
-        await tx.conversation.update({
-          where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
-          data: takeoverFieldsFor(authority, at),
+        await tx.aiDraft.update({ where: draftKey(draftId), data: { status: "SCHEDULED" } });
+        // Approving a reply is taking the conversation: the person who just spoke for the business owns it.
+        await tx.conversation.update({ where: conversationKey(conversationId), data: ownershipFor(authority, at) });
+        return { kind: "SCHEDULED", operationId };
+      });
+    },
+
+    async resolveDismissal({ draftId, conversationId, actor, at, note }) {
+      return db.$transaction(async (tx) => {
+        const opened = await openDecision(tx, { draftId, conversationId });
+        if ("refusal" in opened) {
+          return opened.refusal;
+        }
+        if (!(await winClaim(tx, draftId, at))) {
+          return { kind: "ALREADY_RESOLVED" };
+        }
+        await tx.aiDraft.update({
+          where: draftKey(draftId),
+          data: { status: "DISMISSED", updatedAt: at, ...(note === undefined ? {} : { suggestedAction: note }) },
         });
-      });
-      return { operationId };
-    },
-
-    async dismiss(draftId, _actor, at, note) {
-      await db.aiDraft.update({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } },
-        data: { status: "DISMISSED", updatedAt: at, ...(note === undefined ? {} : { suggestedAction: note }) },
+        // Dismissing hands the conversation back: nobody is holding it and nothing is waiting.
+        await tx.conversation.update({ where: conversationKey(conversationId), data: NO_OWNERSHIP });
+        void actor;
+        return { kind: "DISMISSED" };
       });
     },
 
-    async setTakeover(conversationId, actor, at, keepOwnership) {
-      await db.conversation.update({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
-        data: keepOwnership
-          ? humanOwnership(actor, at)
-          : {
-              takeoverState: "NONE",
-              takeoverReason: null,
-              takeoverReviewMode: null,
-              humanTakeoverAt: null,
-              takeoverPausedUntil: null,
-              takeoverActorKind: null,
-              takeoverActorUserId: null,
-            },
+    async resolveClaim({ draftId, conversationId, actor, at }) {
+      return db.$transaction(async (tx) => {
+        const opened = await openDecision(tx, { draftId, conversationId });
+        if ("refusal" in opened) {
+          return opened.refusal;
+        }
+        if (!(await winClaim(tx, draftId, at))) {
+          return { kind: "ALREADY_RESOLVED" };
+        }
+        await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(actor, at) });
+        return { kind: "CLAIMED" };
       });
     },
   };
@@ -122,9 +158,27 @@ function humanOwnership(actor: Actor, at: Date) {
   } as const;
 }
 
-function takeoverFieldsFor(authority: SendAuthority, at: Date) {
-  // Approving a reply is taking the conversation: the person who just spoke for the business owns it.
-  return authority.kind === "HUMAN_APPROVED" ? humanOwnership(authority.actor, at) : humanOwnership({ kind: "SYSTEM" }, at);
+/** Nobody is holding the conversation and nothing is waiting on it. */
+const NO_OWNERSHIP = {
+  takeoverState: "NONE",
+  takeoverReason: null,
+  takeoverReviewMode: null,
+  humanTakeoverAt: null,
+  takeoverPausedUntil: null,
+  takeoverActorKind: null,
+  takeoverActorUserId: null,
+} as const;
+
+/** Who owns the conversation once this authority has acted on it. */
+function ownershipFor(authority: SendAuthority, at: Date) {
+  return authority.kind === "HUMAN_APPROVED"
+    ? humanOwnership({ kind: "USER", userId: authority.approvedByUserId }, at)
+    : humanOwnership({ kind: "SYSTEM" }, at);
+}
+
+/** The person an approval names, for the audit trail on the draft they edited. */
+function approverOf(authority: SendAuthority): string | undefined {
+  return authority.kind === "HUMAN_APPROVED" ? authority.approvedByUserId : undefined;
 }
 
 /**
@@ -140,8 +194,7 @@ function authorityFieldsFor(authority: SendAuthority) {
   }
   return {
     authority: "HUMAN_APPROVED",
-    approvedActorKind: authority.actor.kind,
-    approvedByUserId: authority.actor.kind === "USER" ? authority.actor.userId : null,
+    approvedByUserId: authority.approvedByUserId,
     approvedAt: authority.approvedAt,
     approvedReviewMode: authority.reviewMode,
   } as const;

@@ -14,7 +14,7 @@
  *   business sounds; it does not make the claims inside it true. Promoting human text into the factual
  *   corpus would let one hurried message become evidence for every later answer.
  */
-import type { Actor, ReviewMode, SendAuthority } from "@omnichannel/domain";
+import type { Actor, ReviewMode, SendAuthority, UserId } from "@omnichannel/domain";
 
 export type ReviewAction =
   /** Send the draft exactly as the model wrote it. */
@@ -35,37 +35,57 @@ export interface ReviewCommand {
   readonly reviewMode: ReviewMode;
 }
 
-export type ReviewClaim =
+/**
+ * How a decision ended. Every one of these is a *committed* state, not a step towards one.
+ *
+ * `FOREIGN_CONVERSATION` is a refusal, not a race: the draft belongs to a different conversation than the
+ * command names, so approving it would take ownership of one conversation while sending into another, and
+ * the authority and the recipient would describe two different actions.
+ */
+export type ReviewDecision =
+  | { readonly kind: "SCHEDULED"; readonly operationId: string }
+  | { readonly kind: "DISMISSED" }
   | { readonly kind: "CLAIMED" }
-  /** Someone else got there first; their decision stands and this one is discarded. */
+  /** Someone else got there first; their decision stands and this one changes nothing. */
   | { readonly kind: "ALREADY_RESOLVED"; readonly byActor?: Actor }
-  | { readonly kind: "GONE" };
+  | { readonly kind: "GONE" }
+  | { readonly kind: "FOREIGN_CONVERSATION" };
 
 export interface ReviewStore {
-  /** Atomically marks the item as being resolved by this actor. Only one caller can ever win. */
-  claimReview(draftId: string, actor: Actor, at: Date): Promise<ReviewClaim>;
-  /** Persists the human's final wording and marks the draft's source as human. */
-  recordHumanEdit(draftId: string, text: string, actor: Actor, at: Date): Promise<void>;
   /**
-   * Hands the draft to the delivery coordinator, **with the authority the person just granted**, and takes
-   * the conversation for them — in one write. Returns the operation that now owns the send.
+   * The whole approval, in one transaction: win the item, persist the final wording, record the authority,
+   * create the delivery, mark the draft scheduled, and take the conversation for the approver.
    *
-   * One write because the two halves are one fact. Scheduling the send and recording who owns the
-   * conversation used to be separate, and a worker that picked the job up in between saw an approved send
-   * with nobody owning the conversation. That is the window in which a deliberate human action can be
-   * mistaken for ordinary automation, which is precisely the bypass ADR-014 forbids — so it is closed by
-   * construction rather than by being narrow.
+   * One transaction because every one of those is part of the same decision. Claimed separately, a crash or
+   * a thrown dependency anywhere in between left a draft permanently `CLAIMED` with no delivery — a review
+   * item nobody could act on again, because the retry is told somebody already resolved it.
+   *
+   * Idempotent on purpose: a retry (or a second click) that finds the delivery already created returns the
+   * same operation rather than a refusal, so reporting a decision and committing it cannot disagree.
    */
-  scheduleApprovedDelivery(input: {
+  resolveApproval(input: {
     readonly draftId: string;
     readonly conversationId: string;
     readonly authority: SendAuthority;
+    /** The person's own wording, when they changed it. Written in the same transaction as everything else. */
+    readonly editedText?: string;
     readonly at: Date;
-  }): Promise<{ readonly operationId: string }>;
-  /** Ends the draft and any pending delivery without sending. */
-  dismiss(draftId: string, actor: Actor, at: Date, note?: string): Promise<void>;
-  /** Records the new ownership produced by the handoff state machine. */
-  setTakeover(conversationId: string, actor: Actor, at: Date, keepOwnership: boolean): Promise<void>;
+  }): Promise<ReviewDecision>;
+  /** Ends the draft without sending and hands the conversation back, in one transaction. */
+  resolveDismissal(input: {
+    readonly draftId: string;
+    readonly conversationId: string;
+    readonly actor: Actor;
+    readonly at: Date;
+    readonly note?: string;
+  }): Promise<ReviewDecision>;
+  /** Takes the conversation for this person without sending anything, in one transaction. */
+  resolveClaim(input: {
+    readonly draftId: string;
+    readonly conversationId: string;
+    readonly actor: Actor;
+    readonly at: Date;
+  }): Promise<ReviewDecision>;
 }
 
 /**
@@ -114,36 +134,29 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
     return { status: "REJECTED", reason: "an edited reply cannot be empty" };
   }
 
-  const claim = await dependencies.reviews.claimReview(command.draftId, command.actor, at);
-  if (claim.kind === "GONE") {
-    return { status: "GONE" };
-  }
-  if (claim.kind === "ALREADY_RESOLVED") {
-    // Two colleagues opened the same queue. The first decision stands; this one changes nothing.
-    dependencies.log.info("review.already_resolved", fields);
-    return { status: "ALREADY_RESOLVED" };
-  }
+  const target = { draftId: command.draftId, conversationId: command.scope.conversationId, at };
 
   if (command.action.kind === "CLAIM") {
-    await dependencies.reviews.setTakeover(command.scope.conversationId, command.actor, at, true);
-    dependencies.log.info("review.claimed", fields);
-    return { status: "CLAIMED" };
+    return outcomeOf(dependencies, fields, await dependencies.reviews.resolveClaim({ ...target, actor: command.actor }));
   }
 
   if (command.action.kind === "DISMISS") {
-    await dependencies.reviews.dismiss(command.draftId, command.actor, at, command.action.note);
-    // Dismissing hands the conversation back: nobody is holding it and nothing is waiting.
-    await dependencies.reviews.setTakeover(command.scope.conversationId, command.actor, at, false);
-    dependencies.log.info("review.dismissed", fields);
-    return { status: "DISMISSED" };
+    const note = command.action.note;
+    return outcomeOf(
+      dependencies,
+      fields,
+      await dependencies.reviews.resolveDismissal({ ...target, actor: command.actor, ...(note === undefined ? {} : { note }) }),
+    );
   }
 
-  const edited = command.action.kind === "EDIT";
-  if (command.action.kind === "EDIT") {
-    await dependencies.reviews.recordHumanEdit(command.draftId, command.action.text, command.actor, at);
-    if (command.action.saveAsStyleExample) {
-      await learnFromEdit(dependencies, command, command.action.text);
-    }
+  // Sending is the one decision only a person can make. A `SYSTEM` or `NATIVE_APP` actor is human activity
+  // for the purpose of takeover — a message sent from the Instagram app is a person acting — but neither can
+  // look at a draft and decide it may go out, and the authority to send is what approving grants. Refused
+  // here, before anything is claimed, so a rejected command leaves no trace on the queue.
+  const approver = approvingUser(command.actor);
+  if (approver === undefined) {
+    dependencies.log.warn("review.actor_cannot_approve", { ...fields, actorKind: command.actor.kind });
+    return { status: "REJECTED", reason: "only a signed-in person can approve or edit a reply" };
   }
 
   // The one route out. Whether it is actually sent is still the coordinator's decision, made against live
@@ -154,18 +167,56 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   // another process, and an approval that only existed in this call would arrive there as automation.
   const authority: SendAuthority = {
     kind: "HUMAN_APPROVED",
-    actor: command.actor,
+    approvedByUserId: approver,
     approvedAt: at,
     reviewMode: command.reviewMode,
   };
-  const { operationId } = await dependencies.reviews.scheduleApprovedDelivery({
-    draftId: command.draftId,
-    conversationId: command.scope.conversationId,
+  const edited = command.action.kind === "EDIT";
+  const decision = await dependencies.reviews.resolveApproval({
+    ...target,
     authority,
-    at,
+    ...(command.action.kind === "EDIT" ? { editedText: command.action.text } : {}),
   });
-  dependencies.log.info("review.scheduled", { ...fields, operationId, edited, reviewMode: command.reviewMode });
-  return { status: "SCHEDULED", operationId, edited };
+
+  if (decision.kind !== "SCHEDULED") {
+    return outcomeOf(dependencies, fields, decision);
+  }
+  // After the commit, and never before it: what a person wrote is worth learning from, and it is worth
+  // less than the reply they asked for. A style store that is down must not be able to lose the send.
+  if (command.action.kind === "EDIT" && command.action.saveAsStyleExample) {
+    await learnFromEdit(dependencies, command, command.action.text);
+  }
+  dependencies.log.info("review.scheduled", { ...fields, operationId: decision.operationId, edited, reviewMode: command.reviewMode });
+  return { status: "SCHEDULED", operationId: decision.operationId, edited };
+}
+
+/** Only a signed-in person can grant the authority to send; everything else is refused by the type. */
+function approvingUser(actor: Actor): UserId | undefined {
+  return actor.kind === "USER" ? actor.userId : undefined;
+}
+
+/** The committed decision, in the vocabulary the caller uses, with the one line of audit it deserves. */
+function outcomeOf(dependencies: ReviewDependencies, fields: Readonly<Record<string, unknown>>, decision: ReviewDecision): ReviewOutcome {
+  switch (decision.kind) {
+    case "GONE":
+      return { status: "GONE" };
+    case "FOREIGN_CONVERSATION":
+      // The draft and the conversation named do not belong together, so no single action was described.
+      dependencies.log.warn("review.foreign_conversation", fields);
+      return { status: "REJECTED", reason: "the draft belongs to a different conversation" };
+    case "ALREADY_RESOLVED":
+      // Two colleagues opened the same queue. The first decision stands; this one changes nothing.
+      dependencies.log.info("review.already_resolved", fields);
+      return { status: "ALREADY_RESOLVED" };
+    case "CLAIMED":
+      dependencies.log.info("review.claimed", fields);
+      return { status: "CLAIMED" };
+    case "DISMISSED":
+      dependencies.log.info("review.dismissed", fields);
+      return { status: "DISMISSED" };
+    case "SCHEDULED":
+      return { status: "SCHEDULED", operationId: decision.operationId, edited: false };
+  }
 }
 
 /**
@@ -173,12 +224,12 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
  * reply the person actually asked for, so a failure here is logged rather than raised.
  */
 async function learnFromEdit(dependencies: ReviewDependencies, command: ReviewCommand, text: string): Promise<void> {
-  const inboundContext = await dependencies.inboundContextFor(command.draftId);
-  if (inboundContext === undefined) {
-    dependencies.log.warn("review.style_context_missing", { draftId: command.draftId });
-    return;
-  }
   try {
+    const inboundContext = await dependencies.inboundContextFor(command.draftId);
+    if (inboundContext === undefined) {
+      dependencies.log.warn("review.style_context_missing", { draftId: command.draftId });
+      return;
+    }
     await dependencies.style.recordEditedDraft({
       workspaceId: command.scope.workspaceId,
       businessProfileId: command.scope.businessProfileId,
@@ -188,6 +239,8 @@ async function learnFromEdit(dependencies: ReviewDependencies, command: ReviewCo
       sourceDraftId: command.draftId,
     });
   } catch (error) {
+    // Everything, including looking up the context. This runs after the decision has committed, so a
+    // failure that escaped here would report an error for a reply that is already on its way out.
     dependencies.log.warn("review.style_not_recorded", {
       draftId: command.draftId,
       errorName: error instanceof Error ? error.name : typeof error,

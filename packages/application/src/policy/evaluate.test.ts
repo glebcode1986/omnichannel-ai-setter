@@ -472,11 +472,11 @@ describe("purity", () => {
  * and it would be added for the best of reasons, because someone has already decided.
  */
 describe("a reply a person approved", () => {
-  const APPROVER: Actor = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-00000000000a") };
+  const APPROVER = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-00000000000a") } as const;
   const OTHER: Actor = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-00000000000b") };
   const approval = (overrides: Partial<Extract<SendAuthority, { kind: "HUMAN_APPROVED" }>> = {}): SendAuthority => ({
     kind: "HUMAN_APPROVED",
-    actor: APPROVER,
+    approvedByUserId: APPROVER.userId,
     approvedAt: NOW,
     reviewMode: "NORMAL",
     ...overrides,

@@ -711,7 +711,7 @@ model DeliveryJobRecord {
   /// in another process: an approval that lived only in the request that granted it would arrive there as
   /// automation, and the human-support transport path would be unreachable (ADR-014).
   authority         DeliveryAuthorityKind @default(AUTOMATED)
-  approvedActorKind ActorKind?            @map("approved_actor_kind")
+  /// Set exactly when `authority` is HUMAN_APPROVED: only an authenticated user action grants it.
   approvedByUserId  String?               @map("approved_by_user_id")
   approvedAt        DateTime?             @map("approved_at")
   /// Which send the person authorized: an ordinary reply, or the provider's human-support path.

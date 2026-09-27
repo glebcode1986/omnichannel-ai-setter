@@ -104,7 +104,6 @@ interface SendStateGuard {
    * later feature decides it may edit.
    */
   readonly authority: DeliveryAuthorityKind;
-  readonly approvedActorKind: ActorKind | null;
   readonly approvedByUserId: string | null;
   readonly approvedAt: Date | null;
   readonly approvedReviewMode: ReviewMode | null;
@@ -127,7 +126,6 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           workspaceId: true,
           businessProfileId: true,
           authority: true,
-          approvedActorKind: true,
           approvedByUserId: true,
           approvedAt: true,
           approvedReviewMode: true,
@@ -216,7 +214,6 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           takeoverActorKind: conversation.takeoverActorKind,
           takeoverActorUserId: conversation.takeoverActorUserId,
           authority: job.authority,
-          approvedActorKind: job.approvedActorKind,
           approvedByUserId: job.approvedByUserId,
           approvedAt: job.approvedAt,
           approvedReviewMode: job.approvedReviewMode,
@@ -362,7 +359,6 @@ async function claimInside(
         operationId: context.operationId,
         status: CLAIMABLE,
         authority: guard.authority,
-        approvedActorKind: guard.approvedActorKind,
         approvedByUserId: guard.approvedByUserId,
         approvedAt: guard.approvedAt,
         approvedReviewMode: guard.approvedReviewMode,
@@ -518,16 +514,19 @@ function actorOf(kind: ActorKind | null, userId: string | null): Actor | undefin
  */
 function authorityOf(job: {
   authority: DeliveryAuthorityKind;
-  approvedActorKind: ActorKind | null;
   approvedByUserId: string | null;
   approvedAt: Date | null;
   approvedReviewMode: ReviewMode | null;
 }): DeliverySendContext["authority"] {
-  const actor = actorOf(job.approvedActorKind, job.approvedByUserId);
-  if (job.authority !== "HUMAN_APPROVED" || actor === undefined || job.approvedAt === null || job.approvedReviewMode === null) {
+  if (job.authority !== "HUMAN_APPROVED" || job.approvedByUserId === null || job.approvedAt === null || job.approvedReviewMode === null) {
     return { kind: "AUTOMATED" };
   }
-  return { kind: "HUMAN_APPROVED", actor, approvedAt: job.approvedAt, reviewMode: job.approvedReviewMode };
+  return {
+    kind: "HUMAN_APPROVED",
+    approvedByUserId: toUserId(job.approvedByUserId),
+    approvedAt: job.approvedAt,
+    reviewMode: job.approvedReviewMode,
+  };
 }
 
 async function anchorTime(db: DbClient, scope: { workspaceId: string; businessProfileId: string }, draftId: string): Promise<Date> {

@@ -30,11 +30,14 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
   let database: TestDatabase;
   let profile: SeededProfile;
   let rival: DbClient;
+  let ownerUserId: string;
   let operationSeq = 0;
 
   beforeAll(async () => {
     database = await createMigratedTestDatabase();
-    [profile] = (await seedWorkspace(database.db, "delivery")).profiles as [SeededProfile];
+    const seeded = await seedWorkspace(database.db, "delivery");
+    [profile] = seeded.profiles as [SeededProfile];
+    ownerUserId = seeded.ownerUserId;
     // A second client, so two claims can genuinely be in flight at once.
     rival = createDbClient({ connectionString: database.url });
   }, 120_000);
@@ -526,7 +529,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         change: () =>
           database.db.deliveryJobRecord.updateMany({
             where: { ...scope() },
-            data: { authority: "HUMAN_APPROVED", approvedActorKind: "SYSTEM", approvedAt: NOW, approvedReviewMode: "NORMAL" },
+            data: { authority: "HUMAN_APPROVED", approvedByUserId: ownerUserId, approvedAt: NOW, approvedReviewMode: "NORMAL" },
           }),
       },
     ];

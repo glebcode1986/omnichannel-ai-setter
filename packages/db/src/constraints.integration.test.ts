@@ -237,6 +237,35 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     await expect(connect(a1, "wa-phone-second")).resolves.toMatchObject({ businessProfileId: a1.businessProfileId });
   });
 
+  it("lets only an authenticated person hold the authority to send", async () => {
+    const draft = await newDraft(a1);
+    const job = (data: Record<string, unknown>) =>
+      db().deliveryJobRecord.create({
+        data: {
+          ...scope(a1),
+          draftId: draft.id,
+          operationId: `op-authority-${String(Math.trunc(Math.random() * 1e9))}`,
+          correlationId: "corr-authority",
+          scheduledFor: new Date(),
+          selectedDelayMs: 0,
+          ...data,
+        },
+      });
+
+    // A human approval names the person, the moment and which send they authorized, or it is not one. The
+    // code says so too; this is the last place that can still say it, and it is the one a future writer
+    // cannot get around.
+    await expectCheckViolation(job({ authority: "HUMAN_APPROVED" }), "delivery_jobs_authority_check");
+    await expectCheckViolation(job({ authority: "HUMAN_APPROVED", approvedAt: new Date(), approvedReviewMode: "NORMAL" }), "delivery_jobs_authority_check");
+    await expectCheckViolation(job({ authority: "HUMAN_APPROVED", approvedByUserId: a.ownerUserId, approvedAt: new Date() }), "delivery_jobs_authority_check");
+    // And automation names nobody: a row cannot carry an approval it does not claim to have.
+    await expectCheckViolation(job({ approvedByUserId: a.ownerUserId }), "delivery_jobs_authority_check");
+
+    await expect(
+      job({ authority: "HUMAN_APPROVED", approvedByUserId: a.ownerUserId, approvedAt: new Date(), approvedReviewMode: "HUMAN_AGENT" }),
+    ).resolves.toMatchObject({ authority: "HUMAN_APPROVED" });
+  });
+
   it("enforces takeover-state and message-direction invariants", async () => {
     const takeover = (data: Parameters<TestDatabase["db"]["conversation"]["update"]>[0]["data"]) =>
       db().conversation.update({ where: { id: a1.conversationId }, data });

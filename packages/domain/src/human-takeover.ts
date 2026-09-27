@@ -66,7 +66,15 @@ export type SendAuthority =
   | { readonly kind: "AUTOMATED" }
   | {
       readonly kind: "HUMAN_APPROVED";
-      readonly actor: Actor;
+      /**
+       * The signed-in person who approved it.
+       *
+       * A `UserId` rather than an `Actor`, because only an authenticated human action may grant this
+       * authority (ADR-014). `SYSTEM` and `NATIVE_APP` are actors in the takeover sense — a native-app
+       * message is human activity — but neither of them can look at a draft and decide to send it, and a
+       * type that admitted them would let a background sweep approve a reply on a person's behalf.
+       */
+      readonly approvedByUserId: UserId;
       readonly approvedAt: Date;
       /**
        * Which send the person authorized: an ordinary reply, or the provider's human-support path.
@@ -108,5 +116,8 @@ export function takeoverAuthorizes(takeover: HumanTakeoverState, authority: Send
     // The review is what this approval resolved.
     return true;
   }
-  return takeover.state === "HUMAN_ACTIVE" && takeover.actor !== undefined && isSameActor(takeover.actor, authority.actor);
+  if (takeover.state !== "HUMAN_ACTIVE" || takeover.actor === undefined) {
+    return false;
+  }
+  return isSameActor(takeover.actor, { kind: "USER", userId: authority.approvedByUserId });
 }

@@ -50,12 +50,12 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   ...overrides,
 });
 
-const APPROVER: Actor = { kind: "USER", userId: toUserId("11111111-1111-4111-8111-111111111111") };
+const APPROVER = { kind: "USER", userId: toUserId("11111111-1111-4111-8111-111111111111") } as const;
 
 /** A delivery a person approved, as the review queue records it. */
 const approved = (overrides: Partial<Extract<SendAuthority, { kind: "HUMAN_APPROVED" }>> = {}): SendAuthority => ({
   kind: "HUMAN_APPROVED",
-  actor: APPROVER,
+  approvedByUserId: APPROVER.userId,
   approvedAt: NOW,
   reviewMode: "NORMAL",
   ...overrides,

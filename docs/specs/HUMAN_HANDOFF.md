@@ -39,9 +39,33 @@ Support explicit resume. Optional timed auto-resume may occur only when configur
 - for Instagram `HUMAN_ASSISTED_EXTENDED`, a deliberate human click/edit/send may use the Human Agent transport path if eligibility/approval still passes immediately before send;
 - human text is not automatically added to factual knowledge.
 
+### One decision, one write
+
+Each decision a person makes — approve, edit-and-send, dismiss, claim — is **one transaction**: winning the
+review item, the person's final wording, the authority they granted, the delivery, the draft's new status and
+the conversation's ownership commit together or not at all. Claimed separately, a crash or a failed
+dependency between the parts left a draft permanently `CLAIMED` with nothing done, and every retry was told
+somebody had already resolved it.
+
+A retry that finds the delivery already created is answered with the same operation rather than refused, so
+reporting a decision and committing it cannot disagree.
+
+Every decision also checks that the draft and the conversation named belong together, and fails closed on a
+mismatch. The delivery path derives the recipient from the draft, so approving a draft from one conversation
+while taking ownership of another would leave the authority and the reply describing two different actions.
+
+Learning a style example from edited wording runs **after** the commit and is best effort in full: nothing it
+can do — a slow store, a failed lookup — may stand between a person's click and the reply they asked for.
+
 ### The authority a decision grants
 
-Approving or editing a draft **grants an authority**, and that authority is persisted with the delivery:
+Approving or editing a draft **grants an authority**, and only a signed-in person can grant it. `SYSTEM` and
+`NATIVE_APP` are actors in the takeover sense — a message sent from the Instagram app is a person acting —
+but neither can look at a draft and decide it may go out, so an approval or edit from one is refused before
+anything is claimed. The type carries a user id rather than an actor, and the table's CHECK constraint says
+the same thing, so the invariant holds at the boundary as well as in the use case.
+
+That authority is persisted with the delivery:
 who approved it, when, and which send they authorized (an ordinary reply, or the provider's human-support
 path). The send happens later and in another process, so an approval that lived only in the request that
 granted it arrives there as automation — and then the very gates that exist to ask for a human hold the
