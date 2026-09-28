@@ -500,6 +500,21 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     expect(await statusOf(operationId)).toBe("SENT");
   }, 180_000);
 
+  it("tells a colleague who clicks afterwards that it was already resolved", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
+
+    const first = scheduledOperation(await approve(conversationId, draftId));
+    const second = await approve(conversationId, draftId, {}, colleagueContext);
+
+    // Not "scheduled": they did not decide this, and saying otherwise would report a send as theirs — and
+    // for an edit, report wording as sent that was discarded. Exactly one logical send exists either way.
+    expect(second).toEqual({ status: "ALREADY_RESOLVED" });
+    expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(1);
+    const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId: first }, select: { approvedByUserId: true } });
+    expect(job.approvedByUserId).toBe(approverId);
+  }, 180_000);
+
   it("answers a retry of a decision that already committed with the same operation", async () => {
     const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
     const draftId = await pendingDraft(conversationId, messageId);
@@ -507,8 +522,8 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     const first = scheduledOperation(await approve(conversationId, draftId));
     const again = await approve(conversationId, draftId);
 
-    // The same logical send, so it is told so rather than refused. Reporting a decision and committing it
-    // cannot disagree, whatever the network did to the first answer.
+    // The same person, the same decision: the same logical send, so it is named rather than refused.
+    // Reporting a decision and committing it cannot disagree, whatever the network did to the first answer.
     expect(again).toMatchObject({ status: "SCHEDULED", operationId: first });
   }, 180_000);
 

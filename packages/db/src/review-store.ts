@@ -47,10 +47,10 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
   const openDecision = async (
     tx: DbExecutor,
     input: { readonly draftId: string; readonly conversationId: string },
-  ): Promise<{ readonly refusal: ReviewDecision } | { readonly operationId: string | undefined }> => {
+  ): Promise<{ readonly refusal: ReviewDecision } | { readonly ourOperationId: string | undefined }> => {
     const draft = await tx.aiDraft.findUnique({
       where: draftKey(input.draftId),
-      select: { conversationId: true, deliveryJob: { select: { operationId: true } } },
+      select: { conversationId: true, deliveryJob: { select: { operationId: true, approvedByUserId: true } } },
     });
     if (draft === null) {
       return { refusal: { kind: "GONE" } };
@@ -58,7 +58,14 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
     if (draft.conversationId !== input.conversationId) {
       return { refusal: { kind: "FOREIGN_CONVERSATION" } };
     }
-    return { operationId: draft.deliveryJob?.operationId };
+    // A delivery this member's own approval created: the same decision arriving twice — a retry after a
+    // lost answer, or a second click — and the same logical send, so it is named rather than refused.
+    //
+    // A delivery *somebody else* created is not that. Telling a colleague "scheduled" for a decision they
+    // did not make hides that theirs changed nothing, and for an edit it would report their wording as
+    // sent when it was discarded. That is `ALREADY_RESOLVED`, which the claim below reaches on its own.
+    const job = draft.deliveryJob;
+    return { ourOperationId: job !== null && job.approvedByUserId === context.userId ? job.operationId : undefined };
   };
 
   /** One conditional UPDATE: only a draft still waiting for a decision can be claimed, and only once. */
@@ -75,10 +82,9 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         if ("refusal" in opened) {
           return opened.refusal;
         }
-        if (opened.operationId !== undefined) {
-          // One delivery per draft, enforced by a unique index. A second click — or a retry of a decision
-          // that already committed — is the same logical send, so it is told so rather than refused.
-          return { kind: "SCHEDULED", operationId: opened.operationId };
+        if (opened.ourOperationId !== undefined) {
+          // One delivery per draft, enforced by a unique index; this caller already made this decision.
+          return { kind: "SCHEDULED", operationId: opened.ourOperationId };
         }
         if (!(await winClaim(tx, draftId, at))) {
           return { kind: "ALREADY_RESOLVED" };
