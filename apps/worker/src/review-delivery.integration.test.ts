@@ -23,6 +23,7 @@ import {
 import {
   appendInboundMessage,
   authorizeBusinessProfileAccess,
+  addWorkspaceMember,
   authorizeWorkspaceAccess,
   createAiDraftStore,
   createBusinessProfile,
@@ -50,24 +51,34 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
   let context: BusinessProfileContext;
   let scope: { workspaceId: string; businessProfileId: string };
   let channelAccountId: string;
-  let approver: Actor;
   let approverId: string;
   let colleague: Actor;
+  let colleagueId: string;
+  /** A second signed-in member of the same Business Profile, and one from a different profile. */
+  let colleagueContext: BusinessProfileContext;
+  let otherProfileContext: BusinessProfileContext;
+  let otherProfileId: string;
   let seq = 0;
 
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const owner = await infra.db.user.create({ data: { name: "Review Owner", email: "review-owner@example.test" } });
     const other = await infra.db.user.create({ data: { name: "Colleague", email: "review-colleague@example.test" } });
-    approver = { kind: "USER", userId: toUserId(owner.id) };
     approverId = owner.id;
     colleague = { kind: "USER", userId: toUserId(other.id) };
+    colleagueId = other.id;
 
     const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Review Workspace", ownerUserId: owner.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: owner.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Review Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: owner.id, workspaceId, businessProfileId });
     scope = { workspaceId, businessProfileId };
+
+    await addWorkspaceMember(infra.db, workspace, { userId: other.id, role: "ADMIN", businessProfileScope: "ALL" });
+    colleagueContext = await authorizeBusinessProfileAccess(infra.db, { userId: other.id, workspaceId, businessProfileId });
+    const second = await createBusinessProfile(infra.db, workspace, { name: "Other Profile" });
+    otherProfileId = second.businessProfileId;
+    otherProfileContext = await authorizeBusinessProfileAccess(infra.db, { userId: other.id, workspaceId, businessProfileId: second.businessProfileId });
     const account = await createChannelAccount(infra.db, context, {
       channel: "INSTAGRAM",
       externalAccountId: "ig-account-review",
@@ -136,19 +147,18 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     return aiDraftId;
   };
 
-  const reviewDependencies = (): ReviewDependencies => ({
-    reviews: createReviewStore(infra.db, context),
-    style: createStyleLearningStore(infra.db, context),
+  const reviewDependencies = (as: BusinessProfileContext = context): ReviewDependencies => ({
+    reviews: createReviewStore(infra.db, as),
+    style: createStyleLearningStore(infra.db, as),
     log: { info: () => undefined, warn: () => undefined },
     now: () => NOW,
     inboundContextFor: () => Promise.resolve("Are you open on Saturday?"),
   });
 
-  const approve = (conversationId: string, draftId: string, overrides: Partial<ReviewCommand> = {}) =>
-    resolveReview(reviewDependencies(), {
+  const approve = (conversationId: string, draftId: string, overrides: Partial<ReviewCommand> = {}, as: BusinessProfileContext = context) =>
+    resolveReview(reviewDependencies(as), {
       scope: { ...scope, conversationId },
       draftId,
-      actor: approver,
       action: { kind: "APPROVE" },
       reviewMode: "NORMAL",
       ...overrides,
@@ -360,27 +370,64 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     expect(conversation).toMatchObject({ takeoverState: "HUMAN_ACTIVE", takeoverActorUserId: job.approvedByUserId });
   }, 180_000);
 
-  for (const actor of [{ kind: "SYSTEM" }, { kind: "NATIVE_APP" }] as const) {
-    it(`refuses an approval from ${actor.kind} and leaves no trace of it`, async () => {
-      const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
-      const draftId = await pendingDraft(conversationId, messageId);
+  it("attributes the send to the authenticated member, with no way to name anybody else", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
 
-      const outcome = await approve(conversationId, draftId, { actor });
+    // The command carries no identity at all — there is no field for one — so this is the only identity
+    // the decision can be made under: the one the authorization was issued for.
+    const operationId = scheduledOperation(await approve(conversationId, draftId));
 
-      // Human activity for the purpose of takeover is not the authority to send. Neither of these can look
-      // at a draft and decide it may go out, so there is nothing to schedule and nothing to own — and the
-      // draft is still waiting for a person, not stranded as claimed.
-      expect(outcome).toMatchObject({ status: "REJECTED" });
-      expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(0);
-      const draft = await infra.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
-      expect(draft.status).toBe("PENDING");
-      const conversation = await infra.db.conversation.findUniqueOrThrow({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
-        select: { takeoverState: true },
-      });
-      expect(conversation.takeoverState).toBe("NONE");
-    }, 180_000);
-  }
+    const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { approvedByUserId: true } });
+    const conversation = await infra.db.conversation.findUniqueOrThrow({
+      where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+      select: { takeoverActorUserId: true, takeoverActorKind: true },
+    });
+    expect(job.approvedByUserId).toBe(approverId);
+    expect(conversation).toMatchObject({ takeoverActorKind: "USER", takeoverActorUserId: approverId });
+  }, 180_000);
+
+  it("follows the context it was issued for, not the one that came before it", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
+
+    // The same workspace and the same Business Profile, a different signed-in member. Everything the
+    // decision writes has to name *them*, because that is who acted.
+    const operationId = scheduledOperation(await approve(conversationId, draftId, {}, colleagueContext));
+
+    const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { approvedByUserId: true } });
+    const conversation = await infra.db.conversation.findUniqueOrThrow({
+      where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+      select: { takeoverActorUserId: true },
+    });
+    expect(job.approvedByUserId).toBe(colleagueId);
+    expect(conversation.takeoverActorUserId).toBe(colleagueId);
+    expect(job.approvedByUserId).not.toBe(approverId);
+  }, 180_000);
+
+  it("cannot be made to approve as a member of another Business Profile", async () => {
+    const { conversationId, messageId } = await freshConversation({ mode: "DRAFT" });
+    const draftId = await pendingDraft(conversationId, messageId);
+
+    // A store built for a different Business Profile cannot reach this draft at all, so there is no path
+    // by which one profile's member becomes the recorded approver of another's reply.
+    const outcome = await resolveReview(reviewDependencies(otherProfileContext), {
+      scope: { workspaceId: scope.workspaceId, businessProfileId: otherProfileId, conversationId },
+      draftId,
+      action: { kind: "APPROVE" },
+      reviewMode: "NORMAL",
+    });
+
+    expect(outcome).toEqual({ status: "GONE" });
+    expect(await infra.db.deliveryJobRecord.count({ where: { ...scope, draftId } })).toBe(0);
+    const draft = await infra.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope, id: draftId } }, select: { status: true } });
+    expect(draft.status).toBe("PENDING");
+    const conversation = await infra.db.conversation.findUniqueOrThrow({
+      where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+      select: { takeoverState: true },
+    });
+    expect(conversation.takeoverState).toBe("NONE");
+  }, 180_000);
 
   it("refuses to approve a draft from one conversation while taking another", async () => {
     const mine = await freshConversation({ mode: "DRAFT" });
@@ -436,7 +483,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     await expect(
       resolveReview(
         { ...reviewDependencies(), reviews: createReviewStore(failing, context) },
-        { scope: { ...scope, conversationId }, draftId, actor: approver, action: { kind: "APPROVE" }, reviewMode: "NORMAL" },
+        { scope: { ...scope, conversationId }, draftId, action: { kind: "APPROVE" }, reviewMode: "NORMAL" },
       ),
     ).rejects.toThrow("the ownership write failed");
 

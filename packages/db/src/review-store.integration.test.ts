@@ -112,8 +112,18 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     const draft = await database.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope(), id: draftId } }, select: { text: true } });
     expect(draft.text).toBe("Saturdays we're open 10 till 6 😊");
 
-    const example = await database.db.styleExample.findFirstOrThrow({ where: { ...scope(), sourceDraftId: draftId }, select: { provenance: true, outboundText: true, inboundContext: true } });
-    expect(example).toMatchObject({ provenance: "HUMAN_EDITED_DRAFT", outboundText: "Saturdays we're open 10 till 6 😊", inboundContext: "Are you open Saturday?" });
+    const example = await database.db.styleExample.findFirstOrThrow({
+      where: { ...scope(), sourceDraftId: draftId },
+      select: { provenance: true, outboundText: true, inboundContext: true, approvedByUserId: true },
+    });
+    // Whose wording it was is part of the evidence, and it is the authenticated member's — the caller
+    // never gets to say.
+    expect(example).toMatchObject({
+      provenance: "HUMAN_EDITED_DRAFT",
+      outboundText: "Saturdays we're open 10 till 6 😊",
+      inboundContext: "Are you open Saturday?",
+      approvedByUserId: workspace.ownerUserId,
+    });
     // What a person wrote says how this business sounds; it does not make the claims inside it true.
     expect(await database.db.knowledgeDocument.count({ where: { workspaceId: scope().workspaceId } })).toBe(0);
   }, 120_000);
@@ -131,6 +141,19 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     const released = await database.db.conversation.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } }, select: { takeoverState: true, takeoverActorUserId: true } });
     expect(released).toMatchObject({ takeoverState: "NONE", takeoverActorUserId: null });
     expect((await database.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope(), id: dismissed } }, select: { status: true } })).status).toBe("DISMISSED");
+  }, 120_000);
+
+  it("attributes a claimed conversation to the member who claimed it", async () => {
+    const draftId = await pendingDraft();
+
+    await resolveReview(dependencies(database.db), command(draftId, { kind: "CLAIM" }));
+
+    const held = await database.db.conversation.findUniqueOrThrow({
+      where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+      select: { takeoverState: true, takeoverActorKind: true, takeoverActorUserId: true },
+    });
+    // Taking a conversation is a person doing it, and the inbox has to be able to say which person.
+    expect(held).toMatchObject({ takeoverState: "HUMAN_ACTIVE", takeoverActorKind: "USER", takeoverActorUserId: workspace.ownerUserId });
   }, 120_000);
 
   it("does not let a fresh takeover inherit an earlier auto-resume deadline", async () => {

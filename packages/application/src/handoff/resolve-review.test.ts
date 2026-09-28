@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { toUserId, type SendAuthority } from "@omnichannel/domain";
+import type { ReviewMode } from "@omnichannel/domain";
 
 import { resolveReview, type ReviewCommand, type ReviewDecision, type ReviewDependencies } from "./resolve-review";
 
 const NOW = new Date("2026-09-19T12:00:00.000Z");
-const USER = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-000000000007") } as const;
 
 const command = (overrides: Partial<ReviewCommand> = {}): ReviewCommand => ({
   scope: { workspaceId: "ws_1", businessProfileId: "bp_1", conversationId: "conv_1" },
   draftId: "draft_1",
-  actor: USER,
   action: { kind: "APPROVE" },
   reviewMode: "NORMAL",
   ...overrides,
@@ -18,8 +16,8 @@ const command = (overrides: Partial<ReviewCommand> = {}): ReviewCommand => ({
 
 function harness(options: { decision?: ReviewDecision; styleFails?: boolean; contextFails?: boolean; inboundContext?: string | undefined } = {}) {
   const calls: string[] = [];
-  const styled: { outboundText: string; sourceDraftId: string; approvedByUserId?: string }[] = [];
-  const scheduled: { authority: SendAuthority; editedText?: string }[] = [];
+  const styled: { outboundText: string; sourceDraftId: string }[] = [];
+  const scheduled: { reviewMode: ReviewMode; editedText?: string }[] = [];
   const logs: string[] = [];
   let decisions = 0;
 
@@ -30,7 +28,7 @@ function harness(options: { decision?: ReviewDecision; styleFails?: boolean; con
       return options.decision;
     }
     if (decisions > 1) {
-      return { kind: "ALREADY_RESOLVED", byActor: USER };
+      return { kind: "ALREADY_RESOLVED" };
     }
     return kind === "SCHEDULED" ? { kind: "SCHEDULED", operationId } : { kind };
   };
@@ -39,7 +37,7 @@ function harness(options: { decision?: ReviewDecision; styleFails?: boolean; con
     reviews: {
       resolveApproval: (input) => {
         calls.push(input.editedText === undefined ? "schedule" : `edit:${input.editedText}`);
-        scheduled.push({ authority: input.authority, ...(input.editedText === undefined ? {} : { editedText: input.editedText }) });
+        scheduled.push({ reviewMode: input.reviewMode, ...(input.editedText === undefined ? {} : { editedText: input.editedText }) });
         return Promise.resolve(answer("SCHEDULED"));
       },
       resolveDismissal: () => {
@@ -59,7 +57,7 @@ function harness(options: { decision?: ReviewDecision; styleFails?: boolean; con
         if (options.styleFails === true) {
           return Promise.reject(new Error("style store is down"));
         }
-        styled.push({ outboundText: input.outboundText, sourceDraftId: input.sourceDraftId, ...(input.approvedByUserId === undefined ? {} : { approvedByUserId: input.approvedByUserId }) });
+        styled.push({ outboundText: input.outboundText, sourceDraftId: input.sourceDraftId });
         return Promise.resolve();
       },
     },
@@ -109,7 +107,7 @@ describe("two colleagues, one review item", () => {
   });
 
   it("does nothing when the item was already resolved", async () => {
-    const { dependencies, calls } = harness({ decision: { kind: "ALREADY_RESOLVED", byActor: USER } });
+    const { dependencies, calls } = harness({ decision: { kind: "ALREADY_RESOLVED" } });
 
     expect(await resolveReview(dependencies, command())).toEqual({ status: "ALREADY_RESOLVED" });
     // The store was asked, and answered that the decision was not this caller's to make.
@@ -131,7 +129,7 @@ describe("an edited reply teaches style, never facts", () => {
     await resolveReview(dependencies, command({ action: { kind: "EDIT", text: "Saturdays we're open 10 till 6 😊", saveAsStyleExample: true } }));
 
     expect(styled).toEqual([
-      { outboundText: "Saturdays we're open 10 till 6 😊", sourceDraftId: "draft_1", approvedByUserId: USER.userId },
+      { outboundText: "Saturdays we're open 10 till 6 😊", sourceDraftId: "draft_1" },
     ]);
     // The port it is written through has no way to reach the factual corpus; the separation is structural.
     expect(Object.keys(dependencies.style)).toEqual(["recordEditedDraft"]);
@@ -247,64 +245,39 @@ describe("one decision, one write", () => {
   });
 });
 
-describe("only a person can authorize a send", () => {
-  for (const actor of [{ kind: "SYSTEM" }, { kind: "NATIVE_APP" }] as const) {
-    it(`refuses an approval from ${actor.kind} before anything is claimed`, async () => {
-      const { dependencies, calls, logs } = harness();
+describe("who is acting is not the caller's to say", () => {
+  it("has nowhere in a command to name a person", () => {
+    // A compile-time property, asserted here so it is not quietly given back. A command that could name
+    // someone is a claim about identity made by whoever built it, and a caller that can name anybody can
+    // approve a reply as a colleague who never signed in.
+    const named = { ...command(), actor: { kind: "USER", userId: "someone-else" } };
+    expect(Object.keys(command())).not.toContain("actor");
+    expect(Object.keys(named)).toContain("actor");
+  });
 
-      const outcome = await resolveReview(dependencies, command({ actor }));
+  it("asks the store for the send without telling it whose it is", async () => {
+    const { dependencies, scheduled } = harness();
 
-      // Human activity for the purpose of takeover is not the authority to send: neither of these can look
-      // at a draft and decide it may go out. Refused before the claim, so nothing is left half-resolved.
-      expect(outcome).toMatchObject({ status: "REJECTED" });
-      expect(calls).toEqual([]);
-      expect(logs).toContain("review.actor_cannot_approve");
-    });
+    await resolveReview(dependencies, command({ reviewMode: "HUMAN_AGENT" }));
 
-    it(`refuses an edit from ${actor.kind} too`, async () => {
-      const { dependencies, calls } = harness();
-
-      const outcome = await resolveReview(dependencies, command({ actor, action: { kind: "EDIT", text: "we open at 10", saveAsStyleExample: true } }));
-
-      expect(outcome).toMatchObject({ status: "REJECTED" });
-      expect(calls).toEqual([]);
-    });
-
-    it(`still lets ${actor.kind} claim and dismiss, which is takeover rather than authority`, async () => {
-      const claiming = harness();
-      expect(await resolveReview(claiming.dependencies, command({ actor, action: { kind: "CLAIM" } }))).toEqual({ status: "CLAIMED" });
-
-      const dismissing = harness();
-      expect(await resolveReview(dismissing.dependencies, command({ actor, action: { kind: "DISMISS" } }))).toEqual({ status: "DISMISSED" });
-    });
-  }
+    // Only *which* send is authorized travels from here. The *who* is the store's own authenticated
+    // identity, taken from the authorization the request was issued under.
+    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT" }]);
+  });
 });
 
 describe("the authority a decision grants", () => {
-  it("records who approved it, when, and which send they authorized", async () => {
-    const { dependencies, scheduled } = harness();
-
-    await resolveReview(dependencies, command());
-
-    // Persisted with the delivery, because the send happens later and in another process. An approval
-    // that lived only in this call would arrive there as automation — which is how the human-support
-    // path became unreachable and how a DRAFT-mode approval held itself.
-    expect(scheduled.map((entry) => entry.authority)).toEqual([
-      { kind: "HUMAN_APPROVED", approvedByUserId: USER.userId, approvedAt: NOW, reviewMode: "NORMAL" },
-    ]);
-  });
-
   it("carries the human-support intent, which is not the same authority as an ordinary reply", async () => {
     const { dependencies, scheduled, logs } = harness();
 
     const outcome = await resolveReview(dependencies, command({ reviewMode: "HUMAN_AGENT" }));
 
     // A deliberate human action is what makes the path available; it is not what makes it permitted. The
-    // coordinator still re-checks eligibility immediately before dispatch.
+    // coordinator still re-checks eligibility immediately before dispatch. Which send was authorized is
+    // part of the authority the store records, because approving an ordinary reply is not agreeing to a
+    // tagged one.
     expect(outcome.status).toBe("SCHEDULED");
-    expect(scheduled.map((entry) => entry.authority)).toEqual([
-      { kind: "HUMAN_APPROVED", approvedByUserId: USER.userId, approvedAt: NOW, reviewMode: "HUMAN_AGENT" },
-    ]);
+    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT" }]);
     expect(logs).toContain("review.scheduled");
   });
 });

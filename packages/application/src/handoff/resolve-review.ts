@@ -14,7 +14,7 @@
  *   business sounds; it does not make the claims inside it true. Promoting human text into the factual
  *   corpus would let one hurried message become evidence for every later answer.
  */
-import type { Actor, ReviewMode, SendAuthority, UserId } from "@omnichannel/domain";
+import type { ReviewMode } from "@omnichannel/domain";
 
 export type ReviewAction =
   /** Send the draft exactly as the model wrote it. */
@@ -29,13 +29,20 @@ export type ReviewAction =
 export interface ReviewCommand {
   readonly scope: { readonly workspaceId: string; readonly businessProfileId: string; readonly conversationId: string };
   readonly draftId: string;
-  readonly actor: Actor;
   readonly action: ReviewAction;
   /** Present when the review exists because a provider's human-support exception is the only way to reply. */
   readonly reviewMode: ReviewMode;
 }
 
 /**
+ * Who is acting is **not** part of a command.
+ *
+ * It is a property of the authorization the request was issued under, and the store holds that. A command
+ * that named a person would be a claim about identity made by the caller, and a caller that can name
+ * anybody can approve a reply as somebody who never signed in — attributing a send, and the ownership of a
+ * conversation, to a colleague who did nothing. So there is nowhere here to put a user id, and the store
+ * stamps the authenticated one.
+ *
  * How a decision ended. Every one of these is a *committed* state, not a step towards one.
  *
  * `FOREIGN_CONVERSATION` is a refusal, not a race: the draft belongs to a different conversation than the
@@ -47,7 +54,7 @@ export type ReviewDecision =
   | { readonly kind: "DISMISSED" }
   | { readonly kind: "CLAIMED" }
   /** Someone else got there first; their decision stands and this one changes nothing. */
-  | { readonly kind: "ALREADY_RESOLVED"; readonly byActor?: Actor }
+  | { readonly kind: "ALREADY_RESOLVED" }
   | { readonly kind: "GONE" }
   | { readonly kind: "FOREIGN_CONVERSATION" };
 
@@ -66,7 +73,8 @@ export interface ReviewStore {
   resolveApproval(input: {
     readonly draftId: string;
     readonly conversationId: string;
-    readonly authority: SendAuthority;
+    /** Which send is being authorized. *Who* authorizes it is the store's own authenticated identity. */
+    readonly reviewMode: ReviewMode;
     /** The person's own wording, when they changed it. Written in the same transaction as everything else. */
     readonly editedText?: string;
     readonly at: Date;
@@ -75,17 +83,11 @@ export interface ReviewStore {
   resolveDismissal(input: {
     readonly draftId: string;
     readonly conversationId: string;
-    readonly actor: Actor;
     readonly at: Date;
     readonly note?: string;
   }): Promise<ReviewDecision>;
-  /** Takes the conversation for this person without sending anything, in one transaction. */
-  resolveClaim(input: {
-    readonly draftId: string;
-    readonly conversationId: string;
-    readonly actor: Actor;
-    readonly at: Date;
-  }): Promise<ReviewDecision>;
+  /** Takes the conversation for the authenticated person without sending anything, in one transaction. */
+  resolveClaim(input: { readonly draftId: string; readonly conversationId: string; readonly at: Date }): Promise<ReviewDecision>;
 }
 
 /**
@@ -98,7 +100,6 @@ export interface StyleLearningStore {
     readonly businessProfileId: string;
     readonly inboundContext: string;
     readonly outboundText: string;
-    readonly approvedByUserId?: string;
     readonly sourceDraftId: string;
   }): Promise<void>;
 }
@@ -137,26 +138,12 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   const target = { draftId: command.draftId, conversationId: command.scope.conversationId, at };
 
   if (command.action.kind === "CLAIM") {
-    return outcomeOf(dependencies, fields, await dependencies.reviews.resolveClaim({ ...target, actor: command.actor }));
+    return outcomeOf(dependencies, fields, await dependencies.reviews.resolveClaim(target));
   }
 
   if (command.action.kind === "DISMISS") {
     const note = command.action.note;
-    return outcomeOf(
-      dependencies,
-      fields,
-      await dependencies.reviews.resolveDismissal({ ...target, actor: command.actor, ...(note === undefined ? {} : { note }) }),
-    );
-  }
-
-  // Sending is the one decision only a person can make. A `SYSTEM` or `NATIVE_APP` actor is human activity
-  // for the purpose of takeover — a message sent from the Instagram app is a person acting — but neither can
-  // look at a draft and decide it may go out, and the authority to send is what approving grants. Refused
-  // here, before anything is claimed, so a rejected command leaves no trace on the queue.
-  const approver = approvingUser(command.actor);
-  if (approver === undefined) {
-    dependencies.log.warn("review.actor_cannot_approve", { ...fields, actorKind: command.actor.kind });
-    return { status: "REJECTED", reason: "only a signed-in person can approve or edit a reply" };
+    return outcomeOf(dependencies, fields, await dependencies.reviews.resolveDismissal({ ...target, ...(note === undefined ? {} : { note }) }));
   }
 
   // The one route out. Whether it is actually sent is still the coordinator's decision, made against live
@@ -164,17 +151,13 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   //
   // What travels with it is the authority: who approved this, when, and which send they authorized. It is
   // persisted with the delivery rather than passed along in memory, because the send happens later, in
-  // another process, and an approval that only existed in this call would arrive there as automation.
-  const authority: SendAuthority = {
-    kind: "HUMAN_APPROVED",
-    approvedByUserId: approver,
-    approvedAt: at,
-    reviewMode: command.reviewMode,
-  };
+  // another process, and an approval that only existed in this call would arrive there as automation. The
+  // *who* is the store's, taken from the authorization this request was issued under: this layer decides
+  // what happens, never on whose behalf.
   const edited = command.action.kind === "EDIT";
   const decision = await dependencies.reviews.resolveApproval({
     ...target,
-    authority,
+    reviewMode: command.reviewMode,
     ...(command.action.kind === "EDIT" ? { editedText: command.action.text } : {}),
   });
 
@@ -188,11 +171,6 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   }
   dependencies.log.info("review.scheduled", { ...fields, operationId: decision.operationId, edited, reviewMode: command.reviewMode });
   return { status: "SCHEDULED", operationId: decision.operationId, edited };
-}
-
-/** Only a signed-in person can grant the authority to send; everything else is refused by the type. */
-function approvingUser(actor: Actor): UserId | undefined {
-  return actor.kind === "USER" ? actor.userId : undefined;
 }
 
 /** The committed decision, in the vocabulary the caller uses, with the one line of audit it deserves. */
@@ -235,7 +213,6 @@ async function learnFromEdit(dependencies: ReviewDependencies, command: ReviewCo
       businessProfileId: command.scope.businessProfileId,
       inboundContext,
       outboundText: text,
-      ...(command.actor.kind === "USER" ? { approvedByUserId: command.actor.userId } : {}),
       sourceDraftId: command.draftId,
     });
   } catch (error) {

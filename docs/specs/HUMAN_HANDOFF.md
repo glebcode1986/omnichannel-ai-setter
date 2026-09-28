@@ -61,9 +61,17 @@ can do — a slow store, a failed lookup — may stand between a person's click 
 
 Approving or editing a draft **grants an authority**, and only a signed-in person can grant it. `SYSTEM` and
 `NATIVE_APP` are actors in the takeover sense — a message sent from the Instagram app is a person acting —
-but neither can look at a draft and decide it may go out, so an approval or edit from one is refused before
-anything is claimed. The type carries a user id rather than an actor, and the table's CHECK constraint says
-the same thing, so the invariant holds at the boundary as well as in the use case.
+but neither can look at a draft and decide it may go out. The type carries a user id rather than an actor,
+and the table's CHECK constraint says the same thing, so the invariant holds at the boundary as well as in
+the use case.
+
+**Who is acting is never part of a command.** It is a property of the authorization the request was issued
+under, and the review store — built from that `BusinessProfileContext` — stamps it: the approval, the
+conversation's new ownership and the style example a person's wording becomes are all attributed to that
+authenticated member. A command that could name someone would be a claim about identity made by whoever
+built it, and a caller that can name anybody can approve a reply as a colleague who never signed in,
+attributing both the send and the ownership of a conversation to them. There is nowhere in a review command
+to put a user id.
 
 That authority is persisted with the delivery:
 who approved it, when, and which send they authorized (an ordinary reply, or the provider's human-support

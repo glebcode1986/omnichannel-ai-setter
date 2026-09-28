@@ -17,7 +17,11 @@
  * authority and the reply would describe two different actions.
  *
  * Unlike delivery, these operations are taken on behalf of a signed-in member, so every one of them is
- * scoped by an authorized `BusinessProfileContext` rather than by a queue job's own row.
+ * scoped by an authorized `BusinessProfileContext` rather than by a queue job's own row — and the person
+ * they are attributed to is that context's own authenticated user, never one the caller named. A caller
+ * that could name anybody could approve a reply as a colleague who never signed in, attributing both the
+ * send and the ownership of a conversation to them. The identity is not an argument here; it is a property
+ * of the authorization this store was built from.
  */
 import type { ReviewDecision, ReviewStore, StyleLearningStore } from "@omnichannel/application";
 import { randomUUID } from "node:crypto";
@@ -29,6 +33,8 @@ import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export function createReviewStore(db: DbClient, context: BusinessProfileContext): ReviewStore {
   const scope = profileScopeOf(context);
+  /** The authenticated member this store acts for. Everything it writes is attributed to them. */
+  const actingUser: Actor = { kind: "USER", userId: context.userId };
   const draftKey = (draftId: string) => ({ workspaceId_businessProfileId_id: { ...scope, id: draftId } });
   const conversationKey = (conversationId: string) => ({ workspaceId_businessProfileId_id: { ...scope, id: conversationId } });
 
@@ -62,7 +68,8 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
   };
 
   return {
-    async resolveApproval({ draftId, conversationId, authority, editedText, at }) {
+    async resolveApproval({ draftId, conversationId, reviewMode, editedText, at }) {
+      const authority: SendAuthority = { kind: "HUMAN_APPROVED", approvedByUserId: context.userId, approvedAt: at, reviewMode };
       return db.$transaction(async (tx) => {
         const opened = await openDecision(tx, { draftId, conversationId });
         if ("refusal" in opened) {
@@ -108,7 +115,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
       });
     },
 
-    async resolveDismissal({ draftId, conversationId, actor, at, note }) {
+    async resolveDismissal({ draftId, conversationId, at, note }) {
       return db.$transaction(async (tx) => {
         const opened = await openDecision(tx, { draftId, conversationId });
         if ("refusal" in opened) {
@@ -123,12 +130,11 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         });
         // Dismissing hands the conversation back: nobody is holding it and nothing is waiting.
         await tx.conversation.update({ where: conversationKey(conversationId), data: NO_OWNERSHIP });
-        void actor;
         return { kind: "DISMISSED" };
       });
     },
 
-    async resolveClaim({ draftId, conversationId, actor, at }) {
+    async resolveClaim({ draftId, conversationId, at }) {
       return db.$transaction(async (tx) => {
         const opened = await openDecision(tx, { draftId, conversationId });
         if ("refusal" in opened) {
@@ -137,7 +143,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         if (!(await winClaim(tx, draftId, at))) {
           return { kind: "ALREADY_RESOLVED" };
         }
-        await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(actor, at) });
+        await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(actingUser, at) });
         return { kind: "CLAIMED" };
       });
     },
@@ -220,7 +226,9 @@ export function createStyleLearningStore(db: DbClient, context: BusinessProfileC
           // The provenance the schema admits for a reply a person actually wrote or corrected.
           provenance: "HUMAN_EDITED_DRAFT",
           sourceDraftId: input.sourceDraftId,
-          ...(input.approvedByUserId === undefined ? {} : { approvedByUserId: input.approvedByUserId }),
+          // The authenticated member, like everywhere else: an example is evidence about how this business
+          // sounds, and whose wording it was is part of that evidence.
+          approvedByUserId: context.userId,
         },
       });
     },
