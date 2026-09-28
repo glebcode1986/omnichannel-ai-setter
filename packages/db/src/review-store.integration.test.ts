@@ -4,11 +4,14 @@
  * counted — so it is tested against a real server rather than a stub.
  */
 import { noRetrieval, resolveReview, type ReviewDependencies } from "@omnichannel/application";
-import { toUserId } from "@omnichannel/domain";
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAiDraftStore } from "./ai-draft-store";
 import { createDbClient, type DbClient } from "./client";
+import { addWorkspaceMember } from "./repositories/workspaces";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createReviewStore, createStyleLearningStore } from "./review-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededWorkspace, type SeededProfile } from "./testing/fixtures";
@@ -20,6 +23,8 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
   let workspace: SeededWorkspace;
   let profile: SeededProfile;
   let rival: DbClient;
+  /** A second signed-in member of the same Business Profile, so "two colleagues" means two people. */
+  let colleagueContext: BusinessProfileContext;
   let seq = 0;
 
   beforeAll(async () => {
@@ -27,6 +32,15 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     workspace = await seedWorkspace(database.db, "review");
     [profile] = workspace.profiles as [SeededProfile];
     rival = createDbClient({ connectionString: database.url });
+
+    const other = await database.db.user.create({ data: { name: "Review Colleague", email: `review-colleague-${randomUUID()}@example.test` } });
+    const workspaceContext = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: profile.context.workspaceId });
+    await addWorkspaceMember(database.db, workspaceContext, { userId: other.id, role: "ADMIN", businessProfileScope: "ALL" });
+    colleagueContext = await authorizeBusinessProfileAccess(database.db, {
+      userId: other.id,
+      workspaceId: profile.context.workspaceId,
+      businessProfileId: profile.businessProfileId,
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -34,7 +48,6 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     await database?.dispose();
   });
 
-  const actor = () => ({ kind: "USER", userId: toUserId(workspace.ownerUserId) }) as const;
   const scope = () => ({ workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId });
 
   const pendingDraft = async (): Promise<string> => {
@@ -62,9 +75,9 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     return aiDraftId;
   };
 
-  const dependencies = (client: DbClient): ReviewDependencies => ({
-    reviews: createReviewStore(client, profile.context),
-    style: createStyleLearningStore(client, profile.context),
+  const dependencies = (client: DbClient, as: BusinessProfileContext = profile.context): ReviewDependencies => ({
+    reviews: createReviewStore(client, as),
+    style: createStyleLearningStore(client, as),
     log: { info: () => undefined, warn: () => undefined },
     now: () => NOW,
     inboundContextFor: () => Promise.resolve("Are you open Saturday?"),
@@ -73,7 +86,6 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
   const command = (draftId: string, action: Parameters<typeof resolveReview>[1]["action"]) => ({
     scope: { ...scope(), conversationId: profile.conversationId },
     draftId,
-    actor: actor(),
     action,
     reviewMode: "NORMAL" as const,
   });
@@ -81,14 +93,36 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
   it("lets exactly one of two colleagues resolve the same item", async () => {
     const draftId = await pendingDraft();
 
+    // Two people, on two connections. Whoever loses must learn that they did not decide this: told
+    // "scheduled", they would believe a send was theirs — and for an edit, that wording they wrote went
+    // out when it was discarded.
     const [first, second] = await Promise.all([
       resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" })),
-      resolveReview(dependencies(rival), command(draftId, { kind: "APPROVE" })),
+      resolveReview(dependencies(rival, colleagueContext), command(draftId, { kind: "APPROVE" })),
     ]);
 
     expect([first.status, second.status].sort()).toEqual(["ALREADY_RESOLVED", "SCHEDULED"]);
     // And exactly one logical send exists, not two.
     expect(await database.db.deliveryJobRecord.count({ where: { ...scope(), draftId } })).toBe(1);
+  }, 120_000);
+
+  it("answers one person's retry with the send they already made", async () => {
+    const draftId = await pendingDraft();
+
+    // Two clicks at the same instant are a race even for one person, and either answer is truthful: one
+    // of them made the decision. What must not vary is how many sends exist.
+    const together = await Promise.all([
+      resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" })),
+      resolveReview(dependencies(rival), command(draftId, { kind: "APPROVE" })),
+    ]);
+    expect(together.map((outcome) => outcome.status)).toContain("SCHEDULED");
+    expect(await database.db.deliveryJobRecord.count({ where: { ...scope(), draftId } })).toBe(1);
+
+    // A retry *after* the decision committed — a lost answer, a reloaded page — is the case that has to be
+    // certain: the same person is told which operation is theirs, not that somebody else resolved it.
+    const scheduled = together.find((outcome) => outcome.status === "SCHEDULED");
+    const retried = await resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" }));
+    expect(retried).toEqual(scheduled);
   }, 120_000);
 
   it("schedules through the delivery coordinator rather than sending", async () => {
