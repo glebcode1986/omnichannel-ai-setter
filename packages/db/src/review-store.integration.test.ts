@@ -125,6 +125,81 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     expect(retried).toEqual(scheduled);
   }, 120_000);
 
+  /**
+   * The same person asking for something different is not a replay.
+   *
+   * A delivery already created may only be handed back to a request that describes the same decision. The
+   * earlier rule — same person, same send — answered "scheduled" to an edit whose wording never won, and
+   * to a human-support request whose stored intent is an ordinary reply.
+   */
+  const differingDecisions: readonly {
+    readonly what: string;
+    readonly first: Parameters<typeof command>[1];
+    readonly second: Parameters<typeof command>[1];
+    readonly reviewMode?: "HUMAN_AGENT";
+  }[] = [
+    {
+      what: "an approval followed by an edit",
+      first: { kind: "APPROVE" },
+      second: { kind: "EDIT", text: "Actually, 11 till 5 on Saturdays.", saveAsStyleExample: true },
+    },
+    {
+      what: "an edit followed by different wording",
+      first: { kind: "EDIT", text: "We're open 10 till 6.", saveAsStyleExample: true },
+      second: { kind: "EDIT", text: "We're open 11 till 5.", saveAsStyleExample: true },
+    },
+    {
+      what: "the same wording asked to be learned from this time",
+      first: { kind: "EDIT", text: "We're open 10 till 6.", saveAsStyleExample: false },
+      second: { kind: "EDIT", text: "We're open 10 till 6.", saveAsStyleExample: true },
+    },
+  ];
+
+  for (const { what, first, second } of differingDecisions) {
+    it(`refuses ${what} rather than reporting the earlier send as this one`, async () => {
+      const draftId = await pendingDraft();
+      const committed = await resolveReview(dependencies(database.db), command(draftId, first));
+      expect(committed.status).toBe("SCHEDULED");
+      const examplesAfterFirst = await database.db.styleExample.count({ where: { ...scope(), sourceDraftId: draftId } });
+
+      const later = await resolveReview(dependencies(database.db), command(draftId, second));
+
+      // Nothing new was sent, so nothing new may be claimed — and the losing wording is not evidence of
+      // how this business sounds, because it never went to anybody.
+      expect(later).toEqual({ status: "ALREADY_RESOLVED" });
+      expect(await database.db.deliveryJobRecord.count({ where: { ...scope(), draftId } })).toBe(1);
+      expect(await database.db.styleExample.count({ where: { ...scope(), sourceDraftId: draftId } })).toBe(examplesAfterFirst);
+    }, 120_000);
+  }
+
+  it("refuses a human-support request for a send already authorized as an ordinary reply", async () => {
+    const draftId = await pendingDraft();
+    expect((await resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" }))).status).toBe("SCHEDULED");
+
+    const tagged = await resolveReview(dependencies(database.db), {
+      ...command(draftId, { kind: "APPROVE" }),
+      reviewMode: "HUMAN_AGENT" as const,
+    });
+
+    // The stored delivery carries the ordinary intent. Reporting this as scheduled would say a tagged
+    // human-agent send was authorized when nothing of the sort is recorded (ADR-014).
+    expect(tagged).toEqual({ status: "ALREADY_RESOLVED" });
+    const job = await database.db.deliveryJobRecord.findFirstOrThrow({ where: { ...scope(), draftId }, select: { approvedReviewMode: true } });
+    expect(job.approvedReviewMode).toBe("NORMAL");
+  }, 120_000);
+
+  it("learns from a person's wording once, however many times the same decision arrives", async () => {
+    const draftId = await pendingDraft();
+    const edit = { kind: "EDIT", text: "Saturdays we're open 10 till 6 😊", saveAsStyleExample: true } as const;
+
+    const first = await resolveReview(dependencies(database.db), command(draftId, edit));
+    const replay = await resolveReview(dependencies(database.db), command(draftId, edit));
+
+    expect(replay).toEqual(first);
+    // One sentence, counted once: a duplicate would weight it twice in every later answer.
+    expect(await database.db.styleExample.count({ where: { ...scope(), sourceDraftId: draftId } })).toBe(1);
+  }, 120_000);
+
   it("schedules through the delivery coordinator rather than sending", async () => {
     const draftId = await pendingDraft();
 

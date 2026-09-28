@@ -258,11 +258,23 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     await expectCheckViolation(job({ authority: "HUMAN_APPROVED" }), "delivery_jobs_authority_check");
     await expectCheckViolation(job({ authority: "HUMAN_APPROVED", approvedAt: new Date(), approvedReviewMode: "NORMAL" }), "delivery_jobs_authority_check");
     await expectCheckViolation(job({ authority: "HUMAN_APPROVED", approvedByUserId: a.ownerUserId, approvedAt: new Date() }), "delivery_jobs_authority_check");
+    // Including the decision it came from: without it, nothing can tell a replay from a different ask.
+    await expectCheckViolation(
+      job({ authority: "HUMAN_APPROVED", approvedByUserId: a.ownerUserId, approvedAt: new Date(), approvedReviewMode: "NORMAL" }),
+      "delivery_jobs_authority_check",
+    );
     // And automation names nobody: a row cannot carry an approval it does not claim to have.
     await expectCheckViolation(job({ approvedByUserId: a.ownerUserId }), "delivery_jobs_authority_check");
+    await expectCheckViolation(job({ decisionKey: "some-decision" }), "delivery_jobs_authority_check");
 
     await expect(
-      job({ authority: "HUMAN_APPROVED", approvedByUserId: a.ownerUserId, approvedAt: new Date(), approvedReviewMode: "HUMAN_AGENT" }),
+      job({
+        authority: "HUMAN_APPROVED",
+        approvedByUserId: a.ownerUserId,
+        approvedAt: new Date(),
+        approvedReviewMode: "HUMAN_AGENT",
+        decisionKey: "a-decision",
+      }),
     ).resolves.toMatchObject({ authority: "HUMAN_APPROVED" });
   });
 

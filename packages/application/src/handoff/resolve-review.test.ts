@@ -14,10 +14,12 @@ const command = (overrides: Partial<ReviewCommand> = {}): ReviewCommand => ({
   ...overrides,
 });
 
-function harness(options: { decision?: ReviewDecision; styleFails?: boolean; contextFails?: boolean; inboundContext?: string | undefined } = {}) {
+function harness(
+  options: { decision?: ReviewDecision; replayed?: boolean; styleFails?: boolean; contextFails?: boolean; inboundContext?: string | undefined } = {},
+) {
   const calls: string[] = [];
   const styled: { outboundText: string; sourceDraftId: string }[] = [];
-  const scheduled: { reviewMode: ReviewMode; editedText?: string }[] = [];
+  const scheduled: { reviewMode: ReviewMode; saveAsStyleExample: boolean; editedText?: string }[] = [];
   const logs: string[] = [];
   let decisions = 0;
 
@@ -30,14 +32,14 @@ function harness(options: { decision?: ReviewDecision; styleFails?: boolean; con
     if (decisions > 1) {
       return { kind: "ALREADY_RESOLVED" };
     }
-    return kind === "SCHEDULED" ? { kind: "SCHEDULED", operationId } : { kind };
+    return kind === "SCHEDULED" ? { kind: "SCHEDULED", operationId, replayed: options.replayed ?? false } : { kind };
   };
 
   const dependencies: ReviewDependencies = {
     reviews: {
       resolveApproval: (input) => {
-        calls.push(input.editedText === undefined ? "schedule" : `edit:${input.editedText}`);
-        scheduled.push({ reviewMode: input.reviewMode, ...(input.editedText === undefined ? {} : { editedText: input.editedText }) });
+        calls.push(input.decision.editedText === undefined ? "schedule" : `edit:${input.decision.editedText}`);
+        scheduled.push(input.decision);
         return Promise.resolve(answer("SCHEDULED"));
       },
       resolveDismissal: () => {
@@ -153,6 +155,16 @@ describe("an edited reply teaches style, never facts", () => {
     expect(calls).toEqual(["edit:We're open 10-6!", "style"]);
   });
 
+  it("does not learn the same wording twice when a decision is replayed", async () => {
+    const { dependencies, styled } = harness({ replayed: true });
+
+    await resolveReview(dependencies, command({ action: { kind: "EDIT", text: "Sure thing.", saveAsStyleExample: true } }));
+
+    // The store found this decision already committed, so nothing new was sent — and one sentence counted
+    // twice would weight it twice in every later answer.
+    expect(styled).toEqual([]);
+  });
+
   it("still sends the reply when even looking up the context fails", async () => {
     const { dependencies, calls, logs } = harness({ contextFails: true });
 
@@ -262,7 +274,7 @@ describe("who is acting is not the caller's to say", () => {
 
     // Only *which* send is authorized travels from here. The *who* is the store's own authenticated
     // identity, taken from the authorization the request was issued under.
-    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT" }]);
+    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT", saveAsStyleExample: false }]);
   });
 });
 
@@ -277,7 +289,7 @@ describe("the authority a decision grants", () => {
     // part of the authority the store records, because approving an ordinary reply is not agreeing to a
     // tagged one.
     expect(outcome.status).toBe("SCHEDULED");
-    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT" }]);
+    expect(scheduled).toEqual([{ reviewMode: "HUMAN_AGENT", saveAsStyleExample: false }]);
     expect(logs).toContain("review.scheduled");
   });
 });

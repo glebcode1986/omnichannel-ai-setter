@@ -50,7 +50,18 @@ export interface ReviewCommand {
  * the authority and the recipient would describe two different actions.
  */
 export type ReviewDecision =
-  | { readonly kind: "SCHEDULED"; readonly operationId: string }
+  | {
+      readonly kind: "SCHEDULED";
+      readonly operationId: string;
+      /**
+       * True when this call found the decision already committed rather than committing it.
+       *
+       * The send is the same either way, which is why both are `SCHEDULED`. What differs is everything a
+       * caller might do *besides* sending: learning a style example twice from one piece of wording would
+       * weight it twice in every later answer.
+       */
+      readonly replayed: boolean;
+    }
   | { readonly kind: "DISMISSED" }
   | { readonly kind: "CLAIMED" }
   /** Someone else got there first; their decision stands and this one changes nothing. */
@@ -73,10 +84,24 @@ export interface ReviewStore {
   resolveApproval(input: {
     readonly draftId: string;
     readonly conversationId: string;
-    /** Which send is being authorized. *Who* authorizes it is the store's own authenticated identity. */
-    readonly reviewMode: ReviewMode;
-    /** The person's own wording, when they changed it. Written in the same transaction as everything else. */
-    readonly editedText?: string;
+    /**
+     * Everything that makes this decision the decision it is, apart from who made it — the store adds
+     * that, because it is the only layer that knows who authenticated.
+     *
+     * It is carried whole because a delivery already created may only be handed back to a request that
+     * describes *the same* decision. The same person asking for something different is not a replay: an
+     * approval, then an edit with new wording, then the same edit with a different review mode are three
+     * decisions, and answering the second two with the first one's send would report wording as sent that
+     * was discarded, and a human-support intent as authorized when the stored one is an ordinary reply.
+     */
+    readonly decision: {
+      /** The person's own wording, when they changed it. Absent means they approved it as written. */
+      readonly editedText?: string;
+      /** Which send is being authorized. *Who* authorizes it is the store's own authenticated identity. */
+      readonly reviewMode: ReviewMode;
+      /** Whether they asked for the wording to be learned from; a differing intent is a differing ask. */
+      readonly saveAsStyleExample: boolean;
+    };
     readonly at: Date;
   }): Promise<ReviewDecision>;
   /** Ends the draft without sending and hands the conversation back, in one transaction. */
@@ -155,10 +180,14 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   // *who* is the store's, taken from the authorization this request was issued under: this layer decides
   // what happens, never on whose behalf.
   const edited = command.action.kind === "EDIT";
+  const saveAsStyleExample = command.action.kind === "EDIT" && command.action.saveAsStyleExample;
   const decision = await dependencies.reviews.resolveApproval({
     ...target,
-    reviewMode: command.reviewMode,
-    ...(command.action.kind === "EDIT" ? { editedText: command.action.text } : {}),
+    decision: {
+      reviewMode: command.reviewMode,
+      saveAsStyleExample,
+      ...(command.action.kind === "EDIT" ? { editedText: command.action.text } : {}),
+    },
   });
 
   if (decision.kind !== "SCHEDULED") {
@@ -166,7 +195,10 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   }
   // After the commit, and never before it: what a person wrote is worth learning from, and it is worth
   // less than the reply they asked for. A style store that is down must not be able to lose the send.
-  if (command.action.kind === "EDIT" && command.action.saveAsStyleExample) {
+  //
+  // And only for the call that committed it. A replay is the same wording arriving twice; learning from it
+  // twice would weight one sentence double in every later answer.
+  if (command.action.kind === "EDIT" && command.action.saveAsStyleExample && !decision.replayed) {
     await learnFromEdit(dependencies, command, command.action.text);
   }
   dependencies.log.info("review.scheduled", { ...fields, operationId: decision.operationId, edited, reviewMode: command.reviewMode });
@@ -194,6 +226,7 @@ function outcomeOf(dependencies: ReviewDependencies, fields: Readonly<Record<str
       return { status: "DISMISSED" };
     case "SCHEDULED":
       return { status: "SCHEDULED", operationId: decision.operationId, edited: false };
+
   }
 }
 

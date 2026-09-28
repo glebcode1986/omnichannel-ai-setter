@@ -24,7 +24,7 @@
  * of the authorization this store was built from.
  */
 import type { ReviewDecision, ReviewStore, StyleLearningStore } from "@omnichannel/application";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { Actor, SendAuthority } from "@omnichannel/domain";
 
@@ -46,11 +46,11 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
    */
   const openDecision = async (
     tx: DbExecutor,
-    input: { readonly draftId: string; readonly conversationId: string },
-  ): Promise<{ readonly refusal: ReviewDecision } | { readonly ourOperationId: string | undefined }> => {
+    input: { readonly draftId: string; readonly conversationId: string; readonly decisionKey?: string },
+  ): Promise<{ readonly refusal: ReviewDecision } | { readonly replayOf: string | undefined }> => {
     const draft = await tx.aiDraft.findUnique({
       where: draftKey(input.draftId),
-      select: { conversationId: true, deliveryJob: { select: { operationId: true, approvedByUserId: true } } },
+      select: { conversationId: true, deliveryJob: { select: { operationId: true, decisionKey: true } } },
     });
     if (draft === null) {
       return { refusal: { kind: "GONE" } };
@@ -58,14 +58,18 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
     if (draft.conversationId !== input.conversationId) {
       return { refusal: { kind: "FOREIGN_CONVERSATION" } };
     }
-    // A delivery this member's own approval created: the same decision arriving twice — a retry after a
-    // lost answer, or a second click — and the same logical send, so it is named rather than refused.
+    // A delivery created by *this same decision*: a retry after a lost answer, or the same click twice.
+    // The send is already made, so it is named rather than refused.
     //
-    // A delivery *somebody else* created is not that. Telling a colleague "scheduled" for a decision they
-    // did not make hides that theirs changed nothing, and for an edit it would report their wording as
-    // sent when it was discarded. That is `ALREADY_RESOLVED`, which the claim below reaches on its own.
+    // Anything else is not a replay, however familiar it looks. A colleague's decision is obviously not
+    // this one — but neither is the same person asking for something different: an approval, then an edit
+    // with new wording, then that edit with a different review mode are three decisions. Answering the
+    // later ones with the first one's send would report wording as sent that was discarded, and a
+    // human-support intent as authorized when the stored one is an ordinary reply. That is
+    // `ALREADY_RESOLVED`, which the conditional claim reaches on its own.
     const job = draft.deliveryJob;
-    return { ourOperationId: job !== null && job.approvedByUserId === context.userId ? job.operationId : undefined };
+    const replay = input.decisionKey !== undefined && job !== null && job.decisionKey === input.decisionKey;
+    return { replayOf: replay && job !== null ? job.operationId : undefined };
   };
 
   /** One conditional UPDATE: only a draft still waiting for a decision can be claimed, and only once. */
@@ -75,16 +79,18 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
   };
 
   return {
-    async resolveApproval({ draftId, conversationId, reviewMode, editedText, at }) {
+    async resolveApproval({ draftId, conversationId, decision, at }) {
+      const { editedText, reviewMode } = decision;
       const authority: SendAuthority = { kind: "HUMAN_APPROVED", approvedByUserId: context.userId, approvedAt: at, reviewMode };
+      const decisionKey = keyOf(context.userId, decision);
       return db.$transaction(async (tx) => {
-        const opened = await openDecision(tx, { draftId, conversationId });
+        const opened = await openDecision(tx, { draftId, conversationId, decisionKey });
         if ("refusal" in opened) {
           return opened.refusal;
         }
-        if (opened.ourOperationId !== undefined) {
-          // One delivery per draft, enforced by a unique index; this caller already made this decision.
-          return { kind: "SCHEDULED", operationId: opened.ourOperationId };
+        if (opened.replayOf !== undefined) {
+          // One delivery per draft, enforced by a unique index; this very decision already made it.
+          return { kind: "SCHEDULED", operationId: opened.replayOf, replayed: true };
         }
         if (!(await winClaim(tx, draftId, at))) {
           return { kind: "ALREADY_RESOLVED" };
@@ -111,13 +117,13 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
             // A human has already decided, so there is no human-like delay left to simulate.
             scheduledFor: at,
             selectedDelayMs: 0,
-            ...authorityFieldsFor(authority),
+            ...authorityFieldsFor(authority, decisionKey),
           },
         });
         await tx.aiDraft.update({ where: draftKey(draftId), data: { status: "SCHEDULED" } });
         // Approving a reply is taking the conversation: the person who just spoke for the business owns it.
         await tx.conversation.update({ where: conversationKey(conversationId), data: ownershipFor(authority, at) });
-        return { kind: "SCHEDULED", operationId };
+        return { kind: "SCHEDULED", operationId, replayed: false };
       });
     },
 
@@ -200,7 +206,7 @@ function approverOf(authority: SendAuthority): string | undefined {
  * here would be one the send path has to guess at, and a guess is how an automated send acquires a
  * person's name.
  */
-function authorityFieldsFor(authority: SendAuthority) {
+function authorityFieldsFor(authority: SendAuthority, decisionKey: string) {
   if (authority.kind !== "HUMAN_APPROVED") {
     return { authority: "AUTOMATED" } as const;
   }
@@ -209,7 +215,30 @@ function authorityFieldsFor(authority: SendAuthority) {
     approvedByUserId: authority.approvedByUserId,
     approvedAt: authority.approvedAt,
     approvedReviewMode: authority.reviewMode,
+    decisionKey,
   } as const;
+}
+
+/**
+ * What makes a decision that decision: who made it, what they asked to send, on which path, and whether
+ * they asked to learn from their wording.
+ *
+ * A digest rather than the fields themselves, because it is compared and never read back — and because a
+ * reply's text has no business being copied into a second column to be matched on. The moment is
+ * deliberately *not* part of it: the same decision retried a minute later is the same decision.
+ */
+function keyOf(userId: string, decision: { editedText?: string; reviewMode: string; saveAsStyleExample: boolean }): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        userId,
+        // Absent means "send it as written", which is a different ask from any wording at all.
+        editedText: decision.editedText ?? null,
+        reviewMode: decision.reviewMode,
+        saveAsStyleExample: decision.saveAsStyleExample,
+      }),
+    )
+    .digest("hex");
 }
 
 /**

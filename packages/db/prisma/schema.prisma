@@ -716,6 +716,10 @@ model DeliveryJobRecord {
   approvedAt        DateTime?             @map("approved_at")
   /// Which send the person authorized: an ordinary reply, or the provider's human-support path.
   approvedReviewMode ReviewMode?          @map("approved_review_mode")
+  /// Digest of the decision this delivery came from: who, which action, the final wording, the review mode
+  /// and whether they asked to learn from it. A later request is the same decision only if it matches, so
+  /// a replay can be answered with this operation and anything else cannot.
+  decisionKey       String?               @map("decision_key")
   attemptCount      Int               @default(0) @map("attempt_count")
   claimedAt         DateTime?         @map("claimed_at")
   sentAt            DateTime?         @map("sent_at")

@@ -529,7 +529,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         change: () =>
           database.db.deliveryJobRecord.updateMany({
             where: { ...scope() },
-            data: { authority: "HUMAN_APPROVED", approvedByUserId: ownerUserId, approvedAt: NOW, approvedReviewMode: "NORMAL" },
+            data: { authority: "HUMAN_APPROVED", approvedByUserId: ownerUserId, approvedAt: NOW, approvedReviewMode: "NORMAL", decisionKey: "rewritten" },
           }),
       },
     ];

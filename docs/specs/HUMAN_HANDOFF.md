@@ -48,7 +48,16 @@ dependency between the parts left a draft permanently `CLAIMED` with nothing don
 somebody had already resolved it.
 
 A retry that finds the delivery already created is answered with the same operation rather than refused, so
-reporting a decision and committing it cannot disagree.
+reporting a decision and committing it cannot disagree — but **only a provably identical replay**. The
+decision's identity is persisted with the delivery: the authenticated person, the final wording (or its
+absence, for an approval as written), the review mode, and whether they asked to learn from it. The same
+person asking for something different is not a replay. An approval, then an edit with new wording, then
+that edit on the human-support path are three decisions; answering the later ones with the first one's send
+would report wording as sent that was discarded, and a tagged human-agent intent as authorized when the
+stored one is an ordinary reply.
+
+A replay is also told that it is one, so what a caller does *besides* sending can differ: a style example
+is learned from a person's wording once, not once per retry.
 
 Every decision also checks that the draft and the conversation named belong together, and fails closed on a
 mismatch. The delivery path derives the recipient from the draft, so approving a draft from one conversation

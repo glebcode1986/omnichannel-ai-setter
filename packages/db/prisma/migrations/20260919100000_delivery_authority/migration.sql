@@ -3,6 +3,7 @@ CREATE TYPE "DeliveryAuthorityKind" AS ENUM ('AUTOMATED', 'HUMAN_APPROVED');
 
 -- AlterTable
 ALTER TABLE "delivery_jobs" ADD COLUMN     "approved_at" TIMESTAMP(3),
+ADD COLUMN     "decision_key" TEXT,
 ADD COLUMN     "approved_by_user_id" TEXT,
 ADD COLUMN     "approved_review_mode" "ReviewMode",
 ADD COLUMN     "authority" "DeliveryAuthorityKind" NOT NULL DEFAULT 'AUTOMATED';
@@ -22,9 +23,11 @@ ALTER TABLE "delivery_jobs" ADD CONSTRAINT "delivery_jobs_authority_check" CHECK
   (
     "authority" = 'AUTOMATED'
     AND "approved_by_user_id" IS NULL AND "approved_at" IS NULL AND "approved_review_mode" IS NULL
+    AND "decision_key" IS NULL
   )
   OR (
     "authority" = 'HUMAN_APPROVED'
     AND "approved_by_user_id" IS NOT NULL AND "approved_at" IS NOT NULL AND "approved_review_mode" IS NOT NULL
+    AND "decision_key" IS NOT NULL
   )
 );
