@@ -431,6 +431,49 @@ describe.skipIf(!endToEndTestsEnabled())("the claim and the switch take the same
     expect(await claiming).toEqual({ kind: "CLAIMED" });
   }, 180_000);
 
+  /**
+   * A row that already exists can start or stop covering a send, so the trigger fires on more than
+   * `INSERT`. Editing one by hand during an incident is the same operator path as writing one.
+   */
+  it("makes editing a switch into coverage wait for the claims already in flight", async () => {
+    // A switch that covers nothing here, so the edit below is what changes coverage.
+    const inserted = await infra.db.$queryRaw<{ id: string }[]>`
+      INSERT INTO "automation_suspensions" ("id", "scope", "workspace_id", "reason", "since", "by_user_id", "updated_at")
+      VALUES (gen_random_uuid()::text, 'WORKSPACE', 'ws-somewhere-else', 'OPERATOR', ${NOW}, ${ownerUserId}, ${NOW})
+      RETURNING "id"`;
+    const id = inserted[0]?.id ?? "";
+    const lock = holdingKey(`WORKSPACE:${scope.workspaceId}`, "shared");
+    await lock.ready;
+
+    const editing = (async () =>
+      infra.db.$executeRaw`UPDATE "automation_suspensions" SET "workspace_id" = ${scope.workspaceId} WHERE "id" = ${id}`)();
+    await waitingOnAdvisoryLock();
+
+    lock.release();
+    await lock.transaction;
+    expect(await editing).toBe(1);
+  }, 180_000);
+
+  it("makes removing a switch wait too, so coverage cannot change underneath a claim", async () => {
+    const inserted = await infra.db.$queryRaw<{ id: string }[]>`
+      INSERT INTO "automation_suspensions" ("id", "scope", "workspace_id", "reason", "since", "by_user_id", "updated_at")
+      VALUES (gen_random_uuid()::text, 'WORKSPACE', ${scope.workspaceId}, 'OPERATOR', ${NOW}, ${ownerUserId}, ${NOW})
+      RETURNING "id"`;
+    const id = inserted[0]?.id ?? "";
+    const lock = holdingKey(`WORKSPACE:${scope.workspaceId}`, "shared");
+    await lock.ready;
+
+    // Deleting only ever makes a claim more permissive, so this ordering is not what keeps a send safe —
+    // it is what keeps the set of covering switches stable for the length of a claim, which is the
+    // property the re-read inside the claim is entitled to rely on.
+    const deleting = (async () => infra.db.$executeRaw`DELETE FROM "automation_suspensions" WHERE "id" = ${id}`)();
+    await waitingOnAdvisoryLock();
+
+    lock.release();
+    await lock.transaction;
+    expect(await deleting).toBe(1);
+  }, 180_000);
+
   it("makes turning a switch on wait for the claims already in flight, even by raw SQL", async () => {
     const lock = holdingKey("GLOBAL", "shared");
     await lock.ready;
