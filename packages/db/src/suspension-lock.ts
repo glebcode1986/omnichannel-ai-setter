@@ -6,16 +6,20 @@
  * parent the claim already holds `FOR UPDATE` — has nothing to hang on. A `GLOBAL` switch names no row at
  * all, so no row lock could ever cover it. Advisory locks give the same ordering without a parent row.
  *
- * A claim takes, in *shared* mode, every key that could cover it; a writer takes its own key exclusively.
+ * A claim takes, in *shared* mode, every key that could cover it. The other side is **not** application
+ * code: a `BEFORE INSERT OR UPDATE OR DELETE` trigger on `automation_suspensions` takes the matching key
+ * exclusively, so every writer participates — including the direct SQL an operator runs during an
+ * incident, which `RELIABILITY_INCIDENTS.md` documents as how the switch is pulled today. A lock taken in
+ * a store method would only bind callers who went through that method, which is the one guarantee this
+ * mechanism cannot afford.
+ *
  * Shared holders do not block one another, so claims stay as concurrent as they were, while a switch
- * being turned on waits for the claims already in flight and blocks the ones that follow until it has
+ * being written waits for the claims already in flight and blocks the ones that follow until it has
  * committed. Neither side can believe it went first.
  *
- * The keys live here, in one place, because the whole mechanism rests on both sides naming a switch
- * identically — and two copies of a naming convention is how that stops being true.
- *
- * Lifting a switch deliberately takes no lock. Removing coverage can only ever make a claim more
- * permissive, and a claim that ran just before a lift simply holds the delivery and is retried.
+ * So the keys are spelled twice — here and in the trigger — which is exactly the drift this file's
+ * existence is meant to prevent. `suspension-lock.integration.test.ts` closes that by asserting the two
+ * derivations hash identically for every scope.
  */
 export type SuspensionLockKey = string;
 
@@ -33,7 +37,12 @@ export function suspensionLockKeysFor(target: {
   ];
 }
 
-/** The single key a switch of this scope is written under; it must be one of the keys above. */
+/**
+ * The single key a switch of this scope is written under; it must be one of the keys above.
+ *
+ * Nothing in production calls this any more — the trigger derives the key itself, which is the point. It
+ * is the TypeScript half of the agreement, kept so a test can hold the two spellings against each other.
+ */
 export function suspensionLockKeyOf(input: {
   readonly scope: "GLOBAL" | "WORKSPACE" | "BUSINESS_PROFILE" | "CHANNEL_ACCOUNT";
   readonly workspaceId?: string | null;

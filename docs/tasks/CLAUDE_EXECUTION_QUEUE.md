@@ -16,10 +16,15 @@ Nothing is merged to `main`.
 
 ### Current gate — PR #72 / P3-03 (Issue #56)
 
-**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) is now the earliest unresolved
+**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) is the earliest unresolved
 gate.** Branch `feat/p3-03-reliability`, carrying reliability controls, health, kill switches and
 reconciliation, with the accepted #71 head merged down into it. Everything before it in the chain has an
-independent PASS at its published head.
+independent PASS at its published head, and nothing is downstream of #72.
+
+Two review findings on the kill switch are addressed on the branch: the switch is read with the state the
+claim binds and re-asserted inside the claim, and activation is ordered against in-flight claims by a
+trigger on `automation_suspensions` rather than by a lock in a store method — so the direct SQL an
+operator runs during an incident participates too. No later stage is authorized.
 
 ### Accepted and propagated
 

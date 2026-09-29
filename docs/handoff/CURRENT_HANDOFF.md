@@ -129,6 +129,15 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**A kill switch is only as strong as the boundary it is enforced at (#56 / PR #72).** Binding the switch
+to the delivery claim was not enough on its own: the ordering lived in a store method, so it bound callers
+who went through that method and nobody else — while this spec's own incident guidance says the table is
+written to by hand. A `BEFORE INSERT OR UPDATE OR DELETE` trigger now takes the scope's advisory key, so
+every activation route participates, including direct SQL. The cost is the key being spelled in both SQL
+and TypeScript, and a mismatch has no symptom — the claim would simply stop waiting — so a test holds the
+two derivations against each other and pins the property that matters: a switch that covers a send derives
+a key that send's claim already holds. See `docs/specs/RELIABILITY_INCIDENTS.md`.
+
 **A kill switch is not a request for someone to look (#56 / PR #72).** Merging the accepted #71 head down
 raised the question directly: the policy engine now skips the gates that mean "a person should look at
 this" once a person has, and an operator's suspension sits among them in the same function. It stays

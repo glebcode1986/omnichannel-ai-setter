@@ -210,6 +210,56 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
     }, 180_000);
   }
 
+  /**
+   * The same window, with the writer an operator actually uses.
+   *
+   * `RELIABILITY_INCIDENTS.md` says this is a table people write to by hand during an incident, and there
+   * is no operator HTTP surface in this version — so a direct `INSERT` is not an exotic bypass, it is the
+   * documented way the switch gets pulled. An ordering enforced in a store method would not bind it at
+   * all, which is why the ordering lives in a trigger on the table. Nothing below goes through
+   * `createSuspensionStore`, and all four scopes are covered because the trigger derives the key per row
+   * rather than per caller.
+   */
+  for (const { name, columns, values } of [
+    { name: "GLOBAL", columns: "", values: () => [] as string[] },
+    { name: "WORKSPACE", columns: ', "workspace_id"', values: () => [scope.workspaceId] },
+    { name: "BUSINESS_PROFILE", columns: ', "workspace_id", "business_profile_id"', values: () => [scope.workspaceId, scope.businessProfileId] },
+    { name: "CHANNEL_ACCOUNT", columns: ', "workspace_id", "channel_account_id"', values: () => [scope.workspaceId, channelAccountId] },
+  ]) {
+    it(`stops a send when a ${name} switch arrives as a direct SQL insert`, async () => {
+      const { conversationId, operationId } = await readyToSend();
+      let go = (): void => undefined;
+      let read = (): void => undefined;
+      const release = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      const hasRead = new Promise<void>((resolve) => {
+        read = resolve;
+      });
+      const { run, sends } = deliver(conversationId, operationId, read, release);
+
+      const running = run();
+      await hasRead;
+      const scopeColumnValues = values();
+      const placeholders = scopeColumnValues.map((_, index) => `$${String(index + 4)}`).join(", ");
+      await infra.db.$executeRawUnsafe(
+        `INSERT INTO "automation_suspensions" ("id", "scope", "reason", "since", "by_user_id", "updated_at"${columns})
+         VALUES (gen_random_uuid()::text, '${name}', 'OPERATOR', $1, $2, $3${scopeColumnValues.length === 0 ? "" : `, ${placeholders}`})`,
+        NOW,
+        ownerUserId,
+        NOW,
+        ...scopeColumnValues,
+      );
+      go();
+      await running;
+
+      expect(sends).toEqual([]);
+      const held = await heldStateOf(operationId);
+      expect(held.status).toBe("HELD_REVIEW");
+      expect(held.lastErrorMessage).toContain("AUTOMATION_SUSPENDED");
+    }, 180_000);
+  }
+
   it("still sends when the thing that commits in that window is not a switch that covers it", async () => {
     // The same interleaving with a switch on another workspace. Without this the test above would pass
     // just as well against code that refused every delivery it had paused.
@@ -381,17 +431,24 @@ describe.skipIf(!endToEndTestsEnabled())("the claim and the switch take the same
     expect(await claiming).toEqual({ kind: "CLAIMED" });
   }, 180_000);
 
-  it("makes turning a switch on wait for the claims already in flight", async () => {
+  it("makes turning a switch on wait for the claims already in flight, even by raw SQL", async () => {
     const lock = holdingKey("GLOBAL", "shared");
     await lock.ready;
 
-    // The writer's side of the same key: a switch cannot commit underneath a claim that already holds it.
-    const suspending = createSuspensionStore(infra.db).suspend({ scope: "GLOBAL", reason: "OPERATOR", since: NOW, byUserId: ownerUserId });
+    // The writer's side of the same key, and deliberately not through `createSuspensionStore`: the
+    // ordering has to bind the direct insert an operator runs, or it binds nothing that matters. What
+    // makes this wait is the trigger on the table, not any application code in the path.
+    // Started rather than merely constructed: a Prisma raw call is a lazy promise, and one that is only
+    // assigned has not reached the database at all — the poll below would then be waiting for nobody.
+    const inserting = (async () =>
+      infra.db.$executeRaw`
+        INSERT INTO "automation_suspensions" ("id", "scope", "reason", "since", "by_user_id", "updated_at")
+        VALUES (gen_random_uuid()::text, 'GLOBAL', 'OPERATOR', ${NOW}, ${ownerUserId}, ${NOW})`)();
     await waitingOnAdvisoryLock();
 
     lock.release();
     await lock.transaction;
     // It did commit once the key was free; a writer that gave up would be a different failure.
-    expect((await suspending).id).not.toBe("");
+    expect(await inserting).toBe(1);
   }, 180_000);
 });

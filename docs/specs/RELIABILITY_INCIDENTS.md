@@ -44,17 +44,24 @@ the Inbox.
   read cannot be re-asserted when the send is taken, so a switch turned on while a reply was being judged
   reached no guard at all and the reply went out behind the operator. The switch is now part of the
   coordinator's single guarded read, and the claim re-reads it inside its own transaction.
-- **Turning a switch on is ordered against claims in flight.** `automation_suspensions` has no foreign key
-  to the workspace, profile or account it names — and a `GLOBAL` switch names no row at all — so there is
-  no parent row whose lock could order the two. An advisory key does it instead: a claim takes, in shared
-  mode, every key that could cover it, and a writer takes its own key exclusively. Claims never block one
-  another; a switch waits for the claims already in flight and blocks the ones after it. Lifting takes no
-  key, because removing coverage can only make a claim more permissive.
+- **Turning a switch on is ordered against claims in flight, by the database.** `automation_suspensions`
+  has no foreign key to the workspace, profile or account it names — and a `GLOBAL` switch names no row at
+  all — so there is no parent row whose lock could order the two. An advisory key does it instead: a claim
+  takes, in shared mode, every key that could cover it. **A trigger on the table takes the matching key on
+  every insert, update and delete**, which is the only way the rule can bind the direct SQL an operator
+  runs during an incident. Ordering it in a store method would bind callers who went through that method
+  and nobody else — and this section says in the next bullet that writing to this table by hand is
+  expected. Claims never block one another; a write waits for the claims already in flight and blocks the
+  ones after it.
+
+  The key is spelled twice, in the trigger and in `packages/db/src/suspension-lock.ts`, and a test asserts
+  the two derivations hash identically. A mismatch has no symptom: the claim would simply never wait.
 - **It is a record, not a flag.** Who, when, why, and who lifted it. Lifted switches are kept, because the
   question after an incident is always whether anyone turned it back on.
 - **A narrow scope must name what it narrows to.** A `BUSINESS_PROFILE` row with no profile named would be
   a global stop wearing a contained-looking label; a CHECK constraint refuses it, because this is a table
-  people write to by hand during an incident.
+  people write to by hand during an incident — the same reason the ordering above is a trigger and not a
+  convention in application code.
 
 The system may pull a global switch itself — currently only for `BACKLOG`, see below. System switches are
 distinguishable from operator switches (no user attributed), and nothing automatic may extend, shorten or

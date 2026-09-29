@@ -23,7 +23,6 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
-import { suspensionLockKeyOf } from "./suspension-lock";
 
 export interface SuspensionTargetQuery {
   readonly workspaceId: string;
@@ -117,28 +116,24 @@ export function createSuspensionStore(db: DbClient): SuspensionStore {
     },
 
     async suspend(input) {
-      // Inside a transaction that first takes this switch's key exclusively, so the switch and any
-      // delivery claim it would cover cannot both believe they went first: a claim already in flight
-      // finishes and sends, and every claim after this commit sees the switch. Without it the claim's
-      // guard had no predicate on suspensions at all, and a switch turned on while a send was being
-      // judged was simply invisible to it (#56).
-      return db.$transaction(async (tx) => {
-        // `$executeRaw`, not `$queryRaw`: the lock function returns `void`, which has no Prisma column type.
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${suspensionLockKeyOf(input)}, 0))`;
-        return tx.automationSuspension.create({
-          data: {
-            scope: input.scope,
-            workspaceId: input.workspaceId ?? null,
-            businessProfileId: input.businessProfileId ?? null,
-            channelAccountId: input.channelAccountId ?? null,
-            reason: input.reason,
-            note: input.note ?? null,
-            since: input.since,
-            until: input.until ?? null,
-            byUserId: input.byUserId ?? null,
-          },
-          select: { id: true },
-        });
+      // No lock is taken here, deliberately. Turning a switch on has to be ordered against the delivery
+      // claims it would cover, and a `BEFORE INSERT` trigger on the table does that for *every* writer —
+      // including the direct SQL an operator runs during an incident, which is the documented way this
+      // switch is pulled today. Doing it here as well would put the rule in two places, and the one in
+      // application code is the one that cannot be relied on (#56).
+      return db.automationSuspension.create({
+        data: {
+          scope: input.scope,
+          workspaceId: input.workspaceId ?? null,
+          businessProfileId: input.businessProfileId ?? null,
+          channelAccountId: input.channelAccountId ?? null,
+          reason: input.reason,
+          note: input.note ?? null,
+          since: input.since,
+          until: input.until ?? null,
+          byUserId: input.byUserId ?? null,
+        },
+        select: { id: true },
       });
     },
 
@@ -152,13 +147,9 @@ export function createSuspensionStore(db: DbClient): SuspensionStore {
     async holdSystemSuspension(input) {
       const active = await activeSystem(input.reason, input.at);
       if (active === undefined) {
-        // Same ordering as an operator's switch: this one is pulled by the system, and a send must not
-        // slip past it either.
-        await db.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${suspensionLockKeyOf({ scope: "GLOBAL" })}, 0))`;
-          await tx.automationSuspension.create({
-            data: { scope: "GLOBAL", reason: input.reason, note: input.note, since: input.at, until: input.until, byUserId: null },
-          });
+        // Ordered by the same trigger: a switch the system pulls is not a different kind of switch.
+        await db.automationSuspension.create({
+          data: { scope: "GLOBAL", reason: input.reason, note: input.note, since: input.at, until: input.until, byUserId: null },
         });
         return;
       }
