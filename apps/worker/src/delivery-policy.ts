@@ -16,6 +16,7 @@ import {
   evaluateHumanAgentEligibility,
   evaluateStandardWindow,
   instagramTimingPolicy,
+  type HumanAgentApproval,
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
 
@@ -25,14 +26,19 @@ const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowM
   humanAgentWindowMs: 7 * 24 * 60 * 60 * 1000,
 };
 
-export function createChannelStateResolver(now: () => Date): DeliveryChannelStatePort {
+/**
+ * @param humanAgentApproval whether Meta has approved *this app* for the Human Agent exception, from live
+ * configuration. It is an app-level capability, not a fact about an account, so nothing stores it — and
+ * hard-coding `UNKNOWN` here made the exception unreachable no matter what a person authorized, because
+ * this gate runs before the transport ever gets a say. Omitted still means `UNKNOWN`, which fails closed.
+ */
+export function createChannelStateResolver(now: () => Date, humanAgentApproval: HumanAgentApproval = "UNKNOWN"): DeliveryChannelStatePort {
   return {
     stateFor(context: DeliverySendContext): DeliveryChannelState {
       const windowInputs: WindowInputs = {
         ...DEFAULT_WINDOW,
         connectionState: context.account === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
-        // Approval is a live capability, not a stored boolean to be trusted; unknown fails closed.
-        humanAgentApproval: "UNKNOWN",
+        humanAgentApproval,
       };
       const ctx = {
         workspaceId: context.workspaceId,

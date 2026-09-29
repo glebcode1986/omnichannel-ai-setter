@@ -27,10 +27,11 @@ export interface RegistryAccount {
   readonly channelAccountId: string;
   readonly channel: ChannelType;
   readonly status: ChannelAccountStatus;
+  /** Instagram's own ID for this account. Taken from the resolved account row, never from a payload. */
+  readonly externalAccountId: string;
 }
 
 export interface InstagramBinding {
-  readonly externalAccountId: string;
   readonly secrets: InstagramSecrets;
   /**
    * Whether Meta has approved this app for the Human Agent exception. Read from live configuration rather
@@ -64,7 +65,9 @@ export function createInstagramAdapterRegistry(options: InstagramRegistryOptions
           workspaceId: account.workspaceId,
           businessProfileId: account.businessProfileId,
           channelAccountId: account.channelAccountId,
-          externalAccountId: binding.externalAccountId,
+          // From the account, not the binding: two places to state the same ID is one place for a
+          // deployment to name the wrong account.
+          externalAccountId: account.externalAccountId,
         },
         secrets: binding.secrets,
         http: options.http,

@@ -7,27 +7,22 @@ import {
   createIngestionStore,
   createKnowledgeRetriever,
   createStyleProfileStore,
-  createDeliveryStore,
-  createCredentialCipher,
   createStyleRetriever,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { resolveStyleProfile } from "@omnichannel/domain";
-import { createLogger, type Logger } from "@omnichannel/observability";
+import { createLogger } from "@omnichannel/observability";
 import { createQueueProducer, createQueueWorkers, createRedisConnection } from "@omnichannel/queue";
 
 import { createEmbeddings } from "./embeddings";
-import { loadWorkerEnv, type WorkerEnv } from "./env";
+import { loadWorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
-import type { DeliverySendPort } from "@omnichannel/application";
-
 import { createDebounceHandler } from "./debounce-handler";
-import { createInstagramDeliverySender } from "./instagram-sender";
+import { createDeliveryEngine } from "./delivery-engine";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
-import { createChannelStateResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -44,28 +39,6 @@ const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
 const DUPLICATE_SIGNAL_WINDOW_MS = 2_000;
 /** Bumped whenever the prompt changes, and persisted with every draft so output stays attributable. */
 const PROMPT_VERSION = "reply.v1";
-
-/**
- * Without Meta app credentials there is no adapter, and delivery refuses with a named reason rather than
- * pretending: a rejection that says why is safe, and an accepted send that never happened would not be.
- */
-function createSender(env: WorkerEnv, db: ReturnType<typeof createDbClient>, logger: Logger): DeliverySendPort {
-  if (env.INSTAGRAM_APP_SECRET === undefined || env.INSTAGRAM_VERIFY_TOKEN === undefined || env.CHANNEL_CREDENTIAL_KEY_ID === undefined || env.CHANNEL_CREDENTIAL_KEY === undefined) {
-    logger.warn("worker.no_channel_adapter", { reason: "instagram app or credential-encryption configuration is missing" });
-    return {
-      send: () => Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is configured for delivery" }),
-    };
-  }
-  return createInstagramDeliverySender({
-    db,
-    cipher: createCredentialCipher({ keyId: env.CHANNEL_CREDENTIAL_KEY_ID, keys: { [env.CHANNEL_CREDENTIAL_KEY_ID]: Buffer.from(env.CHANNEL_CREDENTIAL_KEY, "base64") } }),
-    appSecret: env.INSTAGRAM_APP_SECRET,
-    verifyToken: env.INSTAGRAM_VERIFY_TOKEN,
-    humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
-    now: () => new Date(),
-    logger,
-  });
-}
 
 function main(): void {
   let env;
@@ -117,7 +90,16 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
-        dispose: createDraftDisposition({ db, producer, logger, now: () => new Date(), random: Math.random }),
+        dispose: createDraftDisposition({
+          db,
+          producer,
+          logger,
+          now: () => new Date(),
+          random: Math.random,
+          // The same live answer the final gate below is given: one app-level capability, read once from
+          // configuration, so the two gates cannot disagree about whether the exception exists at all.
+          humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
+        }),
         retrieval: {
           knowledge: createKnowledgeRetriever(db),
           style: createStyleRetriever(db),
@@ -129,13 +111,7 @@ function main(): void {
         logger,
       });
       const deliver = createDeliveryHandler({
-        engine: {
-          store: createDeliveryStore(db),
-          sender: createSender(env, db, logger),
-          channel: createChannelStateResolver(() => new Date()),
-          log: logger,
-          now: () => new Date(),
-        },
+        engine: createDeliveryEngine(env, db, logger),
         logger,
       });
       const workers = createQueueWorkers({

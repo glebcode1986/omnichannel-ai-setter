@@ -9,10 +9,17 @@
  * elsewhere — which is the point of the architecture guard in the P2-09 contract: there is one policy
  * engine and one delivery coordinator, and no path around either.
  */
-import { evaluatePolicy, selectDeliveryDelayMs, type PolicyDecision } from "@omnichannel/application";
-import { instagramTimingPolicy, remainingAutomatedDispatchMs } from "@omnichannel/channel-instagram";
+import { evaluatePolicy, selectDeliveryDelayMs, type PolicyDecision, type PolicyInput } from "@omnichannel/application";
+import {
+  DEFAULT_HUMAN_AGENT_WINDOW_MS,
+  DEFAULT_STANDARD_WINDOW_MS,
+  evaluateHumanAgentEligibility,
+  instagramTimingPolicy,
+  remainingAutomatedDispatchMs,
+  type HumanAgentApproval,
+} from "@omnichannel/channel-instagram";
 import { requestHumanReview, scheduleAutomatedDelivery, type DbClient } from "@omnichannel/db";
-import { isReasonCode, NO_CAPABILITIES, toQuietHours } from "@omnichannel/domain";
+import { isReasonCode, NO_CAPABILITIES, toQuietHours, type ChannelAccountStatus } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import type { QueueProducer } from "@omnichannel/queue";
 
@@ -22,6 +29,16 @@ export interface DraftDispositionDependencies {
   readonly logger: Logger;
   readonly now: () => Date;
   readonly random: () => number;
+  /**
+   * Whether Meta has approved this app for the Human Agent exception, from live configuration.
+   *
+   * The same answer the final gate uses, from the same place, because the two decide the same question at
+   * different moments: whether a person *could* be offered the human-support path, and whether they may
+   * still take it. Hard-coded `UNAVAILABLE` here, a draft outside the window was skipped outright — no
+   * review item was ever created, so the path nobody could reach was also a path nobody was offered.
+   * Omitted means `UNKNOWN`, which fails closed.
+   */
+  readonly humanAgentApproval?: HumanAgentApproval;
 }
 
 export interface DraftDispositionInput {
@@ -38,6 +55,47 @@ export type DraftDisposition =
   | { readonly status: "SKIPPED"; readonly reasons: readonly string[] }
   /** The provider's budget was already spent before a delay could be chosen; a person decides. */
   | { readonly status: "DEADLINE_MISSED" };
+
+/**
+ * Whether a human could still reply under the provider's human-support exception.
+ *
+ * Computed from the customer's own last message — the provider's clock — and the app's live approval, with
+ * the adapter's own rules rather than a second copy of them. Anything unknown fails closed: a review item
+ * offering a path that does not exist is worse than no review item at all.
+ */
+function humanAgentAvailability(
+  dependencies: DraftDispositionDependencies,
+  where: { readonly workspaceId: string; readonly conversationId: string },
+  conversation: {
+    channelAccountId: string;
+    lastInboundAt: Date | null;
+    channelIdentity: { externalUserId: string; channelAccount: { status: ChannelAccountStatus } };
+  },
+  now: Date,
+): PolicyInput["humanAgent"] {
+  const eligibility = evaluateHumanAgentEligibility(
+    {
+      workspaceId: where.workspaceId,
+      channelAccountId: conversation.channelAccountId,
+      conversationId: where.conversationId,
+      participantExternalId: conversation.channelIdentity.externalUserId,
+      ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
+      now,
+    },
+    {
+      standardWindowMs: DEFAULT_STANDARD_WINDOW_MS,
+      humanAgentWindowMs: DEFAULT_HUMAN_AGENT_WINDOW_MS,
+      // The account's live state, not an assumption: one that needs re-auth cannot carry a human-support
+      // reply either, and offering the path in review would send a person down a route that fails.
+      connectionState: conversation.channelIdentity.channelAccount.status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
+      humanAgentApproval: dependencies.humanAgentApproval ?? "UNKNOWN",
+    },
+  );
+  if (eligibility.state === "ELIGIBLE") {
+    return { state: "ELIGIBLE", expiresAt: eligibility.expiresAt };
+  }
+  return { state: "UNAVAILABLE", reason: eligibility.state === "NOT_APPROVED" ? "NOT_APPROVED" : eligibility.state === "EXPIRED" ? "EXPIRED" : "UNKNOWN" };
+}
 
 export function createDraftDisposition(dependencies: DraftDispositionDependencies) {
   return async function disposeOfDraft(input: DraftDispositionInput): Promise<DraftDisposition> {
@@ -57,7 +115,7 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
         status: true,
         takeoverState: true,
         modeOverride: true,
-        channelIdentity: { select: { channelAccount: { select: { status: true } } } },
+        channelIdentity: { select: { externalUserId: true, channelAccount: { select: { status: true } } } },
       },
     });
     if (draft === null || conversation === null) {
@@ -109,8 +167,9 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
         conversation.lastInboundAt === null
           ? { state: "NOT_ELIGIBLE", reason: "no user-initiated conversation" }
           : { state: "OPEN_FREEFORM", expiresAt: new Date(conversation.lastInboundAt.getTime() + 24 * 60 * 60 * 1000) },
-      // Approval is a live capability; without one configured, the exception is unavailable and fails closed.
-      humanAgent: { state: "UNAVAILABLE", reason: "UNKNOWN" },
+      // Approval is a live capability, and eligibility is computed from the customer's own last message —
+      // the provider's clock — rather than assumed. Without an approved app it stays unavailable.
+      humanAgent: humanAgentAvailability(dependencies, { workspaceId: input.workspaceId, conversationId: input.conversationId }, conversation, now),
       ...(remainingMs === undefined ? {} : { dispatchDeadline: new Date(now.getTime() + remainingMs) }),
       replyCycle: "OWNED",
       now,

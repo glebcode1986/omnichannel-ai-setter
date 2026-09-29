@@ -17,8 +17,15 @@ Nothing is merged to `main`.
 ### Current gate — PR #71 / P2-09 (Issue #16)
 
 **PR [#71](https://github.com/glebcode1986/omnichannel-ai-setter/pull/71) is the earliest unresolved gate.**
-Branch `feat/p2-09-instagram-slice`, carrying the Instagram vertical slice, now with the accepted #70 head
+Branch `feat/p2-09-instagram-slice`, carrying the Instagram vertical slice, with the accepted #70 head
 merged down into it.
+
+The review at `d77cf92b4b7e860adfe2dfb1a47b33dc9d6babe0` named two composition blockers, and both are now
+addressed on the branch: `apps/web` registers an Instagram adapter per resolved channel account, reading
+that account's own credential through its relation and binding none at all when the webhook verify token
+is unconfigured; and the live `INSTAGRAM_HUMAN_AGENT_APPROVAL` reaches the draft disposition, the final
+channel-state resolver and the sender from one place, so an approved human-support reply is reachable
+through the shared gate instead of being refused before the transport is consulted.
 
 ### Accepted and propagated
 

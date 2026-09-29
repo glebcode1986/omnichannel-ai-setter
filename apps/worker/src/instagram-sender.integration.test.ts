@@ -6,6 +6,11 @@
  * tagged send happen exactly when a person approved *that* send, and never otherwise? The sender is run
  * against a real database, with the account, its credential and the conversation all read the way
  * production reads them, and a scripted HTTP port records what went on the wire.
+ *
+ * The second half of the file asks the same question *through the coordinator*, because the sender's own
+ * answer is not the system's. A gate before it decides whether the delivery is claimed at all, and while
+ * that gate said the exception was unavailable, the transport below it could never be chosen — the sender
+ * was correct and unreachable at the same time. A test that calls the sender directly cannot see that.
  */
 import {
   authorizeBusinessProfileAccess,
@@ -15,24 +20,37 @@ import {
   createContactWithChannelIdentity,
   createConversation,
   createCredentialCipher,
+  createAiDraftStore,
   createWorkspaceWithOwner,
+  appendInboundMessage,
   writeChannelCredential,
   type BusinessProfileContext,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES, toUserId } from "@omnichannel/domain";
-import type { DeliverySendCommand } from "@omnichannel/application";
+import { coordinateDelivery, noRetrieval, type DeliverySendCommand } from "@omnichannel/application";
 import type { InstagramHttpPort } from "@omnichannel/channel-instagram";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createDeliveryEngine } from "./delivery-engine";
 import { createInstagramDeliverySender } from "./instagram-sender";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z");
 /** Inside the human-support window (7 days) but outside the standard one (24 hours). */
 const LAST_INBOUND = new Date(NOW.getTime() - 48 * 60 * 60 * 1000);
-const CIPHER = createCredentialCipher({ keyId: "test-key", keys: { "test-key": Buffer.alloc(32, 7) } });
+/** The same key the worker would be configured with, so the engine below decrypts what this file wrote. */
+const CIPHER_KEY_ID = "test-key";
+const CIPHER_KEY = Buffer.alloc(32, 7);
+const CIPHER = createCredentialCipher({ keyId: CIPHER_KEY_ID, keys: { [CIPHER_KEY_ID]: CIPHER_KEY } });
 
-/** Records every request, so the assertion is about the wire and not about an intention. */
+/**
+ * Records every request, so the assertion is about the wire and not about an intention.
+ *
+ * The returned message id is unique across the whole file, not per port: an accepted send writes a
+ * `messages` row keyed by it, and two tests both reporting `mid-1` would collide on that key — a failure
+ * about the fixture wearing the costume of a failure about delivery.
+ */
+let wireSeq = 0;
 function scriptedHttp(): { readonly port: InstagramHttpPort; readonly requests: Parameters<InstagramHttpPort["send"]>[0][] } {
   const requests: Parameters<InstagramHttpPort["send"]>[0][] = [];
   return {
@@ -40,10 +58,11 @@ function scriptedHttp(): { readonly port: InstagramHttpPort; readonly requests: 
     port: {
       send(request) {
         requests.push(request);
+        wireSeq += 1;
         return Promise.resolve({
           kind: "RESPONSE" as const,
           status: 200,
-          body: JSON.stringify({ recipient_id: "ig-customer", message_id: `mid-${String(requests.length)}` }),
+          body: JSON.stringify({ recipient_id: "ig-customer", message_id: `mid-out-${String(wireSeq)}` }),
         });
       },
     },
@@ -99,11 +118,57 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
       where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
       data: { lastInboundAt: LAST_INBOUND },
     });
+
+    // AUTOPILOT, and the business opted into the human-support exception. Both matter: without a policy
+    // row the mode is OFF and nothing reaches a transport, and without the exception there is no
+    // after-window route for anyone to take — so a failure here would say nothing about the authority.
+    await infra.db.automationPolicy.create({
+      data: {
+        ...scope,
+        channelAccountId,
+        mode: "AUTOPILOT",
+        mandatoryReviewReasons: [],
+        instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED",
+      },
+    });
   }, 180_000);
 
   afterAll(async () => {
     await infra?.dispose();
   });
+
+  /** A usable draft anchored on the customer's own message, as the engine would leave one. */
+  const pendingDraft = async (): Promise<string> => {
+    seq += 1;
+    const anchor = await appendInboundMessage(infra.db, context, {
+      conversationId,
+      channelMessageId: `mid-transport-${String(seq)}`,
+      kind: "TEXT",
+      text: "Are you open on Saturday?",
+      occurredAt: LAST_INBOUND,
+    });
+    const { aiDraftId } = await createAiDraftStore(infra.db).saveDraft({
+      scope: { ...scope, conversationId },
+      generationKey: `transport_${String(seq)}`,
+      trigger: "AUTOMATIC",
+      anchorMessageId: anchor.id,
+      anchorStateVersion: 1,
+      text: "We open at 10 on Saturday.",
+      structuredOutput: { reply: "We open at 10 on Saturday." },
+      confidence: 0.9,
+      modelSuggestsSend: true,
+      needsReview: false,
+      reasonCodes: [],
+      factualSourceIds: [],
+      retrieval: noRetrieval("OK"),
+      status: "PENDING",
+      provider: "anthropic",
+      model: "claude-opus-5",
+      promptVersion: "reply.v1",
+      schemaVersion: "ai-draft.v1",
+    });
+    return aiDraftId;
+  };
 
   const send = async (authority: DeliverySendCommand["authority"], approval: "APPROVED" | "NOT_APPROVED" = "APPROVED") => {
     const http = scriptedHttp();
@@ -222,4 +287,150 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
       data: { lastInboundAt: LAST_INBOUND },
     });
   }, 180_000);
+
+  describe("the same question, asked through the coordinator", () => {
+    /** The whole path a queued delivery takes: policy gate, atomic claim, then the transport. */
+    const deliver = async (options: {
+      approval?: "APPROVED" | "NOT_APPROVED" | "UNKNOWN";
+      reviewMode?: "NORMAL" | "HUMAN_AGENT";
+      automated?: boolean;
+      /** Drops the Meta app credentials, as a deployment that was never configured for Instagram has. */
+      unconfigured?: boolean;
+      /** Applied after the draft's anchor message, which would otherwise move the clock forward itself. */
+      lastInboundAt?: Date;
+    }) => {
+      const http = scriptedHttp();
+      seq += 1;
+      const operationId = `op-coordinated-${String(seq)}`;
+      const draftId = await pendingDraft();
+      if (options.lastInboundAt !== undefined) {
+        await infra.db.conversation.update({
+          where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+          data: { lastInboundAt: options.lastInboundAt },
+        });
+      }
+      await infra.db.deliveryJobRecord.create({
+        data: {
+          ...scope,
+          draftId,
+          operationId,
+          correlationId: operationId,
+          status: "SCHEDULED",
+          scheduledFor: NOW,
+          selectedDelayMs: 0,
+          ...(options.automated === true
+            ? {}
+            : {
+                authority: "HUMAN_APPROVED" as const,
+                approvedByUserId: approverId,
+                approvedAt: NOW,
+                approvedReviewMode: options.reviewMode ?? "HUMAN_AGENT",
+                decisionKey: `decision-${operationId}`,
+              }),
+        },
+      });
+      if (options.automated !== true) {
+        // Approving takes the conversation, which is the state the coordinator will see.
+        await infra.db.conversation.update({
+          where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+          data: {
+            takeoverState: "HUMAN_ACTIVE",
+            takeoverReason: "HUMAN_SENT_FROM_INBOX",
+            humanTakeoverAt: NOW,
+            takeoverActorKind: "USER",
+            takeoverActorUserId: approverId,
+            takeoverPausedUntil: null,
+          },
+        });
+      }
+
+      // The production composition, not a copy of it: the defect being pinned here was in the wiring, so
+      // a test that hand-assembled the same parts would agree with a broken deployment.
+      const outcome = await coordinateDelivery(
+        createDeliveryEngine(
+          {
+            ...(options.unconfigured === true
+              ? { INSTAGRAM_APP_SECRET: undefined, INSTAGRAM_VERIFY_TOKEN: undefined, CHANNEL_CREDENTIAL_KEY_ID: undefined, CHANNEL_CREDENTIAL_KEY: undefined }
+              : {
+                  INSTAGRAM_APP_SECRET: "app-secret",
+                  INSTAGRAM_VERIFY_TOKEN: "verify-token",
+                  CHANNEL_CREDENTIAL_KEY_ID: CIPHER_KEY_ID,
+                  CHANNEL_CREDENTIAL_KEY: CIPHER_KEY.toString("base64"),
+                }),
+            INSTAGRAM_HUMAN_AGENT_APPROVAL: options.approval ?? "APPROVED",
+          },
+          infra.db,
+          infra.logger,
+          { http: http.port, now: () => NOW },
+        ),
+        { operationId, correlationId: operationId },
+      );
+      const job = await infra.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } });
+      return { outcome, requests: http.requests, status: job.status };
+    };
+
+    it("dispatches a tagged send for an approval the gate agrees is still eligible", async () => {
+      const { outcome, requests, status } = await deliver({});
+
+      // The standard window closed a day ago, so this is the only permitted route — and the gate has to
+      // agree the exception exists before the transport ever gets a say. It said UNAVAILABLE, always.
+      expect(outcome).toMatchObject({ status: "SENT" });
+      expect(status).toBe("SENT");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.body).toContain("HUMAN_AGENT");
+    }, 180_000);
+
+    for (const approval of ["UNKNOWN", "NOT_APPROVED"] as const) {
+      it(`fails closed with no outbound call when the app's approval is ${approval}`, async () => {
+        const { outcome, requests, status } = await deliver({ approval });
+
+        // Nothing about the person changed. The app is not approved for the exception, so there is no
+        // permitted route out of a closed window at all.
+        expect(outcome.status).not.toBe("SENT");
+        expect(status).not.toBe("SENT");
+        expect(requests).toEqual([]);
+      }, 180_000);
+    }
+
+    it("fails closed when this deployment has no Meta app configuration at all", async () => {
+      const { outcome, requests, status } = await deliver({ unconfigured: true });
+
+      // No adapter can exist, so there is nothing to re-check: the delivery is refused with a named
+      // reason rather than accepted as a send that never happened.
+      expect(outcome.status).not.toBe("SENT");
+      expect(status).not.toBe("SENT");
+      expect(requests).toEqual([]);
+    }, 180_000);
+
+    it("fails closed once the exception has expired, however it was approved", async () => {
+      // Eight days since the customer last wrote: past the human-support window as well as the standard
+      // one. The approval is identical to the one that sends above, so the window is the only difference.
+      const { outcome, requests, status } = await deliver({ lastInboundAt: new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000) });
+
+      expect(outcome.status).not.toBe("SENT");
+      expect(status).not.toBe("SENT");
+      expect(requests).toEqual([]);
+
+      await infra.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
+        data: { lastInboundAt: LAST_INBOUND },
+      });
+    }, 180_000);
+
+    it("does not let an ordinary approval out of a closed window at all", async () => {
+      const { outcome, requests } = await deliver({ reviewMode: "NORMAL" });
+
+      // The only permitted route is the tagged one, and nobody authorized that. It goes back to a person
+      // rather than out on the standard transport.
+      expect(outcome.status).not.toBe("SENT");
+      expect(requests).toEqual([]);
+    }, 180_000);
+
+    it("never lets automation out of a closed window either", async () => {
+      const { outcome, requests } = await deliver({ automated: true });
+
+      expect(outcome.status).not.toBe("SENT");
+      expect(requests).toEqual([]);
+    }, 180_000);
+  });
 });
