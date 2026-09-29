@@ -20,6 +20,7 @@ const account: WebhookAccount = {
   channelAccountId: "ca_1",
   channel: "INSTAGRAM",
   status: "CONNECTED",
+  externalAccountId: "ig_1",
 };
 
 const webhook: RawWebhook = { method: "POST", headers: {}, query: {}, rawBody: new Uint8Array(), receivedAt: new Date() };

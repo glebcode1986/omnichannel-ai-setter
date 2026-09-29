@@ -14,14 +14,25 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — PR #70 / P2-08 (Issue #15)
+### Current gate — PR #71 / P2-09 (Issue #16)
 
-**PR [#70](https://github.com/glebcode1986/omnichannel-ai-setter/pull/70) is the earliest unresolved gate.**
-Branch `feat/p2-08-evaluation-harness`, carrying the AI evaluation harness and golden conversations, now
-with the accepted #69 correction merged down into it.
+**PR [#71](https://github.com/glebcode1986/omnichannel-ai-setter/pull/71) is the earliest unresolved gate.**
+Branch `feat/p2-09-instagram-slice`, carrying the Instagram vertical slice, with the accepted #70 head
+merged down into it.
+
+The review at `d77cf92b4b7e860adfe2dfb1a47b33dc9d6babe0` named two composition blockers, and both are now
+addressed on the branch: `apps/web` registers an Instagram adapter per resolved channel account, reading
+that account's own credential through its relation and binding none at all when the webhook verify token
+is unconfigured; and the live `INSTAGRAM_HUMAN_AGENT_APPROVAL` reaches the draft disposition, the final
+channel-state resolver and the sender from one place, so an approved human-support reply is reachable
+through the shared gate instead of being refused before the transport is consulted.
 
 ### Accepted and propagated
 
+- **PR #70 / P2-08 (Issue #15)** was independently accepted at
+  `c15a9a6f558d9270263ad7573669f76ca3af8ac0`. The evaluation harness now asserts the model's own intent and
+  suggested lead stage rather than merely supplying them, so a classification regression can no longer hide
+  behind an identical reply — see `docs/specs/AI_EVALUATION.md`.
 - **PR #69 / P2-07 (Issue #14)** was independently accepted at
   `4c9f496d805316ded56311e41bdd4c3c39ff5a43`. The authority a reviewed reply is sent under is persisted with
   the delivery and read from there; the approver is the authenticated member rather than one the command
@@ -35,7 +46,7 @@ with the accepted #69 correction merged down into it.
 
 ### Blocked
 
-**#71 and #72 stay unchanged until #70 has an independent PASS at its exact head.** After it, only the
+**#72 stays unchanged until #71 has an independent PASS at its exact head.** After it, only the
 accepted correction is propagated downstream with ordinary merges, each branch verified before pushing. Do
 not rebase, force-push, merge to `main`, or start Stage D.
 

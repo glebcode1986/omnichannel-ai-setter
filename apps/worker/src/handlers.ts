@@ -1,23 +1,24 @@
 import { NonRetryableJobError, type QueueHandlers } from "@omnichannel/queue";
 
-import type { DeliveryAttemptResult, DeliveryJob } from "@omnichannel/queue";
+import type { DeliveryAttemptResult, DeliveryJob, InboundDebounceJob } from "@omnichannel/queue";
 
 import type { AiDraftJob } from "./ai-draft-handler";
 import { draftJobFromDebounce } from "./ai-draft-handler";
 
 /**
- * Phase 2 processors. Draft generation and delivery are wired; the reply-cycle handler that decides when to
- * draft (#16) is not, so it still fails visibly rather than pretending.
+ * Phase 2 processors, all wired: a debounce window elapsing enqueues generation, generation hands the
+ * draft to the shared policy engine, and delivery runs through the one coordinator. Reconciliation is
+ * still a placeholder and fails visibly rather than pretending.
  */
 export function createHandlers(
   generateDraft: (job: AiDraftJob) => Promise<void>,
   deliver: (job: DeliveryJob) => Promise<DeliveryAttemptResult>,
+  onInboundDebounceElapsed: (job: InboundDebounceJob) => Promise<void>,
 ): QueueHandlers {
   const notImplemented = (what: string) => () => Promise.reject(new NonRetryableJobError(`${what} is not implemented yet`));
   return {
-    // The debounce handler will orchestrate retrieval and generation in #16; drafting from it directly now
-    // would skip the policy work that task owns.
-    onInboundDebounceElapsed: notImplemented("inbound debounce handling"),
+    // Enqueues generation rather than drafting inline: timing and generation have different retry stories.
+    onInboundDebounceElapsed: (job) => onInboundDebounceElapsed(job),
     generateAiDraft: (job) =>
       generateDraft({
         workspaceId: job.workspaceId,

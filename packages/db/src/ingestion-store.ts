@@ -27,7 +27,7 @@ export function createIngestionStore(db: DbClient): IngestionStore {
     async findWebhookAccount(channel, channelAccountId): Promise<WebhookAccount | undefined> {
       const account = await db.channelAccount.findFirst({
         where: { id: channelAccountId, channel },
-        select: { id: true, workspaceId: true, businessProfileId: true, channel: true, status: true },
+        select: { id: true, workspaceId: true, businessProfileId: true, channel: true, status: true, externalAccountId: true },
       });
       return account === null
         ? undefined
@@ -37,6 +37,7 @@ export function createIngestionStore(db: DbClient): IngestionStore {
             channelAccountId: account.id,
             channel: account.channel,
             status: account.status,
+            externalAccountId: account.externalAccountId,
           };
     },
 

@@ -46,6 +46,9 @@ describe("loadWebEnv", () => {
       ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "http://app.example.test/callback" }],
       ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "not-a-url" }],
       ["INSTAGRAM_HUMAN_AGENT_APPROVAL", { ...required, INSTAGRAM_HUMAN_AGENT_APPROVAL: "MAYBE" }],
+      // Optional, but a guessable token is worse than none: absent binds no adapter, present and weak
+      // would answer Meta's handshake for anyone who tried the obvious string.
+      ["INSTAGRAM_VERIFY_TOKEN", { ...required, INSTAGRAM_VERIFY_TOKEN: "too-short" }],
     ] as const) {
       let error: unknown;
       try {
@@ -57,5 +60,21 @@ describe("loadWebEnv", () => {
       expect((error as EnvValidationError).issues.map((issue) => issue.key)).toContain(key);
       expect((error as EnvValidationError).message).not.toMatch(/fake-password|short-secret|fake-instagram-app-secret/);
     }
+  });
+
+  it("accepts a verify token without reporting it anywhere", () => {
+    const verifyToken = "fake-instagram-verify-token";
+
+    const env = loadWebEnv({ ...required, INSTAGRAM_VERIFY_TOKEN: verifyToken });
+
+    expect(env.INSTAGRAM_VERIFY_TOKEN).toBe(verifyToken);
+    // And an invalid *other* value must not drag it into the error, which is how secrets usually escape.
+    let error: unknown;
+    try {
+      loadWebEnv({ ...required, INSTAGRAM_VERIFY_TOKEN: verifyToken, LOG_LEVEL: "loud" });
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as EnvValidationError).message).not.toContain(verifyToken);
   });
 });

@@ -7,7 +7,6 @@ import {
   createIngestionStore,
   createKnowledgeRetriever,
   createStyleProfileStore,
-  createDeliveryStore,
   createStyleRetriever,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
@@ -20,8 +19,10 @@ import { loadWorkerEnv } from "./env";
 import { randomUUID } from "node:crypto";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
+import { createDebounceHandler } from "./debounce-handler";
+import { createDeliveryEngine } from "./delivery-engine";
 import { createDeliveryHandler } from "./delivery-handler";
-import { createChannelStateResolver } from "./delivery-policy";
+import { createDraftDisposition } from "./draft-disposition";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -76,6 +77,7 @@ function main(): void {
       // Stated at boot, not inferred from silence: lexical-only is a supported mode, but an operator has
       // to be able to see which mode a worker is actually in before a customer asks a factual question.
       logger.info("worker.retrieval_mode", { semantic: embeddings !== undefined, lexical: true });
+      const producer = createQueueProducer({ connection, logger });
       const generateDraft = createAiDraftHandler({
         engine: {
           model: replyModel,
@@ -88,6 +90,16 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
+        dispose: createDraftDisposition({
+          db,
+          producer,
+          logger,
+          now: () => new Date(),
+          random: Math.random,
+          // The same live answer the final gate below is given: one app-level capability, read once from
+          // configuration, so the two gates cannot disagree about whether the exception exists at all.
+          humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
+        }),
         retrieval: {
           knowledge: createKnowledgeRetriever(db),
           style: createStyleRetriever(db),
@@ -99,23 +111,14 @@ function main(): void {
         logger,
       });
       const deliver = createDeliveryHandler({
-        engine: {
-          store: createDeliveryStore(db),
-          sender: {
-            // The adapter registry arrives with the vertical slice (#16). Until an account's credentials
-            // can be resolved here, delivery refuses rather than pretending: a rejection that names the
-            // reason is safe, and an accepted send that never happened would not be.
-            send: () =>
-              Promise.resolve({ outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no channel adapter is registered for delivery" }),
-          },
-          channel: createChannelStateResolver(() => new Date()),
-          log: logger,
-          now: () => new Date(),
-        },
+        engine: createDeliveryEngine(env, db, logger),
         logger,
       });
-      const workers = createQueueWorkers({ connection, logger, handlers: createHandlers(generateDraft, deliver) });
-      const producer = createQueueProducer({ connection, logger });
+      const workers = createQueueWorkers({
+        connection,
+        logger,
+        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger })),
+      });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>

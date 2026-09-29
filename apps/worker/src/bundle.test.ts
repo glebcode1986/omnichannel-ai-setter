@@ -9,6 +9,9 @@ const appDir = path.resolve(import.meta.dirname, "..");
 // Inside apps/worker/node_modules so externalized dependencies resolve exactly as they do from dist/.
 const outDir = path.join(appDir, "node_modules", ".cache", "worker-bundle-test");
 
+/** Boot-time warnings this run legitimately produces: no Redis, and no Meta app credentials. */
+const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "worker.no_channel_adapter"];
+
 describe.skipIf(process.platform === "win32")("production bundle", () => {
   it("builds and runs under plain node, shutting down gracefully on SIGTERM", async () => {
     const outfile = await bundleWorker({ outDir, logLevel: "silent" });
@@ -43,9 +46,11 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-    // Without a reachable Redis the only stderr entry allowed is the URL-free outage warning.
+    // Without a reachable Redis and without Meta app credentials, the only stderr entries allowed are the
+    // URL-free outage warning and the worker saying it cannot deliver — which it should say at boot rather
+    // than discover on the first customer message.
     for (const line of result.stderr.split("\n").filter((entry) => entry.trim().length > 0)) {
-      expect((JSON.parse(line) as { event: string }).event).toBe("queue.redis_unavailable");
+      expect(EXPECTED_STARTUP_WARNINGS).toContain((JSON.parse(line) as { event: string }).event);
     }
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('"event":"worker.stopped"');

@@ -37,6 +37,8 @@ import type {
   DeliveryStore,
   PolicyLimits,
 } from "@omnichannel/application";
+import { randomUUID } from "node:crypto";
+
 import { isReasonCode, toQuietHours, toUserId, type Actor, type DeliveryJobStatus, type TakeoverReason } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
@@ -618,4 +620,60 @@ function policyUnchanged(channelAccountId: string | null, updatedAt: Date | null
   return updatedAt === null
     ? { automationPolicies: { none: { channelAccountId } } }
     : { automationPolicies: { some: { channelAccountId, updatedAt } } };
+}
+
+export interface AutomatedDeliveryInput {
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  readonly draftId: string;
+  readonly correlationId: string;
+  readonly delayMs: number;
+  readonly now: Date;
+}
+
+/**
+ * Creates the durable delivery row for a draft automation approved (#16).
+ *
+ * The chosen delay and the intended send time are persisted *before* anything is enqueued, so a queue that
+ * loses the job still leaves a record of what was supposed to happen and when. The unique index on
+ * `(workspace, profile, draft)` is what makes a repeated call return the existing operation instead of
+ * creating a second logical send.
+ */
+export async function scheduleAutomatedDelivery(db: DbClient, input: AutomatedDeliveryInput): Promise<{ readonly operationId: string; readonly scheduledFor: Date }> {
+  const scope = { workspaceId: input.workspaceId, businessProfileId: input.businessProfileId };
+  const existing = await db.deliveryJobRecord.findUnique({
+    where: { workspaceId_businessProfileId_draftId: { ...scope, draftId: input.draftId } },
+    select: { operationId: true, scheduledFor: true },
+  });
+  if (existing !== null) {
+    return existing;
+  }
+  const scheduledFor = new Date(input.now.getTime() + input.delayMs);
+  const operationId = randomUUID();
+  await db.$transaction(async (tx) => {
+    await tx.deliveryJobRecord.create({
+      data: { ...scope, draftId: input.draftId, operationId, correlationId: input.correlationId, status: "SCHEDULED", scheduledFor, selectedDelayMs: input.delayMs },
+    });
+    await tx.aiDraft.update({ where: { workspaceId_businessProfileId_id: { ...scope, id: input.draftId } }, data: { status: "SCHEDULED" } });
+  });
+  return { operationId, scheduledFor };
+}
+
+/** Marks a conversation as waiting for a human decision, without claiming a person has acted. */
+export async function requestHumanReview(
+  db: DbClient,
+  input: { readonly workspaceId: string; readonly businessProfileId: string; readonly conversationId: string; readonly reviewMode: "NORMAL" | "HUMAN_AGENT"; readonly at: Date },
+): Promise<void> {
+  const scope = { workspaceId: input.workspaceId, businessProfileId: input.businessProfileId };
+  await db.conversation.updateMany({
+    // Only from NONE: a person already holding the conversation is not demoted by an escalation from
+    // automation, which is the state machine's rule expressed as a predicate.
+    where: { ...scope, id: input.conversationId, takeoverState: "NONE" },
+    data: {
+      takeoverState: "REVIEW_REQUIRED",
+      takeoverReason: input.reviewMode === "HUMAN_AGENT" ? "HUMAN_AGENT_REVIEW" : "MANDATORY_REVIEW",
+      takeoverReviewMode: input.reviewMode,
+      humanTakeoverAt: input.at,
+    },
+  });
 }

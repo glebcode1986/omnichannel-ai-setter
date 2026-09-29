@@ -57,17 +57,26 @@ const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
 
 /**
- * With Redis unreachable the only permitted stderr entries are the (URL-free) outage warning and, if the
- * process outlived its own shutdown deadline, the warning that says so.
+ * The three warnings these runs may legitimately produce, and nothing else.
  *
- * A linger is a handle some library kept open after everything the worker owns had already closed: not a
- * failed shutdown, so the worker reports it and still exits 0 (see `shutdown.ts`). It is rare locally and
- * has shown up on loaded CI runners. A genuine timeout is a different event, at error level, and would
- * fail both this check and the exit code.
+ * - `queue.redis_unavailable`: Redis is deliberately unreachable in most of these runs, and surviving it
+ *   quietly (without echoing the URL) is the point.
+ * - `worker.no_channel_adapter`: no Meta app credentials are configured, so the worker correctly
+ *   announces at boot that it cannot deliver, rather than discovering it on the first customer message.
+ * - `worker.lingering_after_stop`: the process outlived its own shutdown deadline because a handle some
+ *   library owns stayed open after everything the worker owns had closed. Not a failed shutdown — the
+ *   worker reports it and still exits 0 (see `shutdown.ts`). Rare locally, seen on loaded CI runners.
+ *
+ * A genuine shutdown timeout is a different event, at error level, and would fail both this check and
+ * the exit code.
  */
-const PERMITTED_STDERR_EVENTS = new Set(["queue.redis_unavailable", "worker.lingering_after_stop"]);
+const PERMITTED_STDERR_EVENTS = new Set([
+  "queue.redis_unavailable",
+  "worker.no_channel_adapter",
+  "worker.lingering_after_stop",
+]);
 
-function expectOnlyRedisOutageOnStderr(stderr: string): void {
+function expectNoUnexpectedStderr(stderr: string): void {
   expect(events(stderr).filter((event) => !PERMITTED_STDERR_EVENTS.has(event))).toEqual([]);
   expect(stderr).not.toContain("127.0.0.1:1");
 }
@@ -82,7 +91,7 @@ const GRACEFUL_LIFECYCLE = ["worker.retrieval_mode", "worker.started", "worker.s
 
 /** A graceful stop: exit code 0, nothing unexpected on stderr, and exactly `expected` on stdout. */
 function expectGracefulShutdown(result: ProcessResult, expected: readonly string[] = GRACEFUL_LIFECYCLE): void {
-  expectOnlyRedisOutageOnStderr(result.stderr);
+  expectNoUnexpectedStderr(result.stderr);
   expect(result.code).toBe(0);
   expect(events(result.stdout)).toEqual(expected);
 }

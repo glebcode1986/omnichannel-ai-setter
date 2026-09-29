@@ -22,6 +22,13 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   /** Exactly the HTTPS redirect URI registered with Meta; never derived from an incoming request. */
   INSTAGRAM_REDIRECT_URI: z.url({ protocol: /^https$/ }),
   /**
+   * Token echoed back to Meta during the webhook subscription handshake. Optional so a deployment that
+   * does not receive Instagram webhooks still boots; where it is absent no Instagram adapter is bound at
+   * all, so webhooks are refused before signature verification, persistence or enqueue rather than
+   * accepted unverified. Validated for shape when present, and never logged or returned in a response.
+   */
+  INSTAGRAM_VERIFY_TOKEN: z.string().min(16).max(256).optional(),
+  /**
    * Whether Meta approved the Human Agent feature for this app. No API exposes it, so it is operator-entered
    * and defaults to UNKNOWN, which keeps the human-agent send path closed.
    */

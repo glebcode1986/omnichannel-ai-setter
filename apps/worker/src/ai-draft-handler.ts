@@ -28,6 +28,11 @@ export interface AiDraftHandlerDependencies {
   readonly retrieval: DraftRetrievalDependencies;
   readonly styleProfiles: StyleProfileStore;
   /**
+   * What happens to the draft once it exists. Separate from generation because a model call and a policy
+   * decision have different failure modes and different retry stories.
+   */
+  readonly dispose?: (input: { readonly workspaceId: string; readonly businessProfileId: string; readonly conversationId: string; readonly draftId: string; readonly correlationId: string }) => Promise<unknown>;
+  /**
    * The platform's voice of last resort, used only where a business has configured nothing. It is a safe
    * default, never the authoritative persona for a tenant (product-owner decision on PR #65).
    */
@@ -94,6 +99,17 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
     if (outcome.status === "UNAVAILABLE") {
       // Nothing was written and nothing was sent, so the queue may retry this job.
       throw new Error("reply model unavailable");
+    }
+    if (outcome.status === "GENERATED" && dependencies.dispose !== undefined) {
+      // The draft exists; the shared policy engine decides what becomes of it. There is no branch here
+      // that could schedule a send on its own.
+      await dependencies.dispose({
+        workspaceId: job.workspaceId,
+        businessProfileId: job.businessProfileId,
+        conversationId: job.conversationId,
+        draftId: outcome.draft.aiDraftId,
+        correlationId: job.correlationId,
+      });
     }
     dependencies.logger.info("worker.ai_draft", {
       correlationId: job.correlationId,
