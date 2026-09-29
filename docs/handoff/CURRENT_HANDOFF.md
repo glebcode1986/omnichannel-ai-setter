@@ -41,11 +41,12 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**PR [#69](https://github.com/glebcode1986/omnichannel-ai-setter/pull/69) / P2-07 (Issue #14) is the
-earliest unresolved review gate**, on branch `feat/p2-07-human-handoff`. Everything before it in the chain
-has an independent PASS at its published head, including **#68 / P2-06, accepted at
-`fb35665209b90c82bc10f3068450111e75f83299` and already propagated downstream**. **#70, #71 and #72 stay
-unchanged until #69 is accepted**, and nothing is merged to `main`.
+**PR [#70](https://github.com/glebcode1986/omnichannel-ai-setter/pull/70) / P2-08 (Issue #15) is the
+earliest unresolved review gate**, on branch `feat/p2-08-evaluation-harness`. Everything before it in the
+chain has an independent PASS at its published head, including **#69 / P2-07, accepted at
+`4c9f496d805316ded56311e41bdd4c3c39ff5a43`**, and **#68 / P2-06, accepted at
+`fb35665209b90c82bc10f3068450111e75f83299`**; both are propagated downstream. **#71 and #72 stay unchanged
+until #70 is accepted**, and nothing is merged to `main`.
 
 Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
 
@@ -135,9 +136,9 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **PR #69 / P2-07 is the gate.** Address independent-review findings on `feat/p2-07-human-handoff`, verify
-   at the exact head, and publish readiness evidence. Do not merge it.
-2. **Do not touch #70, #71 or #72** until #69 has an independent PASS. After it, propagate only the accepted
+1. **PR #70 / P2-08 is the gate.** Address independent-review findings on `feat/p2-08-evaluation-harness`,
+   verify at the exact head, and publish readiness evidence. Do not merge it.
+2. **Do not touch #71 or #72** until #70 has an independent PASS. After it, propagate only the accepted
    correction with ordinary merges, verifying each branch before pushing.
 3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
 4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
