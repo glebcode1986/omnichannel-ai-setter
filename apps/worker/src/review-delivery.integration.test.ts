@@ -205,11 +205,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
       scheduledFor: now.toISOString(),
       selectedDelayMs: 0,
     };
-    // No kill switch in these cases: what is under test is the authority a reviewed reply carries, and a
-    // suspension would stop every one of them before that question is reached. It is still stated rather
-    // than defaulted, because a handler that can be composed without one can be composed without one in
-    // production too.
-    return { run: () => createDeliveryHandler({ engine, outboundSuspension: () => Promise.resolve(undefined), logger: infra.logger })(job), sends };
+    return { run: () => createDeliveryHandler({ engine, logger: infra.logger })(job), sends };
   };
 
   const statusOf = async (operationId: string) =>

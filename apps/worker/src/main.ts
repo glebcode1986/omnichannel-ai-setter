@@ -37,7 +37,6 @@ import { createDebounceHandler } from "./debounce-handler";
 import { createDeliveryEngine } from "./delivery-engine";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
-import { createSuspensionResolver } from "./delivery-policy";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
@@ -141,7 +140,6 @@ function main(): void {
       });
       const deliver = createDeliveryHandler({
         engine: createDeliveryEngine(env, db, logger),
-        outboundSuspension: createSuspensionResolver(db, () => new Date()),
         logger,
       });
       const reconcile = createReconcileHandler({

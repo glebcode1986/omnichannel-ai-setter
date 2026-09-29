@@ -9,33 +9,28 @@
  * unknown outcome, and an unknown outcome is quarantined rather than retried (ADR-012). So the coordinator's
  * own settlement is always what reaches the database, and the queue is only ever told what already happened.
  */
-import { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies } from "@omnichannel/application";
+import { coordinateDelivery, type DeliveryDependencies } from "@omnichannel/application";
 import type { Logger } from "@omnichannel/observability";
 import type { DeliveryAttemptResult, DeliveryJob } from "@omnichannel/queue";
 
 export interface DeliveryHandlerDependencies {
   readonly engine: DeliveryDependencies;
-  /**
-   * Whether a kill switch covers this send. Read per run rather than with the conversation's state: it is
-   * an operator's decision about the system, not a fact about the conversation the claim binds.
-   */
-  readonly outboundSuspension: (job: DeliveryJob) => Promise<DeliveryCommand["outboundSuspended"] | undefined>;
   readonly logger: Logger;
 }
 
 export function createDeliveryHandler(dependencies: DeliveryHandlerDependencies) {
   return async function deliver(job: DeliveryJob): Promise<DeliveryAttemptResult> {
-    // No limits, no channel facts and no authority are supplied here. They come out of the coordinator's
-    // own read, so what a send is judged against and what its claim binds cannot describe two different
-    // instants — and a queue job cannot name an authority it was never granted, nor lose one that was.
+    // Nothing is supplied here but the identity of the work. Limits, channel facts, authority and the
+    // operator's kill switch all come out of the coordinator's own read, so what a send is judged against
+    // is what its claim binds — one instant, one guard.
     //
-    // The kill switch is the one thing still passed in, and deliberately: it is not a fact about this
-    // conversation but an operator's decision about the system, read for the run rather than for the send.
-    const suspended = await dependencies.outboundSuspension(job);
+    // The switch used to be the exception, resolved here and frozen into the command, on the reasoning
+    // that it is a decision about the system rather than a fact about this conversation. That is true and
+    // it was still wrong: a value read before the coordinator's read cannot be re-asserted by the claim,
+    // so a switch turned on while a send was being judged never reached the guard at all.
     const outcome = await coordinateDelivery(dependencies.engine, {
       operationId: job.operationId,
       correlationId: job.correlationId,
-      ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
     });
 
     dependencies.logger.info("worker.delivery", {

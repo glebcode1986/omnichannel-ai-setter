@@ -71,7 +71,6 @@ function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; del
   };
   const handler = createDeliveryHandler({
     engine,
-    outboundSuspension: () => Promise.resolve(undefined),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
   });
   return { handler, logs };

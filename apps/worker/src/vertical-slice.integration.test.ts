@@ -125,14 +125,13 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
         log: infra.logger,
         now: () => NOW,
       },
-      outboundSuspension: () => Promise.resolve(undefined),
       logger: infra.logger,
     });
 
   /** Reads the live state and claims against it, which is the only way a claim can be made. */
   const claimFresh = async (operationId: string, claimedAt: Date = NOW) => {
     const store = createDeliveryStore(infra.db);
-    const context = await store.loadForSend(operationId);
+    const context = await store.loadForSend(operationId, claimedAt);
     if (context === undefined) {
       throw new Error(`no delivery context for ${operationId}`);
     }
@@ -269,7 +268,6 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
           log: infra.logger,
           now: () => NOW,
         },
-        outboundSuspension: () => Promise.resolve(undefined),
         logger: infra.logger,
       });
 

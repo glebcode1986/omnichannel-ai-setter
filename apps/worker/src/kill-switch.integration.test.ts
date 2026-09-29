@@ -25,7 +25,7 @@ import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
-import { createChannelStateResolver, createSuspensionResolver } from "./delivery-policy";
+import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-19T12:00:00.000Z");
@@ -113,7 +113,6 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
         log: infra.logger,
         now: () => NOW,
       },
-      outboundSuspension: createSuspensionResolver(infra.db, () => NOW),
       logger: infra.logger,
     });
     return {

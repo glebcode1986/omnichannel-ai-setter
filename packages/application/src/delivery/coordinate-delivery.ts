@@ -58,13 +58,6 @@ export interface DeliveryDependencies {
 export interface DeliveryCommand {
   readonly operationId: string;
   readonly correlationId: string;
-  /**
-   * Present when a kill switch covers this send (Issue #56); the policy engine decides what it means.
-   *
-   * The authority a send carries is deliberately *not* here: it is read from the delivery row inside the
-   * same guarded read as everything else the decision rests on (#14), so a caller cannot construct one.
-   */
-  readonly outboundSuspended?: PolicyInput["outboundSuspended"];
 }
 
 /**
@@ -95,7 +88,7 @@ const MAX_CLAIM_PASSES = 2;
 
 export async function coordinateDelivery(dependencies: DeliveryDependencies, command: DeliveryCommand): Promise<DeliveryOutcome> {
   const fields = { operationId: command.operationId, correlationId: command.correlationId };
-  let context = await dependencies.store.loadForSend(command.operationId);
+  let context = await dependencies.store.loadForSend(command.operationId, dependencies.now());
   if (context === undefined) {
     // The job, draft or conversation is gone. Nothing to send and nothing to recover.
     dependencies.log.warn("delivery.missing", fields);
@@ -103,7 +96,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
   }
 
   for (let pass = 1; ; pass += 1) {
-    const preflight = revalidate(dependencies, command, context);
+    const preflight = revalidate(dependencies, context);
     if (preflight !== undefined) {
       // Settled without claiming: a gate that fails here must never reach the adapter at all.
       await dependencies.store.settle(command.operationId, preflight.settlement, dependencies.now());
@@ -111,7 +104,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
       return preflight.outcome;
     }
 
-    const deferral = deferralFor(dependencies, command, context);
+    const deferral = deferralFor(dependencies, context);
     if (deferral !== undefined) {
       await dependencies.store.reschedule(command.operationId, deferral);
       dependencies.log.info("delivery.deferred", { ...fields, notBefore: deferral.toISOString() });
@@ -139,7 +132,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
       return { status: "RESCHEDULED", notBefore };
     }
 
-    const reread = await dependencies.store.loadForSend(command.operationId);
+    const reread = await dependencies.store.loadForSend(command.operationId, dependencies.now());
     if (reread === undefined) {
       dependencies.log.warn("delivery.missing", fields);
       return { status: "NOT_CLAIMABLE" };
@@ -230,7 +223,6 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
  */
 function revalidate(
   dependencies: DeliveryDependencies,
-  command: DeliveryCommand,
   context: DeliverySendContext,
 ): { readonly settlement: DeliverySettlement; readonly outcome: DeliveryOutcome; readonly reasons: readonly ReasonCode[] } | undefined {
   if (context.alreadySent || context.status === "SENT") {
@@ -250,7 +242,7 @@ function revalidate(
     };
   }
 
-  const decision = evaluatePolicy(policyInputFor(dependencies, command, context));
+  const decision = evaluatePolicy(policyInputFor(dependencies, context));
   if (decision.action === "SCHEDULE") {
     return undefined;
   }
@@ -273,15 +265,15 @@ function revalidate(
  * A `SCHEDULE` whose `notBefore` is still ahead means quiet hours began during the delay. Sending now would
  * ignore the business's own setting; failing would waste a perfectly good draft. It waits instead.
  */
-function deferralFor(dependencies: DeliveryDependencies, command: DeliveryCommand, context: DeliverySendContext): Date | undefined {
-  const decision = evaluatePolicy(policyInputFor(dependencies, command, context));
+function deferralFor(dependencies: DeliveryDependencies, context: DeliverySendContext): Date | undefined {
+  const decision = evaluatePolicy(policyInputFor(dependencies, context));
   if (decision.action !== "SCHEDULE" || decision.notBefore === undefined) {
     return undefined;
   }
   return decision.notBefore.getTime() > dependencies.now().getTime() ? decision.notBefore : undefined;
 }
 
-function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCommand, context: DeliverySendContext): PolicyInput {
+function policyInputFor(dependencies: DeliveryDependencies, context: DeliverySendContext): PolicyInput {
   // Both from the read the claim will bind: the limits the store returned with the state, and the channel
   // facts derived from that same state. Nothing here was read at a different moment from anything else.
   const channelState = dependencies.channel.stateFor(context);
@@ -307,9 +299,10 @@ function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCom
     window: channelState.window,
     humanAgent: channelState.humanAgent,
     ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),
-    // The kill switch is the operator's, not the conversation's: it is a decision about this run rather
-    // than a fact read with the state, so it stays on the command.
-    ...(command.outboundSuspended === undefined ? {} : { outboundSuspended: command.outboundSuspended }),
+    // From the context, so the switch the decision honours is the one the claim re-asserts. It is still
+    // an operator's decision about the system rather than a fact about this conversation — but a value
+    // read outside the guarded read cannot be bound by the claim, and unbound is how it was bypassable.
+    ...(context.outboundSuspended === undefined ? {} : { outboundSuspended: context.outboundSuspended }),
     replyCycle: context.replyCycle,
     authority: context.authority,
     now: dependencies.now(),

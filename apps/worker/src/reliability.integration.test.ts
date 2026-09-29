@@ -30,7 +30,7 @@ import { NO_CAPABILITIES, outboundBlockedByHealth, overallHealth } from "@omnich
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
-import { createChannelStateResolver, createSuspensionResolver } from "./delivery-policy";
+import { createChannelStateResolver } from "./delivery-policy";
 import { aiProviderProbe, channelAccountProbes, databaseProbe } from "./health-probes";
 import { createOperationEvidencePort } from "./operation-evidence";
 import { createReconcileHandler } from "./reconcile-handler";
@@ -127,7 +127,6 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
         log: infra.logger,
         now: () => now,
       },
-      outboundSuspension: createSuspensionResolver(infra.db, () => now),
       logger: infra.logger,
     });
     return {
