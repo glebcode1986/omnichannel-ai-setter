@@ -16,7 +16,7 @@
  * purpose.
  */
 import type { DeliverySendCommand, DeliverySendPort } from "@omnichannel/application";
-import { createInstagramAdapter, createFetchHttpPort, type HumanAgentApproval, type InstagramHttpPort } from "@omnichannel/channel-instagram";
+import { createInstagramAdapterRegistry, createFetchHttpPort, type HumanAgentApproval, type InstagramHttpPort } from "@omnichannel/channel-instagram";
 import { readChannelCredential, type CredentialCipher, type DbClient } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
 
@@ -47,7 +47,22 @@ function humanAgentSend(authority: DeliverySendCommand["authority"]): { readonly
 }
 
 export function createInstagramDeliverySender(config: InstagramSenderConfig): DeliverySendPort {
-  const http = config.http ?? createFetchHttpPort();
+  // The same registry webhook ingestion binds adapters with. Two constructions of an adapter would be two
+  // answers to "is this account usable right now", and they would disagree the first time one was changed.
+  const registry = createInstagramAdapterRegistry({
+    bindingFor: (account) => ({
+      secrets: {
+        appSecret: config.appSecret,
+        verifyToken: config.verifyToken,
+        // Read per send, and only when a send is actually happening: a revoked token must fail the next
+        // attempt, not the one after the cache expires.
+        accessToken: () => currentAccessToken(config, account.workspaceId, account.channelAccountId),
+      },
+      humanAgentApproval: config.humanAgentApproval,
+    }),
+    http: config.http ?? createFetchHttpPort(),
+    logger: config.logger,
+  });
 
   return {
     async send(command) {
@@ -55,32 +70,24 @@ export function createInstagramDeliverySender(config: InstagramSenderConfig): De
         where: { id: command.channelAccountId },
         select: { id: true, workspaceId: true, businessProfileId: true, channel: true, externalAccountId: true, status: true },
       });
-      if (account === null || account.channel !== "INSTAGRAM") {
+      // Everything the adapter is bound to is read here, at send time — the account's status, its external
+      // ID, its token — because a delivery job may have been scheduled minutes ago and none of those are
+      // facts about the past.
+      const adapter =
+        account === null
+          ? undefined
+          : registry.adapterFor({
+              workspaceId: account.workspaceId,
+              businessProfileId: account.businessProfileId,
+              channelAccountId: account.id,
+              channel: account.channel,
+              status: account.status,
+              externalAccountId: account.externalAccountId,
+            });
+      if (account === null || adapter === undefined) {
         // Not a rejection the queue should retry: no amount of waiting produces an adapter.
         return { outcome: "REJECTED", retryable: false, code: "NO_ADAPTER", message: "no Instagram account is bound to this delivery" };
       }
-
-      const adapter = createInstagramAdapter({
-        binding: {
-          workspaceId: account.workspaceId,
-          businessProfileId: account.businessProfileId,
-          channelAccountId: account.id,
-          externalAccountId: account.externalAccountId,
-        },
-        secrets: {
-          appSecret: config.appSecret,
-          verifyToken: config.verifyToken,
-          // Read per send, and only when a send is actually happening: a revoked token must fail the next
-          // attempt, not the one after the cache expires.
-          accessToken: () => currentAccessToken(config, account.workspaceId, account.id),
-        },
-        http,
-        // Carried from the live row: an account that needs re-auth fails closed inside the adapter too,
-        // not only at the policy layer.
-        connectionState: account.status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
-        humanAgentApproval: config.humanAgentApproval,
-        logger: config.logger,
-      });
 
       const outbound = {
         workspaceId: account.workspaceId,
