@@ -6,23 +6,18 @@
  * make the dangerous move harder to express than the safe one.
  */
 import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/channel-core";
-import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode } from "@omnichannel/domain";
+import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode, SendAuthority } from "@omnichannel/domain";
 
 import type { AccountHealth, HumanAgentAvailability, PolicyLimits, ReplyCycleState } from "../policy/inputs";
 
-/** Who authorized this delivery. Automation cannot produce the human variant: it has no actor to name. */
-export type DeliveryAuthority =
-  | { readonly kind: "AUTOMATED" }
-  | {
-      /**
-       * An explicitly human-approved send. Only this variant may use a provider's human-support path, and
-       * eligibility is still re-checked immediately before dispatch — a decision a human made a minute ago
-       * is not evidence about the window now.
-       */
-      readonly kind: "HUMAN_APPROVED";
-      readonly approvedByUserId: string;
-      readonly approvedAt: Date;
-    };
+/**
+ * Who authorized this delivery (`SendAuthority`, in the domain).
+ *
+ * Automation cannot produce the human variant: it has no actor to name. Only that variant may use a
+ * provider's human-support path, and eligibility is still re-checked immediately before dispatch — a
+ * decision a human made a minute ago is not evidence about the window now.
+ */
+export type DeliveryAuthority = SendAuthority;
 
 /**
  * An opaque description of the live state a send was authorized against.
@@ -70,6 +65,14 @@ export interface DeliverySendContext {
   readonly limits: PolicyLimits;
   /** The customer's own last message: where a provider's messaging window starts counting. */
   readonly lastInboundAt?: Date;
+  /**
+   * On whose authority this send would go out, read from the row the approval was recorded on.
+   *
+   * Here rather than on the command, because an authority is something that was *granted*. A background job
+   * constructing one as it goes is how a queue retry acquires a human's approval it was never given — and
+   * how a human's approval is silently lost, which is the same bug seen from the other side.
+   */
+  readonly authority: DeliveryAuthority;
   /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
   readonly guard: DeliveryStateGuard;
 }

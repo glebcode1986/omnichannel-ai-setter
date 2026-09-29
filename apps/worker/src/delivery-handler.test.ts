@@ -53,6 +53,7 @@ function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; del
     draftNeedsReview: false,
     alreadySent: false,
     limits,
+    authority: { kind: "AUTOMATED" },
     // Opaque by design: this handler never looks inside one, it only lets the store see it again.
     guard: {} as DeliveryStateGuard,
   };

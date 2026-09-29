@@ -24,6 +24,7 @@ import type {
   QuietHours,
   ReasonCode,
   ReviewMode,
+  SendAuthority,
   WhatsAppAfterWindowPolicy,
 } from "@omnichannel/domain";
 
@@ -108,6 +109,14 @@ export interface PolicyInput {
    */
   readonly dispatchDeadline?: Date;
   readonly replyCycle: ReplyCycleState;
+  /**
+   * On whose authority this reply would be sent.
+   *
+   * Omitted means automation, which is the strict case — a caller that forgets to say gets the gate that
+   * asks for a human rather than the one that assumes one already spoke. The delivery path never omits it:
+   * it reads the authority from the row the approval was recorded on.
+   */
+  readonly authority?: SendAuthority;
   readonly now: Date;
 }
 
