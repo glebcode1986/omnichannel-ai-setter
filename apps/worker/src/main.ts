@@ -62,6 +62,7 @@ function createSender(env: WorkerEnv, db: ReturnType<typeof createDbClient>, log
     appSecret: env.INSTAGRAM_APP_SECRET,
     verifyToken: env.INSTAGRAM_VERIFY_TOKEN,
     humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
+    now: () => new Date(),
     logger,
   });
 }
