@@ -41,26 +41,30 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**P1-01 / Issue #2 is implemented** on `feat/p1-01-project-skeleton`; PR [#26](https://github.com/glebcode1986/omnichannel-ai-setter/pull/26) is open for review (not merged). The repository now has the pnpm 12 workspace (`apps/web`, `apps/worker`, all `packages/*` plus `packages/env`), Node 24 / TypeScript 6.0 strict / ESLint 10 / Vitest 5 tooling, `pnpm verify` as the pre-PR gate and `pnpm lint:boundaries` enforcing the dependency matrix in `docs/specs/REPOSITORY_LAYOUT.md`.
+**PR [#69](https://github.com/glebcode1986/omnichannel-ai-setter/pull/69) / P2-07 (Issue #14) is the
+earliest unresolved review gate**, on branch `feat/p2-07-human-handoff`. Everything before it in the chain
+has an independent PASS at its published head, including **#68 / P2-06, accepted at
+`fb35665209b90c82bc10f3068450111e75f83299` and already propagated downstream**. **#70, #71 and #72 stay
+unchanged until #69 is accepted**, and nothing is merged to `main`.
 
-Architecture review of PR #26 (changes requested, then applied; awaiting re-review): `application` is pure and depends only on `domain`/`channel-core`; it owns the provider-neutral AI ports (`ReplyModel`, `EmbeddingProvider`) and the model-output boundary schema, `packages/ai` implements them (`ai -> application` allowed), `domain` holds pure semantic types — ADR-010, `AI_ORCHESTRATION.md`, `RETRIEVAL.md`, P2-03/P2-04 contracts and `REPOSITORY_LAYOUT.md` updated. Accepted: `db`/`queue -> application`; forbidden: `db -> ai`, `application -> observability`; browser automation dev/test only. Also: TypeScript pinned to 6.0 (typescript-eslint does not support 7); Next.js `agentRules: false`. Follow-ups outside #2: add a `pnpm verify` GitHub Actions gate early (reviewer request; implementing token lacks `workflow` scope) and choose a formatter.
+Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
 
-The next Claude task is prepared:
-- **P1-02 / Issue #3 — domain model and channel contracts**
-- contract: `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`
-- branch: `feat/p1-02-domain-channel-contracts`
-- hard start condition: Issue #2 reviewed/accepted/merged into `main`.
+`#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 
-Do not start actual Phase 2 implementation until Phase 1 exit criteria are met unless architecture is explicitly amended.
+The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
+under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
+and is recorded there.
 
 ## Execution order
 
-### Phase 1 — current coding path
-#2 -> #3 -> #4/#5 -> #6 with #7 independent review.
-Use `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`.
+The dependency order each phase was planned in. Phases 1 and 2 are implemented; see "Execution state right
+now" for the live gate, and `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` for what to work on.
 
-### Phase 2 — Instagram/shared AI
-#8–#16 Claude; #17 independent review. Contracts under `docs/tasks/P2-*`.
+### Phase 1 — implemented
+#2 -> #3 -> #4/#5 -> #6 with #7 independent review, as PRs #26, #49, #50, #51, #52.
+
+### Phase 2 — implemented
+#8–#16 Claude; #17 independent review, as PRs #63–#71. Contracts under `docs/tasks/P2-*`.
 
 ### Phase 4 — WhatsApp
 #18–#24 Claude; #25 independent review. Contracts under `docs/tasks/P4-*`.
@@ -131,7 +135,13 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. P1-01/#2 PR #26 is open; do not auto-merge.
-2. Review #2 against its contract and run R1/Codex-Astra review.
-3. After #2 merge, launch P1-02/#3 from fresh `main`.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency gates.
+1. **PR #69 / P2-07 is the gate.** Address independent-review findings on `feat/p2-07-human-handoff`, verify
+   at the exact head, and publish readiness evidence. Do not merge it.
+2. **Do not touch #70, #71 or #72** until #69 has an independent PASS. After it, propagate only the accepted
+   correction with ordinary merges, verifying each branch before pushing.
+3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
+4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+   gates.
+
+Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
+superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
