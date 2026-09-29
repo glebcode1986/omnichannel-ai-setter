@@ -100,6 +100,12 @@ enum ReviewMode {
   HUMAN_AGENT
 }
 
+/// Who authorized an outbound delivery. Automation has no actor to name (HUMAN_HANDOFF.md, ADR-004/014).
+enum DeliveryAuthorityKind {
+  AUTOMATED
+  HUMAN_APPROVED
+}
+
 enum ActorKind {
   USER
   NATIVE_APP
@@ -255,6 +261,7 @@ model User {
   approvedStyleExamples     StyleExample[]
   channelConnectStates      ChannelConnectState[]
   requestedAiDrafts         AiDraft[]             @relation("DraftRequestedBy")
+  approvedDeliveries        DeliveryJobRecord[]
 
   @@map("users")
 }
@@ -700,6 +707,19 @@ model DeliveryJobRecord {
   status            DeliveryJobStatus @default(SCHEDULED)
   scheduledFor      DateTime          @map("scheduled_for")
   selectedDelayMs   Int               @map("selected_delay_ms")
+  /// On whose authority this send may go out. Persisted with the delivery because the send happens later,
+  /// in another process: an approval that lived only in the request that granted it would arrive there as
+  /// automation, and the human-support transport path would be unreachable (ADR-014).
+  authority         DeliveryAuthorityKind @default(AUTOMATED)
+  /// Set exactly when `authority` is HUMAN_APPROVED: only an authenticated user action grants it.
+  approvedByUserId  String?               @map("approved_by_user_id")
+  approvedAt        DateTime?             @map("approved_at")
+  /// Which send the person authorized: an ordinary reply, or the provider's human-support path.
+  approvedReviewMode ReviewMode?          @map("approved_review_mode")
+  /// Digest of the decision this delivery came from: who, which action, the final wording, the review mode
+  /// and whether they asked to learn from it. A later request is the same decision only if it matches, so
+  /// a replay can be answered with this operation and anything else cannot.
+  decisionKey       String?               @map("decision_key")
   attemptCount      Int               @default(0) @map("attempt_count")
   claimedAt         DateTime?         @map("claimed_at")
   sentAt            DateTime?         @map("sent_at")
@@ -713,6 +733,7 @@ model DeliveryJobRecord {
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
   draft AiDraft @relation(fields: [workspaceId, businessProfileId, draftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  approvedByUser User? @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   /// One delivery job per draft, so a draft can never become more than one send.
   @@unique([workspaceId, businessProfileId, draftId], map: "delivery_jobs_draft_key")

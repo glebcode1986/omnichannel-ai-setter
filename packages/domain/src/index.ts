@@ -15,6 +15,7 @@ export * from "./conversation";
 export * from "./delivery";
 export { literalGuard } from "./enum";
 export * from "./errors";
+export * from "./handoff";
 export * from "./human-takeover";
 export * from "./ids";
 export * from "./language";

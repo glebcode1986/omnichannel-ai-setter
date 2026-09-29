@@ -34,6 +34,20 @@ A draft can be scheduled for automatic delivery only when all required gates pas
 
 DRAFT mode always results in `HOLD_REVIEW`; OFF never generates/schedules normal AI delivery.
 
+## Authority
+
+The question is whether a reply may be sent **on this authority**, not whether automation may send it.
+Automation is the default and the strict case; a caller that says nothing is judged as automation.
+
+A reply a person approved in the review queue carries their approval into the decision, and it answers the
+gates listed above that exist to ask for a human: DRAFT mode, a pending review claim, that person's own
+ownership of the conversation, confidence, mandatory-review categories, factual support and provenance, and
+quiet hours. It answers none of the gates about what is possible or permitted — reply cycle, OFF mode, AI
+disabled, account health, content support, channel window — and a takeover by anyone else still blocks.
+
+`HUMAN_AGENT` is offered to a review, and accepted from an approval, only while the exception is live. See
+`HUMAN_HANDOFF.md` for how the authority is granted and persisted.
+
 ## Instagram after-window behavior
 
 Policy input includes `instagramAfterWindowPolicy`:

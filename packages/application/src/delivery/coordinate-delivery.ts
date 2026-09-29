@@ -36,7 +36,6 @@ import { evaluatePolicy } from "../policy/evaluate";
 import type { PolicyInput } from "../policy/inputs";
 import type {
   CancelledStatus,
-  DeliveryAuthority,
   DeliveryChannelStatePort,
   DeliveryLogPort,
   DeliverySendContext,
@@ -59,7 +58,6 @@ export interface DeliveryDependencies {
 export interface DeliveryCommand {
   readonly operationId: string;
   readonly correlationId: string;
-  readonly authority: DeliveryAuthority;
 }
 
 /**
@@ -149,7 +147,9 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
     recipientExternalId: context.recipientExternalId,
     text: context.text ?? "",
     operationId: context.operationId,
-    authority: command.authority,
+    // The authority the approval was recorded with, carried across whole. The adapter is told who
+    // authorized this send, and a queue job cannot tell it anything else.
+    authority: context.authority,
   });
 
   switch (sendDisposition(result)) {
@@ -300,6 +300,7 @@ function policyInputFor(dependencies: DeliveryDependencies, context: DeliverySen
     humanAgent: channelState.humanAgent,
     ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),
     replyCycle: context.replyCycle,
+    authority: context.authority,
     now: dependencies.now(),
   };
 }

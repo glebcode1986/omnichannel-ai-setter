@@ -1,4 +1,4 @@
-import { NO_CAPABILITIES, toQuietHours, type ReasonCode } from "@omnichannel/domain";
+import { NO_CAPABILITIES, toQuietHours, toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
 
 import { evaluatePolicy } from "./evaluate";
@@ -461,5 +461,132 @@ describe("purity", () => {
 
     expect(first).toEqual(second);
     expect(JSON.stringify(input)).toBe(snapshot);
+  });
+});
+
+/**
+ * A human approval is an answer to the gates that ask for a human — and to nothing else.
+ *
+ * These cases are written as two halves on purpose: what an approval settles, and what it cannot touch. A
+ * gate that quietly moved from the second half to the first would be a bypass with a person's name on it,
+ * and it would be added for the best of reasons, because someone has already decided.
+ */
+describe("a reply a person approved", () => {
+  const APPROVER = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-00000000000a") } as const;
+  const OTHER: Actor = { kind: "USER", userId: toUserId("01a0b40c-0000-7000-8000-00000000000b") };
+  const approval = (overrides: Partial<Extract<SendAuthority, { kind: "HUMAN_APPROVED" }>> = {}): SendAuthority => ({
+    kind: "HUMAN_APPROVED",
+    approvedByUserId: APPROVER.userId,
+    approvedAt: NOW,
+    reviewMode: "NORMAL",
+    ...overrides,
+  });
+  /** Approving a reply takes the conversation, so this is the state every approved send arrives in. */
+  const owned = (actor: Actor = APPROVER): PolicyInput["takeover"] => ({
+    state: "HUMAN_ACTIVE",
+    reason: "HUMAN_SENT_FROM_INBOX",
+    since: NOW,
+    actor,
+  });
+
+  it("sends in DRAFT mode, which exists to make a person look and has had one", () => {
+    expect(decide({ mode: "DRAFT", takeover: owned(), authority: approval() })).toEqual({ action: "SCHEDULE", reasons: [] });
+    // Without the approval the same conversation holds, which is what DRAFT is for.
+    expect(decide({ mode: "DRAFT" })).toMatchObject({ action: "HOLD_REVIEW" });
+  });
+
+  it("is not blocked by the ownership that approving it created", () => {
+    expect(decide({ takeover: owned(), authority: approval() })).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("does not reach past a colleague who took the conversation afterwards", () => {
+    // They hold it now. An approval from before that is not authority over their work.
+    expect(decide({ takeover: owned(OTHER), authority: approval() })).toMatchObject({ action: "SKIP", reasons: ["HUMAN_TAKEOVER"] });
+  });
+
+  it("resolves the review it was waiting on rather than queueing another", () => {
+    const pending: PolicyInput["takeover"] = { state: "REVIEW_REQUIRED", reason: "LOW_CONFIDENCE_REVIEW", reviewMode: "NORMAL", since: NOW };
+    expect(decide({ takeover: pending, authority: approval() })).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("answers the gates that only ever asked for a human", () => {
+    const needingAHuman: Partial<PolicyInput> = {
+      draft: { usable: true, confidence: 0.1, reasonCodes: ["PAYMENT_DISPUTE"], citedSourceIds: ["never_supplied"], contentType: "TEXT" },
+      retrieval: { suppliedSourceIds: [], corpusReachable: false },
+    };
+    // Low confidence, a mandatory-review category, an unsupported citation and an unreachable corpus:
+    // four different ways of saying "somebody should look at this".
+    expect(decide(needingAHuman)).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decide({ ...needingAHuman, takeover: owned(), authority: approval() })).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("is not deferred to the morning: quiet hours bound automation, not the person", () => {
+    const quiet = { ...passing().limits, quietHours: toQuietHours("UTC", "11:00", "14:00") };
+    // A window wide enough that waiting is a real option, so the difference under test is the authority.
+    const openLate = { state: "OPEN_FREEFORM", expiresAt: new Date("2026-09-19T00:00:00.000Z") } as const;
+    expect(decide({ limits: quiet, window: openLate })).toMatchObject({
+      action: "SCHEDULE",
+      notBefore: new Date("2026-09-18T14:00:00.000Z"),
+    });
+    expect(decide({ limits: quiet, window: openLate, takeover: owned(), authority: approval() })).toEqual({
+      action: "SCHEDULE",
+      reasons: [],
+    });
+  });
+
+  it("cannot answer anything about what is possible or permitted", () => {
+    const cases: readonly (readonly [string, Partial<PolicyInput>])[] = [
+      ["the customer has written since", { replyCycle: "SUPERSEDED" }],
+      ["automation is switched off entirely", { mode: "OFF" }],
+      ["AI is disabled for the conversation", { aiEnabled: false }],
+      ["the account cannot send", { account: "DISCONNECTED" }],
+      ["the channel cannot carry the content", { draft: { ...passing().draft, contentType: "TEMPLATE" } }],
+      ["the messaging window has closed", { window: { state: "NOT_ELIGIBLE", reason: "closed" } }],
+    ];
+    for (const [what, overrides] of cases) {
+      const decision = decide({ ...overrides, takeover: owned(), authority: approval() });
+      // A click does not reopen a window, unsay a customer's message or reconnect an account.
+      expect(decision.action, what).not.toBe("SCHEDULE");
+    }
+  });
+
+  it("uses the human-support path only when the person authorized that path", () => {
+    const closed: Partial<PolicyInput> = {
+      window: { state: "NOT_ELIGIBLE", reason: "closed" },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 60_000) },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } },
+    };
+
+    expect(decide({ ...closed, takeover: owned(), authority: approval({ reviewMode: "HUMAN_AGENT" }) })).toEqual({
+      action: "SCHEDULE",
+      reasons: [],
+    });
+    // Approving an ordinary reply is not agreeing to a tagged human-agent send, so the only permitted
+    // route here is one nobody authorized: it goes back to a person.
+    expect(decide({ ...closed, takeover: owned(), authority: approval({ reviewMode: "NORMAL" }) })).toMatchObject({
+      action: "HOLD_REVIEW",
+      reviewMode: "HUMAN_AGENT",
+    });
+    // And automation can never produce that authority at all.
+    expect(decide(closed)).toMatchObject({ action: "HOLD_REVIEW", reviewMode: "HUMAN_AGENT" });
+  });
+
+  it("cannot use a human-support exception that has lapsed", () => {
+    const lapsed: Partial<PolicyInput> = {
+      window: { state: "NOT_ELIGIBLE", reason: "closed" },
+      humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() - 1) },
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } },
+    };
+
+    // Eligibility is a fact about a moment, and the moment has passed — whoever authorized it.
+    expect(decide({ ...lapsed, takeover: owned(), authority: approval({ reviewMode: "HUMAN_AGENT" }) })).toEqual({
+      action: "SKIP",
+      reasons: ["WINDOW_CLOSED"],
+    });
+  });
+
+  it("treats a caller that says nothing as automation, which is the strict reading", () => {
+    expect(decide({ mode: "DRAFT", authority: undefined })).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decide({ mode: "DRAFT", authority: { kind: "AUTOMATED" } })).toMatchObject({ action: "HOLD_REVIEW" });
   });
 });

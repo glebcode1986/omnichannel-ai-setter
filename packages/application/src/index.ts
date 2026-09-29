@@ -125,3 +125,14 @@ export type {
   DeliveryStore,
   HeldStatus,
 } from "./delivery/ports";
+export {
+  resolveReview,
+  type ReviewAction,
+  type ReviewDecision,
+  type ReviewCommand,
+  type ReviewDependencies,
+  type ReviewLogPort,
+  type ReviewOutcome,
+  type ReviewStore,
+  type StyleLearningStore,
+} from "./handoff/resolve-review";
