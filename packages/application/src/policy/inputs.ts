@@ -24,6 +24,7 @@ import type {
   QuietHours,
   ReasonCode,
   ReviewMode,
+  SendAuthority,
   SuspensionReason,
   SuspensionScope,
   WhatsAppAfterWindowPolicy,
@@ -116,6 +117,14 @@ export interface PolicyInput {
    * is how a switch ends up with a path around it.
    */
   readonly outboundSuspended?: { readonly scope: SuspensionScope; readonly reason: SuspensionReason };
+  /**
+   * On whose authority this reply would be sent.
+   *
+   * Omitted means automation, which is the strict case — a caller that forgets to say gets the gate that
+   * asks for a human rather than the one that assumes one already spoke. The delivery path never omits it:
+   * it reads the authority from the row the approval was recorded on.
+   */
+  readonly authority?: SendAuthority;
   readonly now: Date;
 }
 

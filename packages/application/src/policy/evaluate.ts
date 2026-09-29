@@ -13,19 +13,35 @@
  * 3. **The distinction between "nobody needs to act" and "a person must act" is the decision.** `SKIP`
  *    means the work is over; `HOLD_REVIEW` means a human is expected. Getting that backwards either buries
  *    an operator in dead review items or silently drops a reply they wanted to send.
+ *
+ * And one that decides what the answer even means: **the question is whether this reply may be sent on this
+ * authority**, not whether automation may send it. Most of the gates here exist to ask for a human; when a
+ * human has already answered — approved a draft in the review queue, with their name and the moment on it —
+ * those gates have had their answer and it would be absurd for them to hold the reply the person asked for.
+ *
+ * What an approval cannot answer is anything about what is *possible or permitted*: whether the provider's
+ * window is still open, whether the customer has written since, whether the account can send at all,
+ * whether the channel can carry the content. A click does not reopen a messaging window. Every one of those
+ * stays in force, and the handful that a person does answer is written out gate by gate below rather than
+ * subtracted from the result afterwards — a list of reasons to forgive would quietly forgive a new gate
+ * nobody thought about.
  */
 import {
   allowsAutomatedSend,
   isWithinQuietHours,
   nextQuietHoursEnd,
+  takeoverAuthorizes,
   type ReasonCode,
   type ReviewMode,
+  type SendAuthority,
 } from "@omnichannel/domain";
 
 import type { PolicyDecision, PolicyInput } from "./inputs";
 
 export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   const reasons = new Set<ReasonCode>();
+  /** The approval this send carries, if any. Absent means automation, and automation is judged strictly. */
+  const approved = approvalIn(input.authority);
   /**
    * Tracked as a flag rather than as a set of "terminal codes", because the same code can be terminal or
    * not: `MODE_NOT_AUTOPILOT` ends the matter in OFF and asks for a human in DRAFT.
@@ -47,7 +63,10 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
     reasons.add("SUPERSEDED_BY_NEWER_INBOUND");
     terminal = true;
   }
-  if (!allowsAutomatedSend(input.takeover)) {
+  if (!allowsAutomatedSend(input.takeover) && !(approved !== undefined && takeoverAuthorizes(input.takeover, approved))) {
+    // Approving a reply takes the conversation, so the approver's own ownership cannot be what blocks it.
+    // Anyone else's is: they hold the conversation now, and an approval from before that does not reach
+    // past them.
     if (input.takeover.state === "HUMAN_ACTIVE") {
       // A human owns the conversation (ADR-004). Queueing a review item would compete with the person
       // already handling it.
@@ -59,8 +78,9 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   }
 
   // --- Everything below blocks an automatic send but still deserves a human's attention ----------------
-  if (input.mode === "DRAFT") {
-    // DRAFT always holds: the whole point of the mode is that a person sees every reply first.
+  if (input.mode === "DRAFT" && approved === undefined) {
+    // DRAFT always holds: the whole point of the mode is that a person sees every reply first — and once
+    // one has, holding it again is the mode defeating itself.
     reasons.add("MODE_NOT_AUTOPILOT");
   }
   if (!input.draft.usable) {
@@ -73,19 +93,28 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (input.outboundSuspended !== undefined) {
     // Held rather than cancelled: the operator stopped sending, they did not decide the reply was wrong.
     // Held rather than skipped, too — the work stays recoverable for when the switch is lifted.
+    //
+    // Unconditional, like the account check above it. A kill switch is not a request for someone to look;
+    // it is an operator saying nothing may leave, and an approval recorded before they said it cannot
+    // answer it. Making this one authority-aware would be building the path around the switch.
     reasons.add("AUTOMATION_SUSPENDED");
   }
-  if (input.draft.confidence < input.limits.confidenceThreshold) {
+  // The four below are all the same kind of gate: "a person should look at this". A person has, so they
+  // are not asked again. What the person could not have changed — the account, the kill switch, the
+  // channel's capabilities, the window — is checked above and below regardless of who is sending.
+  if (approved === undefined && input.draft.confidence < input.limits.confidenceThreshold) {
     reasons.add("LOW_CONFIDENCE");
   }
-  for (const code of mandatoryReviewReasons(input)) {
-    reasons.add(code);
+  if (approved === undefined) {
+    for (const code of mandatoryReviewReasons(input)) {
+      reasons.add(code);
+    }
   }
-  if (!input.retrieval.corpusReachable) {
+  if (approved === undefined && !input.retrieval.corpusReachable) {
     // "No such fact" and "we could not look" are different answers, and only the first may reach a customer.
     reasons.add("RETRIEVAL_UNAVAILABLE");
   }
-  if (!citationsSupported(input)) {
+  if (approved === undefined && !citationsSupported(input)) {
     // Re-checked here rather than trusted from the draft engine: a gate that relies on an upstream layer
     // having already checked is not a gate.
     reasons.add("MISSING_FACT");
@@ -96,12 +125,15 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   // Quiet hours prefer to defer rather than block (product-owner decision on PR #67). A compliant later
   // time is a better answer than a review item — but only if it still sits inside what the provider
   // permits. On a channel with a seconds-long automated budget it never will, and then a person decides.
-  const deferral = evaluateQuietHours(input);
+  // Quiet hours bound *automation*: they are the business's answer to "do not message people at night on
+  // our behalf". A person choosing to reply at 03:00 has made that decision themselves, and deferring them
+  // until morning would be this layer overruling the human it exists to serve.
+  const deferral = approved === undefined ? evaluateQuietHours(input) : { blocked: false, notBefore: undefined };
   if (deferral.blocked) {
     reasons.add("QUIET_HOURS");
   }
 
-  const windowReasons = evaluateWindowGate(input);
+  const windowReasons = evaluateWindowGate(input, approved);
   for (const code of windowReasons) {
     reasons.add(code);
   }
@@ -119,6 +151,13 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
     return { action: "HOLD_REVIEW", reasons: ordered(reasons), reviewMode: reviewModeFor(input, reasons) };
   }
   return { action: "SCHEDULE", reasons: [], ...(deferral.notBefore === undefined ? {} : { notBefore: deferral.notBefore }) };
+}
+
+/** The human variant of `SendAuthority`, narrowed once so every gate can ask the same short question. */
+type HumanApproval = Extract<SendAuthority, { kind: "HUMAN_APPROVED" }>;
+
+function approvalIn(authority: SendAuthority | undefined): HumanApproval | undefined {
+  return authority?.kind === "HUMAN_APPROVED" ? authority : undefined;
 }
 
 /**
@@ -152,14 +191,16 @@ function evaluateQuietHours(input: PolicyInput): { readonly blocked: boolean; re
  * `UNKNOWN` fails closed: an unknown window is not an open one, and the cost of guessing wrong is a message
  * sent outside what the provider permits.
  */
-function evaluateWindowGate(input: PolicyInput): readonly ReasonCode[] {
+function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefined): readonly ReasonCode[] {
   if (isWindowOpen(input)) {
     return [];
   }
   if (humanAgentPathAvailable(input)) {
-    // The AI may draft; only a deliberate human action may initiate the tagged send. This layer therefore
-    // returns a review path and never a schedule — no automated delivery may carry HUMAN_AGENT.
-    return ["WINDOW_CLOSED", "HUMAN_AGENT_REVIEW_REQUIRED"];
+    // The AI may draft; only a deliberate human action may initiate the tagged send. An approval that named
+    // the human-agent path *is* that action, and nothing else is: an approval of an ordinary reply has not
+    // agreed to a tagged send, and automation can never produce one at all. So this returns a review path
+    // rather than a schedule for everyone else.
+    return approved?.reviewMode === "HUMAN_AGENT" ? [] : ["WINDOW_CLOSED", "HUMAN_AGENT_REVIEW_REQUIRED"];
   }
   // Includes HUMAN_ASSISTED_EXTENDED when Human Agent is expired, unapproved or unknown: eligibility is
   // never assumed, and an absent approval is not a weaker form of approval.

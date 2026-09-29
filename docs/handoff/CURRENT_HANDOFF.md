@@ -41,26 +41,32 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**P1-01 / Issue #2 is implemented** on `feat/p1-01-project-skeleton`; PR [#26](https://github.com/glebcode1986/omnichannel-ai-setter/pull/26) is open for review (not merged). The repository now has the pnpm 12 workspace (`apps/web`, `apps/worker`, all `packages/*` plus `packages/env`), Node 24 / TypeScript 6.0 strict / ESLint 10 / Vitest 5 tooling, `pnpm verify` as the pre-PR gate and `pnpm lint:boundaries` enforcing the dependency matrix in `docs/specs/REPOSITORY_LAYOUT.md`.
+**PR [#71](https://github.com/glebcode1986/omnichannel-ai-setter/pull/71) / P2-09 (Issue #16) is the
+earliest unresolved review gate**, on branch `feat/p2-09-instagram-slice`. Everything before it in the
+chain has an independent PASS at its published head, including **#70 / P2-08 at
+`c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
+`4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
+`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. **#72 stays unchanged until
+#71 is accepted**, and nothing is merged to `main`.
 
-Architecture review of PR #26 (changes requested, then applied; awaiting re-review): `application` is pure and depends only on `domain`/`channel-core`; it owns the provider-neutral AI ports (`ReplyModel`, `EmbeddingProvider`) and the model-output boundary schema, `packages/ai` implements them (`ai -> application` allowed), `domain` holds pure semantic types — ADR-010, `AI_ORCHESTRATION.md`, `RETRIEVAL.md`, P2-03/P2-04 contracts and `REPOSITORY_LAYOUT.md` updated. Accepted: `db`/`queue -> application`; forbidden: `db -> ai`, `application -> observability`; browser automation dev/test only. Also: TypeScript pinned to 6.0 (typescript-eslint does not support 7); Next.js `agentRules: false`. Follow-ups outside #2: add a `pnpm verify` GitHub Actions gate early (reviewer request; implementing token lacks `workflow` scope) and choose a formatter.
+Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
 
-The next Claude task is prepared:
-- **P1-02 / Issue #3 — domain model and channel contracts**
-- contract: `docs/tasks/P1-02_CLAUDE_TASK_CONTRACT.md`
-- branch: `feat/p1-02-domain-channel-contracts`
-- hard start condition: Issue #2 reviewed/accepted/merged into `main`.
+`#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 
-Do not start actual Phase 2 implementation until Phase 1 exit criteria are met unless architecture is explicitly amended.
+The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
+under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
+and is recorded there.
 
 ## Execution order
 
-### Phase 1 — current coding path
-#2 -> #3 -> #4/#5 -> #6 with #7 independent review.
-Use `docs/tasks/CLAUDE_EXECUTION_QUEUE.md`.
+The dependency order each phase was planned in. Phases 1 and 2 are implemented; see "Execution state right
+now" for the live gate, and `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` for what to work on.
 
-### Phase 2 — Instagram/shared AI
-#8–#16 Claude; #17 independent review. Contracts under `docs/tasks/P2-*`.
+### Phase 1 — implemented
+#2 -> #3 -> #4/#5 -> #6 with #7 independent review, as PRs #26, #49, #50, #51, #52.
+
+### Phase 2 — implemented
+#8–#16 Claude; #17 independent review, as PRs #63–#71. Contracts under `docs/tasks/P2-*`.
 
 ### Phase 4 — WhatsApp
 #18–#24 Claude; #25 independent review. Contracts under `docs/tasks/P4-*`.
@@ -103,7 +109,7 @@ Nothing is merged yet.
 9. P2-03 (#10): the provider-neutral AI draft engine — `ReplyModel` port and Zod boundary in `packages/application`, an Anthropic implementation in `packages/ai`, idempotent draft persistence, and the worker's `generateAiDraft` handler wired. Retrieval (#11) and the policy engine (#12) are not: drafts are produced and stored, never sent.
 10. P2-04 (#11): factual and style retrieval — application-owned `KnowledgeRetriever`/`StyleRetriever`/`EmbeddingProvider` ports with deterministic RRF fusion, PostgreSQL lexical + pgvector semantic retrieval in `packages/db`, a Voyage embedding provider in `packages/ai`, and retrieval wired into the worker's draft handler. Nothing writes knowledge or style yet: ingestion and the knowledge/style UX are Phase 5, so in a fresh deployment both corpora are empty and every fact-dependent answer becomes `MISSING_FACT`.
 
-8. P2-02 (#9): Instagram Login onboarding and token lifecycle — connect/callback/disconnect routes, encrypted credential storage, single-use OAuth state and refresh handling. The adapter is still not registered in `apps/web`; that wiring belongs to the vertical slice (#16), which can now resolve real credentials.
+8. P2-02 (#9): Instagram Login onboarding and token lifecycle — connect/callback/disconnect routes, encrypted credential storage, single-use OAuth state and refresh handling. The adapter is registered in `apps/web` by the vertical slice (#16), which resolves each account's own credential.
 
 11. P2-05 (#12), PR #67: the deterministic policy engine. Human Agent eligibility is current-only — an `ELIGIBLE` fact whose `expiresAt` has passed (including exactly at `now`) never opens the after-window path.
 12. P2-06 (#13), PR #68: the delivery coordinator and final pre-send revalidation.
@@ -111,6 +117,34 @@ Nothing is merged yet.
 14. P2-08 (#15), PR #70: the AI evaluation harness and golden conversations.
 15. P2-09 (#16), PR #71: the Instagram vertical slice.
 16. P3-03 (#56), PR #72: reliability controls, health, kill switch and reconciliation. ADR-017 is **Rejected**: an unmatched echo stays native human activity, and an unresolved ambiguous send is quarantined and put in front of a person rather than retried blind.
+
+**A reviewed reply carries the authority the person granted (#14 / PR #69).** Approving or editing a draft
+persists *who* approved it, *when*, and *which send* they authorized on the delivery row, and the
+coordinator reads it from there with everything else it judges. The worker can no longer construct an
+authority, which is how a human's approval was silently downgraded to automation — the reply then met the
+gates that exist to ask for a human, and the Human Agent transport path was unreachable. Scheduling the
+send and taking the conversation are now one write, so there is no moment in which an approved delivery
+exists with nobody owning the conversation. The policy engine judges "may this be sent on this authority":
+an approval answers the gates that ask for a human and none of those about what is possible or permitted,
+and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
+
+**A skipped suite and a passing suite look the same (#16 / PR #71).** `pnpm verify` runs the whole test
+run without a database or Redis, so DB-backed suites skip there by design and the infrastructure scripts
+are what execute them. A new integration suite in a project no infrastructure script named therefore
+reported "skipped" inside a green CI run, and the defect it reproduced was never exercised in the review
+gate. `pnpm test:e2e` now runs `@omnichannel/web` as well as `@omnichannel/worker`, and
+`scripts/verification/gate.test.ts` fails whenever a project owns an integration suite that no
+infrastructure script runs.
+
+**A channel is only real where it is composed (#16 / PR #71).** Every part of the inbound half passed its
+own tests while `apps/web` registered no adapter at all, so no webhook reached signature verification,
+normalization, persistence, the outbox or debounce; and the final policy gate answered the Human Agent
+question with a hard-coded `UNKNOWN`, so the outbound half could never choose the tagged transport no
+matter what a person had authorized. Both are now wired through the normal composition roots — the web
+app binds an adapter per resolved channel account and reads that account's own credential through its
+relation, and the worker hands one live `INSTAGRAM_HUMAN_AGENT_APPROVAL` to the draft disposition, the
+final channel-state resolver and the sender alike. Missing configuration binds no adapter, which refuses
+the webhook before anything is stored. See `docs/specs/INSTAGRAM_ADAPTER.md` and ADR-014.
 
 **Delivery send authority is bound to the claim (#13 / PR #68).** The final pre-send revalidation is no
 longer separated from the claim by an unguarded gap: the claim's own statement re-asserts every fact the
@@ -121,7 +155,13 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. P1-01/#2 PR #26 is open; do not auto-merge.
-2. Review #2 against its contract and run R1/Codex-Astra review.
-3. After #2 merge, launch P1-02/#3 from fresh `main`.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency gates.
+1. **PR #71 / P2-09 is the gate.** Address independent-review findings on `feat/p2-09-instagram-slice`,
+   verify at the exact head, and publish readiness evidence. Do not merge it.
+2. **Do not touch #72** until #71 has an independent PASS. After it, propagate only the accepted correction
+   with ordinary merges, verifying each branch before pushing.
+3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
+4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+   gates.
+
+Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
+superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.

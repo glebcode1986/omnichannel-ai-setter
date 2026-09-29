@@ -36,7 +36,6 @@ import { evaluatePolicy } from "../policy/evaluate";
 import type { PolicyInput } from "../policy/inputs";
 import type {
   CancelledStatus,
-  DeliveryAuthority,
   DeliveryChannelStatePort,
   DeliveryLogPort,
   DeliverySendContext,
@@ -59,8 +58,12 @@ export interface DeliveryDependencies {
 export interface DeliveryCommand {
   readonly operationId: string;
   readonly correlationId: string;
-  readonly authority: DeliveryAuthority;
-  /** Present when a kill switch covers this send (Issue #56); the policy engine decides what it means. */
+  /**
+   * Present when a kill switch covers this send (Issue #56); the policy engine decides what it means.
+   *
+   * The authority a send carries is deliberately *not* here: it is read from the delivery row inside the
+   * same guarded read as everything else the decision rests on (#14), so a caller cannot construct one.
+   */
   readonly outboundSuspended?: PolicyInput["outboundSuspended"];
 }
 
@@ -151,7 +154,9 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
     recipientExternalId: context.recipientExternalId,
     text: context.text ?? "",
     operationId: context.operationId,
-    authority: command.authority,
+    // The authority the approval was recorded with, carried across whole. The adapter is told who
+    // authorized this send, and a queue job cannot tell it anything else.
+    authority: context.authority,
   });
 
   switch (sendDisposition(result)) {
@@ -306,6 +311,7 @@ function policyInputFor(dependencies: DeliveryDependencies, command: DeliveryCom
     // than a fact read with the state, so it stays on the command.
     ...(command.outboundSuspended === undefined ? {} : { outboundSuspended: command.outboundSuspended }),
     replyCycle: context.replyCycle,
+    authority: context.authority,
     now: dependencies.now(),
   };
 }

@@ -30,6 +30,12 @@ export interface WebhookAccount {
   readonly channelAccountId: string;
   readonly channel: ChannelType;
   readonly status: ChannelAccountStatus;
+  /**
+   * The provider's own ID for this account (Instagram's `entry.id`). It is here because binding an
+   * adapter is synchronous and per-account: without it a composition root could only bind by workspace,
+   * and a workspace with two accounts would be free to pick the wrong one.
+   */
+  readonly externalAccountId: string;
 }
 
 export interface ChannelAdapterProvider {

@@ -153,6 +153,20 @@ function assertionFailures(expected: CaseAssertions, observed: Observed): readon
   if (expected.needsReview !== undefined && observed.draft !== undefined && observed.draft.needsReview !== expected.needsReview) {
     say("needsReview", expected.needsReview, observed.draft.needsReview);
   }
+  // Absent on the draft and `null` in a case mean the same thing — nothing was classified — so they are
+  // compared as one value rather than as two ways of saying it.
+  if (expected.modelIntent !== undefined) {
+    const intent = observed.draft?.intent ?? null;
+    if (intent !== expected.modelIntent) {
+      say("intent", expected.modelIntent, intent);
+    }
+  }
+  if (expected.leadStage !== undefined) {
+    const leadStage = observed.draft?.suggestedLeadStage ?? null;
+    if (leadStage !== expected.leadStage) {
+      say("leadStage", expected.leadStage, leadStage);
+    }
+  }
   for (const code of expected.reasonCodes ?? []) {
     if (!observed.reasonCodes.includes(code)) {
       say("reasonCodes contains", code, observed.reasonCodes);
