@@ -128,6 +128,14 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**A skipped suite and a passing suite look the same (#16 / PR #71).** `pnpm verify` runs the whole test
+run without a database or Redis, so DB-backed suites skip there by design and the infrastructure scripts
+are what execute them. A new integration suite in a project no infrastructure script named therefore
+reported "skipped" inside a green CI run, and the defect it reproduced was never exercised in the review
+gate. `pnpm test:e2e` now runs `@omnichannel/web` as well as `@omnichannel/worker`, and
+`scripts/verification/gate.test.ts` fails whenever a project owns an integration suite that no
+infrastructure script runs.
+
 **A channel is only real where it is composed (#16 / PR #71).** Every part of the inbound half passed its
 own tests while `apps/web` registered no adapter at all, so no webhook reached signature verification,
 normalization, persistence, the outbox or debounce; and the final policy gate answered the Human Agent
