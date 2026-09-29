@@ -396,6 +396,25 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/evals:
+    dependencies:
+      '@omnichannel/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@omnichannel/application':
+        specifier: workspace:*
+        version: link:../application
+      '@omnichannel/channel-core':
+        specifier: workspace:*
+        version: link:../channel-core
+      '@omnichannel/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      tsx:
+        specifier: ^4.23.13
+        version: 4.23.13
+
   packages/observability: {}
 
   packages/queue:

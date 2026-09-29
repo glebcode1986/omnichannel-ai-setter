@@ -14,29 +14,30 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — PR #69 / P2-07 (Issue #14)
+### Current gate — PR #70 / P2-08 (Issue #15)
 
-**PR [#69](https://github.com/glebcode1986/omnichannel-ai-setter/pull/69) is the earliest unresolved gate.**
-Branch `feat/p2-07-human-handoff`. It carries the human handoff and review state machine, and has been
-through four rounds of independent review: the authority a reviewed reply is sent under is now persisted
-with the delivery and read from there, the approver is the authenticated member rather than one the command
-named, each decision commits in one transaction, and an existing send is reused only for a provably
-identical decision. See `docs/specs/HUMAN_HANDOFF.md`.
+**PR [#70](https://github.com/glebcode1986/omnichannel-ai-setter/pull/70) is the earliest unresolved gate.**
+Branch `feat/p2-08-evaluation-harness`, carrying the AI evaluation harness and golden conversations, now
+with the accepted #69 correction merged down into it.
 
 ### Accepted and propagated
 
-- **PR #68 / P2-06 (Issue #13)** was independently accepted at `fb35665209b90c82bc10f3068450111e75f83299`
-  and propagated down the chain. The send claim now re-asserts the state its revalidation was made against,
-  inside a transaction that shares row locks with the writers of those facts — see
-  `docs/specs/DELIVERY_COORDINATOR.md`.
+- **PR #69 / P2-07 (Issue #14)** was independently accepted at
+  `4c9f496d805316ded56311e41bdd4c3c39ff5a43`. The authority a reviewed reply is sent under is persisted with
+  the delivery and read from there; the approver is the authenticated member rather than one the command
+  named; each decision commits in one transaction; and an existing send is reused only for a provably
+  identical decision. See `docs/specs/HUMAN_HANDOFF.md`.
+- **PR #68 / P2-06 (Issue #13)** was independently accepted at `fb35665209b90c82bc10f3068450111e75f83299`.
+  The send claim re-asserts the state its revalidation was made against, inside a transaction that shares
+  row locks with the writers of those facts — see `docs/specs/DELIVERY_COORDINATOR.md`.
 - Everything earlier in the chain up to and including **#67 / P2-05** has an independent PASS at its
   published head.
 
 ### Blocked
 
-**#70, #71 and #72 stay unchanged until #69 has an independent PASS.** After it, only the accepted
-correction is propagated downstream with ordinary merges, each branch verified before pushing. Do not
-rebase, force-push, merge to `main`, or start Stage D.
+**#71 and #72 stay unchanged until #70 has an independent PASS at its exact head.** After it, only the
+accepted correction is propagated downstream with ordinary merges, each branch verified before pushing. Do
+not rebase, force-push, merge to `main`, or start Stage D.
 
 ## Phase 4 gate — WhatsApp
 
