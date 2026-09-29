@@ -41,13 +41,14 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**PR [#71](https://github.com/glebcode1986/omnichannel-ai-setter/pull/71) / P2-09 (Issue #16) is the
-earliest unresolved review gate**, on branch `feat/p2-09-instagram-slice`. Everything before it in the
-chain has an independent PASS at its published head, including **#70 / P2-08 at
+**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) / P3-03 (Issue #56) is the
+earliest unresolved review gate**, on branch `feat/p3-03-reliability`. Everything before it in the chain
+has an independent PASS at its published head, including **#71 / P2-09 at
+`38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
 `4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
-`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. **#72 stays unchanged until
-#71 is accepted**, and nothing is merged to `main`.
+`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. #72 is the last branch in the
+chain, nothing is merged to `main`, and Stage D has not started.
 
 Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
 
@@ -128,6 +129,24 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**A kill switch is only as strong as the boundary it is enforced at (#56 / PR #72).** Binding the switch
+to the delivery claim was not enough on its own: the ordering lived in a store method, so it bound callers
+who went through that method and nobody else — while this spec's own incident guidance says the table is
+written to by hand. A `BEFORE INSERT OR UPDATE OR DELETE` trigger now takes the scope's advisory key, so
+every activation route participates, including direct SQL. The cost is the key being spelled in both SQL
+and TypeScript, and a mismatch has no symptom — the claim would simply stop waiting — so a test holds the
+two derivations against each other and pins the property that matters: a switch that covers a send derives
+a key that send's claim already holds. See `docs/specs/RELIABILITY_INCIDENTS.md`.
+
+**A kill switch is not a request for someone to look (#56 / PR #72).** Merging the accepted #71 head down
+raised the question directly: the policy engine now skips the gates that mean "a person should look at
+this" once a person has, and an operator's suspension sits among them in the same function. It stays
+unconditional. What an approval answers is a request for human attention; a kill switch is an operator
+saying nothing may leave, and a click recorded before they said it does not answer that. Making it
+authority-aware would build the one path around the switch. `AUTOMATION_SUSPENDED` is asserted in
+`packages/application/src/policy/evaluate.test.ts`, which is new: the reason code existed and no test in
+the repository named it.
+
 **A skipped suite and a passing suite look the same (#16 / PR #71).** `pnpm verify` runs the whole test
 run without a database or Redis, so DB-backed suites skip there by design and the infrastructure scripts
 are what execute them. A new integration suite in a project no infrastructure script named therefore
@@ -155,10 +174,10 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **PR #71 / P2-09 is the gate.** Address independent-review findings on `feat/p2-09-instagram-slice`,
+1. **PR #72 / P3-03 is the gate.** Address independent-review findings on `feat/p3-03-reliability`,
    verify at the exact head, and publish readiness evidence. Do not merge it.
-2. **Do not touch #72** until #71 has an independent PASS. After it, propagate only the accepted correction
-   with ordinary merges, verifying each branch before pushing.
+2. **Nothing is downstream of #72.** The accepted #71 head is already merged down into it; there is no
+   further branch to propagate to until a new one is opened.
 3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
 4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.

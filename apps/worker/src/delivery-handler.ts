@@ -20,9 +20,14 @@ export interface DeliveryHandlerDependencies {
 
 export function createDeliveryHandler(dependencies: DeliveryHandlerDependencies) {
   return async function deliver(job: DeliveryJob): Promise<DeliveryAttemptResult> {
-    // No limits, no channel facts and no authority are supplied here. They come out of the coordinator's
-    // own read, so what a send is judged against and what its claim binds cannot describe two different
-    // instants — and a queue job cannot name an authority it was never granted, nor lose one that was.
+    // Nothing is supplied here but the identity of the work. Limits, channel facts, authority and the
+    // operator's kill switch all come out of the coordinator's own read, so what a send is judged against
+    // is what its claim binds — one instant, one guard.
+    //
+    // The switch used to be the exception, resolved here and frozen into the command, on the reasoning
+    // that it is a decision about the system rather than a fact about this conversation. That is true and
+    // it was still wrong: a value read before the coordinator's read cannot be re-asserted by the claim,
+    // so a switch turned on while a send was being judged never reached the guard at all.
     const outcome = await coordinateDelivery(dependencies.engine, {
       operationId: job.operationId,
       correlationId: job.correlationId,

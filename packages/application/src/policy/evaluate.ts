@@ -90,9 +90,18 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   if (input.account !== "CONNECTED") {
     reasons.add("ACCOUNT_UNHEALTHY");
   }
+  if (input.outboundSuspended !== undefined) {
+    // Held rather than cancelled: the operator stopped sending, they did not decide the reply was wrong.
+    // Held rather than skipped, too — the work stays recoverable for when the switch is lifted.
+    //
+    // Unconditional, like the account check above it. A kill switch is not a request for someone to look;
+    // it is an operator saying nothing may leave, and an approval recorded before they said it cannot
+    // answer it. Making this one authority-aware would be building the path around the switch.
+    reasons.add("AUTOMATION_SUSPENDED");
+  }
   // The four below are all the same kind of gate: "a person should look at this". A person has, so they
-  // are not asked again. What the person could not have changed — the account, the channel's capabilities,
-  // the window — is checked above and below regardless of who is sending.
+  // are not asked again. What the person could not have changed — the account, the kill switch, the
+  // channel's capabilities, the window — is checked above and below regardless of who is sending.
   if (approved === undefined && input.draft.confidence < input.limits.confidenceThreshold) {
     reasons.add("LOW_CONFIDENCE");
   }

@@ -25,6 +25,8 @@ import type {
   ReasonCode,
   ReviewMode,
   SendAuthority,
+  SuspensionReason,
+  SuspensionScope,
   WhatsAppAfterWindowPolicy,
 } from "@omnichannel/domain";
 
@@ -109,6 +111,12 @@ export interface PolicyInput {
    */
   readonly dispatchDeadline?: Date;
   readonly replyCycle: ReplyCycleState;
+  /**
+   * Set when a kill switch covers this send. A fact like any other, so the one place that decides whether
+   * a reply may go out also decides this — rather than a second check somewhere closer to the wire, which
+   * is how a switch ends up with a path around it.
+   */
+  readonly outboundSuspended?: { readonly scope: SuspensionScope; readonly reason: SuspensionReason };
   /**
    * On whose authority this reply would be sent.
    *

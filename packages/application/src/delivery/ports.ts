@@ -6,7 +6,7 @@
  * make the dangerous move harder to express than the safe one.
  */
 import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/channel-core";
-import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode, SendAuthority } from "@omnichannel/domain";
+import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode, SendAuthority, SuspensionReason, SuspensionScope } from "@omnichannel/domain";
 
 import type { AccountHealth, HumanAgentAvailability, PolicyLimits, ReplyCycleState } from "../policy/inputs";
 
@@ -73,6 +73,16 @@ export interface DeliverySendContext {
    * how a human's approval is silently lost, which is the same bug seen from the other side.
    */
   readonly authority: DeliveryAuthority;
+  /**
+   * An operator's kill switch covering this send, if one does.
+   *
+   * Read here with everything else, and re-asserted by the claim. It used to be resolved by the worker
+   * before the coordinator ran, on the reasoning that a switch is a decision about the system rather than
+   * a fact about this conversation — which is true, and was still the wrong place for it. A value read
+   * before the coordinator's own read cannot be bound by the claim, so a switch committed in between was
+   * simply invisible: the guard had no predicate for it and the send went out behind the operator's back.
+   */
+  readonly outboundSuspended?: { readonly scope: SuspensionScope; readonly reason: SuspensionReason };
   /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
   readonly guard: DeliveryStateGuard;
 }
@@ -114,7 +124,12 @@ export type ClaimOutcome =
 
 export interface DeliveryStore {
   /** Re-reads live state. Returns undefined when the job or its conversation no longer exists. */
-  loadForSend(operationId: string): Promise<DeliverySendContext | undefined>;
+  /**
+   * @param at the instant the decision is being made. Explicit, like `claim`'s, because whether a kill
+   * switch is live is a question about a moment, and a store that read its own clock would answer it at a
+   * different one from the gate that uses the answer.
+   */
+  loadForSend(operationId: string, at: Date): Promise<DeliverySendContext | undefined>;
   /**
    * Atomically moves one claimable delivery into SENDING — and only while the state it was judged against is
    * still the live state.

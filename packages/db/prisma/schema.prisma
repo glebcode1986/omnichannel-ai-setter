@@ -205,6 +205,34 @@ enum KnowledgeDocumentStatus {
   ARCHIVED
 }
 
+enum ReconciliationReason {
+  AMBIGUOUS_SEND_RESULT
+  DELIVERY_HANDLER_FAILED
+  DELIVERY_STALLED
+}
+
+enum ReconciliationState {
+  PENDING
+  RESOLVED_SENT
+  RESOLVED_RESUMED
+  NEEDS_HUMAN
+  ALREADY_SETTLED
+}
+
+enum SuspensionScope {
+  GLOBAL
+  WORKSPACE
+  BUSINESS_PROFILE
+  CHANNEL_ACCOUNT
+}
+
+enum SuspensionReason {
+  OPERATOR
+  DEPENDENCY_FAILURE
+  CHANNEL_UNHEALTHY
+  BACKLOG
+}
+
 enum ReplyLength {
   SHORT
   MEDIUM
@@ -261,6 +289,8 @@ model User {
   approvedStyleExamples     StyleExample[]
   channelConnectStates      ChannelConnectState[]
   requestedAiDrafts         AiDraft[]             @relation("DraftRequestedBy")
+  automationSuspensions     AutomationSuspension[] @relation("SuspensionBy")
+  liftedSuspensions         AutomationSuspension[] @relation("SuspensionLiftedBy")
   approvedDeliveries        DeliveryJobRecord[]
 
   @@map("users")
@@ -733,6 +763,8 @@ model DeliveryJobRecord {
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
   draft AiDraft @relation(fields: [workspaceId, businessProfileId, draftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// Present only while the outcome of this send is, or was, unknown (ADR-012).
+  reconciliation DeliveryReconciliation?
   approvedByUser User? @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   /// One delivery job per draft, so a draft can never become more than one send.
@@ -798,6 +830,75 @@ model KnowledgeChunk {
 
 /// How a business sounds: Workspace base when `business_profile_id` is NULL, a Business Profile override
 /// when it is set (product-owner decision on PR #65). Customer-owned configuration, never platform config.
+/// An operator's stop on automated outbound (RELIABILITY_INCIDENTS.md, Issue #56). Inbound is never
+/// suspended: a switch that also dropped customer messages would turn a precaution into data loss.
+model AutomationSuspension {
+  id                String           @id @default(uuid(7))
+  scope             SuspensionScope
+  /// Absent for GLOBAL; present for every narrower scope, enforced by a CHECK.
+  workspaceId       String?          @map("workspace_id")
+  businessProfileId String?          @map("business_profile_id")
+  channelAccountId  String?          @map("channel_account_id")
+  reason            SuspensionReason
+  /// Operator-written context. Never rendered to a customer and never a place for secrets.
+  note              String?
+  since             DateTime
+  /// Absent means it stays until a person lifts it, which is the safe default for a precaution.
+  until             DateTime?
+  /// Who pulled the switch; absent when the system did it in response to a dependency.
+  byUserId          String?          @map("by_user_id")
+  /// When and by whom it was lifted. Kept rather than deleted: the question after an incident is always
+  /// who turned this off and whether anyone turned it back on.
+  liftedAt          DateTime?        @map("lifted_at")
+  liftedByUserId    String?          @map("lifted_by_user_id")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  byUser     User? @relation("SuspensionBy", fields: [byUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  liftedByUser User? @relation("SuspensionLiftedBy", fields: [liftedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([scope, liftedAt])
+  @@index([workspaceId, businessProfileId, liftedAt])
+  @@map("automation_suspensions")
+}
+
+/// One unresolved outbound operation (ADR-012, Issue #56).
+///
+/// The row exists so that an ambiguous send survives the queue: a Redis flush or a dropped job must not
+/// be able to make "we do not know whether the customer received this" disappear. It is written before
+/// anything is examined, and it keeps every attempt's conclusion rather than only the last one's state.
+model DeliveryReconciliation {
+  id                String               @id @default(uuid(7))
+  workspaceId       String               @map("workspace_id")
+  businessProfileId String               @map("business_profile_id")
+  /// One logical outbound action, the same identity the delivery job carries (ADR-012).
+  operationId       String               @unique @map("operation_id")
+  deliveryJobId     String               @map("delivery_job_id")
+  conversationId    String               @map("conversation_id")
+  reason            ReconciliationReason
+  state             ReconciliationState  @default(PENDING)
+  attemptCount      Int                  @default(0) @map("attempt_count")
+  /// When the ambiguity was first observed; the grace period before a person is told runs from here.
+  detectedAt        DateTime             @map("detected_at")
+  lastAttemptAt     DateTime?            @map("last_attempt_at")
+  /// Set together with a terminal state, never on its own (CHECK).
+  resolvedAt        DateTime?            @map("resolved_at")
+  /// One short phrase saying how it was concluded. Never a provider response body, never a secret.
+  evidence          String?
+  providerRequestId String?              @map("provider_request_id")
+  providerCode      String?              @map("provider_code")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  /// Keyed on the operation rather than on a row id, so the record and the job it investigates cannot
+  /// drift apart, and so a job with no record at all is a question the database can answer directly.
+  deliveryJob DeliveryJobRecord @relation(fields: [operationId], references: [operationId], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([state, detectedAt])
+  @@index([workspaceId, businessProfileId, state])
+  @@map("delivery_reconciliations")
+}
+
 model StyleProfile {
   id                String        @id @default(uuid(7))
   workspaceId       String        @map("workspace_id")

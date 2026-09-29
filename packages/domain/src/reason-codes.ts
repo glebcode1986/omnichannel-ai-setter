@@ -32,6 +32,8 @@ export const REASON_CODES = [
   "RATE_LIMITED",
   "SUPERSEDED_BY_NEWER_INBOUND",
   "RETRIEVAL_UNAVAILABLE",
+  /** An operator, or the system on their behalf, stopped automated outbound for this scope. */
+  "AUTOMATION_SUSPENDED",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const isReasonCode = literalGuard(REASON_CODES);

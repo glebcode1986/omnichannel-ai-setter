@@ -88,7 +88,7 @@ const MAX_CLAIM_PASSES = 2;
 
 export async function coordinateDelivery(dependencies: DeliveryDependencies, command: DeliveryCommand): Promise<DeliveryOutcome> {
   const fields = { operationId: command.operationId, correlationId: command.correlationId };
-  let context = await dependencies.store.loadForSend(command.operationId);
+  let context = await dependencies.store.loadForSend(command.operationId, dependencies.now());
   if (context === undefined) {
     // The job, draft or conversation is gone. Nothing to send and nothing to recover.
     dependencies.log.warn("delivery.missing", fields);
@@ -132,7 +132,7 @@ export async function coordinateDelivery(dependencies: DeliveryDependencies, com
       return { status: "RESCHEDULED", notBefore };
     }
 
-    const reread = await dependencies.store.loadForSend(command.operationId);
+    const reread = await dependencies.store.loadForSend(command.operationId, dependencies.now());
     if (reread === undefined) {
       dependencies.log.warn("delivery.missing", fields);
       return { status: "NOT_CLAIMABLE" };
@@ -299,6 +299,10 @@ function policyInputFor(dependencies: DeliveryDependencies, context: DeliverySen
     window: channelState.window,
     humanAgent: channelState.humanAgent,
     ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),
+    // From the context, so the switch the decision honours is the one the claim re-asserts. It is still
+    // an operator's decision about the system rather than a fact about this conversation — but a value
+    // read outside the guarded read cannot be bound by the claim, and unbound is how it was bypassable.
+    ...(context.outboundSuspended === undefined ? {} : { outboundSuspended: context.outboundSuspended }),
     replyCycle: context.replyCycle,
     authority: context.authority,
     now: dependencies.now(),

@@ -542,6 +542,7 @@ describe("a reply a person approved", () => {
       ["the account cannot send", { account: "DISCONNECTED" }],
       ["the channel cannot carry the content", { draft: { ...passing().draft, contentType: "TEMPLATE" } }],
       ["the messaging window has closed", { window: { state: "NOT_ELIGIBLE", reason: "closed" } }],
+      ["an operator has stopped outbound sending", { outboundSuspended: { scope: "WORKSPACE", reason: "OPERATOR" } as const }],
     ];
     for (const [what, overrides] of cases) {
       const decision = decide({ ...overrides, takeover: owned(), authority: approval() });
@@ -588,5 +589,57 @@ describe("a reply a person approved", () => {
   it("treats a caller that says nothing as automation, which is the strict reading", () => {
     expect(decide({ mode: "DRAFT", authority: undefined })).toMatchObject({ action: "HOLD_REVIEW" });
     expect(decide({ mode: "DRAFT", authority: { kind: "AUTOMATED" } })).toMatchObject({ action: "HOLD_REVIEW" });
+  });
+});
+
+/**
+ * The kill switch (Issue #56).
+ *
+ * It is stated here rather than left to the integration suites because the reason code it produces was
+ * asserted nowhere: a switch that stopped producing `AUTOMATION_SUSPENDED` would have changed no test.
+ *
+ * The case worth pinning is the last one. Every other gate that holds a reply is asking for a person, and
+ * an approval answers those — so the obvious reading is that an approved reply goes out. It must not. An
+ * operator stopping outbound sending is not a request for someone to look; it is a statement that nothing
+ * may leave, and a click recorded before they said it cannot answer it. If that ever becomes
+ * authority-aware, the switch has a path around it.
+ */
+describe("an operator's kill switch", () => {
+  const suspended = { scope: "WORKSPACE", reason: "OPERATOR" } as const;
+
+  it("holds the reply rather than cancelling it", () => {
+    const decision = decide({ outboundSuspended: suspended });
+
+    // Held, not skipped: the operator stopped sending, they did not decide this reply was wrong, and the
+    // work has to survive until the switch is lifted.
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decision.reasons).toContain("AUTOMATION_SUSPENDED");
+  });
+
+  it("changes nothing while no switch covers the send", () => {
+    expect(decide({ outboundSuspended: undefined })).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("stops a reply a person approved, exactly as it stops automation", () => {
+    const approved: SendAuthority = {
+      kind: "HUMAN_APPROVED",
+      approvedByUserId: toUserId("11111111-1111-4111-8111-111111111111"),
+      approvedAt: NOW,
+      reviewMode: "NORMAL",
+    };
+    const takenOver: PolicyInput["takeover"] = {
+      state: "HUMAN_ACTIVE",
+      reason: "HUMAN_SENT_FROM_INBOX",
+      since: NOW,
+      actor: { kind: "USER", userId: toUserId("11111111-1111-4111-8111-111111111111") },
+    };
+
+    // Same conversation, same approver holding it: without the switch this schedules.
+    expect(decide({ takeover: takenOver, authority: approved })).toEqual({ action: "SCHEDULE", reasons: [] });
+
+    const decision = decide({ takeover: takenOver, authority: approved, outboundSuspended: suspended });
+
+    expect(decision.action).not.toBe("SCHEDULE");
+    expect(decision.reasons).toContain("AUTOMATION_SUSPENDED");
   });
 });

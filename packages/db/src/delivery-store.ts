@@ -39,9 +39,24 @@ import type {
 } from "@omnichannel/application";
 import { randomUUID } from "node:crypto";
 
-import { isReasonCode, toQuietHours, toUserId, type Actor, type DeliveryJobStatus, type TakeoverReason } from "@omnichannel/domain";
+import {
+  activeSuspension,
+  isReasonCode,
+  toBusinessProfileId,
+  toChannelAccountId,
+  toQuietHours,
+  toUserId,
+  toWorkspaceId,
+  type Actor,
+  type AutomationSuspension,
+  type DeliveryJobStatus,
+  type SuspensionReason,
+  type SuspensionScope,
+  type TakeoverReason,
+} from "@omnichannel/domain";
 
-import type { DbClient } from "./client";
+import type { DbClient, DbExecutor } from "./client";
+import { suspensionLockKeysFor } from "./suspension-lock";
 import type {
   ActorKind,
   AiMode,
@@ -116,7 +131,7 @@ const openGuard = (guard: DeliveryStateGuard): SendStateGuard => guard as unknow
 
 export function createDeliveryStore(db: DbClient): DeliveryStore {
   return {
-    async loadForSend(operationId) {
+    async loadForSend(operationId, at) {
       const job = await db.deliveryJobRecord.findUnique({
         where: { operationId },
         select: {
@@ -175,6 +190,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
       });
       const policies = await automationPolicies(db, scope, conversation.channelAccountId);
       const effective = policies.account ?? policies.default;
+      const suspended = await coveringSuspension(db, { ...scope, channelAccountId: conversation.channelAccountId }, at);
 
       const context: DeliverySendContext = {
         deliveryJobId: job.id,
@@ -194,6 +210,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
         takeover: takeoverStateOf(conversation),
         authority: authorityOf(job),
+        ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
         account: conversation.channelIdentity.channelAccount.status,
         draftNeedsReview: job.draft.needsReview,
@@ -289,6 +306,58 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
 }
 
 /**
+ * The kill switch covering this send, as both the read and the claim must see it.
+ *
+ * One function, called twice on purpose: once with the rest of the state, and once inside the claim's own
+ * transaction after the lock below. A switch is an operator's decision about the system rather than a fact
+ * about this conversation, and that is exactly why it was originally resolved outside the coordinator —
+ * but a value read outside the guarded read cannot be re-asserted by the claim, and a switch committed
+ * between the read and the claim was therefore invisible to the guard.
+ */
+async function coveringSuspension(
+  db: DbExecutor,
+  target: { readonly workspaceId: string; readonly businessProfileId: string; readonly channelAccountId: string },
+  at: Date,
+): Promise<{ readonly scope: SuspensionScope; readonly reason: SuspensionReason } | undefined> {
+  const rows = await db.automationSuspension.findMany({
+    where: {
+      liftedAt: null,
+      OR: [
+        { scope: "GLOBAL" },
+        { scope: "WORKSPACE", workspaceId: target.workspaceId },
+        { scope: "BUSINESS_PROFILE", workspaceId: target.workspaceId, businessProfileId: target.businessProfileId },
+        { scope: "CHANNEL_ACCOUNT", workspaceId: target.workspaceId, channelAccountId: target.channelAccountId },
+      ],
+    },
+    select: { scope: true, workspaceId: true, businessProfileId: true, channelAccountId: true, reason: true, since: true, until: true },
+  });
+  // Which of several switches applies is the domain's rule, not this file's: widest wins, and an expired
+  // or not-yet-started one covers nothing.
+  const covering = rows.map(
+    (row): AutomationSuspension => ({
+      scope: row.scope,
+      ...(row.workspaceId === null ? {} : { workspaceId: toWorkspaceId(row.workspaceId) }),
+      ...(row.businessProfileId === null ? {} : { businessProfileId: toBusinessProfileId(row.businessProfileId) }),
+      ...(row.channelAccountId === null ? {} : { channelAccountId: toChannelAccountId(row.channelAccountId) }),
+      reason: row.reason,
+      since: row.since,
+      ...(row.until === null ? {} : { until: row.until }),
+    }),
+  );
+  const active = activeSuspension(
+    {
+      workspaceId: toWorkspaceId(target.workspaceId),
+      businessProfileId: toBusinessProfileId(target.businessProfileId),
+      channelAccountId: toChannelAccountId(target.channelAccountId),
+    },
+    covering,
+    at,
+  );
+  return active === undefined ? undefined : { scope: active.scope, reason: active.reason };
+}
+
+
+/**
  * The claim itself: locks the rows the decision was made against, in a fixed order, then takes the send.
  *
  * Kept whole and separate so the ordering reads as one sequence — the order is part of the argument, not
@@ -302,6 +371,18 @@ async function claimInside(
 ): Promise<ClaimOutcome> {
   return db.$transaction(
   async (tx) => {
+    const target = { workspaceId: guard.workspaceId, businessProfileId: guard.businessProfileId, channelAccountId: guard.channelAccountId };
+
+    // The kill-switch keys, taken before any row lock so that every claim and every switch writer agrees
+    // on one order. Shared, so claims never wait on each other; a writer takes its own key exclusively
+    // and therefore waits for claims already in flight, and blocks the ones that follow until it commits.
+    //
+    // One statement rather than four round trips: `unnest` holds them all by the time it returns, and
+    // `hashtextextended` derives the key on the server so the two sides cannot disagree about it.
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock_shared(hashtextextended(key, 0))
+      FROM unnest(${suspensionLockKeysFor(target)}::text[]) AS key`;
+
     // The Business Profile row, locked first because it is the coarsest of these and a consistent
     // order is what keeps two claims from deadlocking against each other.
     //
@@ -352,6 +433,14 @@ async function claimInside(
         AND "business_profile_id" = ${guard.businessProfileId}
         AND ("channel_account_id" = ${guard.channelAccountId} OR "channel_account_id" IS NULL)
       FOR SHARE`;
+
+    // The switch, re-read now that the keys above are held: from here to commit, no covering switch can
+    // appear. A switch found here is a state change like any other — the coordinator re-reads and
+    // re-judges, and the policy engine is what turns it into a held delivery with a named reason. This
+    // path deliberately produces no send and no attempt.
+    if ((await coveringSuspension(tx, target, claimedAt)) !== undefined) {
+      return { kind: "STATE_CHANGED" };
+    }
 
     // One conditional UPDATE, evaluated on a snapshot taken after those locks are held. Every
     // predicate in it is part of the concurrency control: the status decides which worker wins, and

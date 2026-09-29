@@ -136,3 +136,24 @@ export {
   type ReviewStore,
   type StyleLearningStore,
 } from "./handoff/resolve-review";
+export { reconcileOperation, type ReconcileCommand, type ReconcileDependencies, type ReconcileOutcome } from "./reliability/reconcile-operation";
+export {
+  RECONCILIATION_STATES,
+  type DeliveryStatusForReconciliation,
+  type OpenReconciliation,
+  type OperationEvidence,
+  type OperationEvidencePort,
+  type ReconciliationRecord,
+  type ReconciliationState,
+  type ReconciliationStore,
+  type ReconciliationSubject,
+} from "./reliability/ports";
+export {
+  decideBackpressure,
+  DEFAULT_BACKLOG_THRESHOLDS,
+  type BacklogReading,
+  type BacklogThresholds,
+  type BackpressureDecision,
+  type BackpressureState,
+} from "./reliability/backpressure";
+export { collectHealth, type HealthProbe, type ProbeResult } from "./reliability/collect-health";

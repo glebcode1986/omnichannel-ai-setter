@@ -14,21 +14,33 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — PR #71 / P2-09 (Issue #16)
+### Current gate — PR #72 / P3-03 (Issue #56)
 
-**PR [#71](https://github.com/glebcode1986/omnichannel-ai-setter/pull/71) is the earliest unresolved gate.**
-Branch `feat/p2-09-instagram-slice`, carrying the Instagram vertical slice, with the accepted #70 head
-merged down into it.
+**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) is the earliest unresolved
+gate.** Branch `feat/p3-03-reliability`, carrying reliability controls, health, kill switches and
+reconciliation, with the accepted #71 head merged down into it. Everything before it in the chain has an
+independent PASS at its published head, and nothing is downstream of #72.
 
-The review at `d77cf92b4b7e860adfe2dfb1a47b33dc9d6babe0` named two composition blockers, and both are now
-addressed on the branch: `apps/web` registers an Instagram adapter per resolved channel account, reading
-that account's own credential through its relation and binding none at all when the webhook verify token
-is unconfigured; and the live `INSTAGRAM_HUMAN_AGENT_APPROVAL` reaches the draft disposition, the final
-channel-state resolver and the sender from one place, so an approved human-support reply is reachable
-through the shared gate instead of being refused before the transport is consulted.
+Two review findings on the kill switch are addressed on the branch: the switch is read with the state the
+claim binds and re-asserted inside the claim, and activation is ordered against in-flight claims by a
+trigger on `automation_suspensions` rather than by a lock in a store method — so the direct SQL an
+operator runs during an incident participates too. No later stage is authorized.
 
 ### Accepted and propagated
 
+- **PR #71 / P2-09 (Issue #16)** was independently accepted at
+  `38df858508ec61e2c6821e47a0a5225c86768223`. The production web composition registers an Instagram adapter
+  per route-resolved channel account and reads that account's own credential through its relation; the live
+  `INSTAGRAM_HUMAN_AGENT_APPROVAL` reaches draft disposition, the final channel-state resolver and the
+  sender from one composition, so an approved human-support reply is reachable through the shared gate; one
+  registry binds adapters in both directions; and the verification gate now runs every project that owns an
+  integration suite, with a meta-test that fails when one is added outside it.
+
+  Merging it down raised one question the chain had not answered: whether a human approval gets a reply
+  past an operator's kill switch. It does not. The gates an approval answers are the ones asking for a
+  person to look; a kill switch is a statement that nothing may leave, and an approval recorded before the
+  operator said it cannot answer it. `AUTOMATION_SUSPENDED` is now asserted in `evaluate.test.ts`, where it
+  was asserted nowhere before.
 - **PR #70 / P2-08 (Issue #15)** was independently accepted at
   `c15a9a6f558d9270263ad7573669f76ca3af8ac0`. The evaluation harness now asserts the model's own intent and
   suggested lead stage rather than merely supplying them, so a classification regression can no longer hide
@@ -46,9 +58,9 @@ through the shared gate instead of being refused before the transport is consult
 
 ### Blocked
 
-**#72 stays unchanged until #71 has an independent PASS at its exact head.** After it, only the
-accepted correction is propagated downstream with ordinary merges, each branch verified before pushing. Do
-not rebase, force-push, merge to `main`, or start Stage D.
+**Nothing downstream of #72 exists yet, and Stage D has not started.** #72 is the last branch in the chain;
+it waits on an independent exact-head review like every gate before it. Do not rebase, force-push, merge to
+`main`, or start Stage D.
 
 ## Phase 4 gate — WhatsApp
 

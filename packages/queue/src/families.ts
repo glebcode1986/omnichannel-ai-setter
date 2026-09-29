@@ -95,3 +95,36 @@ export const RECONCILIATION: JobFamily<ReconciliationJob> = {
 };
 
 export const JOB_FAMILIES = [INBOUND_DEBOUNCE, AI_DRAFT_GENERATION, DELIVERY, RECONCILIATION] as const;
+
+/**
+ * How much work one worker process may have in flight per queue, and how fast it may start it.
+ *
+ * These are the concurrency limits that keep one failure from becoming a dependency storm, and they are
+ * per queue because the queues have nothing in common except the process they run in. Storing a burst of
+ * webhooks is cheap and touches only our own database; asking a language model is expensive, rate-limited
+ * by the provider, and the fastest way to turn a slow provider into a refusing one; sending is bounded by
+ * the platform's own limits, and exceeding those costs the account rather than the request.
+ *
+ * A rate limit is expressed as "at most `max` jobs started per `durationMs`" and is enforced by BullMQ
+ * across every worker sharing the queue, not per process — which is what makes it meaningful once more
+ * than one worker runs.
+ *
+ * The numbers are starting points chosen to be obviously safe rather than optimal, and every one of them
+ * is overridable from the environment: the right value depends on the provider tier and the account,
+ * neither of which this file can know.
+ */
+export interface QueueExecutionLimits {
+  readonly concurrency: number;
+  readonly rateLimit?: { readonly max: number; readonly durationMs: number };
+}
+
+export const DEFAULT_QUEUE_LIMITS: Readonly<Record<string, QueueExecutionLimits>> = {
+  // Database-only and short. Running these in parallel is how a burst of webhooks stops being a backlog.
+  [INBOUND_DEBOUNCE.queueName]: { concurrency: 8 },
+  // One provider, charged per token and rate-limited by tier. Concurrency here is the storm risk.
+  [AI_DRAFT_GENERATION.queueName]: { concurrency: 2, rateLimit: { max: 30, durationMs: 60_000 } },
+  // Bounded by the platform's own send limits; exceeding them is charged to the account, not the request.
+  [DELIVERY.queueName]: { concurrency: 4, rateLimit: { max: 60, durationMs: 60_000 } },
+  // Investigation only, and it never sends. Low, because it is never the urgent work.
+  [RECONCILIATION.queueName]: { concurrency: 2 },
+};

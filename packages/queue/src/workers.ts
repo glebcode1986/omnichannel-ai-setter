@@ -1,4 +1,5 @@
 import { parseSendResult, sendDisposition, type SendDisposition, type SendResult } from "@omnichannel/channel-core";
+import type { ReconciliationReason } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import type { Redis } from "ioredis";
@@ -7,9 +8,11 @@ import {
   AI_DRAFT_GENERATION,
   DEFAULT_QUEUE_PREFIX,
   DELIVERY,
+  DEFAULT_QUEUE_LIMITS,
   INBOUND_DEBOUNCE,
   RECONCILIATION,
   type JobFamily,
+  type QueueExecutionLimits,
 } from "./families";
 import {
   JobPayloadValidationError,
@@ -18,7 +21,6 @@ import {
   type DeliveryJob,
   type InboundDebounceJob,
   type ReconciliationJob,
-  type ReconciliationReason,
 } from "./payloads";
 import { createQueueProducer } from "./producer";
 import { createReplyCycleRegistry, type ReplyCycleOwnership } from "./reply-cycle";
@@ -82,11 +84,36 @@ export interface QueueWorkersOptions {
   readonly logger: Logger;
   readonly handlers: QueueHandlers;
   readonly prefix?: string;
+  /** Fallback for a queue with no entry in `limits`; kept for callers that only need one number. */
   readonly concurrency?: number;
+  /**
+   * Per-queue concurrency and rate limits. Defaults to `DEFAULT_QUEUE_LIMITS`, which is where the
+   * reasoning for each number lives; pass a partial map to override individual queues.
+   */
+  readonly limits?: Readonly<Record<string, QueueExecutionLimits>>;
   /** Lock/stall timings; production uses BullMQ defaults (30 s), tests shorten them. */
   readonly lockDurationMs?: number;
   readonly stalledIntervalMs?: number;
   readonly now?: () => Date;
+  /**
+   * Called for every job failure, so the process can fold many failures into one incident (Issue #56).
+   *
+   * Deliberately synchronous and total: it runs on the failure path, and a reporter that could throw or
+   * hang there would turn one bad dependency into a worker that stops taking jobs. The queue does no
+   * aggregation itself — it only reports what failed, and something above decides what that means.
+   */
+  readonly onJobFailure?: (failure: JobFailure) => void;
+}
+
+export interface JobFailure {
+  readonly queueName: string;
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  /** The conversation this job was acting on, when the payload names one. Blast radius, not identity. */
+  readonly conversationId?: string;
+  /** The error's class name. Never its message, which routinely carries hosts, URLs and keys. */
+  readonly errorName: string;
+  readonly willRetry: boolean;
 }
 
 export interface QueueWorkers {
@@ -108,6 +135,15 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
   const { handlers, logger } = options;
   const replyCycles = createReplyCycleRegistry(options.connection, prefix);
   const reconciliation = createQueueProducer({ connection: options.connection, logger, prefix, now });
+
+  /** Never lets a reporter's own failure reach the job: the job already failed for its own reasons. */
+  const reportFailure = (failure: JobFailure): void => {
+    try {
+      options.onJobFailure?.(failure);
+    } catch (error) {
+      logger.warn("queue.failure_report_failed", { errorName: errorName(error) });
+    }
+  };
 
   async function quarantine(
     job: DeliveryJob,
@@ -245,6 +281,15 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
     }),
   ];
 
+  /**
+   * The limits for one queue: an explicit override, then the per-queue default, then the caller's single
+   * fallback number. A queue that fell through every one of those would run unbounded against whatever
+   * dependency it talks to, so it ends at 1 rather than at BullMQ's own default.
+   */
+  function limitsFor(family: { readonly queueName: string }): QueueExecutionLimits {
+    return options.limits?.[family.queueName] ?? DEFAULT_QUEUE_LIMITS[family.queueName] ?? { concurrency: options.concurrency ?? 1 };
+  }
+
   function worker<Payload extends { readonly workspaceId: string; readonly businessProfileId: string; readonly correlationId: string }>(
     family: JobFamily<Payload>,
     handle: (payload: Payload, context: JobContext) => Promise<JobOutcome>,
@@ -253,6 +298,7 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
       readonly onFailed?: (job: Job, error: Error) => Promise<void>;
     } = {},
   ): Worker {
+    const limits = limitsFor(family);
     const created = new Worker(
       family.queueName,
       async (job: Job): Promise<{ outcome: JobOutcome }> => {
@@ -286,7 +332,16 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
             !(error instanceof UnrecoverableError) &&
             !(error instanceof NonRetryableJobError) &&
             attempt < (job.opts.attempts ?? 1);
-          jobLogger[retryable ? "warn" : "error"]("queue.job_failed", { attempt, willRetry: retryable, errorName: errorName(error) });
+          const failedWith = errorName(error);
+          jobLogger[retryable ? "warn" : "error"]("queue.job_failed", { attempt, willRetry: retryable, errorName: failedWith });
+          reportFailure({
+            queueName: family.queueName,
+            workspaceId: payload.workspaceId,
+            businessProfileId: payload.businessProfileId,
+            ...("conversationId" in payload && typeof payload.conversationId === "string" ? { conversationId: payload.conversationId } : {}),
+            errorName: failedWith,
+            willRetry: retryable,
+          });
           if (error instanceof NonRetryableJobError) {
             throw new UnrecoverableError(error.message);
           }
@@ -298,7 +353,8 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
         // connections, including when shutdown starts before Redis was ever reachable.
         connection: { ...options.connection.options },
         prefix,
-        concurrency: options.concurrency ?? 1,
+        concurrency: limits.concurrency,
+        ...(limits.rateLimit === undefined ? {} : { limiter: { max: limits.rateLimit.max, duration: limits.rateLimit.durationMs } }),
         ...(options.lockDurationMs === undefined ? {} : { lockDuration: options.lockDurationMs }),
         ...(options.stalledIntervalMs === undefined ? {} : { stalledInterval: options.stalledIntervalMs }),
         ...(extra.maxStalledCount === undefined ? {} : { maxStalledCount: extra.maxStalledCount }),

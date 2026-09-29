@@ -2,7 +2,7 @@
  * Versioned, runtime-validated job payloads. Payloads carry stable identifiers and correlation data only —
  * never message text or other conversation content, which workers load from PostgreSQL when they run.
  */
-import { isValidIdentifier } from "@omnichannel/domain";
+import { isValidIdentifier, RECONCILIATION_REASONS } from "@omnichannel/domain";
 import { z } from "zod";
 
 export const MAX_SCHEDULE_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
@@ -78,15 +78,6 @@ export const deliveryJobSchema = z.strictObject({
 });
 export type DeliveryJob = z.output<typeof deliveryJobSchema>;
 
-export const RECONCILIATION_REASONS = [
-  /** The adapter reported AMBIGUOUS: the request may have reached the platform. */
-  "AMBIGUOUS_SEND_RESULT",
-  /** The delivery handler threw or returned an unreadable result, so whether a send happened is unknown. */
-  "DELIVERY_HANDLER_FAILED",
-  /** The worker running the delivery died or lost its lock mid-run; the job is failed, never re-run. */
-  "DELIVERY_STALLED",
-] as const;
-export type ReconciliationReason = (typeof RECONCILIATION_REASONS)[number];
 
 /** Follow-up for an outbound action whose outcome is unknown. Never a resend (ADR-012). */
 export const reconciliationJobSchema = z.strictObject({

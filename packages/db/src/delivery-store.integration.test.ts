@@ -92,7 +92,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
 
   /** Reads the live state and claims against it, which is the only way a claim can be made. */
   const claimFresh = async (store: DeliveryStore, operationId: string, claimedAt: Date = NOW): Promise<ClaimOutcome> => {
-    const context = await store.loadForSend(operationId);
+    const context = await store.loadForSend(operationId, NOW);
     if (context === undefined) {
       throw new Error(`no delivery context for ${operationId}`);
     }
@@ -147,7 +147,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     await claimFresh(store, operationId);
     await store.settle(operationId, { kind: "SENT", platformMessageId: "mid_3" }, NOW);
 
-    const context = await store.loadForSend(operationId);
+    const context = await store.loadForSend(operationId, NOW);
 
     expect(context?.alreadySent).toBe(true);
   }, 120_000);
@@ -203,7 +203,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
 
   it("notices a customer message that arrived during the delay", async () => {
     const { operationId } = await scheduleDelivery();
-    const before = await createDeliveryStore(database.db).loadForSend(operationId);
+    const before = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
     expect(before?.replyCycle).toBe("OWNED");
 
     await database.db.message.create({
@@ -219,7 +219,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       },
     });
 
-    const after = await createDeliveryStore(database.db).loadForSend(operationId);
+    const after = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
     // The whole reason the coordinator re-reads instead of trusting the schedule.
     expect(after?.replyCycle).toBe("SUPERSEDED");
   }, 120_000);
@@ -249,7 +249,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
   }, 120_000);
 
   it("returns nothing for an operation that does not exist", async () => {
-    expect(await createDeliveryStore(database.db).loadForSend("op_missing")).toBeUndefined();
+    expect(await createDeliveryStore(database.db).loadForSend("op_missing", NOW)).toBeUndefined();
   }, 120_000);
 
   /**
@@ -324,8 +324,8 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       let fired = false;
       return {
         ...store,
-        async loadForSend(operationId) {
-          const context = await store.loadForSend(operationId);
+        async loadForSend(operationId, at) {
+          const context = await store.loadForSend(operationId, at);
           if (!fired) {
             fired = true;
             await change();
@@ -427,7 +427,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     it("refuses a claim made against a state that has since been overtaken", async () => {
       const { operationId, anchoredAt } = await sendable();
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -445,7 +445,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     it("refuses a claim made against a draft whose text has been rewritten since", async () => {
       const { operationId, draftId } = await sendable();
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -465,7 +465,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     it("refuses a claim when conversation state moved in a way no other predicate names", async () => {
       const { operationId } = await sendable();
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -538,7 +538,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       it(`refuses a claim overtaken by ${what}`, async () => {
         const { operationId } = await sendable();
         const store = createDeliveryStore(database.db);
-        const stale = await store.loadForSend(operationId);
+        const stale = await store.loadForSend(operationId, NOW);
         if (stale === undefined) {
           throw new Error("no delivery context");
         }
@@ -554,7 +554,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     it("refuses a claim on a draft that produced a message while the job was still scheduled", async () => {
       const { operationId, draftId } = await sendable();
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -600,7 +600,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         data: { ...holder, takeoverActorKind: "SYSTEM" },
       });
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -626,7 +626,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         data: { ...scope(), channelAccountId: profile.channelAccount.id, mode: "AUTOPILOT", mandatoryReviewReasons: [] },
       });
       const store = createDeliveryStore(database.db);
-      const stale = await store.loadForSend(operationId);
+      const stale = await store.loadForSend(operationId, NOW);
       if (stale === undefined) {
         throw new Error("no delivery context");
       }
@@ -725,7 +725,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       write: (tx: Parameters<Parameters<typeof rival.$transaction>[0]>[0]) => Promise<unknown>,
     ) => {
       const store = createDeliveryStore(database.db);
-      const context = await store.loadForSend(operationId);
+      const context = await store.loadForSend(operationId, NOW);
       if (context === undefined) {
         throw new Error("no delivery context");
       }
@@ -841,7 +841,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         },
       );
 
-      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
       if (context === undefined) {
         throw new Error("no delivery context");
       }
@@ -893,7 +893,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       insert: () => Promise<unknown>,
     ): Promise<{ claimed: ClaimOutcome; insertBlocked: boolean }> => {
       const store = createDeliveryStore(database.db);
-      const context = await store.loadForSend(operationId);
+      const context = await store.loadForSend(operationId, NOW);
       if (context === undefined) {
         throw new Error("no delivery context");
       }
@@ -976,7 +976,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
 
     it("reports a broken deadlock as a moved state rather than letting it escape", async () => {
       const { operationId } = await sendable();
-      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
       if (context === undefined) {
         throw new Error("no delivery context");
       }
@@ -1030,7 +1030,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
         },
       });
 
-      const context = await createDeliveryStore(database.db).loadForSend(operationId);
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
 
       // The limits and the mode come out of one row, read once. A caller that fetched them separately
       // could judge against one version of the business's settings while the claim bound another.
@@ -1055,7 +1055,7 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       });
       logged.$on("query", (event) => statements.push(event.query));
       const store = createDeliveryStore(logged);
-      const context = await store.loadForSend(operationId);
+      const context = await store.loadForSend(operationId, NOW);
       if (context === undefined) {
         throw new Error("no delivery context");
       }
@@ -1072,13 +1072,28 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       expect(writes[0]).toContain("WHERE");
       // Every read before it acquires a lock and holds it to commit. An ordinary SELECT here would be a
       // fact read outside the boundary, which is the thing a concurrent writer can invalidate.
+      //
+      // Two statements are locking reads without saying `FOR ...`, and both are named rather than
+      // excused. The advisory acquisition *is* the lock. The suspensions read is covered by it, because
+      // the row that would invalidate it does not exist yet when the claim starts — a row lock cannot be
+      // taken on a row nobody has inserted, which is the whole reason that key exists (#56).
       const reads = trimmed.filter((statement) => statement.startsWith("SELECT"));
-      expect(reads.length).toBeGreaterThan(0);
-      expect(reads.every((read) => /FOR (UPDATE|SHARE)$/.test(read))).toBe(true);
-      // The Business Profile is locked first — the coarsest, so two claims cannot deadlock on ordering —
-      // and the conversation, the boundary an inbound writer takes, is locked before anything is decided.
-      expect(reads[0]).toContain('"business_profiles"');
-      expect(reads.some((read) => read.includes('"conversations"') && read.includes("FOR UPDATE"))).toBe(true);
+      const advisory = reads.filter((read) => read.includes("pg_advisory_xact_lock_shared"));
+      const suspensions = reads.filter((read) => read.includes('"automation_suspensions"'));
+      expect(advisory).toHaveLength(1);
+      expect(suspensions).toHaveLength(1);
+      const rowReads = reads.filter((read) => !advisory.includes(read) && !suspensions.includes(read));
+      expect(rowReads.length).toBeGreaterThan(0);
+      expect(rowReads.every((read) => /FOR (UPDATE|SHARE)$/.test(read))).toBe(true);
+      // The key is taken before any row lock, so every claim and every switch writer agree on one order,
+      // and the suspensions are read after it rather than before.
+      expect(reads[0]).toBe(advisory[0]);
+      expect(reads.indexOf(suspensions[0] ?? "")).toBeGreaterThan(0);
+      // The Business Profile is locked first of the rows — the coarsest, so two claims cannot deadlock on
+      // ordering — and the conversation, the boundary an inbound writer takes, is locked before anything
+      // is decided.
+      expect(rowReads[0]).toContain('"business_profiles"');
+      expect(rowReads.some((read) => read.includes('"conversations"') && read.includes("FOR UPDATE"))).toBe(true);
       await logged.$disconnect();
     }, 120_000);
   });
