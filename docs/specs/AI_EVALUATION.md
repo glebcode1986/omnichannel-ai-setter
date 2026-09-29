@@ -58,13 +58,20 @@ Add an entry to `packages/evals/src/cases/index.ts` with:
 
 Never put a policy expectation in `quality`. A decision that can be graded away is not a decision.
 
+**A fixture that states a classification must assert it.** The model's `intent` and its suggested lead
+stage are the one part of an answer that can change while the reply, the citations and the policy decision
+all stay identical — a booking that stops being recognised as a booking goes out looking exactly the same.
+So `assertions.modelIntent` and `assertions.leadStage` pin them, `null` asserts that nothing was
+classified (a conversation that must not be read as a lead is where a wrong reading would be quietest),
+and a harness self-test fails any golden that supplies a classification without asserting one.
+
 Cases are TypeScript rather than JSON so that a change to a contract breaks the goldens at compile time.
 
 ## Coverage
 
 Factual answers with provenance, missing facts, every mandatory-review escalation category, unsupported
 media, prompt injection both from the customer and inside a knowledge chunk, multilingual style fidelity,
-malformed and refused model output, and deterministic policy cases for mode, window, after-window policy,
-takeover and reply-cycle ownership.
+malformed and refused model output, deterministic policy cases for mode, window, after-window policy,
+takeover and reply-cycle ownership, and the intent/lead-stage classification wherever a case states one.
 
 No production customer data is used or required; the businesses in these conversations do not exist.

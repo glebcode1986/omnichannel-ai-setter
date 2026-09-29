@@ -66,6 +66,20 @@ export interface CaseAssertions {
   readonly citedSourceIds?: readonly string[];
   readonly policyAction?: "SKIP" | "HOLD_REVIEW" | "SCHEDULE";
   readonly policyReasons?: readonly ReasonCode[];
+  /**
+   * How the model classified the conversation, as stored on the draft.
+   *
+   * Not `GoldenCase.intent`, which is the sentence saying what a case protects. This is the model's own
+   * `intent` field — `HOURS`, `BOOKING`, `OTHER` — and it is asserted because the contract asks these
+   * goldens to pin the classification, and because a fixture that merely *supplies* one proves nothing:
+   * change it and every other assertion still sees the same reply, the same citations and the same policy.
+   *
+   * `null` asserts that the draft carries no classification, which is a claim worth making: a conversation
+   * that must not be read as a lead is exactly where a wrong one would be quiet.
+   */
+  readonly modelIntent?: string | null;
+  /** The lead stage the model suggested, on the same terms. `null` asserts that it suggested none. */
+  readonly leadStage?: string | null;
   /** The draft must be stored but unusable — a held generation with its audit row intact. */
   readonly held?: boolean;
   /** Strings that must never appear in the reply, whatever the model was asked to do. */
