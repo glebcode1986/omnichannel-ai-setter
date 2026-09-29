@@ -1,4 +1,4 @@
-import type { ReasonCode } from "@omnichannel/domain";
+import { toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
 import type { SendResult } from "@omnichannel/channel-core";
 import { describe, expect, it } from "vitest";
 
@@ -45,14 +45,33 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   draftNeedsReview: false,
   alreadySent: false,
   limits,
+  authority: { kind: "AUTOMATED" },
   guard: guard("read_1"),
   ...overrides,
+});
+
+const APPROVER = { kind: "USER", userId: toUserId("11111111-1111-4111-8111-111111111111") } as const;
+
+/** A delivery a person approved, as the review queue records it. */
+const approved = (overrides: Partial<Extract<SendAuthority, { kind: "HUMAN_APPROVED" }>> = {}): SendAuthority => ({
+  kind: "HUMAN_APPROVED",
+  approvedByUserId: APPROVER.userId,
+  approvedAt: NOW,
+  reviewMode: "NORMAL",
+  ...overrides,
+});
+
+/** The ownership approving a reply creates: the approver now holds the conversation. */
+const ownedByApprover = (actor: Actor = APPROVER): DeliverySendContext["takeover"] => ({
+  state: "HUMAN_ACTIVE",
+  reason: "HUMAN_SENT_FROM_INBOX",
+  since: NOW,
+  actor,
 });
 
 const command = (overrides: Partial<DeliveryCommand> = {}): DeliveryCommand => ({
   operationId: "op_1",
   correlationId: "corr_1",
-  authority: { kind: "AUTOMATED" },
   ...overrides,
 });
 
@@ -468,7 +487,7 @@ describe("quiet hours that begin during the delay", () => {
 describe("the human-approved path", () => {
   it("carries the approving actor to the adapter and still re-checks eligibility first", async () => {
     const sends: { authority: unknown }[] = [];
-    const { dependencies } = harness();
+    const { dependencies } = harness({ context: context({ takeover: ownedByApprover(), authority: approved() }) });
     const withCapture: DeliveryDependencies = {
       ...dependencies,
       sender: {
@@ -479,24 +498,85 @@ describe("the human-approved path", () => {
       },
     };
 
-    await coordinateDelivery(
-      withCapture,
-      command({ authority: { kind: "HUMAN_APPROVED", approvedByUserId: "user_7", approvedAt: NOW } }),
-    );
+    await coordinateDelivery(withCapture, command());
 
-    expect(sends[0]?.authority).toEqual({ kind: "HUMAN_APPROVED", approvedByUserId: "user_7", approvedAt: NOW });
+    // Carried across whole from the row the approval was recorded on: the adapter is told who authorized
+    // this send, and this call had no way to say anything else.
+    expect(sends[0]?.authority).toEqual(approved());
   });
 
-  it("is blocked by the same gates as automation: approval is not a bypass", async () => {
-    const { dependencies, sends } = harness({ context: context({ takeover: { state: "HUMAN_ACTIVE", reason: "HUMAN_CLAIMED", since: NOW } }) });
+  it("sends a reply a person approved even though the mode holds every automated one", async () => {
+    // DRAFT mode plus the approver's own ownership: the two things that exist to make a human look, after
+    // a human has looked. Under automation this is a hold; here it is the reply the person asked for.
+    const { dependencies, sends, settlements } = harness({
+      context: context({ mode: "DRAFT", takeover: ownedByApprover(), authority: approved() }),
+    });
 
-    const outcome = await coordinateDelivery(
-      dependencies,
-      command({ authority: { kind: "HUMAN_APPROVED", approvedByUserId: "user_7", approvedAt: NOW } }),
-    );
+    const outcome = await coordinateDelivery(dependencies, command());
 
+    expect(outcome).toMatchObject({ status: "SENT" });
+    expect(sends).toHaveLength(1);
+    expect(settlements).toEqual([{ kind: "SENT", platformMessageId: "mid_1" }]);
+  });
+
+  it("does not reach past a colleague who has taken the conversation since", async () => {
+    const other: Actor = { kind: "USER", userId: toUserId("22222222-2222-4222-8222-222222222222") };
+    const { dependencies, sends } = harness({ context: context({ takeover: ownedByApprover(other), authority: approved() }) });
+
+    const outcome = await coordinateDelivery(dependencies, command());
+
+    // They own the conversation now. An approval from before that is not authority over their work.
     expect(sends).toEqual([]);
     expect(outcome.status).toBe("CANCELLED");
+  });
+
+  it("is still stopped by everything an approval cannot answer", async () => {
+    for (const [what, overrides] of [
+      ["the customer wrote again", { replyCycle: "SUPERSEDED" as const }],
+      ["automation was switched off entirely", { mode: "OFF" as const }],
+      ["AI was disabled for the conversation", { aiEnabled: false }],
+      ["the account stopped being usable", { account: "DISCONNECTED" as const }],
+    ] satisfies readonly (readonly [string, Partial<DeliverySendContext>])[]) {
+      const { dependencies, sends } = harness({ context: context({ ...overrides, takeover: ownedByApprover(), authority: approved() }) });
+
+      const outcome = await coordinateDelivery(dependencies, command());
+
+      // A click cannot reopen a window, unsay a customer's message or reconnect an account.
+      expect(sends, what).toEqual([]);
+      expect(outcome.status, what).not.toBe("SENT");
+    }
+  });
+
+  it("uses the human-support path only when the person authorized that path and it is still live", async () => {
+    const closed = { window: { state: "NOT_ELIGIBLE", reason: "closed" } as const, humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() + 60_000) } as const };
+    const extended = { ...limits, afterWindow: { channel: "INSTAGRAM", policy: "HUMAN_ASSISTED_EXTENDED" } as const };
+
+    const authorized = harness({
+      channelState: closed,
+      context: context({ limits: extended, takeover: ownedByApprover(), authority: approved({ reviewMode: "HUMAN_AGENT" }) }),
+    });
+    const sent = await coordinateDelivery(authorized.dependencies, command());
+    expect(sent).toMatchObject({ status: "SENT" });
+    expect(authorized.sends).toHaveLength(1);
+
+    // The same closed window, approved as an ordinary reply. The only permitted route is the tagged send,
+    // and nobody authorized one — so it goes back to a person rather than out on the standard path.
+    const ordinary = harness({
+      channelState: closed,
+      context: context({ limits: extended, takeover: ownedByApprover(), authority: approved({ reviewMode: "NORMAL" }) }),
+    });
+    const held = await coordinateDelivery(ordinary.dependencies, command());
+    expect(ordinary.sends).toEqual([]);
+    expect(held.status).toBe("HELD");
+
+    // And an authorization for the tagged path is worth nothing once the exception has lapsed.
+    const lapsed = harness({
+      channelState: { ...closed, humanAgent: { state: "ELIGIBLE", expiresAt: new Date(NOW.getTime() - 1) } },
+      context: context({ limits: extended, takeover: ownedByApprover(), authority: approved({ reviewMode: "HUMAN_AGENT" }) }),
+    });
+    const expired = await coordinateDelivery(lapsed.dependencies, command());
+    expect(lapsed.sends).toEqual([]);
+    expect(expired.status).toBe("CANCELLED");
   });
 });
 

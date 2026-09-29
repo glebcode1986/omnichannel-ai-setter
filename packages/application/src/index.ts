@@ -128,7 +128,7 @@ export type {
 export {
   resolveReview,
   type ReviewAction,
-  type ReviewClaim,
+  type ReviewDecision,
   type ReviewCommand,
   type ReviewDependencies,
   type ReviewLogPort,

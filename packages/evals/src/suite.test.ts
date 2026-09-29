@@ -66,6 +66,62 @@ describe("the suite can fail", () => {
     expect(result.failures.some((failure) => failure.startsWith("needsReview"))).toBe(true);
   });
 
+  /**
+   * The classification is the one thing a reply can get wrong while looking identical.
+   *
+   * Every other assertion here reads the reply, the citations or the policy decision, and none of them
+   * moves when a booking stops being recognised as a booking. The contract asks these goldens to pin the
+   * intent and the lead stage, and a fixture that merely supplies them pins nothing.
+   */
+  it("fails when the model stops classifying the conversation the same way", async () => {
+    const kase = baseCase();
+    const withIntent: GoldenCase = { ...kase, assertions: { ...kase.assertions, modelIntent: "HOURS" } };
+    const broken: GoldenCase = {
+      ...withIntent,
+      fixtureReply: { kind: "OUTPUT", output: { ...(kase.fixtureReply as { output: Record<string, unknown> }).output, intent: "OTHER" } },
+    };
+
+    expect((await runCase(withIntent)).failures).toEqual([]);
+    const result = await runCase(broken);
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toContain("intent");
+    // The reply itself is untouched, which is exactly why nothing else catches this.
+    expect(result.reply).toBe((await runCase(withIntent)).reply);
+  });
+
+  it("fails when a qualified lead stops being recognised as one", async () => {
+    const kase = baseCase();
+    const asLead = (leadStage: unknown): GoldenCase => ({
+      ...kase,
+      assertions: { ...kase.assertions, leadStage: "QUALIFIED" },
+      fixtureReply: { kind: "OUTPUT", output: { ...(kase.fixtureReply as { output: Record<string, unknown> }).output, lead_stage: leadStage } },
+    });
+
+    expect((await runCase(asLead("QUALIFIED"))).failures).toEqual([]);
+    const result = await runCase(asLead(null));
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toContain("leadStage");
+  });
+
+  it("fails when something is classified that should not have been", async () => {
+    const kase = baseCase();
+    const mustNotQualify: GoldenCase = { ...kase, assertions: { ...kase.assertions, leadStage: null } };
+    const broken: GoldenCase = {
+      ...mustNotQualify,
+      fixtureReply: { kind: "OUTPUT", output: { ...(kase.fixtureReply as { output: Record<string, unknown> }).output, lead_stage: "QUALIFIED" } },
+    };
+
+    // A wrong classification is quietest in the direction nobody checks: a conversation that must not be
+    // read as a lead, read as one.
+    expect((await runCase(mustNotQualify)).failures).toEqual([]);
+    const result = await runCase(broken);
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toContain("leadStage");
+  });
+
   it("fails when a policy decision changes", async () => {
     const result = await runCase({ ...baseCase(), policy: { windowOpen: false, afterWindowPolicy: "STANDARD_ONLY" } });
 
@@ -148,6 +204,23 @@ describe("the golden suite itself", () => {
     // A case whose purpose nobody remembers is a case that gets deleted the first time it is inconvenient.
     for (const kase of GOLDEN_CASES) {
       expect(kase.intent.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("pins the classification wherever the model states one", () => {
+    // A golden whose fixture classifies the conversation and whose assertions do not is a golden that
+    // would not notice the classification changing.
+    for (const kase of GOLDEN_CASES) {
+      const fixture = kase.fixtureReply as { kind: string; output?: Record<string, unknown> };
+      if (fixture.kind !== "OUTPUT") {
+        continue;
+      }
+      if (fixture.output?.intent !== null && fixture.output?.intent !== undefined) {
+        expect(kase.assertions.modelIntent, `${kase.id} supplies an intent without asserting it`).toBeDefined();
+      }
+      if (fixture.output?.lead_stage !== null && fixture.output?.lead_stage !== undefined) {
+        expect(kase.assertions.leadStage, `${kase.id} supplies a lead stage without asserting it`).toBeDefined();
+      }
     }
   });
 

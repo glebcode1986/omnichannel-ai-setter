@@ -33,6 +33,8 @@ Names may be normalized during implementation but semantics must remain.
 
 Immediately before an atomic send claim, check:
 
+- the authority the delivery was scheduled with — automation, or a named human approval — read from the
+  delivery's own row and never reconstructed by the caller (`HUMAN_HANDOFF.md`);
 - no newer qualifying inbound after the draft anchor;
 - no human/manual outbound or active takeover;
 - conversation/account mode still AUTOPILOT and enabled;
