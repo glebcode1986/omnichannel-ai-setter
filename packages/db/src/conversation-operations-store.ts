@@ -14,6 +14,7 @@
  */
 import type { ConversationOperationStore } from "@omnichannel/application";
 
+import { recordAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
@@ -46,6 +47,17 @@ export function createConversationOperationStore(db: DbClient, context: Business
           return { status: "GONE" };
         }
         await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(context.userId, at) });
+        // In the same transaction as the takeover it describes. A crash between the two would leave a
+        // conversation somebody holds with no record of who took it or when.
+        await recordAuditEvent(tx, context, {
+          kind: "TAKEOVER_STARTED",
+          summary: "Took a conversation over",
+          subjectType: "conversations",
+          subjectId: conversationId,
+          actorUserId: context.userId,
+          conversationId,
+          occurredAt: at,
+        });
         // Idempotent by construction: taking a conversation you already hold writes the same row.
         return { status: "TAKEN_OVER" };
       });
@@ -81,6 +93,16 @@ export function createConversationOperationStore(db: DbClient, context: Business
                   takeoverActorUserId: context.userId,
                   takeoverPausedUntil: pauseUntil,
                 },
+        });
+        await recordAuditEvent(tx, context, {
+          kind: "TAKEOVER_ENDED",
+          summary: pauseUntil === undefined ? "Handed a conversation back to automation" : "Paused automation on a conversation",
+          subjectType: "conversations",
+          subjectId: conversationId,
+          actorUserId: context.userId,
+          conversationId,
+          detail: pauseUntil === undefined ? {} : { pausedUntil: pauseUntil.toISOString() },
+          occurredAt: at,
         });
         return { status: "HANDED_BACK" };
       });

@@ -6,6 +6,7 @@ import type { ChannelAccountStatus, Prisma } from "../generated/prisma/client";
 
 /** Connection state of a channel account, mirrored from the schema enum. */
 export type ChannelAccountStatusValue = ChannelAccountStatus;
+import { recordAuditEvent } from "../audit-store";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "../tenancy";
 
 /** Channel account fields safe to return to callers; credential references stay inside persistence. */
@@ -119,30 +120,41 @@ export async function connectChannelAccount(
     }));
 
   try {
-    if (existing === null) {
-      return await db.channelAccount.create({
-        data: {
-          ...scope,
-          channel: input.channel,
-          externalAccountId: input.externalAccountId,
-          displayName: input.displayName,
-          capabilities: { ...input.capabilities },
-          credentialId: input.credentialId,
-          status: "CONNECTED",
-        },
-        select: channelAccountSelect,
-      });
-    }
-    return await db.channelAccount.update({
-      where: { workspaceId_businessProfileId_id: { ...scope, id: existing.id } },
-      data: {
-        displayName: input.displayName,
-        capabilities: { ...input.capabilities },
-        credentialId: input.credentialId,
-        status: "CONNECTED",
-      },
-      select: channelAccountSelect,
+    const account =
+      existing === null
+        ? await db.channelAccount.create({
+            data: {
+              ...scope,
+              channel: input.channel,
+              externalAccountId: input.externalAccountId,
+              displayName: input.displayName,
+              capabilities: { ...input.capabilities },
+              credentialId: input.credentialId,
+              status: "CONNECTED",
+            },
+            select: channelAccountSelect,
+          })
+        : await db.channelAccount.update({
+            where: { workspaceId_businessProfileId_id: { ...scope, id: existing.id } },
+            data: {
+              displayName: input.displayName,
+              capabilities: { ...input.capabilities },
+              credentialId: input.credentialId,
+              status: "CONNECTED",
+            },
+            select: channelAccountSelect,
+          });
+    // Admin-only to read, because it says which provider account this business now speaks as.
+    await recordAuditEvent(db, context, {
+      kind: "CHANNEL_CONNECTED",
+      summary: `Connected ${input.channel} account ${input.displayName}`,
+      subjectType: "channel_accounts",
+      subjectId: account.id,
+      actorUserId: context.userId,
+      channelAccountId: account.id,
+      detail: { channel: input.channel, reconnected: existing !== null },
     });
+    return account;
   } catch (error) {
     // The live-account index is global on purpose: one provider account may be live in one place only.
     if (isUniqueViolation(error)) {

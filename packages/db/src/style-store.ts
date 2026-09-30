@@ -14,6 +14,7 @@
 import type { EmojiUsage, ReplyLength } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
@@ -144,6 +145,14 @@ export async function saveStyleProfile(
   } else {
     await db.styleProfile.update({ where: { id: existing.id }, data });
   }
+  await recordAuditEvent(db, context, {
+    kind: "STYLE_VERSIONED",
+    summary: businessProfileId === null ? "Saved the workspace voice" : "Saved this profile's voice",
+    subjectType: "style_profiles",
+    subjectId: existing?.id ?? "new",
+    actorUserId: context.userId,
+    detail: { layer: businessProfileId === null ? "WORKSPACE" : "BUSINESS_PROFILE" },
+  });
   return { status: "SAVED" };
 }
 

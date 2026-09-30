@@ -19,6 +19,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export type ComposeOutcome =
@@ -120,6 +121,18 @@ export async function composeHumanReply(db: DbClient, context: BusinessProfileCo
         takeoverActorUserId: context.userId,
         takeoverPausedUntil: null,
       },
+    });
+    // A person's own words going out is a material action, and one that a reader of the thread cannot
+    // distinguish from an approved draft without this.
+    await recordAuditEvent(tx, context, {
+      kind: "REPLY_COMPOSED",
+      summary: "Composed and sent a reply",
+      subjectType: "delivery_jobs",
+      subjectId: operationId,
+      actorUserId: context.userId,
+      conversationId: input.conversationId,
+      detail: { reviewMode: input.reviewMode },
+      occurredAt: at,
     });
     return { status: "SCHEDULED", operationId, replayed: false };
   });

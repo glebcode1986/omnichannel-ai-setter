@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
@@ -351,6 +352,14 @@ export async function editKnowledge(
         indexingError: null,
         indexedAt: null,
       },
+    });
+    await recordAuditEvent(tx, context, {
+      kind: "KNOWLEDGE_VERSIONED",
+      summary: `Saved version ${String(version)} of ${title}`,
+      subjectType: "knowledge_documents",
+      subjectId: documentId,
+      actorUserId: context.userId,
+      detail: { version, title },
     });
     return { status: "VERSIONED", documentId, version };
   });
