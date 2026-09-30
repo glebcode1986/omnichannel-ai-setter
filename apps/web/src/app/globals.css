@@ -789,3 +789,87 @@ a {
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
 }
+
+/* ---- knowledge library -------------------------------------------------------------------------- */
+
+.knowledge-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.knowledge-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  text-decoration: none;
+  color: var(--text);
+}
+
+.knowledge-row:hover {
+  background: var(--surface-sunken);
+}
+
+.knowledge-name {
+  font-weight: 600;
+}
+
+.knowledge-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 44rem;
+}
+
+.knowledge-editor label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.knowledge-editor input,
+.knowledge-editor textarea,
+.knowledge-editor select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.knowledge-editor textarea {
+  resize: vertical;
+}
+
+.knowledge-editor .button {
+  align-self: flex-start;
+}
+
+.knowledge-tester,
+.knowledge-history {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  margin-bottom: var(--gap);
+}
+
+.retrieval-hits {
+  list-style: decimal;
+  margin: var(--gap) 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A superseded version is visibly not the current one: same content, different standing. */
+.knowledge-history li[data-current="false"] {
+  opacity: 0.75;
+}

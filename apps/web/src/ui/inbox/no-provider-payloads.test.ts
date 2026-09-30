@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 
 const inboxDir = path.dirname(fileURLToPath(import.meta.url));
 /** Every directory of panes this rule covers. The Review queue is held to the same criterion. */
-const paneDirs = [inboxDir, path.resolve(inboxDir, "../review")];
+const paneDirs = [inboxDir, path.resolve(inboxDir, "../review"), path.resolve(inboxDir, "../knowledge")];
 
 /**
  * Comments are stripped before anything is matched.
@@ -126,5 +126,7 @@ describe("the Inbox components", () => {
     // The Review queue is held to the same criterion, and is where a provider payload would be most
     // tempting: a template name, a window state, an eligibility blob.
     expect(files).toContain("review/review-card.tsx");
+    expect(files).toContain("knowledge/knowledge-list.tsx");
+    expect(files).toContain("knowledge/retrieval-results.tsx");
   });
 });

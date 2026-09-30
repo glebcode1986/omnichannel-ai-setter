@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.11.3",
+    "@omnichannel/ai": "workspace:*",
     "@omnichannel/application": "workspace:*",
     "@omnichannel/channel-core": "workspace:*",
     "@omnichannel/channel-instagram": "workspace:*",

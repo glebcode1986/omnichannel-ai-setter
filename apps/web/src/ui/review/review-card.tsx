@@ -45,6 +45,9 @@ const EXPLAINED: Partial<Record<string, MessageKey>> = {
 
 export function ReviewCard({ t, item, basePath, from, actions, target }: ReviewCardProps) {
   const conversationTarget: ConversationTarget = { ...target, conversationId: item.conversationId };
+  // The model's reading of the question, as a starting title. Never the customer's text — see below.
+  const knowledgeHref =
+    item.intent === null ? `${basePath}/knowledge` : `${basePath}/knowledge?suggest=${encodeURIComponent(item.intent)}`;
   const bind = (action: (target: ConversationTarget, formData: FormData) => Promise<void>) => action.bind(null, conversationTarget);
   /** Carried on every form so the decision returns the person to the surface they acted from. */
   const context = (
@@ -113,6 +116,27 @@ export function ReviewCard({ t, item, basePath, from, actions, target }: ReviewC
         <p className="notice" data-tone="stop" role="status">
           {t.t("review.stale")}
         </p>
+      ) : undefined}
+
+      {/*
+        The way out of a MISSING_FACT: write the fact down so the next customer gets an answer.
+        Deliberately a link to the Knowledge Library's form and not an inline "add" button — adding a fact
+        is a considered act with its own draft and publish steps, and one click from a review queue is not
+        that. Nothing is added until a person types it and saves.
+
+        The suggestion carried is the *intent* the model read, never the customer's own words: what a
+        customer wrote is a question, not a fact about the business, and pre-filling it would invite
+        somebody to press save on it. The sentence underneath says so, because the temptation is obvious.
+      */}
+      {item.reasonCodes.includes("MISSING_FACT") ? (
+        <section className="missing-fact" data-missing-fact="true">
+          <h4>{t.t("missingFact.title")}</h4>
+          <p className="muted">{t.t("missingFact.explain")}</p>
+          <p className="muted">{t.t("missingFact.notFromCustomer")}</p>
+          <Link className="button" href={knowledgeHref} data-action="add-to-knowledge">
+            {t.t("missingFact.add")}
+          </Link>
+        </section>
       ) : undefined}
 
       <div className="review-actions">
