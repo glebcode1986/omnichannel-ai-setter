@@ -44,6 +44,25 @@ export {
   type AutomatedDeliveryInput,
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
+export {
+  editLead,
+  listLeads,
+  readQualification,
+  readStageDisplays,
+  readStageHistory,
+  recordQualification,
+  saveStageDisplays,
+  transitionLeadStage,
+  type LeadEditOutcome,
+  type LeadFilter,
+  type LeadRow,
+  type LeadValueSource,
+  type QualificationAnswer,
+  type StageConfigOutcome,
+  type StageDisplay,
+  type StageHistoryEntry,
+  type StageTransitionOutcome,
+} from "./lead-store";
 export { createConversationOperationStore } from "./conversation-operations-store";
 export {
   listReviewQueue,
