@@ -87,7 +87,7 @@ export function createDeliveryResumer(
         correlationId: facts.correlationId,
         conversationId: facts.conversationId,
         deliveryJobId: facts.deliveryJobId,
-        draftId: facts.draftId,
+        ...(facts.draftId === null ? {} : { draftId: facts.draftId }),
         operationId,
         scheduledFor: facts.scheduledFor.toISOString(),
         // The delay is history now — the operation is being resumed, not scheduled — but the payload
@@ -108,7 +108,8 @@ export interface ReconciliationDeliveryFacts {
   readonly correlationId: string;
   readonly conversationId: string;
   readonly deliveryJobId: string;
-  readonly draftId: string;
+  /** Absent for a human-composed delivery, which has no draft (ADR-018 Option B). */
+  readonly draftId: string | null;
   readonly scheduledFor: Date;
   readonly selectedDelayMs: number;
 }

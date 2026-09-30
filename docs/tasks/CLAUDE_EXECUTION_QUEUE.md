@@ -153,3 +153,41 @@ Branch: `feat/p1-02-domain-channel-contracts` — implemented, PR #49.
 Phase 2 was started under the owner's Stage B directive (MASTER Issue #61) once the Issue #53 Business
 Profile sync completed, and is implemented as PRs #63–#71 in the chain above. Contracts: `docs/tasks/P2-*`.
 
+## Stage C — CURRENT STATE: Gate C PASS
+
+Stage C's only task, #56 / P3-03 (reliability controls, health, kill switches, reconciliation), was
+accepted as PR #72 at `9955ecf`. The whole #26→#72 chain has an independent PASS. Gate C's conditions
+hold: the dashboard may be closed while the server continues safely, dependency failures degrade
+narrowly, and outbound can be stopped without losing inbound.
+
+## Stage D — CURRENT STATE: in progress, seven branches
+
+Stacked in MASTER #61's order, each branch cut from the previous task's head because `main` carries
+documentation only. Every PR below is CI-green with an evidence comment and a
+`CLAUDE_READY_FOR_ASTRA` marker.
+
+| Task | Issue | Branch | PR |
+| --- | --- | --- | --- |
+| P5-01 app shell + resumable onboarding | #27 | `feat/p5-01-app-shell-onboarding` | #73 |
+| P5-10 EN/RU localization | #58 | `feat/p5-10-localization` | #74 |
+| P5-02 unified Inbox | #28 | `feat/p5-02-unified-inbox` | #75 |
+| P5-03 conversation operations + Review Queue | #29 | `feat/p5-03-review-conversation-ops` | #76 |
+| P5-05 Knowledge Library | #31 | `feat/p5-05-knowledge-library` | #77 |
+| P5-06 Style Training | #32 | `feat/p5-06-style-training` | #78 |
+| P5-04 AI settings + no-send simulation | #30 | `feat/p5-04-ai-settings-simulation` | #79 |
+| P5-07 Leads pipeline | #33 | `feat/p5-07-leads-pipeline` | store only, no PR yet |
+
+**P5-03 is complete.** ADR-018 was accepted as Option B on 2026-09-30, and the composer is built: a
+human-composed reply has an honest non-AI origin on the delivery record, goes through the one delivery
+coordinator with every gate re-asserted, and creates no `AiDraft` row.
+
+### Open questions for the owner
+
+1. **P5-07: may a Workspace add a lead stage?** `LEADS_ANALYTICS_UX.md` says it may. `LeadStage` is an
+   enum the draft engine returns in its structured output, so adding one is a change to what the model may
+   produce rather than a display preference. Rename, reorder and hide are built.
+2. **`docs/specs/MVP_RELEASE_SCOPE.md` does not exist** but Issue #58 referenced it. `LOCALIZATION.md` was
+   written as part of that task; this one was deliberately not invented.
+3. **The playground and the retrieval tester run in `apps/web`**, which now reads the worker's embedding
+   and reply-model settings (both optional). Moving them into the worker is a reasonable alternative if
+   you would rather the web app held no model configuration.
