@@ -44,6 +44,7 @@ export {
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export { createIngestionStore } from "./ingestion-store";
+export { listInbox, type InboxCursor, type InboxFilter, type InboxPage, type InboxRow } from "./inbox-store";
 export { countUnusableGenerations, DEFAULT_SNAPSHOT_WINDOW, readReliabilitySnapshot, type ReliabilitySnapshot, type SnapshotWindow } from "./reliability-metrics";
 export { createReconciliationStore, findUnresolvedOperations, type UnresolvedOperation } from "./reconciliation-store";
 export { createSuspensionStore, type NewSuspension, type SuspensionStore, type SuspensionTargetQuery, type SystemSuspension } from "./suspension-store";
