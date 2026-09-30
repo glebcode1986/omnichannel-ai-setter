@@ -41,19 +41,30 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**Stage D has started with P5-01 (Issue #27)**, on branch `feat/p5-01-app-shell-onboarding`, based on the
-accepted #72 head. Everything before it in the chain has an independent PASS at its published head,
-including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**. Everything before it in the chain
-has an independent PASS at its published head, including **#71 / P2-09 at
+**Stage D's Phase 5 surfaces are implemented** as PRs #73–#80, each stacked on its predecessor and each
+CI-green with evidence posted. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
 `4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
-`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. #72 is the last branch in the
-chain, nothing is merged to `main`, and Stage D has not started.
+`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. Nothing is merged to `main`.
 
-Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
+Everything is one stacked chain of unmerged PRs, each branch based on its parent:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+
+| PR | Task | Issue |
+| --- | --- | --- |
+| #73 | P5-01 app shell + resumable onboarding | #27 |
+| #74 | P5-10 localization foundation | #58 |
+| #75 | P5-02 unified Inbox | #28 |
+| #76 | P5-03 review operations + human composer | #29 |
+| #77 | P5-05 Knowledge Library | #31 |
+| #78 | P5-06 Style Training | #32 |
+| #79 | P5-04 AI settings + no-send simulation | #30 |
+| #80 | P5-07 Leads pipeline | #33 |
+| #81 | P3-01 customer identity, search and memory | #54 |
 
 The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
 under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
@@ -207,17 +218,21 @@ the implementation notes in `docs/specs/PRODUCT_UX.md`.
 
 ## Immediate next actions
 
-1. **#28 / P5-02 is the open work.** The unified Inbox on `feat/p5-02-unified-inbox`, stacked on P5-10.
-2. **PR #73 (P5-01) and PR #74 (P5-10) are awaiting review.** Both are CI-green with evidence posted.
-   Fixes for either go to the earliest affected branch and merge down the chain.
-3. **P5-03 / Issue #29 (Review queue and composer) is next in MASTER #61's order.** The Inbox deliberately
-   left the composer and every review action to it, and the context pane already says so in words.
+1. **#54 / P3-01 is the latest work**, as PR #81 on `feat/p3-01-customer-identity-memory`, stacked on
+   P5-07. It adds the customer identity and durable-memory primitives with no UI; see
+   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which the issue referenced and the repository did not have.
+2. **PRs #73–#81 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+   the earliest affected branch and merge down the chain.
+3. **P5-08 / Issue #34 (Analytics + Audit) is the next Phase 5 surface**, and #35 P5-09 (E2E,
+   accessibility, responsive) follows it.
 4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
-   or names a provider payload type.
+   or names a provider payload type. New tables are held by the cascade guard in
+   `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
+   foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
 5. No rebases, no force-pushes, and no merges to `main`.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+6. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was

@@ -7,14 +7,38 @@
 **This section is the live instruction. Everything under "Historical launch plan" below is kept for the
 record and is not a current task.**
 
-Phase 1 and Phase 2 are implemented as one stacked chain of unmerged PRs, each branch based on its parent
-and each awaiting independent review in dependency order:
+Everything implemented so far is one stacked chain of unmerged PRs, each branch based on its parent and
+each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
 
 Nothing is merged to `main`.
 
-### Current work — P5-10 / Issue #58 (Stage D)
+### Current work — P3-01 / Issue #54
+
+**Branch `feat/p3-01-customer-identity-memory`**, based on `feat/p5-07-leads-pipeline`. The MVP customer
+identity, search and durable-memory primitives: contact points, external identities, duplicate candidates,
+`CustomerFact`, `CustomerPreference` and an assistive-only `ConversationSummary`. No UI — the issue's
+acceptance criteria ask for persisted, application-facing primitives.
+
+**Issue #54 named `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which did not exist.** The issue's own
+Required behavior / Tests / Acceptance criteria were detailed enough to implement from, so this task writes
+that spec as part of its output — the same precedent as `LOCALIZATION.md` for #58.
+
+**One reading the issue left open, resolved as follows.** It lists message text among the searchable
+fields "as supported by current storage", while P5-02's Inbox search deliberately never searches message
+text. Both are honoured: `searchCustomers` searches it only when the caller passes
+`includeMessageText: true`, and message hits rank after identity hits. A business searching its own
+correspondence is ordinary, but it is a different question from *who is this*, so it is a decision at the
+call site rather than something that happens to every customer's words whenever an operator types a name.
+
+**One deliberate tightening.** The migration first gave the new tables `ON DELETE CASCADE` from the
+contact. `constraints.integration.test.ts` — which predates this task — allows only login data and grants
+to cascade, and that guard is right: every new foreign key is now `ON DELETE RESTRICT`, so `forgetCustomer`
+is the only way memory goes away and a stray `contact.delete()` fails loudly.
+
+### Previous — P5-10 / Issue #58 (Stage D)
 
 **Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
 production locales, per-user and independent of the language customers are answered in.

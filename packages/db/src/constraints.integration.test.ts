@@ -764,6 +764,12 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
         "channel_accounts_live_profile_channel_key",
         "automation_policies_profile_default_key",
         "business_profiles_workspace_id_id_key",
+        "contact_points_value_key",
+        "external_identities_value_key",
+        "customer_facts_active_subject_key",
+        "customer_preferences_active_subject_key",
+        "conversation_summaries_conversation_key",
+        "duplicate_contact_candidates_pair_key",
       ]),
     );
 
