@@ -314,6 +314,9 @@ export async function readConversation(
   const scope = profileScopeOf(context);
   const limit = Math.min(Math.max(Math.trunc(options.messageLimit ?? 100), 1), 200);
 
+  // The policies depend only on the profile, so they are read alongside the conversation rather than
+  // after it: two sequential round trips for one screen is a round trip too many.
+  const policiesPromise = readModePolicies(db, scope);
   const row = await db.conversation.findFirst({
     where: { ...scope, id: conversationId },
     select: {
@@ -368,12 +371,12 @@ export async function readConversation(
       },
     },
   });
+  const policies = await policiesPromise;
   if (row === null) {
     return undefined;
   }
 
   const draft = row.aiDrafts[0];
-  const policies = await readModePolicies(db, scope);
   return {
     id: row.id,
     channel: row.channelIdentity.channelAccount.channel,

@@ -36,14 +36,17 @@ function isFilterName(value: string | undefined): value is InboxFilterName {
 export function parseInboxView(params: RawSearchParams): InboxView {
   const search = one(params["q"])?.trim();
   const filter = one(params["filter"]);
+  const account = one(params["account"]);
+  const stage = one(params["stage"]);
+  const cursor = one(params["cursor"]);
   return {
     ...(search === undefined || search === "" ? {} : { search }),
     ...(isFilterName(filter) ? { filter } : {}),
-    ...(one(params["account"]) === undefined ? {} : { channelAccountId: one(params["account"]) ?? "" }),
+    ...(account === undefined ? {} : { channelAccountId: account }),
     // Validated against the domain's own list, so a hand-typed stage cannot reach a query as a filter
     // nobody defined.
-    ...(isLeadStage(one(params["stage"])) ? { leadStage: one(params["stage"]) ?? "" } : {}),
-    ...(one(params["cursor"]) === undefined ? {} : { cursor: one(params["cursor"]) ?? "" }),
+    ...(isLeadStage(stage) ? { leadStage: stage } : {}),
+    ...(cursor === undefined ? {} : { cursor }),
   };
 }
 
