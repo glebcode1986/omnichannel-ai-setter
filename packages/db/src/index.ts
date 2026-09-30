@@ -103,6 +103,15 @@ export {
 } from "./retrieval/sql";
 export { createStyleProfileStore, type StyleProfileQuery, type StyleProfileStore } from "./style-profile-store";
 export {
+  listPolicyAudits,
+  readPolicies,
+  savePolicy,
+  type PolicyAuditEntry,
+  type PolicyEdit,
+  type PolicyView,
+  type PolicyWriteOutcome,
+} from "./policy-store";
+export {
   approveStyleExample,
   archiveStyleExample,
   createStyleExample,
