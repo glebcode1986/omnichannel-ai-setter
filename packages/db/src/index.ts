@@ -71,6 +71,25 @@ export { createReconciliationStore, findUnresolvedOperations, type UnresolvedOpe
 export { createSuspensionStore, type NewSuspension, type SuspensionStore, type SuspensionTargetQuery, type SystemSuspension } from "./suspension-store";
 export { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
 export {
+  archiveKnowledge,
+  createKnowledge,
+  editKnowledge,
+  listKnowledge,
+  publishKnowledge,
+  readKnowledge,
+  recordIndexingResult,
+  restoreKnowledge,
+  type KnowledgeCursor,
+  type KnowledgeDetail,
+  type KnowledgeFilter,
+  type KnowledgeLibraryPage,
+  type KnowledgeScope,
+  type KnowledgeSummary,
+  type KnowledgeVersion,
+  type KnowledgeWriteOutcome,
+  type NewKnowledge,
+} from "./knowledge-store";
+export {
   seedKnowledge,
   seedStyleExample,
   type SeededKnowledge,
