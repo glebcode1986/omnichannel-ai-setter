@@ -38,7 +38,14 @@ export interface DeliverySendContext {
   readonly operationId: string;
   /** The tenant this delivery belongs to; channel rules are evaluated within it, never across it. */
   readonly workspaceId: string;
-  readonly draftId: string;
+  /**
+   * The AI draft this send came from, absent when a person composed it themselves (ADR-018 Option B).
+   *
+   * Absent rather than a placeholder: a coordinator that received an invented draft id would log and
+   * reconcile against a row that does not exist. Everything else about the send is identical, which is
+   * the point — there is one send path, not two.
+   */
+  readonly draftId?: string;
   readonly conversationId: string;
   readonly channel: ChannelType;
   readonly recipientExternalId: string;

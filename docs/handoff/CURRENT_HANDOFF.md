@@ -205,13 +205,37 @@ force, not the conversation's empty override, and the precedence now has one imp
 approving and editing arrive with P5-03, and the panel says so rather than showing disabled buttons. See
 the implementation notes in `docs/specs/PRODUCT_UX.md`.
 
+**Gate C is PASS.** Stage C's only task, #56 / P3-03, was accepted as PR #72 at `9955ecf`, and the whole
+#26→#72 chain has an independent PASS. Reliability controls, health reporting, kill switches and
+reconciliation are in place: the dashboard may be closed while the server continues safely, dependency
+failures degrade narrowly, and outbound can be stopped without losing inbound.
+
+**A human-composed reply has an honest origin (ADR-018 Option B, accepted 2026-09-30).** The composer was
+the one part of P5-03 that could not be built without a decision, because a delivery required an
+`ai_drafts` row and a person's words are not a generation. Option B was accepted: `delivery_jobs.draft_id`
+is nullable and the row carries `human_text` with its author, under CHECKs admitting **exactly one**
+origin — never none, never both, never anonymous human wording, never an author on a model's draft, never
+empty text, and never automation's authority on words a person typed. `ai_drafts` is untouched and stays
+model-only, so no human reply reaches `readReliabilitySnapshot`, `countUnusableGenerations` or the evals.
+
+The delivery coordinator is still the only path to a customer. A human-composed delivery is claimed by the
+same atomic claim, re-asserts the same conversation facts in the same conditional update, and is refused
+by the same policy, window, account-health, kill-switch and takeover gates. Its wording is part of the
+guard, so an edit between the judgement and the claim refuses rather than sending something nobody judged.
+Idempotency is the same decision digest the review path uses.
+
 ## Immediate next actions
 
-1. **#28 / P5-02 is the open work.** The unified Inbox on `feat/p5-02-unified-inbox`, stacked on P5-10.
-2. **PR #73 (P5-01) and PR #74 (P5-10) are awaiting review.** Both are CI-green with evidence posted.
-   Fixes for either go to the earliest affected branch and merge down the chain.
-3. **P5-03 / Issue #29 (Review queue and composer) is next in MASTER #61's order.** The Inbox deliberately
-   left the composer and every review action to it, and the context pane already says so in words.
+1. **Stage D is open across six stacked branches**, each CI-green with evidence posted:
+   #73 (P5-01 shell/onboarding), #74 (P5-10 EN/RU), #75 (P5-02 Inbox), #76 (P5-03 review + composer,
+   now complete), #77 (P5-05 Knowledge), #78 (P5-06 Style), #79 (P5-04 AI settings + simulation).
+   `feat/p5-07-leads-pipeline` carries the P5-07 store and is not yet a PR.
+2. **Fixes go to the earliest affected branch and merge down the chain.** No rebases, no force-pushes,
+   no merges to `main`.
+3. **P5-07 / Issue #33 (Leads) is the open work.** Its store, migration and tests are committed; the
+   kanban and table views are not built yet. One product question is open: the spec allows a Workspace to
+   *add* stages, which would require `LeadStage` to stop being an enum — and the draft engine returns one
+   in its structured output, so that is a decision, not a display preference.
 4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package

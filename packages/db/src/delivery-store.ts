@@ -146,6 +146,29 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           approvedByUserId: true,
           approvedAt: true,
           approvedReviewMode: true,
+          humanText: true,
+          composedByUserId: true,
+          conversationId: true,
+          // The conversation a human-composed delivery names directly, because it has no draft to ask.
+          // Selected with the same shape as the draft's, so one reader serves both origins.
+          conversation: {
+            select: {
+              id: true,
+              channelAccountId: true,
+              status: true,
+              aiEnabled: true,
+              takeoverState: true,
+              modeOverride: true,
+              stateVersion: true,
+              lastInboundAt: true,
+              takeoverReason: true,
+              takeoverReviewMode: true,
+              humanTakeoverAt: true,
+              takeoverActorKind: true,
+              takeoverActorUserId: true,
+              channelIdentity: { select: { externalUserId: true, channelAccount: { select: { channel: true, status: true } } } },
+            },
+          },
           draft: {
             select: {
               text: true,
@@ -179,9 +202,20 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         return undefined;
       }
 
-      const conversation = job.draft.conversation;
+      // Exactly one origin, which a CHECK guarantees (ADR-018 Option B): an AI draft, or a person's own
+      // wording. Everything below is written once and serves both, because a human-composed reply goes
+      // through this same coordinator with the same gates — there is no second send path.
+      const conversation = job.draft?.conversation ?? job.conversation;
+      if (conversation === null || conversation === undefined) {
+        // A delivery with neither origin cannot exist, and one whose conversation vanished has nowhere to
+        // send. Returning nothing is the same answer the caller already handles for a missing job.
+        return undefined;
+      }
+      const outboundText = job.draft === null ? job.humanText : job.draft.text;
       const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
-      const anchorAt = await anchorTime(db, scope, job.draftId);
+      // A human-composed reply has no draft to anchor to, so "newer inbound" is measured from when the
+      // person composed it. `approvedAt` is that moment, and it is set for every human authority.
+      const anchorAt = job.draftId === null ? (job.approvedAt ?? new Date(0)) : await anchorTime(db, scope, job.draftId);
       // Read here rather than carried from scheduling: a message that arrived during the delay is exactly
       // the thing this lookup exists to notice.
       const newerInbound = await db.message.findFirst({
@@ -196,12 +230,12 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         deliveryJobId: job.id,
         operationId: job.operationId,
         workspaceId: job.workspaceId,
-        draftId: job.draftId,
+        ...(job.draftId === null ? {} : { draftId: job.draftId }),
         conversationId: conversation.id,
         channel: conversation.channelIdentity.channelAccount.channel,
         recipientExternalId: conversation.channelIdentity.externalUserId,
         channelAccountId: conversation.channelAccountId,
-        ...(job.draft.text === null ? {} : { text: job.draft.text }),
+        ...(outboundText === null ? {} : { text: outboundText }),
         status: job.status,
         attemptCount: job.attemptCount,
         mode: conversation.modeOverride ?? effective?.mode ?? "OFF",
@@ -213,9 +247,11 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
         account: conversation.channelIdentity.channelAccount.status,
-        draftNeedsReview: job.draft.needsReview,
-        // The draft's own sent message is the durable record that the logical action already happened.
-        alreadySent: job.draft.sentMessage !== null,
+        // A person's own wording was never held for review; the review it needed was them writing it.
+        draftNeedsReview: job.draft?.needsReview ?? false,
+        // The durable record that the logical action already happened. For a human-composed delivery the
+        // operation id is that record, because there is no draft to hang a sent message from.
+        alreadySent: job.draft === null ? await humanSendAlreadyRecorded(db, job.operationId) : job.draft.sentMessage !== null,
         guard: sealGuard({
           ...scope,
           channelAccountId: conversation.channelAccountId,
@@ -225,8 +261,8 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           aiEnabled: conversation.aiEnabled,
           modeOverride: conversation.modeOverride,
           accountStatus: conversation.channelIdentity.channelAccount.status,
-          draftText: job.draft.text,
-          draftNeedsReview: job.draft.needsReview,
+          draftText: outboundText,
+          draftNeedsReview: job.draft?.needsReview ?? false,
           anchorAt,
           accountPolicyAt: policies.account?.updatedAt ?? null,
           defaultPolicyAt: policies.default?.updatedAt ?? null,
@@ -261,32 +297,52 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
       await db.$transaction(async (tx) => {
         const job = await tx.deliveryJobRecord.findUniqueOrThrow({
           where: { operationId },
-          select: { id: true, workspaceId: true, businessProfileId: true, draftId: true, correlationId: true, draft: { select: { conversationId: true, conversation: { select: { channelAccountId: true } } } } },
+          select: {
+            id: true,
+            workspaceId: true,
+            businessProfileId: true,
+            draftId: true,
+            correlationId: true,
+            humanText: true,
+            composedByUserId: true,
+            conversationId: true,
+            conversation: { select: { id: true, channelAccountId: true } },
+            draft: { select: { conversationId: true, conversation: { select: { channelAccountId: true } } } },
+          },
         });
         const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
 
-        if (settlement.kind === "SENT") {
+        // Exactly one origin, by CHECK. The conversation comes from the draft when there is one and from
+        // the delivery itself when a person composed the reply.
+        const conversationId = job.draft?.conversationId ?? job.conversationId;
+        const channelAccountId = job.draft?.conversation.channelAccountId ?? job.conversation?.channelAccountId;
+
+        if (settlement.kind === "SENT" && conversationId !== null && channelAccountId !== undefined && channelAccountId !== null) {
           // The outbound message and the terminal state are written together: a SENT row without its
           // message would let a later run believe nothing had been sent.
           await tx.message.create({
             data: {
               ...scope,
-              channelAccountId: job.draft.conversation.channelAccountId,
-              conversationId: job.draft.conversationId,
+              channelAccountId,
+              conversationId,
               channelMessageId: settlement.platformMessageId === "" ? null : settlement.platformMessageId,
               direction: "OUT",
-              source: "AI",
+              // Attributed to whoever actually wrote it. Recording a person's words as `AI` would be the
+              // audit trail claiming the assistant said something a colleague did — the one confusion the
+              // thread's source distinction exists to prevent.
+              source: job.draftId === null ? "HUMAN" : "AI",
+              ...(job.composedByUserId === null ? {} : { sentByUserId: job.composedByUserId }),
               kind: "TEXT",
               occurredAt: at,
               deliveryStatus: "SENT",
               // Automated delivery is always the standard path; the human-agent path is a human action.
               transportPath: "STANDARD",
               operationId,
-              aiDraftId: job.draftId,
+              ...(job.draftId === null ? {} : { aiDraftId: job.draftId }),
             },
           });
           await tx.conversation.update({
-            where: { workspaceId_businessProfileId_id: { ...scope, id: job.draft.conversationId } },
+            where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
             data: { lastOutboundAt: at, lastMessageAt: at },
           });
         }
@@ -445,6 +501,63 @@ async function claimInside(
     // One conditional UPDATE, evaluated on a snapshot taken after those locks are held. Every
     // predicate in it is part of the concurrency control: the status decides which worker wins, and
     // the rest decides whether the approval is still the live state.
+    /**
+     * The conversation facts, re-asserted as the send is taken.
+     *
+     * Built once and attached through whichever origin this delivery has (ADR-018 Option B): an AI
+     * delivery reaches its conversation through the draft, a human-composed one names it directly. Every
+     * predicate is identical either way — that is what "one send path" has to mean at this level, and a
+     * human-composed send that skipped even one of these would be the second path the contract forbids.
+     */
+    const conversationStillMatches = {
+      stateVersion: guard.conversationStateVersion,
+      status: guard.conversationStatus,
+      takeoverState: guard.takeoverState,
+      takeoverActorKind: guard.takeoverActorKind,
+      takeoverActorUserId: guard.takeoverActorUserId,
+      aiEnabled: guard.aiEnabled,
+      modeOverride: guard.modeOverride,
+      // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
+      // this reply answers a question that has moved on, whatever any version counter says.
+      messages: { none: { direction: "IN" as const, aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
+      channelIdentity: {
+        channelAccount: {
+          status: guard.accountStatus,
+          businessProfile: {
+            AND: [policyUnchanged(guard.channelAccountId, guard.accountPolicyAt), policyUnchanged(null, guard.defaultPolicyAt)],
+          },
+        },
+      },
+    };
+
+    const originStillMatches =
+      context.draftId === undefined
+        ? {
+            /*
+             * A person's own wording, unchanged since it was judged. Editing it between the judgement and
+             * the claim has to refuse: sending the new wording would send something nobody judged, and
+             * sending the old would send something nobody wrote.
+             *
+             * There is deliberately no "not already sent" predicate here. The draft branch needs one
+             * because a message can exist without the draft's status moving; this branch does not,
+             * because `status: CLAIMABLE` already excludes SENT and `messages.operation_id` is UNIQUE —
+             * one operation can physically produce at most one outbound message. A predicate that
+             * duplicated those would look load-bearing and carry nothing, which is worse than absent:
+             * mutation testing found it by deleting it and breaking nothing.
+             */
+            humanText: guard.draftText,
+            conversation: conversationStillMatches,
+          }
+        : {
+            draft: {
+              text: guard.draftText,
+              needsReview: guard.draftNeedsReview,
+              // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
+              sentMessage: { is: null },
+              conversation: conversationStillMatches,
+            },
+          };
+
     const claimed = await tx.deliveryJobRecord.updateMany({
       where: {
         operationId: context.operationId,
@@ -453,35 +566,7 @@ async function claimInside(
         approvedByUserId: guard.approvedByUserId,
         approvedAt: guard.approvedAt,
         approvedReviewMode: guard.approvedReviewMode,
-        draft: {
-          text: guard.draftText,
-          needsReview: guard.draftNeedsReview,
-          // Not merely "was not sent when we read": not sent *now*, checked as the send is taken.
-          sentMessage: { is: null },
-          conversation: {
-            stateVersion: guard.conversationStateVersion,
-            status: guard.conversationStatus,
-            takeoverState: guard.takeoverState,
-            takeoverActorKind: guard.takeoverActorKind,
-            takeoverActorUserId: guard.takeoverActorUserId,
-            aiEnabled: guard.aiEnabled,
-            modeOverride: guard.modeOverride,
-            // The reply-cycle fact itself, not a proxy for it: a customer message after the anchor means
-            // this reply answers a question that has moved on, whatever any version counter says.
-            messages: { none: { direction: "IN", aiDraftId: null, occurredAt: { gt: guard.anchorAt } } },
-            channelIdentity: {
-              channelAccount: {
-                status: guard.accountStatus,
-                businessProfile: {
-                  AND: [
-                    policyUnchanged(guard.channelAccountId, guard.accountPolicyAt),
-                    policyUnchanged(null, guard.defaultPolicyAt),
-                  ],
-                },
-              },
-            },
-          },
-        },
+        ...originStillMatches,
       },
       data: { status: "SENDING", claimedAt, attemptCount: { increment: 1 } },
     });
@@ -765,4 +850,15 @@ export async function requestHumanReview(
       humanTakeoverAt: input.at,
     },
   });
+}
+
+/**
+ * Whether a human-composed delivery already produced its outbound message.
+ *
+ * An AI delivery answers this through its draft's `sentMessage`; a human-composed one has no draft, so
+ * the operation id is the durable record. Same question, same guarantee — ADR-012's rule that a send
+ * whose outcome is known must never be repeated does not depend on which origin wrote the words.
+ */
+async function humanSendAlreadyRecorded(db: DbExecutor, operationId: string): Promise<boolean> {
+  return (await db.message.findFirst({ where: { operationId }, select: { id: true } })) !== null;
 }

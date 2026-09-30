@@ -308,6 +308,7 @@ model User {
   automationSuspensions     AutomationSuspension[] @relation("SuspensionBy")
   liftedSuspensions         AutomationSuspension[] @relation("SuspensionLiftedBy")
   approvedDeliveries        DeliveryJobRecord[]
+  composedDeliveries        DeliveryJobRecord[]   @relation("ComposedDeliveries")
   onboardingSkips           OnboardingSkip[]
 
   @@map("users")
@@ -652,6 +653,7 @@ model Conversation {
   takeoverActorUser User?           @relation(fields: [takeoverActorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   messages          Message[]
   aiDrafts          AiDraft[]
+  composedDeliveries DeliveryJobRecord[]
 
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, channelAccountId, id])
@@ -772,7 +774,14 @@ model DeliveryJobRecord {
   id                String            @id @default(uuid(7))
   workspaceId       String            @map("workspace_id")
   businessProfileId String            @map("business_profile_id")
-  draftId           String            @map("draft_id")
+  /// Absent exactly when this delivery carries a person's own wording (ADR-018 Option B).
+  draftId           String?           @map("draft_id")
+  /// A person's own reply, for a conversation with no draft to approve. A CHECK admits exactly one origin.
+  humanText         String?           @map("human_text")
+  /// Set exactly when `humanText` is: a reply in somebody's words names its author.
+  composedByUserId  String?           @map("composed_by_user_id")
+  /// Present exactly when there is no draft to derive it from; the sender needs a recipient.
+  conversationId    String?           @map("conversation_id")
   /// One logical outbound action; stable across queue retries (ADR-012).
   operationId       String            @unique @map("operation_id")
   correlationId     String            @map("correlation_id")
@@ -804,10 +813,13 @@ model DeliveryJobRecord {
   createdAt         DateTime          @default(now()) @map("created_at")
   updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  draft AiDraft @relation(fields: [workspaceId, businessProfileId, draftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  draft AiDraft? @relation(fields: [workspaceId, businessProfileId, draftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  /// Present exactly when this delivery carries a person's own wording (ADR-018 Option B).
+  conversation Conversation? @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "delivery_jobs_conversation_fkey")
   /// Present only while the outcome of this send is, or was, unknown (ADR-012).
   reconciliation DeliveryReconciliation?
   approvedByUser User? @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  composedByUser User? @relation("ComposedDeliveries", fields: [composedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "delivery_jobs_composed_by_fkey")
 
   /// One delivery job per draft, so a draft can never become more than one send.
   @@unique([workspaceId, businessProfileId, draftId], map: "delivery_jobs_draft_key")

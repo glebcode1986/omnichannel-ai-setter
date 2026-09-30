@@ -1,8 +1,7 @@
 # ADR-018: Where a human-composed reply lives before it is sent
 
-**Status:** Proposed by Claude on 2026-09-30 while implementing P5-03 (#29). Not decided. The composer is
-the one required scope item of that task that is not built, because building it either way changes
-something CLAUDE.md reserves for an ADR.
+**Status:** **Accepted** by the product owner on 2026-09-30 (PR #76), Option B. Implemented in migration
+`20260930230000_human_composed_delivery` on `feat/p5-03-review-conversation-ops`.
 
 ## Context
 
@@ -42,9 +41,39 @@ row in `ai_drafts` means. Option B changes what a `DeliveryJobRecord` requires. 
 that leaves both alone, and the difference is visible in production: A silently degrades the numbers the
 reliability and evaluation work exists to produce.
 
-## Recommendation
+## Decision
 
-**B.** The model's record should keep describing the model. A delivery having two possible origins is a
+**B**, accepted. The model's record keeps describing the model.
+
+### The invariant, as implemented
+
+A `delivery_jobs` row has **exactly one** content origin, enforced by CHECK rather than by convention:
+
+- `(draft_id IS NOT NULL) <> (human_text IS NOT NULL)` — one origin, never none and never both;
+- `(human_text IS NOT NULL) = (composed_by_user_id IS NOT NULL)` — a person's words name their author,
+  and an AI draft has no author to name;
+- `(human_text IS NOT NULL) = (conversation_id IS NOT NULL)` — a human-composed delivery names its
+  conversation directly, because it has no draft to derive it from; an AI one does not duplicate the fact;
+- `human_text IS NULL OR btrim(human_text) <> ''` — empty wording would ask the transport to send nothing;
+- `human_text IS NULL OR authority = 'HUMAN_APPROVED'` — automation did not write these words, and the
+  human-support transport path depends on the difference (ADR-014).
+
+`ai_drafts` is unchanged and stays semantically model-only. No human-composed reply appears in
+`readReliabilitySnapshot`, `countUnusableGenerations` or the evals, and there is a test asserting that
+composing creates no draft row at all.
+
+### What did not change
+
+The delivery coordinator is still the only path to a customer. A human-composed delivery is claimed
+atomically, revalidated immediately before the transport call, and subject to the same policy, window,
+account-health, kill-switch and takeover gates as an automated one. It carries `selectedDelayMs = 0`
+because a person has already decided, and its idempotency is the same decision digest `resolveApproval`
+uses — a second submit of the same wording is answered with the send the first one made, and a different
+message while one is still queued is refused rather than queued behind it.
+
+### Rationale kept for the record
+
+The model's record should keep describing the model. A delivery having two possible origins is a
 fact about the product — automation and people both reply — and making that explicit in the schema is
 cheaper to live with than a column called `confidence` that sometimes means nothing. It also keeps the
 audit trail honest without a join: the delivery says on its face whether a machine or a person wrote what
@@ -54,10 +83,14 @@ If A is preferred anyway, the follow-up work is not optional: every aggregate ov
 predicate excluding human-composed rows, and the evals need the same, or the first operator reply makes
 those numbers wrong.
 
-## What is built in the meantime
+## Consequences accepted with this
 
-Everything else in P5-03: the Review queue with reason and provenance, approve / edit-and-send /
-reject / take-over, takeover pause and resume, pending-send display and cancellation, the distinct
-Instagram human-assisted and WhatsApp template-review states, and stale-action recovery. Editing a pending
-draft and sending it works today, because that path needs no new record. Composing a reply where no draft
-exists is the piece waiting on this decision.
+- `delivery_jobs.draft_id` is nullable, so every reader of `job.draft` handles the other origin. The
+  delivery store, the reconciliation store and the worker's resume path were each updated; none of them
+  gained a branch that sends differently.
+- The delivery queue payload's `draftId` is optional. `operationId` and `deliveryJobId` already identify
+  the work, and a job carrying an invented draft id would have the worker reconcile against a row that
+  does not exist.
+- An outbound message produced by a human-composed delivery is recorded with `source = HUMAN` and the
+  composer's user id. Recording a person's words as `AI` would make the thread's own source distinction a
+  lie.
