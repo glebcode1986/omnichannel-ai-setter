@@ -176,6 +176,32 @@ enum ActorKind {
   SYSTEM
 }
 
+/// A material action somebody took. One enum rather than nine tables, so the log can be searched at once.
+enum AuditEventKind {
+  CHANNEL_CONNECTED
+  CHANNEL_DISCONNECTED
+  POLICY_CHANGED
+  MODE_CHANGED
+  KNOWLEDGE_VERSIONED
+  STYLE_VERSIONED
+  DRAFT_APPROVED
+  DRAFT_EDITED
+  DRAFT_REJECTED
+  REPLY_COMPOSED
+  TAKEOVER_STARTED
+  TAKEOVER_ENDED
+  TEMPLATE_POLICY_CHANGED
+  AMBIGUOUS_SEND_RESOLVED
+  MEMBER_CHANGED
+}
+
+/// Who acted. Reconciliation and the scheduler act without anybody asking, and recording those as a
+/// person's action would be a lie.
+enum AuditActorKind {
+  USER
+  SYSTEM
+}
+
 enum MessageDirection {
   IN
   OUT
@@ -381,6 +407,7 @@ model User {
   leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
+  auditEvents        AuditEvent[]
   @@map("users")
 }
 
@@ -442,6 +469,7 @@ model Workspace {
   leadStageTransitions LeadStageTransition[]
   leadQualificationAnswers LeadQualificationAnswer[]
 
+  auditEvents        AuditEvent[]
   @@map("workspaces")
 }
 
@@ -488,6 +516,7 @@ model BusinessProfile {
   onboardingSkips    OnboardingSkip[]
   policyChangeAudits PolicyChangeAudit[]
 
+  auditEvents        AuditEvent[]
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("business_profiles")
@@ -1390,6 +1419,46 @@ model PolicyChangeAudit {
 
   @@index([workspaceId, businessProfileId, changedAt(sort: Desc)], map: "policy_change_audits_history_idx")
   @@map("policy_change_audits")
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Audit (P5-08): a searchable, append-only record of the material things people do.
+// ---------------------------------------------------------------------------------------------------------
+
+model AuditEvent {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String         @map("workspace_id")
+  /// Absent for a workspace-level action: a membership or role change belongs to nobody's Business Profile.
+  businessProfileId String?  @map("business_profile_id")
+  kind        AuditEventKind
+  actorKind   AuditActorKind @map("actor_kind")
+  /// Set exactly when `actorKind` is USER; a CHECK holds both halves.
+  actorUserId String?        @map("actor_user_id")
+  occurredAt  DateTime       @default(now()) @map("occurred_at")
+  /// What the action was about, in words, for the search box — written by the caller, because the person
+  /// searching remembers what they did and not our JSON shape.
+  summary     String
+  /// The thing acted on. Deliberately not a foreign key: an audit row must outlive what it describes.
+  subjectType String         @map("subject_type")
+  subjectId   String         @map("subject_id")
+  /// Denormalized filters, so an audit search never joins the customer data it is auditing.
+  channelAccountId String?   @map("channel_account_id")
+  conversationId   String?   @map("conversation_id")
+  /// Whether reading this row needs an admin.
+  sensitive   Boolean        @default(false)
+  detail      Json           @default("{}")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict, map: "audit_events_business_profile_fkey")
+  actor           User?            @relation(fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "audit_events_actor_fkey")
+
+  @@index([workspaceId, occurredAt(sort: Desc)], map: "audit_events_history_idx")
+  @@index([workspaceId, businessProfileId, occurredAt(sort: Desc)], map: "audit_events_profile_idx")
+  @@index([workspaceId, kind, occurredAt(sort: Desc)], map: "audit_events_kind_idx")
+  @@index([workspaceId, channelAccountId, occurredAt(sort: Desc)], map: "audit_events_channel_idx")
+  @@index([workspaceId, conversationId, occurredAt(sort: Desc)], map: "audit_events_conversation_idx")
+  @@map("audit_events")
 }
 
 // ---------------------------------------------------------------------------------------------------------
