@@ -136,6 +136,15 @@ export {
   type ReviewStore,
   type StyleLearningStore,
 } from "./handoff/resolve-review";
+export {
+  operateConversation,
+  type ConversationOperation,
+  type ConversationOperationCommand,
+  type ConversationOperationDependencies,
+  type ConversationOperationLogPort,
+  type ConversationOperationOutcome,
+  type ConversationOperationStore,
+} from "./handoff/operate-conversation";
 export { reconcileOperation, type ReconcileCommand, type ReconcileDependencies, type ReconcileOutcome } from "./reliability/reconcile-operation";
 export {
   RECONCILIATION_STATES,
