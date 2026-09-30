@@ -73,7 +73,14 @@ export {
 } from "./credentials";
 export * from "./repositories/channel-connect-states";
 export { createInstagramOnboardingStore, type ConnectedAccountRef, type InstagramOnboardingStore } from "./onboarding-store";
-export { readOnboarding, skipOnboardingStep, unskipOnboardingStep, type OnboardingSnapshot } from "./setup-store";
+export {
+  activateBusinessProfile,
+  readOnboarding,
+  skipOnboardingStep,
+  unskipOnboardingStep,
+  type ActivationOutcome,
+  type OnboardingSnapshot,
+} from "./setup-store";
 export * from "./repositories/channel-credentials";
 export * from "./repositories/channel-accounts";
 export * from "./repositories/contacts";

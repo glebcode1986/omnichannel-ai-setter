@@ -9,7 +9,7 @@ import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createChannelAccount } from "./repositories/channel-accounts";
-import { readOnboarding, skipOnboardingStep, unskipOnboardingStep } from "./setup-store";
+import { activateBusinessProfile, readOnboarding, skipOnboardingStep, unskipOnboardingStep } from "./setup-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
@@ -189,4 +189,87 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
     // A step that can never be completed is a checklist that can never be finished.
     expect((await readOnboarding(db(), context)).state.steps.find((s) => s.step === "CHANNEL_POLICY")?.state).toBe("COMPLETE");
   }, 120_000);
+
+  describe("taking a profile live", () => {
+    /** A profile that is genuinely ready, built from scratch so the other cases cannot disturb it. */
+    const readyProfile = async (label: string) => {
+      const workspace = await authorizeWorkspaceAccess(db(), { userId: main.context.userId, workspaceId: main.context.workspaceId });
+      const { businessProfileId } = await createBusinessProfile(db(), workspace, { name: `Ready ${label}` });
+      const context = await authorizeBusinessProfileAccess(db(), {
+        userId: main.context.userId,
+        workspaceId: main.context.workspaceId,
+        businessProfileId,
+      });
+      await createChannelAccount(db(), context, {
+        channel: "INSTAGRAM",
+        externalAccountId: `ig-ready-${label}`,
+        capabilities: { ...NO_CAPABILITIES, text: true },
+      });
+      await db().automationPolicy.create({
+        data: { workspaceId: context.workspaceId, businessProfileId, mode: "DRAFT", mandatoryReviewReasons: [] },
+      });
+      await db().knowledgeDocument.create({
+        data: {
+          workspaceId: context.workspaceId,
+          businessProfileId,
+          title: "Hours",
+          sourceType: "MANUAL",
+          status: "ACTIVE",
+          version: 1,
+          createdByUserId: context.userId,
+        },
+      });
+      return { context, businessProfileId };
+    };
+
+    it("activates a profile whose checklist is clear", async () => {
+      const { context, businessProfileId } = await readyProfile("go");
+
+      expect(await activateBusinessProfile(db(), context)).toEqual({ kind: "ACTIVATED" });
+      expect(
+        (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
+      ).toBe("ACTIVE");
+    }, 120_000);
+
+    it("refuses when the checklist is not clear, whatever a page was showing", async () => {
+      const { context, businessProfileId } = await readyProfile("not-ready");
+      // The page rendered a clear checklist, and it was true then. Now the knowledge is gone. Readiness is
+      // re-evaluated at the moment of writing, so the button cannot assert what was true a minute ago.
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(true);
+      await db().knowledgeDocument.deleteMany({ where: { workspaceId: context.workspaceId, businessProfileId } });
+
+      const outcome = await activateBusinessProfile(db(), context);
+
+      expect(outcome.kind).toBe("NOT_READY");
+      expect(outcome.kind === "NOT_READY" ? outcome.blockers : []).toContain("NO_KNOWLEDGE");
+      expect(
+        (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
+      ).toBe("SETUP");
+    }, 120_000);
+
+    it("produces one activation for two simultaneous clicks", async () => {
+      const { context } = await readyProfile("race");
+
+      const [first, second] = await Promise.all([activateBusinessProfile(db(), context), activateBusinessProfile(db(), context)]);
+
+      // Whichever transaction gets the row lock first activates; the other finds the profile already out
+      // of SETUP and says so rather than reporting a second activation.
+      const kinds = [first.kind, second.kind].sort();
+      expect(kinds).toEqual(["ACTIVATED", "ALREADY_SETTLED"]);
+    }, 120_000);
+
+    it("lets only an owner or admin take a profile live", async () => {
+      const { context } = await readyProfile("role");
+      const agentUserId = await createTestUser(db(), "activate-agent");
+      const workspace = await authorizeWorkspaceAccess(db(), { userId: main.context.userId, workspaceId: main.context.workspaceId });
+      await addWorkspaceMember(db(), workspace, { userId: agentUserId, role: "AGENT", businessProfileScope: "ALL" });
+      const agentContext = await authorizeBusinessProfileAccess(db(), {
+        userId: agentUserId,
+        workspaceId: context.workspaceId,
+        businessProfileId: context.businessProfileId,
+      });
+
+      await expect(activateBusinessProfile(db(), agentContext)).rejects.toThrow();
+    }, 120_000);
+  });
 });

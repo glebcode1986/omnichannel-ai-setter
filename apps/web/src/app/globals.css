@@ -1,0 +1,323 @@
+/*
+ * The product shell's own stylesheet.
+ *
+ * Plain CSS with custom properties rather than a framework: the repository is deliberately light on
+ * dependencies, and a UI toolkit is an architectural choice that belongs in an ADR rather than in the
+ * first task that happens to need a button.
+ *
+ * Two things here are requirements rather than taste. Focus is always visible, because the contract asks
+ * for keyboard operation and a focus ring removed "for looks" is the most common way that breaks. And
+ * motion respects `prefers-reduced-motion`, because the cross-cutting requirements name it.
+ */
+
+:root {
+  --surface: #ffffff;
+  --surface-sunken: #f5f6f8;
+  --surface-raised: #ffffff;
+  --border: #d9dde3;
+  --border-strong: #b6bcc6;
+  --text: #16191d;
+  --text-muted: #5b6472;
+  --accent: #1c4ed8;
+  --accent-contrast: #ffffff;
+  --ok: #176b3f;
+  --warn: #8a5300;
+  --stop: #a01b28;
+  --radius: 8px;
+  --gap: 12px;
+  --shell-nav-width: 232px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #14171b;
+    --surface-sunken: #0e1013;
+    --surface-raised: #1c2026;
+    --border: #2c333c;
+    --border-strong: #3d4551;
+    --text: #eef1f5;
+    --text-muted: #a6b0bd;
+    --accent: #7aa2ff;
+    --accent-contrast: #0e1013;
+    --ok: #62d29a;
+    --warn: #e0b054;
+    --stop: #ff8f9a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-sunken);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Always visible, never traded away for appearance: the shell must be operable from the keyboard. */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* A keyboard user's first stop: jump past the navigation into the page's own content. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 0 0 var(--radius) 0;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+/* ---- shell ------------------------------------------------------------------------------------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--shell-nav-width) 1fr;
+  min-height: 100vh;
+}
+
+.shell-nav {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.shell-main {
+  padding: 24px;
+  min-width: 0;
+}
+
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-link {
+  display: block;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  background: var(--surface-sunken);
+}
+
+.nav-link[aria-current="page"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.nav-toggle {
+  display: none;
+}
+
+.workspace-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.workspace-switch strong {
+  font-size: 15px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/*
+ * Mobile is stacked, not a squeezed three-pane (PRODUCT_UX.md). The navigation collapses behind a
+ * disclosure that is a real <button> with real aria state, so it works without hover and without a mouse.
+ */
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .shell-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .nav-list[data-collapsed="true"] {
+    display: none;
+  }
+
+  .shell-main {
+    padding: 16px;
+  }
+}
+
+/* ---- cards and checklist ----------------------------------------------------------------------- */
+
+.card-grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.card h3 {
+  margin: 0 0 4px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.badge[data-tone="ok"] {
+  color: var(--ok);
+}
+
+.badge[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.badge[data-tone="stop"] {
+  color: var(--stop);
+}
+
+.badge[data-tone="muted"] {
+  color: var(--text-muted);
+}
+
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.step[data-current="true"] {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.step-name {
+  font-weight: 600;
+}
+
+.button {
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.button[data-variant="primary"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.blockers {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: 20px;
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.notice {
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.notice[data-tone="stop"] {
+  border-color: var(--stop);
+}

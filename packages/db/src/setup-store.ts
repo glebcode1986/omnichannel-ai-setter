@@ -157,6 +157,58 @@ function carriesText(capabilities: unknown): boolean {
   return (capabilities as Record<string, unknown>).text === true;
 }
 
+/** What happened to an attempt to take a profile live. */
+export type ActivationOutcome =
+  | { readonly kind: "ACTIVATED" }
+  /** The checklist was not clear when the write was attempted, whatever the page had shown. */
+  | { readonly kind: "NOT_READY"; readonly blockers: readonly string[] }
+  /** Someone else got there first, or the profile is not in setup any more. */
+  | { readonly kind: "ALREADY_SETTLED" };
+
+/**
+ * Takes a Business Profile live, if it is still ready at the moment of writing.
+ *
+ * The readiness is re-evaluated **inside** the transaction that flips the status, against the profile row
+ * locked `FOR UPDATE`. A page can sit open for an hour; a channel can be revoked or a review item can
+ * arrive in that time, and a button that activated on the strength of what the page rendered would be
+ * asserting something that was true earlier. This is the same reasoning the delivery claim uses, at much
+ * lower stakes: read, judge and write must describe one instant.
+ *
+ * The guarded `updateMany` is what makes two simultaneous clicks produce one activation.
+ */
+export async function activateBusinessProfile(db: DbClient, context: BusinessProfileContext): Promise<ActivationOutcome> {
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "activating a Business Profile");
+  const scope = profileScopeOf(context);
+
+  return db.$transaction(async (tx) => {
+    // Locked first, so the re-read below cannot be overtaken by another activation or by a change to the
+    // profile itself between the judgement and the write. The status comes back with the lock: a profile
+    // that is already live is settled, and saying "not ready" about it would be a refusal with nothing to
+    // name — which is exactly what a second click used to get.
+    const locked = await tx.$queryRaw<{ status: string }[]>`
+      SELECT "status"::text AS status FROM "business_profiles"
+      WHERE "workspace_id" = ${scope.workspaceId} AND "id" = ${scope.businessProfileId}
+      FOR UPDATE`;
+    if (locked.length === 0 || locked[0]?.status !== "SETUP") {
+      return { kind: "ALREADY_SETTLED" };
+    }
+
+    const { state } = await readOnboarding(tx as unknown as DbClient, context);
+    if (!state.canActivate) {
+      return { kind: "NOT_READY", blockers: state.activationBlockers };
+    }
+
+    const activated = await tx.businessProfile.updateMany({
+      // The profile's own row, so its identifier is `id` rather than the scope's `businessProfileId`.
+      // Only out of SETUP: activating an INACTIVE profile is a different decision with different
+      // consequences, and it is not this surface's to make.
+      where: { workspaceId: scope.workspaceId, id: scope.businessProfileId, status: "SETUP" },
+      data: { status: "ACTIVE" },
+    });
+    return activated.count === 1 ? { kind: "ACTIVATED" } : { kind: "ALREADY_SETTLED" };
+  });
+}
+
 /** Undoes a skip, so a person who changes their mind sees the step again. */
 export async function unskipOnboardingStep(db: DbClient, context: BusinessProfileContext, step: string): Promise<void> {
   requireRole(context, WORKSPACE_ADMIN_ROLES, "restoring a setup step");
