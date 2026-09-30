@@ -45,6 +45,7 @@ export {
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export { createConversationOperationStore } from "./conversation-operations-store";
+export { composeHumanReply, pendingHumanReply, type ComposeInput, type ComposeOutcome } from "./composer-store";
 export {
   listReviewQueue,
   type ReviewCursor,
