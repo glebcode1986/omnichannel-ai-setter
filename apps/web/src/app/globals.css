@@ -1017,3 +1017,48 @@ a {
     display: none;
   }
 }
+
+.lead-panel {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  margin-top: var(--gap);
+}
+
+.lead-panel h3 {
+  margin: 0 0 8px;
+}
+
+.lead-panel h4 {
+  margin: var(--gap) 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.lead-answers,
+.lead-history {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lead-answers {
+  list-style: none;
+  padding-left: 0;
+}
+
+.lead-answers p,
+.lead-history p {
+  margin: 0;
+}
+
+/* A claim the assistant made, not one a person confirmed: visibly provisional. */
+.lead-answers li[data-source="AI_SUGGESTED"] {
+  border-left: 2px dashed var(--border-strong);
+  padding-left: 8px;
+}

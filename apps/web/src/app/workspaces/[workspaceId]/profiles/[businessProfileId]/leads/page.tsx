@@ -5,15 +5,16 @@
  * and why the stage a person confirms is the conversation's own. The assistant's suggestion lives beside
  * it and never replaces it.
  */
-import { listLeads, readStageDisplays, type LeadFilter } from "@omnichannel/db";
+import { listAssignableMembers, listLeads, readQualification, readStageDisplays, readStageHistory, type LeadFilter } from "@omnichannel/db";
 import { isLeadStage } from "@omnichannel/domain";
 
 import { LeadBoard } from "@/ui/leads/lead-board";
+import { LeadPanel } from "@/ui/leads/lead-panel";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
 import { requireBusinessProfileContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
-import { moveLeadAction } from "@/server/lead-actions";
+import { editLeadAction, moveLeadAction, recordAnswerAction } from "@/server/lead-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
 
 function one(value: string | string[] | undefined): string | undefined {
@@ -48,7 +49,20 @@ export default async function LeadsPage({
     ...(search === undefined ? {} : { search }),
   };
 
-  const [stages, leads] = await Promise.all([readStageDisplays(getDb(), context), listLeads(getDb(), context, filter)]);
+  const [stages, leads, members] = await Promise.all([
+    readStageDisplays(getDb(), context),
+    listLeads(getDb(), context, filter),
+    listAssignableMembers(getDb(), context),
+  ]);
+
+  // The lead a person opened, if any. In the URL rather than in state so a reload and a shared link both
+  // land on the same lead — the same reason the Inbox keeps its selection there.
+  const openedId = one(query["lead"]);
+  const opened = openedId === undefined ? undefined : leads.find((lead) => lead.conversationId === openedId);
+  const [history, qualification] =
+    opened === undefined
+      ? [[], []]
+      : await Promise.all([readStageHistory(getDb(), context, opened.conversationId), readQualification(getDb(), context, opened.conversationId)]);
 
   return (
     <>
@@ -89,6 +103,20 @@ export default async function LeadsPage({
         filtered={Object.keys(filter).length > 0}
         moveAction={moveLeadAction}
       />
+
+      {opened === undefined ? undefined : (
+        <LeadPanel
+          t={t}
+          lead={opened}
+          stages={stages}
+          members={members}
+          history={history}
+          qualification={qualification}
+          target={target}
+          editAction={editLeadAction}
+          answerAction={recordAnswerAction}
+        />
+      )}
     </>
   );
 }

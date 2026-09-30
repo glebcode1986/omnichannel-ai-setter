@@ -58,6 +58,9 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
                 {inStage.map((lead) => (
                   <li key={lead.conversationId} data-lead={lead.conversationId}>
                     <Link href={`${basePath}/inbox/${lead.conversationId}`}>{lead.contactName ?? lead.handle}</Link>
+                    <Link className="muted" href={`${basePath}/leads?lead=${lead.conversationId}`} data-open-lead="true">
+                      {t.t("leads.assignee")}, {t.t("leads.tags")}, {t.t("leads.history")}
+                    </Link>
                     <p className="muted">
                       {t.t(`channel.${lead.channel}` as MessageKey)} ·{" "}
                       {lead.assignedUserName ?? t.t("leads.unassigned")}

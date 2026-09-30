@@ -46,6 +46,7 @@ export {
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export {
   editLead,
+  listAssignableMembers,
   listLeads,
   readQualification,
   readStageDisplays,
@@ -53,6 +54,7 @@ export {
   recordQualification,
   saveStageDisplays,
   transitionLeadStage,
+  type AssignableMember,
   type LeadEditOutcome,
   type LeadFilter,
   type LeadRow,

@@ -426,3 +426,25 @@ export async function recordQualification(
   });
   return { status: "SAVED" };
 }
+
+export interface AssignableMember {
+  readonly userId: string;
+  readonly name: string | null;
+  readonly role: string;
+}
+
+/**
+ * Who a lead may be assigned to.
+ *
+ * Members of this Workspace, which is the same set `editLead` validates against — so the dropdown cannot
+ * offer somebody the write would then refuse. Scoped by the context's Workspace rather than by the
+ * profile: an ADMIN with access to several profiles is still one member of one Workspace.
+ */
+export async function listAssignableMembers(db: DbExecutor, context: BusinessProfileContext): Promise<readonly AssignableMember[]> {
+  const members = await db.workspaceMember.findMany({
+    where: { workspaceId: context.workspaceId },
+    orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+    select: { userId: true, role: true, user: { select: { name: true } } },
+  });
+  return members.map((member) => ({ userId: member.userId, name: member.user.name, role: member.role }));
+}
