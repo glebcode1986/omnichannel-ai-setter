@@ -112,7 +112,7 @@ export async function listInbox(
     }
     cursor = { lastMessageAt: last.lastMessageAt, id: last.id };
 
-    for (const row of window) {
+    for (const [index, row] of window.entries()) {
       if (filter.awaitingReply === true && !isAwaitingReply(row)) {
         continue;
       }
@@ -120,7 +120,12 @@ export async function listInbox(
       if (kept.length === limit) {
         // The page is full. The cursor is this row, not the batch's end, or the next page would skip
         // whatever sat between them.
-        return { rows: kept, nextCursor: { lastMessageAt: row.lastMessageAt, id: row.id } };
+        //
+        // Full is not the same as "there is more", though. Rows left unexamined in this window are more;
+        // so is the extra row the batch was read with. Neither being true means the data ended exactly on
+        // the page boundary, and offering a cursor there is the "load more" button that loads nothing.
+        const remains = more || index < window.length - 1;
+        return { rows: kept, ...(remains ? { nextCursor: { lastMessageAt: row.lastMessageAt, id: row.id } } : {}) };
       }
     }
     if (!more) {
@@ -225,5 +230,181 @@ function searchFilter(term: string) {
       { channelIdentity: { username: { contains: term, mode: "insensitive" as const } } },
       { channelIdentity: { externalUserId: { contains: term, mode: "insensitive" as const } } },
     ],
+  };
+}
+
+/** One message as the thread renders it. `source` is what distinguishes customer, AI, human and system. */
+export interface ThreadMessage {
+  readonly id: string;
+  readonly direction: string;
+  readonly source: string;
+  readonly kind: string;
+  readonly text: string | null;
+  readonly occurredAt: Date;
+  readonly deliveryStatus: string | null;
+  readonly transportPath: string | null;
+  readonly sentByUserName: string | null;
+}
+
+/**
+ * The latest AI decision, for the context panel.
+ *
+ * Read for display only. The reason codes and the cited sources are why a reply was held or sent, and
+ * showing them is the difference between an operator trusting the assistant and guessing at it.
+ */
+export interface LatestDraft {
+  readonly id: string;
+  readonly status: string;
+  readonly confidence: number;
+  readonly needsReview: boolean;
+  readonly reasonCodes: readonly string[];
+  readonly citedSourceIds: readonly string[];
+  readonly intent: string | null;
+  readonly suggestedLeadStage: string | null;
+  readonly createdAt: Date;
+}
+
+export interface ConversationDetail {
+  readonly id: string;
+  readonly channel: string;
+  readonly channelAccountId: string;
+  readonly accountStatus: string;
+  readonly contactName: string | null;
+  readonly handle: string;
+  readonly status: string;
+  readonly leadStage: string;
+  readonly mode: string | null;
+  readonly aiEnabled: boolean;
+  readonly takeoverState: string;
+  readonly takeoverReason: string | null;
+  readonly takeoverReviewMode: string | null;
+  readonly takeoverByName: string | null;
+  readonly humanTakeoverAt: Date | null;
+  readonly lastInboundAt: Date | null;
+  readonly lastOutboundAt: Date | null;
+  readonly messages: readonly ThreadMessage[];
+  readonly latestDraft?: LatestDraft;
+}
+
+/**
+ * One conversation, with its thread and the context the right pane shows.
+ *
+ * Returns `undefined` rather than throwing for a conversation that is not this profile's: a URL someone
+ * typed or kept in a bookmark should produce "not found", and a thrown tenancy error rendered as a stack
+ * trace tells an attacker the row exists.
+ */
+export async function readConversation(
+  db: DbExecutor,
+  context: BusinessProfileContext,
+  conversationId: string,
+  options: { readonly messageLimit?: number } = {},
+): Promise<ConversationDetail | undefined> {
+  const scope = profileScopeOf(context);
+  const limit = Math.min(Math.max(Math.trunc(options.messageLimit ?? 100), 1), 200);
+
+  const row = await db.conversation.findFirst({
+    where: { ...scope, id: conversationId },
+    select: {
+      id: true,
+      channelAccountId: true,
+      status: true,
+      leadStage: true,
+      modeOverride: true,
+      aiEnabled: true,
+      takeoverState: true,
+      takeoverReason: true,
+      takeoverReviewMode: true,
+      humanTakeoverAt: true,
+      lastInboundAt: true,
+      lastOutboundAt: true,
+      takeoverActorUser: { select: { name: true } },
+      contact: { select: { displayName: true } },
+      channelIdentity: {
+        select: { externalUserId: true, username: true, channelAccount: { select: { channel: true, status: true } } },
+      },
+      messages: {
+        // Newest last, the way a thread reads. The limit takes the *latest* window, so a long
+        // conversation opens where the work is rather than where it started.
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        take: limit,
+        select: {
+          id: true,
+          direction: true,
+          source: true,
+          kind: true,
+          text: true,
+          occurredAt: true,
+          deliveryStatus: true,
+          transportPath: true,
+          sentByUser: { select: { name: true } },
+        },
+      },
+      aiDrafts: {
+        orderBy: [{ createdAt: "desc" }],
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          confidence: true,
+          needsReview: true,
+          reasonCodes: true,
+          factualSourceIds: true,
+          intent: true,
+          suggestedLeadStage: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
+  if (row === null) {
+    return undefined;
+  }
+
+  const draft = row.aiDrafts[0];
+  return {
+    id: row.id,
+    channel: row.channelIdentity.channelAccount.channel,
+    channelAccountId: row.channelAccountId,
+    accountStatus: row.channelIdentity.channelAccount.status,
+    contactName: row.contact.displayName,
+    handle: row.channelIdentity.username ?? row.channelIdentity.externalUserId,
+    status: row.status,
+    leadStage: row.leadStage,
+    mode: row.modeOverride,
+    aiEnabled: row.aiEnabled,
+    takeoverState: row.takeoverState,
+    takeoverReason: row.takeoverReason,
+    takeoverReviewMode: row.takeoverReviewMode,
+    takeoverByName: row.takeoverActorUser?.name ?? null,
+    humanTakeoverAt: row.humanTakeoverAt,
+    lastInboundAt: row.lastInboundAt,
+    lastOutboundAt: row.lastOutboundAt,
+    // Reversed here rather than in SQL: the query takes the newest window, the thread reads oldest first.
+    messages: [...row.messages].reverse().map((message) => ({
+      id: message.id,
+      direction: message.direction,
+      source: message.source,
+      kind: message.kind,
+      text: message.text,
+      occurredAt: message.occurredAt,
+      deliveryStatus: message.deliveryStatus,
+      transportPath: message.transportPath,
+      sentByUserName: message.sentByUser?.name ?? null,
+    })),
+    ...(draft === undefined
+      ? {}
+      : {
+          latestDraft: {
+            id: draft.id,
+            status: draft.status,
+            confidence: draft.confidence,
+            needsReview: draft.needsReview,
+            reasonCodes: draft.reasonCodes,
+            citedSourceIds: draft.factualSourceIds,
+            intent: draft.intent,
+            suggestedLeadStage: draft.suggestedLeadStage,
+            createdAt: draft.createdAt,
+          },
+        }),
   };
 }

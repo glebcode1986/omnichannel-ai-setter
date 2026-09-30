@@ -8,7 +8,7 @@
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { listInbox } from "./inbox-store";
+import { listInbox, readConversation } from "./inbox-store";
 import { appendInboundMessage } from "./repositories/messages";
 import { createChannelAccount } from "./repositories/channel-accounts";
 import { createContactWithChannelIdentity } from "./repositories/contacts";
@@ -81,6 +81,13 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       kind: "TEXT",
       text: options.text ?? `Message from ${options.name}`,
       occurredAt: options.occurredAt,
+    });
+    // `lastMessageAt` defaults to now() and `latest()` only moves it forward, so a backdated message
+    // leaves it at creation time. Without this the fixture's timestamps are decoration and every
+    // ordering assertion below would hold just as well for a store that ordered by creation.
+    await db().conversation.update({
+      where: { id: created.id },
+      data: { lastMessageAt: options.occurredAt, lastInboundAt: options.occurredAt },
     });
     return created.id;
   };
@@ -201,6 +208,58 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     expect((await listInbox(db(), context, { search: "very distinctive sentence" })).rows).toHaveLength(0);
   }, 180_000);
 
+  /**
+   * The behaviour the whole list order exists for.
+   *
+   * An inbox is sorted by "when did this last move", which is not "when was it created". Every other
+   * ordering test here creates conversations in the same order their timestamps run, so all of them would
+   * pass just as well against a store that sorted by creation. This one cannot: the older conversation is
+   * the one that has to come first.
+   */
+  it("moves a conversation to the top when a new message arrives in it", async () => {
+    const stale = await conversation({ name: "Older Thread", occurredAt: at(310) });
+    const fresh = await conversation({ name: "Newer Thread", occurredAt: at(311) });
+
+    await appendInboundMessage(db(), context, { conversationId: stale, kind: "TEXT", text: "still here?", occurredAt: at(312) });
+
+    const page = await listInbox(db(), context, { search: "Thread" });
+
+    expect(page.rows.map((row) => row.id)).toEqual([stale, fresh]);
+    expect(page.rows[0]?.preview).toBe("still here?");
+  }, 180_000);
+
+  it("matches the username and the platform id separately, not one standing in for the other", async () => {
+    // The fixture usually sets both from the same value, which would let one `OR` branch cover for a
+    // missing other. Here they differ, so each branch has to be present on its own.
+    const identity = await createContactWithChannelIdentity(db(), context, {
+      channelAccountId: instagramAccountId,
+      externalUserId: "platform-id-9911",
+      username: "public_nickname",
+      displayName: "Distinct Fields",
+    });
+    const created = await createConversation(db(), context, { channelAccountId: instagramAccountId, channelIdentityId: identity.channelIdentityId });
+
+    expect((await listInbox(db(), context, { search: "public_nick" })).rows.map((row) => row.id)).toEqual([created.id]);
+    expect((await listInbox(db(), context, { search: "platform-id-9911" })).rows.map((row) => row.id)).toEqual([created.id]);
+    expect((await listInbox(db(), context, { search: "Distinct Fie" })).rows.map((row) => row.id)).toEqual([created.id]);
+  }, 180_000);
+
+  it("offers no next page when the rows end exactly on the page boundary", async () => {
+    // Off by one here is invisible until someone clicks "load older" and gets an empty list: the page is
+    // full, so "is there more" cannot be inferred from its size alone.
+    for (let index = 0; index < 4; index += 1) {
+      await conversation({ name: `Boundary ${String(index)}`, occurredAt: at(320 + index) });
+    }
+
+    const first = await listInbox(db(), context, { search: "Boundary" }, { limit: 2 });
+    expect(first.rows).toHaveLength(2);
+    expect(first.nextCursor).toBeDefined();
+
+    const second = await listInbox(db(), context, { search: "Boundary" }, { limit: 2, cursor: first.nextCursor });
+    expect(second.rows).toHaveLength(2);
+    expect(second.nextCursor).toBeUndefined();
+  }, 180_000);
+
   it("finds the conversations waiting for a reply, and fills the page while doing it", async () => {
     // Twelve conversations where only every fourth is awaiting a reply: a post-query filter applied
     // naively would return three rows for a page of eight.
@@ -222,6 +281,38 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     expect(page.rows).toHaveLength(3);
     expect(page.rows.every((row) => row.awaitingReply)).toBe(true);
     expect(page.rows.map((row) => row.id).every((id) => awaiting.includes(id))).toBe(true);
+  }, 180_000);
+
+  /**
+   * The refill's own boundary, which is where a page can lose a conversation outright.
+   *
+   * When a post-query filter thins a batch, a later round can fill the page part-way through its window.
+   * The rows after that point are real conversations that nobody has looked at yet — so a cursor has to
+   * be offered even though this round's batch was not itself over-full. Deciding it from the batch size
+   * alone drops everything behind the fill point, silently and permanently.
+   *
+   * Six conversations, the newest two already answered, and a page of three: the first page fills on the
+   * second row of its second batch, and the sixth conversation is only ever reachable through the cursor
+   * that fill produces.
+   */
+  it("keeps offering a cursor when a refilled page stopped mid-batch", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      ids.push(await conversation({ name: `Refill ${String(index)}`, occurredAt: at(700 + index) }));
+    }
+    const newestFirst = [...ids].reverse();
+    // The two newest have been answered; the remaining four are still waiting on us.
+    for (const answered of newestFirst.slice(0, 2)) {
+      await db().conversation.update({ where: { id: answered }, data: { lastOutboundAt: at(800) } });
+    }
+
+    const first = await listInbox(db(), context, { search: "Refill", awaitingReply: true }, { limit: 3 });
+    expect(first.rows.map((row) => row.id)).toEqual(newestFirst.slice(2, 5));
+    expect(first.nextCursor, "the sixth conversation is only reachable through this cursor").toBeDefined();
+
+    const second = await listInbox(db(), context, { search: "Refill", awaitingReply: true }, { limit: 3, cursor: first.nextCursor });
+    expect(second.rows.map((row) => row.id)).toEqual([newestFirst[5]]);
+    expect(second.nextCursor).toBeUndefined();
   }, 180_000);
 
   it("filters by what a person is doing with the conversation", async () => {
@@ -314,4 +405,132 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     // And it says there is more, rather than pretending a clamped page was the whole list.
     expect(page.nextCursor).toBeDefined();
   }, 180_000);
+
+  describe("one conversation in detail", () => {
+    it("returns nothing for a conversation belonging to another profile", async () => {
+      const theirs = await conversation({ ctx: neighbour, channelAccountId: await neighbourAccount(), name: "Not Yours", occurredAt: at(800) });
+
+      // `undefined` rather than a thrown tenancy error: the page renders "not found", and a stack trace
+      // would tell someone guessing URLs that the row exists.
+      expect(await readConversation(db(), context, theirs)).toBeUndefined();
+      expect(await readConversation(db(), neighbour, theirs)).toBeDefined();
+    }, 180_000);
+
+    it("returns nothing for an id that is not a conversation at all", async () => {
+      expect(await readConversation(db(), context, "not-an-id")).toBeUndefined();
+    }, 180_000);
+
+    it("reads the thread oldest first, whatever order the query took", async () => {
+      const id = await conversation({ name: "Threaded", occurredAt: at(900) });
+      await appendInboundMessage(db(), context, { conversationId: id, kind: "TEXT", text: "second", occurredAt: at(902) });
+      await appendInboundMessage(db(), context, { conversationId: id, kind: "TEXT", text: "third", occurredAt: at(903) });
+
+      const detail = await readConversation(db(), context, id);
+
+      expect(detail?.messages.map((message) => message.text)).toEqual(["Message from Threaded", "second", "third"]);
+    }, 180_000);
+
+    it("keeps the latest window of a long thread, not the first page of it", async () => {
+      const id = await conversation({ name: "Long", occurredAt: at(1200) });
+      for (let index = 0; index < 5; index += 1) {
+        await appendInboundMessage(db(), context, {
+          conversationId: id,
+          kind: "TEXT",
+          text: `turn ${String(index)}`,
+          occurredAt: at(1201 + index),
+        });
+      }
+
+      const detail = await readConversation(db(), context, id, { messageLimit: 2 });
+
+      // A conversation opens where the work is. Showing the oldest two messages of a long thread would
+      // be showing the least useful part of it.
+      expect(detail?.messages.map((message) => message.text)).toEqual(["turn 3", "turn 4"]);
+    }, 180_000);
+
+    it("carries the source of every message, so the thread can tell them apart", async () => {
+      const id = await conversation({ name: "Sourced", occurredAt: at(1300) });
+      await db().message.create({
+        data: {
+          workspaceId: context.workspaceId,
+          businessProfileId: context.businessProfileId,
+          channelAccountId: instagramAccountId,
+          conversationId: id,
+          direction: "OUT",
+          source: "AI",
+          kind: "TEXT",
+          text: "an assistant reply",
+          occurredAt: at(1301),
+          deliveryStatus: "SENT",
+          transportPath: "STANDARD",
+        },
+      });
+
+      const detail = await readConversation(db(), context, id);
+
+      expect(detail?.messages.map((message) => message.source)).toEqual(["PARTICIPANT", "AI"]);
+      expect(detail?.messages.at(-1)?.transportPath).toBe("STANDARD");
+    }, 180_000);
+
+    it("surfaces the latest AI decision with its reasons and its sources", async () => {
+      const id = await conversation({ name: "Decided", occurredAt: at(1400) });
+      const anchor = await db().message.findFirstOrThrow({
+        where: { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId, conversationId: id },
+        select: { id: true },
+      });
+      await db().aiDraft.create({
+        data: {
+          workspaceId: context.workspaceId,
+          businessProfileId: context.businessProfileId,
+          conversationId: id,
+          generationKey: "detail_1",
+          trigger: "AUTOMATIC",
+          anchorMessageId: anchor.id,
+          anchorStateVersion: 1,
+          text: "We open at 10.",
+          structuredOutput: { reply: "We open at 10." },
+          confidence: 0.42,
+          modelSuggestsSend: false,
+          needsReview: true,
+          reasonCodes: ["LOW_CONFIDENCE", "MISSING_FACT"],
+          factualSourceIds: ["chunk_hours"],
+          retrieval: {},
+          status: "PENDING",
+          modelProvider: "fixture",
+          modelName: "detail",
+          promptVersion: "reply.v1",
+          schemaVersion: "ai-draft.v1",
+          intent: "HOURS",
+        },
+      });
+
+      const detail = await readConversation(db(), context, id);
+
+      // Why a reply was held is the difference between an operator trusting the assistant and guessing.
+      expect(detail?.latestDraft?.reasonCodes).toEqual(["LOW_CONFIDENCE", "MISSING_FACT"]);
+      expect(detail?.latestDraft?.citedSourceIds).toEqual(["chunk_hours"]);
+      expect(detail?.latestDraft?.needsReview).toBe(true);
+      expect(detail?.latestDraft?.confidence).toBeCloseTo(0.42);
+      expect(detail?.latestDraft?.intent).toBe("HOURS");
+    }, 180_000);
+
+    it("names the person holding the conversation", async () => {
+      const id = await conversation({ name: "Held", occurredAt: at(1500) });
+      await db().conversation.update({
+        where: { workspaceId_businessProfileId_id: { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId, id } },
+        data: {
+          takeoverState: "HUMAN_ACTIVE",
+          takeoverReason: "HUMAN_SENT_FROM_INBOX",
+          humanTakeoverAt: at(1500),
+          takeoverActorKind: "USER",
+          takeoverActorUserId: userId,
+        },
+      });
+
+      const detail = await readConversation(db(), context, id);
+
+      expect(detail?.takeoverState).toBe("HUMAN_ACTIVE");
+      expect(detail?.takeoverByName).toBe("Inbox Owner");
+    }, 180_000);
+  });
 });
