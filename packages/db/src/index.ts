@@ -103,6 +103,26 @@ export {
 } from "./retrieval/sql";
 export { createStyleProfileStore, type StyleProfileQuery, type StyleProfileStore } from "./style-profile-store";
 export {
+  approveStyleExample,
+  archiveStyleExample,
+  createStyleExample,
+  listStyleExamples,
+  readStyleProfiles,
+  rejectStyleExample,
+  restoreStyleExample,
+  saveStyleProfile,
+  suggestStyleExample,
+  type NewStyleExample,
+  type StyleExampleCursor,
+  type StyleExampleFilter,
+  type StyleExamplePage,
+  type StyleExampleView,
+  type StyleProfileDraft,
+  type StyleProfileLayerView,
+  type StyleScope,
+  type StyleWriteOutcome,
+} from "./style-store";
+export {
   createCredentialCipher,
   CREDENTIAL_ALGORITHM,
   CredentialCryptoError,

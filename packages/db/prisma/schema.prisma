@@ -273,7 +273,12 @@ enum StyleExampleProvenance {
 }
 
 enum StyleExampleStatus {
+  /// In use for tone. A CHECK requires an approver, because "verified" with nobody's name on it is not.
   ACTIVE
+  /// Noticed by the system and inert until a person activates it. Retrieval filters on ACTIVE only.
+  SUGGESTED
+  /// Judged and declined. Kept rather than deleted, so the decision is auditable.
+  REJECTED
   ARCHIVED
 }
 
@@ -1015,6 +1020,7 @@ model StyleExample {
 
   @@index([workspaceId, businessProfileId, status])
   @@index([workspaceId, businessProfileId, language], map: "style_examples_language_idx")
+  @@index([workspaceId, businessProfileId, status, createdAt(sort: Desc)], map: "style_examples_suggested_idx")
   @@map("style_examples")
 }
 

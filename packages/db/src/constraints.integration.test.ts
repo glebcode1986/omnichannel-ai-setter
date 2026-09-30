@@ -489,7 +489,10 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
         "style example -> source message of another profile",
         () =>
           db().styleExample.create({
-            data: { ...scope(a1), inboundContext: "q", outboundText: "a", provenance: "HUMAN_TYPED", sourceMessageId: a2.messageId },
+            // SUGGESTED, so `style_examples_verified_check` is satisfied and the composite foreign key is
+            // what this case is actually testing. An ACTIVE row with no approver would fail the verified
+            // CHECK first and the FK would never be reached.
+            data: { ...scope(a1), inboundContext: "q", outboundText: "a", provenance: "HUMAN_TYPED", status: "SUGGESTED", sourceMessageId: a2.messageId },
           }),
       ],
       [
@@ -541,7 +544,9 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
         "style example -> source draft of another profile",
         () =>
           db().styleExample.create({
-            data: { ...scope(a1), inboundContext: "q", outboundText: "a", provenance: "HUMAN_EDITED_DRAFT", sourceDraftId: draftInA2.id },
+            // SUGGESTED for the same reason as the source-message case above: the verified CHECK must not
+            // stand in for the foreign key this is testing.
+            data: { ...scope(a1), inboundContext: "q", outboundText: "a", provenance: "HUMAN_EDITED_DRAFT", status: "SUGGESTED", sourceDraftId: draftInA2.id },
           }),
       ],
       [
@@ -609,7 +614,16 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     // Style learned from a conversation must name its profile, or the composite source FKs would be skipped.
     await expectCheckViolation(
       db().styleExample.create({
-        data: { workspaceId: a.workspaceId, inboundContext: "q", outboundText: "a", provenance: "HUMAN_TYPED", sourceMessageId: a2.messageId },
+        data: {
+          workspaceId: a.workspaceId,
+          inboundContext: "q",
+          outboundText: "a",
+          provenance: "HUMAN_TYPED",
+          // As above: SUGGESTED keeps the verified CHECK out of the way, so the constraint this asserts on
+          // is the one it names.
+          status: "SUGGESTED",
+          sourceMessageId: a2.messageId,
+        },
       }),
       "style_examples_source_profile_check",
     );
