@@ -21,6 +21,7 @@
  * render can explain. It also means the refusals survive a reload, which is when someone reads them.
  */
 import {
+  composeHumanReply,
   createConversationOperationStore,
   createReviewStore,
   createStyleLearningStore,
@@ -54,7 +55,11 @@ export type ActionOutcome =
   | "TOO_LATE"
   | "STALE"
   | "GONE"
-  | "REJECTED";
+  | "REJECTED"
+  | "COMPOSED"
+  | "COMPOSE_REPLAYED"
+  | "ALREADY_PENDING"
+  | "NOT_OPEN";
 
 const inboxPath = (target: ConversationTarget) =>
   `/workspaces/${target.workspaceId}/profiles/${target.businessProfileId}/inbox/${target.conversationId}`;
@@ -205,4 +210,40 @@ export async function handBackAction(target: ConversationTarget, formData: FormD
 
 export async function cancelSendAction(target: ConversationTarget, formData: FormData): Promise<void> {
   finish(returnPath(target, formData), await operate(target, { kind: "CANCEL_SEND", operationId: field(formData, "operationId") }));
+}
+
+/**
+ * A person's own reply, handed to the same coordinator (ADR-018 Option B, accepted 2026-09-30).
+ *
+ * This action creates a delivery and nothing else. It does not send: the worker claims the row, re-reads
+ * every fact, and runs the policy engine, the takeover check, the window check, the account-health check
+ * and the kill switch immediately before the transport call. A composer that sent directly would be a
+ * second send path with none of those gates, which the contract forbids.
+ *
+ * No AI draft is created. A person's words are not a generation, and writing them into `ai_drafts` would
+ * put invented model metadata into every metric that counts drafts.
+ */
+export async function composeReplyAction(target: ConversationTarget, formData: FormData): Promise<void> {
+  const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
+  const outcome = await composeHumanReply(getDb(), context, {
+    conversationId: target.conversationId,
+    text: field(formData, "text"),
+    // `HUMAN_AGENT` only when the form said so: it authorizes a different transport (ADR-014).
+    reviewMode: field(formData, "reviewMode") === "HUMAN_AGENT" ? "HUMAN_AGENT" : "NORMAL",
+  });
+
+  finish(
+    returnPath(target, formData),
+    outcome.status === "SCHEDULED"
+      ? outcome.replayed
+        ? "COMPOSE_REPLAYED"
+        : "COMPOSED"
+      : outcome.status === "ALREADY_PENDING"
+        ? "ALREADY_PENDING"
+        : outcome.status === "GONE"
+          ? "GONE"
+          : outcome.reason === "this conversation is not open"
+            ? "NOT_OPEN"
+            : "REJECTED",
+  );
 }

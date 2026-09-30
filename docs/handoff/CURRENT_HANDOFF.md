@@ -216,6 +216,25 @@ force, not the conversation's empty override, and the precedence now has one imp
 approving and editing arrive with P5-03, and the panel says so rather than showing disabled buttons. See
 the implementation notes in `docs/specs/PRODUCT_UX.md`.
 
+**Gate C is PASS.** Stage C's only task, #56 / P3-03, was accepted as PR #72 at `9955ecf`, and the whole
+#26→#72 chain has an independent PASS. Reliability controls, health reporting, kill switches and
+reconciliation are in place: the dashboard may be closed while the server continues safely, dependency
+failures degrade narrowly, and outbound can be stopped without losing inbound.
+
+**A human-composed reply has an honest origin (ADR-018 Option B, accepted 2026-09-30).** The composer was
+the one part of P5-03 that could not be built without a decision, because a delivery required an
+`ai_drafts` row and a person's words are not a generation. Option B was accepted: `delivery_jobs.draft_id`
+is nullable and the row carries `human_text` with its author, under CHECKs admitting **exactly one**
+origin — never none, never both, never anonymous human wording, never an author on a model's draft, never
+empty text, and never automation's authority on words a person typed. `ai_drafts` is untouched and stays
+model-only, so no human reply reaches `readReliabilitySnapshot`, `countUnusableGenerations` or the evals.
+
+The delivery coordinator is still the only path to a customer. A human-composed delivery is claimed by the
+same atomic claim, re-asserts the same conversation facts in the same conditional update, and is refused
+by the same policy, window, account-health, kill-switch and takeover gates. Its wording is part of the
+guard, so an edit between the judgement and the claim refuses rather than sending something nobody judged.
+Idempotency is the same decision digest the review path uses.
+
 ## Immediate next actions
 
 1. **#54 / P3-01 is the latest work**, as PR #81 on `feat/p3-01-customer-identity-memory`, stacked on
@@ -223,16 +242,25 @@ the implementation notes in `docs/specs/PRODUCT_UX.md`.
    `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which the issue referenced and the repository did not have.
 2. **PRs #73–#81 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
    the earliest affected branch and merge down the chain.
-3. **P5-08 / Issue #34 (Analytics + Audit) is the next Phase 5 surface**, and #35 P5-09 (E2E,
-   accessibility, responsive) follows it.
-4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+3. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+   owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
+   all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
+   order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
+   `git merge-base --is-ancestor <parent> <child>`.
+4. **P5-08 / Issue #34 (Analytics + Audit) is the next Phase 5 surface**, and #35 P5-09 (E2E,
+   accessibility, responsive) follows it. Analytics must count the human-composed send path as well as the
+   automated one, which is the reason the repair above came first.
+5. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+   require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
+   so that is a decision, not a display preference.
+6. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
    or names a provider payload type. New tables are held by the cascade guard in
    `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
    foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
-5. No rebases, no force-pushes, and no merges to `main`.
-6. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+7. No rebases, no force-pushes, and no merges to `main`.
+8. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
