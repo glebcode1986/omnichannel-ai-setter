@@ -290,11 +290,31 @@ describe.skipIf(!databaseTestsEnabled())("the audit log", () => {
       expect(page.restricted).toBe(true);
     }, 180_000);
 
-    it("gives an Agent who asks for a sensitive kind the kinds they may see, not an error", async () => {
+    it("gives an Agent who asks for a sensitive kind alongside an ordinary one the ordinary rows", async () => {
       const page = await searchAuditEvents(db(), agentContext, { kinds: ["MEMBER_CHANGED", "POLICY_CHANGED"], limit: 200 });
 
+      // Non-empty first. `every` on an empty array is true, so asserting only the shape of the rows
+      // would pass just as happily if the query had quietly returned nothing at all.
+      expect(page.rows.length).toBeGreaterThan(0);
       expect(page.rows.every((row) => row.kind === "POLICY_CHANGED")).toBe(true);
       expect(page.restricted).toBe(true);
+    }, 180_000);
+
+    it("gives an Agent who asks only for a sensitive kind nothing, not everything", async () => {
+      const page = await searchAuditEvents(db(), agentContext, { kinds: ["MEMBER_CHANGED"], limit: 200 });
+
+      // They asked for a kind they may not read. The answer is an empty page — *not* the whole log,
+      // which is what happens if the requested kinds are filtered down to an empty list and the query
+      // then treats "no kinds" as "every kind".
+      expect(page.rows).toEqual([]);
+      expect(page.restricted).toBe(true);
+    }, 180_000);
+
+    it("still means every kind when a reader asks for none", async () => {
+      const page = await searchAuditEvents(db(), agentContext, { kinds: [], limit: 200 });
+
+      // Otherwise the case above would be satisfied by an empty page for everybody.
+      expect(page.rows.length).toBeGreaterThan(0);
     }, 180_000);
 
     it("asks a narrower question for an Agent rather than filtering the answer", async () => {

@@ -150,7 +150,11 @@ describe.skipIf(!databaseTestsEnabled())("operational metrics", () => {
     }, 180_000);
 
     it("refuses a window with no timezone, rather than guessing UTC", async () => {
-      await expect(inboundVolume(db(), ownerContext, { ...WINDOW, timeZone: "  " })).rejects.toThrow(/time zone/u);
+      // The exact message, because Postgres also says "time zone ... not recognized" for a blank zone —
+      // so a looser matcher passed with the guard deleted, which is the opposite of what it checks.
+      await expect(inboundVolume(db(), ownerContext, { ...WINDOW, timeZone: "  " })).rejects.toThrow(
+        "a metric window needs an explicit IANA time zone",
+      );
     }, 180_000);
 
     it("refuses a window that ends before it starts", async () => {
@@ -381,6 +385,60 @@ describe.skipIf(!databaseTestsEnabled())("operational metrics", () => {
       expect(outcomes.autoSent).toBe(1);
       expect(outcomes.heldAmbiguous).toBe(1);
     }, 180_000);
+
+    it("never counts a reviewed send as an unattended one", async () => {
+      const draft = await db().aiDraft.create({
+        data: {
+          workspaceId: profile.context.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          conversationId: profile.conversationId,
+          anchorMessageId: profile.messageId,
+          anchorStateVersion: 1,
+          generationKey: "metrics-reviewed",
+          trigger: "AUTOMATIC",
+          text: "A reply a person approved",
+          structuredOutput: { reply: "x" },
+          confidence: 0.6,
+          modelSuggestsSend: false,
+          needsReview: true,
+          status: "SENT",
+          modelProvider: "anthropic",
+          modelName: "claude-opus-5",
+          promptVersion: "reply.v1",
+          schemaVersion: "ai-draft.v1",
+          createdAt: utc("2026-10-02T13:00:00.000Z"),
+        },
+        select: { id: true },
+      });
+      await db().deliveryJobRecord.create({
+        data: {
+          workspaceId: profile.context.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          draftId: draft.id,
+          operationId: "metrics-op-reviewed",
+          correlationId: "metrics-corr-reviewed",
+          status: "SENT",
+          scheduledFor: utc("2026-10-02T13:00:00.000Z"),
+          selectedDelayMs: 0,
+          authority: "HUMAN_APPROVED",
+          approvedByUserId: workspace.ownerUserId,
+          approvedAt: utc("2026-10-02T13:00:00.000Z"),
+          approvedReviewMode: "NORMAL",
+          // The full quartet `delivery_jobs_authority_check` requires for HUMAN_APPROVED.
+          decisionKey: "metrics-decision-reviewed",
+          sentAt: utc("2026-10-02T13:00:05.000Z"),
+          platformMessageId: "metrics-platform-reviewed",
+          createdAt: utc("2026-10-02T13:00:00.000Z"),
+        },
+      });
+
+      const outcomes = await draftOutcomes(db(), ownerContext, WINDOW);
+
+      // The safety metric on this whole page is the difference between these two numbers. Merging them
+      // would make "how much goes out with nobody reading it" unanswerable.
+      expect(outcomes.autoSent).toBe(1);
+      expect(outcomes.humanApprovedSent).toBe(1);
+    }, 180_000);
   });
 
   describe("review reasons and the knowledge gap", () => {
@@ -498,6 +556,23 @@ describe.skipIf(!databaseTestsEnabled())("operational metrics", () => {
       expect(rate.rate).toBeCloseTo(rate.takenOver / rate.conversationsWithInbound, 3);
     }, 180_000);
 
+    it("does not count a conversation we only spoke into", async () => {
+      // Its own workspace, because the denominator is a count over everything in scope.
+      const quiet = await seedWorkspace(db(), "metrics-outbound-only");
+      const [onlyOutbound] = quiet.profiles as [SeededProfile];
+      const context = await authorizeWorkspaceAccess(db(), { userId: onlyOutbound.context.userId, workspaceId: onlyOutbound.context.workspaceId });
+      // The seed leaves one inbound message, dated before this window; inside the window there is only
+      // our own outbound.
+      await outbound(utc("2026-10-06T12:00:00.000Z"), { target: onlyOutbound });
+
+      const rate = await takeoverRate(db(), context, WINDOW);
+
+      // A conversation nobody wrote into is not one somebody was waiting on, and counting it would make
+      // the rate fall every quiet week and look like an improvement.
+      expect(rate.conversationsWithInbound).toBe(0);
+      expect(rate.rate).toBeNull();
+    }, 180_000);
+
     it("says nothing rather than zero when no conversation was active", async () => {
       const quiet = await takeoverRate(db(), ownerContext, {
         from: utc("2026-12-01T00:00:00.000Z"),
@@ -506,6 +581,18 @@ describe.skipIf(!databaseTestsEnabled())("operational metrics", () => {
       });
 
       expect(quiet).toEqual({ conversationsWithInbound: 0, takenOver: 0, rate: null });
+    }, 180_000);
+
+    it("says nothing rather than zero when nothing engaged", async () => {
+      const quiet = await leadMovement(db(), ownerContext, {
+        from: utc("2026-12-01T00:00:00.000Z"),
+        to: utc("2026-12-02T00:00:00.000Z"),
+        timeZone: MADRID,
+      });
+
+      // A rate over nothing is undefined, not zero percent — and "0% qualified" reads as a bad month
+      // rather than an empty one.
+      expect(quiet).toEqual({ movements: [], qualified: 0, engaged: 0, qualificationRate: null });
     }, 180_000);
 
     it("remembers a lead that qualified and then was lost", async () => {
@@ -610,13 +697,26 @@ describe.skipIf(!databaseTestsEnabled())("operational metrics", () => {
       await addWorkspaceMember(db(), ownerContext, { userId: outsider.id, role: "AGENT", businessProfileScope: { selected: [second.businessProfileId] } });
       const context = await authorizeWorkspaceAccess(db(), { userId: outsider.id, workspaceId: workspace.workspaceId });
 
-      const snapshot = await readOperationalSnapshot(db(), context, WINDOW, { businessProfileId: profile.businessProfileId });
+      // A database that throws on any access. The claim is that nothing is asked at all when the scope
+      // can match nothing, and the only way to check a query was not made is to make querying fail.
+      const refusing = new Proxy(
+        {},
+        {
+          get() {
+            throw new Error("the store must not query when the authorized scope is empty");
+          },
+        },
+      ) as never;
+
+      const snapshot = await readOperationalSnapshot(refusing, context, WINDOW, { businessProfileId: profile.businessProfileId });
 
       expect(snapshot.volume).toEqual([]);
       expect(snapshot.drafts.generated).toBe(0);
       expect(snapshot.responseTimes.samples).toBe(0);
       expect(snapshot.leads.movements).toEqual([]);
       expect(snapshot.usage).toEqual([]);
+      expect(snapshot.delivery.provider.reportedDelivered).toBe(0);
+      expect(snapshot.takeover.rate).toBeNull();
     }, 180_000);
   });
 });

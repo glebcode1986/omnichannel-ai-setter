@@ -177,10 +177,12 @@ export async function searchAuditEvents(db: DbExecutor, context: WorkspaceContex
   const workspaceId = scopeOf(context);
   const isAdmin = WORKSPACE_ADMIN_ROLES.includes(context.role);
   const take = auditPageLimit(search.limit ?? 50);
-  const requestedKinds = search.kinds ?? [];
-  // An Agent asking for an admin-only kind is not an error and not an empty page with an explanation:
-  // they see the kinds they may see, and `restricted` says something was left out.
-  const kinds = isAdmin ? requestedKinds : requestedKinds.filter((kind) => !ADMIN_ONLY_AUDIT_KINDS.includes(kind));
+  // The requested kinds go through untouched, and `sensitive: false` below is what an Agent cannot see
+  // past. Filtering the list first looked like defence in depth and was a bug: an Agent asking *only*
+  // for an admin-only kind would be left with an empty list, which means "no kind filter" — and they
+  // would get the entire log instead of nothing. A mutation that deleted the filtering is what surfaced
+  // it, by being the better behaviour.
+  const kinds = search.kinds ?? [];
 
   const window = await db.auditEvent.findMany({
     where: {
