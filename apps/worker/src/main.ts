@@ -164,6 +164,9 @@ function main(): void {
                 draftId: true,
                 scheduledFor: true,
                 selectedDelayMs: true,
+                // A human-composed delivery names its conversation directly; an AI one reaches it
+                // through the draft. Both are selected so one reader serves either origin.
+                conversationId: true,
                 draft: { select: { conversationId: true } },
               },
             });
@@ -173,7 +176,8 @@ function main(): void {
                   workspaceId: job.workspaceId,
                   businessProfileId: job.businessProfileId,
                   correlationId: job.correlationId,
-                  conversationId: job.draft.conversationId,
+                  // Either origin. Exactly one is present, which a CHECK guarantees (ADR-018 Option B).
+                  conversationId: job.draft?.conversationId ?? job.conversationId ?? "",
                   deliveryJobId: job.id,
                   draftId: job.draftId,
                   scheduledFor: job.scheduledFor,

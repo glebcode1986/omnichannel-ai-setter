@@ -66,6 +66,7 @@ export {
   type StageTransitionOutcome,
 } from "./lead-store";
 export { createConversationOperationStore } from "./conversation-operations-store";
+export { composeHumanReply, pendingHumanReply, type ComposeInput, type ComposeOutcome } from "./composer-store";
 export {
   listReviewQueue,
   type ReviewCursor,
