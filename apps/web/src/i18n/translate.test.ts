@@ -59,8 +59,11 @@ describe("the catalogues", () => {
     // A Russian catalogue that echoed English would pass a "covers every key" check and fail every reader.
     const identical = (Object.keys(catalogues.en) as MessageKey[]).filter((key) => catalogues.en[key] === catalogues.ru[key]);
 
-    // Only proper nouns may legitimately match: two platform names and the product's own.
-    expect(identical).toEqual(["channel.INSTAGRAM", "channel.WHATSAPP", "landing.title"]);
+    // Two kinds of key may legitimately match. Proper nouns — two platform names and the product's own —
+    // and a pure format string with no words in it. `leads.stageColumn` is `{label} ({count})`: it stays
+    // in the catalogue because a locale could want different brackets or spacing, and it is identical
+    // today because neither language wants anything different yet.
+    expect(identical).toEqual(["channel.INSTAGRAM", "channel.WHATSAPP", "leads.stageColumn", "landing.title"]);
   });
 
   it("gives Russian the plural categories Russian has", () => {

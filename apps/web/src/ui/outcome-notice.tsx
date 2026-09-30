@@ -35,10 +35,13 @@ const OUTCOMES = [
   "REJECTED_EXAMPLE",
   "RESTORED",
   "REFUSED",
+  "MOVED",
+  "STALE_STAGE",
+  "UNCHANGED_STAGE",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
-const REFUSALS = new Set<string>(["TOO_LATE", "STALE", "GONE", "REJECTED", "ALREADY_RESOLVED", "REFUSED"]);
+const REFUSALS = new Set<string>(["TOO_LATE", "STALE", "GONE", "REJECTED", "ALREADY_RESOLVED", "REFUSED", "STALE_STAGE"]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {
   // An outcome nobody defined is not rendered at all. It can only come from a hand-edited URL, and
