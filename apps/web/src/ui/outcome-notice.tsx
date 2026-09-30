@@ -24,6 +24,11 @@ const OUTCOMES = [
   "STALE",
   "GONE",
   "REJECTED",
+  // The human composer's own outcomes (#29).
+  "COMPOSED",
+  "COMPOSE_REPLAYED",
+  "ALREADY_PENDING",
+  "NOT_OPEN",
   // Knowledge and Style report their own outcomes through the same notice, for the same reason: a refusal
   // that survives a reload is one somebody actually reads.
   "SAVED",
@@ -38,7 +43,16 @@ const OUTCOMES = [
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
-const REFUSALS = new Set<string>(["TOO_LATE", "STALE", "GONE", "REJECTED", "ALREADY_RESOLVED", "REFUSED"]);
+const REFUSALS = new Set<string>([
+  "TOO_LATE",
+  "STALE",
+  "GONE",
+  "REJECTED",
+  "ALREADY_RESOLVED",
+  "ALREADY_PENDING",
+  "NOT_OPEN",
+  "REFUSED",
+]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {
   // An outcome nobody defined is not rendered at all. It can only come from a hand-edited URL, and

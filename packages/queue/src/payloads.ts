@@ -67,7 +67,14 @@ export type AiDraftGenerationJob = z.output<typeof aiDraftGenerationJobSchema>;
 export const deliveryJobSchema = z.strictObject({
   ...envelope,
   conversationId: identifier,
-  draftId: identifier,
+  /**
+   * The AI draft this send came from, absent when a person composed it themselves (ADR-018 Option B).
+   *
+   * Optional rather than a placeholder: `operationId` and `deliveryJobId` already identify the work, and
+   * a job carrying an invented draft id would have the worker log and reconcile against a row that does
+   * not exist. The send path is the same either way — that is the point of the decision.
+   */
+  draftId: identifier.optional(),
   /** DeliveryJobRecord row that owns the durable delivery state. */
   deliveryJobId: identifier,
   /** Stable idempotency identity of the outbound action; identical across retries and restarts. */

@@ -282,7 +282,8 @@ export interface LatestDraft {
  */
 export interface PendingSend {
   readonly operationId: string;
-  readonly draftId: string;
+  /** Absent when a person composed this reply themselves (ADR-018 Option B). */
+  readonly draftId: string | null;
   readonly text: string | null;
   readonly scheduledFor: Date;
   readonly claimed: boolean;
@@ -346,7 +347,7 @@ export async function readConversation(
     where: { ...scope, status: { in: ["SCHEDULED", "SENDING"] }, draft: { conversationId } },
     orderBy: [{ scheduledFor: "asc" }],
     take: 10,
-    select: { operationId: true, draftId: true, status: true, scheduledFor: true, authority: true, draft: { select: { text: true } } },
+    select: { operationId: true, draftId: true, status: true, scheduledFor: true, authority: true, humanText: true, draft: { select: { text: true } } },
   });
   const row = await db.conversation.findFirst({
     where: { ...scope, id: conversationId },
@@ -435,7 +436,8 @@ export async function readConversation(
     pendingSends: pending.map((job) => ({
       operationId: job.operationId,
       draftId: job.draftId,
-      text: job.draft.text,
+      // Whichever origin wrote it. The pane shows the words, not which table they came from.
+      text: job.draft?.text ?? job.humanText,
       scheduledFor: job.scheduledFor,
       // A claimed send is already at, or on its way to, the provider. Offering to cancel it would be
       // offering something the database will refuse — and, worse, implying the customer did not get it.
