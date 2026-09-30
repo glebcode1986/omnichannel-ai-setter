@@ -41,8 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) / P3-03 (Issue #56) is the
-earliest unresolved review gate**, on branch `feat/p3-03-reliability`. Everything before it in the chain
+**Stage D has started with P5-01 (Issue #27)**, on branch `feat/p5-01-app-shell-onboarding`, based on the
+accepted #72 head. Everything before it in the chain has an independent PASS at its published head,
+including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**. Everything before it in the chain
 has an independent PASS at its published head, including **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -129,6 +130,15 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**Onboarding readiness is evaluated, never stored (#27 / P5-01).** `BusinessProfile` already said why:
+status is not operational readiness, and readiness is evaluated at execution time. So the setup checklist
+is a pure function of the profile's own configuration, read now — which is also what makes onboarding
+resumable without a state machine, because the completed steps *are* the channel account, the policy row
+and the knowledge documents. The single stored fact is a deliberate skip, because "no style yet" and "we
+decided not to write one" look identical in a style table and only one of them should let a workspace go
+live. Activation re-judges the checklist inside the transaction that flips the status, so a page left open
+for an hour cannot assert what was true when it rendered. See `docs/specs/ONBOARDING_UX.md`.
+
 **A kill switch is only as strong as the boundary it is enforced at (#56 / PR #72).** Binding the switch
 to the delivery claim was not enough on its own: the ordering lived in a store method, so it bound callers
 who went through that method and nobody else — while this spec's own incident guidance says the table is
@@ -174,10 +184,10 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **PR #72 / P3-03 is the gate.** Address independent-review findings on `feat/p3-03-reliability`,
-   verify at the exact head, and publish readiness evidence. Do not merge it.
-2. **Nothing is downstream of #72.** The accepted #71 head is already merged down into it; there is no
-   further branch to propagate to until a new one is opened.
+1. **P5-01 / Issue #27 is the open work.** The workspace shell and resumable setup surface on
+   `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
+2. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
+   `apps/web/src/ui/labels.ts` so that task replaces one module instead of reopening every component.
 3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
 4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.

@@ -14,17 +14,30 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — PR #72 / P3-03 (Issue #56)
+### Current gate — P5-01 / Issue #27 (Stage D)
 
-**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) is the earliest unresolved
-gate.** Branch `feat/p3-03-reliability`, carrying reliability controls, health, kill switches and
-reconciliation, with the accepted #71 head merged down into it. Everything before it in the chain has an
-independent PASS at its published head, and nothing is downstream of #72.
+**Branch `feat/p5-01-app-shell-onboarding`**, based on the accepted #72 head
+`9955ecf6c114145d54bb7dd46abbc902267bd00c`. It carries the authenticated workspace shell and the resumable
+setup surface: the first product UI in the repository.
 
-Two review findings on the kill switch are addressed on the branch: the switch is read with the state the
-claim binds and re-asserted inside the claim, and activation is ordered against in-flight claims by a
-trigger on `automation_suspensions` rather than by a lock in a store method — so the direct SQL an
-operator runs during an incident participates too. No later stage is authorized.
+**It is branched from the chain, not from `main`, and that is a deliberate deviation from the task
+contract.** P5-01 says "open focused PR to `main`", which assumed Phase 1 would be merged by the time it
+ran. `main` holds documentation only — no `packages/`, no auth, no database — so a branch from it would
+carry an app shell with nothing to authorize against. The task's own start condition ("Phase 1
+Auth.js/workspace membership and app scaffold are accepted") is satisfied by review acceptance, which is
+how every PR in this chain has worked. Retargeting the PR is one command if the owner prefers otherwise.
+
+Stage D's order in MASTER #61 is followed as written. One note for whoever picks up #58: P5-01 keeps every
+user-facing string in `apps/web/src/ui/labels.ts` precisely so the localization foundation replaces one
+module rather than reopening every component.
+
+### Accepted and propagated
+
+- **PR #72 / P3-03 (Issue #56)** was independently accepted at
+  `9955ecf6c114145d54bb7dd46abbc902267bd00c`. The kill switch is read with the state the delivery claim
+  binds and re-asserted inside the claim, and activation is ordered against in-flight claims by a trigger
+  on `automation_suspensions` rather than by a lock in a store method — so the direct SQL an operator runs
+  during an incident participates too. See `docs/specs/RELIABILITY_INCIDENTS.md`.
 
 ### Accepted and propagated
 
@@ -58,9 +71,8 @@ operator runs during an incident participates too. No later stage is authorized.
 
 ### Blocked
 
-**Nothing downstream of #72 exists yet, and Stage D has not started.** #72 is the last branch in the chain;
-it waits on an independent exact-head review like every gate before it. Do not rebase, force-push, merge to
-`main`, or start Stage D.
+Nothing is merged to `main`, and no work beyond P5-01 is started. Do not rebase, force-push or merge to
+`main`.
 
 ## Phase 4 gate — WhatsApp
 
