@@ -1,0 +1,189 @@
+/**
+ * Onboarding readiness (Issue #27).
+ *
+ * The cases worth writing are the ones where a nearly-ready workspace must still be told "not yet", and
+ * the ones where a person's own decision to skip something must be honoured rather than argued with.
+ */
+import { describe, expect, it } from "vitest";
+
+import { NO_CAPABILITIES } from "./channel";
+import {
+  channelReadiness,
+  evaluateOnboarding,
+  ONBOARDING_STEPS,
+  SKIPPABLE_ONBOARDING_STEPS,
+  type ChannelOnboardingFacts,
+  type OnboardingFacts,
+  type OnboardingStep,
+} from "./onboarding";
+
+const TEXT_ONLY = { ...NO_CAPABILITIES, text: true };
+
+const connectedChannel = (overrides: Partial<ChannelOnboardingFacts> = {}): ChannelOnboardingFacts => ({
+  channel: "INSTAGRAM",
+  status: "CONNECTED",
+  capabilities: TEXT_ONLY,
+  mode: "DRAFT",
+  outboundSuspended: false,
+  ...overrides,
+});
+
+/** A profile that has done everything and is one click from going live. */
+const ready = (overrides: Partial<OnboardingFacts> = {}): OnboardingFacts => ({
+  channels: [connectedChannel()],
+  policyConfigured: true,
+  timingConfigured: true,
+  channelPolicyConfigured: true,
+  knowledgeDocumentCount: 3,
+  styleConfigured: true,
+  testDriveCompleted: true,
+  blockingReviewItemCount: 0,
+  activated: false,
+  ...overrides,
+});
+
+const stateOf = (facts: OnboardingFacts, step: OnboardingStep) =>
+  evaluateOnboarding(facts).steps.find((status) => status.step === step)?.state;
+
+describe("the channel readiness ladder", () => {
+  it("separates the four states the product must not conflate", () => {
+    // Each rung answers one more question than the one above it, which is the whole point: "connected"
+    // and "would send right now" are different sentences to the person reading the card.
+    expect(channelReadiness(connectedChannel({ status: "NEEDS_REAUTH" }))).toBe("CONFIGURED");
+    expect(channelReadiness(connectedChannel({ mode: "OFF" }))).toBe("CONNECTED");
+    expect(channelReadiness(connectedChannel({ outboundSuspended: true }))).toBe("ELIGIBLE");
+    expect(channelReadiness(connectedChannel())).toBe("SENDABLE");
+  });
+
+  it("does not call a channel sendable when it cannot carry a reply", () => {
+    // A channel with no text capability supports everything except the thing an AI setter does.
+    expect(channelReadiness(connectedChannel({ capabilities: NO_CAPABILITIES }))).toBe("CONNECTED");
+  });
+
+  it("reports a disconnected account as configured rather than absent", () => {
+    // The person did connect it once. Calling it "not configured" would send them back to step one
+    // instead of telling them to re-authorize, which is the actionable difference ONBOARDING_UX.md asks for.
+    expect(channelReadiness(connectedChannel({ status: "DISCONNECTED" }))).toBe("CONFIGURED");
+  });
+});
+
+describe("resuming onboarding", () => {
+  it("has nothing left to do once everything is done", () => {
+    const state = evaluateOnboarding(ready({ activated: true }));
+
+    expect(state.nextStep).toBeUndefined();
+    expect(state.steps.every((status) => status.state === "COMPLETE")).toBe(true);
+  });
+
+  it("resumes at the first unfinished step, not the first one after the last finished one", () => {
+    // Knowledge done, style not, timing done. The answer is STYLE: onboarding is a checklist a person can
+    // fill in any order, and a pointer that only moved forward would skip what they left behind.
+    const state = evaluateOnboarding(ready({ styleConfigured: false }));
+
+    expect(state.nextStep).toBe("STYLE");
+  });
+
+  it("moves past a step the person deliberately skipped", () => {
+    const facts = ready({ styleConfigured: false, testDriveCompleted: false });
+
+    expect(evaluateOnboarding(facts).nextStep).toBe("STYLE");
+    expect(evaluateOnboarding(facts, ["STYLE"]).nextStep).toBe("TEST_DRIVE");
+    // Skipping the last two optional steps does not end the journey — activation is still ahead, and
+    // saying "nothing left to do" to a profile that has not gone live would be the wrong sentence.
+    expect(evaluateOnboarding(facts, ["STYLE", "TEST_DRIVE"]).nextStep).toBe("ACTIVATION");
+  });
+
+  it("marks a skipped step as skipped rather than complete", () => {
+    // They are different answers to "did you set up a voice for this business", and the checklist has to
+    // keep saying which one happened.
+    const facts = ready({ styleConfigured: false });
+
+    expect(stateOf(facts, "STYLE")).toBe("INCOMPLETE");
+    expect(evaluateOnboarding(facts, ["STYLE"]).steps.find((s) => s.step === "STYLE")?.state).toBe("SKIPPED");
+  });
+
+  it("ignores a skip recorded for a step that may not be skipped", () => {
+    // A stored skip for knowledge is a bug or a tampered row. Honouring it would let a setter answer
+    // customers with no facts at all, so the safe reading is that the step is simply not done.
+    const facts = ready({ knowledgeDocumentCount: 0 });
+
+    expect(evaluateOnboarding(facts, ["KNOWLEDGE"]).nextStep).toBe("KNOWLEDGE");
+    expect(evaluateOnboarding(facts, ["KNOWLEDGE"]).activationBlockers).toContain("NO_KNOWLEDGE");
+  });
+
+  it("keeps the step list in the order the spec prescribes", () => {
+    expect(evaluateOnboarding(ready()).steps.map((status) => status.step)).toEqual([...ONBOARDING_STEPS]);
+  });
+
+  it("offers a skip only where a skip is legitimate", () => {
+    const skippable = evaluateOnboarding(ready()).steps.filter((status) => status.skippable).map((status) => status.step);
+
+    expect(skippable).toEqual([...SKIPPABLE_ONBOARDING_STEPS]);
+  });
+});
+
+describe("the activation checklist", () => {
+  it("lets a ready profile go live", () => {
+    const state = evaluateOnboarding(ready());
+
+    expect(state.activationBlockers).toEqual([]);
+    expect(state.canActivate).toBe(true);
+  });
+
+  it("refuses a channel that is configured but not connected", () => {
+    // Activation is the moment the business starts answering customers, and an account waiting for
+    // re-authorization answers nobody. Having *done* the channel step is not the same as being reachable.
+    const state = evaluateOnboarding(ready({ channels: [connectedChannel({ status: "NEEDS_REAUTH" })] }));
+
+    expect(stateOf(ready({ channels: [connectedChannel({ status: "NEEDS_REAUTH" })] }), "CHANNELS")).toBe("COMPLETE");
+    expect(state.activationBlockers).toContain("NO_CONNECTED_CHANNEL");
+    expect(state.canActivate).toBe(false);
+  });
+
+  it("lets a business launch on one channel", () => {
+    // ONBOARDING_UX.md is explicit: a customer may launch with one channel and add the other later.
+    const state = evaluateOnboarding(ready({ channels: [connectedChannel({ channel: "INSTAGRAM" })] }));
+
+    expect(state.canActivate).toBe(true);
+  });
+
+  it("refuses to launch on top of review items nobody has dealt with", () => {
+    const state = evaluateOnboarding(ready({ blockingReviewItemCount: 2 }));
+
+    expect(state.activationBlockers).toContain("UNRESOLVED_REVIEW_ITEMS");
+    expect(state.canActivate).toBe(false);
+  });
+
+  it("does not block a launch on a style nobody wrote", () => {
+    // The checklist asks for style "configured or intentionally skipped", which is a question about the
+    // step and not about whether customers may be answered.
+    const state = evaluateOnboarding(ready({ styleConfigured: false }));
+
+    expect(state.activationBlockers).toEqual([]);
+    expect(state.canActivate).toBe(true);
+  });
+
+  it("does not offer to activate a profile that is already live", () => {
+    const state = evaluateOnboarding(ready({ activated: true }));
+
+    expect(state.activationBlockers).toEqual([]);
+    expect(state.canActivate).toBe(false);
+  });
+
+  it("lists every blocker at once rather than one at a time", () => {
+    // A checklist that revealed problems one reload at a time would be a worse experience than a list.
+    const state = evaluateOnboarding({
+      channels: [],
+      policyConfigured: false,
+      timingConfigured: false,
+      channelPolicyConfigured: false,
+      knowledgeDocumentCount: 0,
+      styleConfigured: false,
+      testDriveCompleted: false,
+      blockingReviewItemCount: 1,
+      activated: false,
+    });
+
+    expect(state.activationBlockers).toEqual(["NO_CONNECTED_CHANNEL", "NO_KNOWLEDGE", "NO_POLICY", "UNRESOLVED_REVIEW_ITEMS"]);
+  });
+});

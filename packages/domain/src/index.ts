@@ -23,6 +23,7 @@ export * from "./ids";
 export * from "./language";
 export * from "./lead";
 export * from "./message";
+export * from "./onboarding";
 export * from "./reason-codes";
 export * from "./reconciliation";
 export * from "./style-profile";
