@@ -221,3 +221,55 @@ describe("in Russian", () => {
     expect(screen.getByText(catalogues.ru["leads.historyEmpty"])).toBeDefined();
   });
 });
+
+describe("the stage configuration", () => {
+  it("shows the internal identifier beside the label, and does not let it be edited", async () => {
+    const { StageConfig } = await import("./stage-config");
+    render(<StageConfig t={t} stages={stages} target={TARGET} action={vi.fn(() => Promise.resolve())} />);
+
+    // The whole point of separating them: a rename must never look like a change to what a stage means
+    // to the draft engine, which returns one of these identifiers in its structured output.
+    expect(screen.getByText("QUALIFIED")).toBeDefined();
+    expect(screen.getByLabelText(text("stages.label"), { selector: "#label_QUALIFIED" })).toHaveProperty("value", "Ready to book");
+    expect(document.querySelector('input[name="stage_QUALIFIED"]')).toBeNull();
+  });
+
+  it("offers a position and a hidden flag per stage", async () => {
+    const { StageConfig } = await import("./stage-config");
+    render(<StageConfig t={t} stages={stages} target={TARGET} action={vi.fn(() => Promise.resolve())} />);
+
+    expect(document.querySelector('input[name="position_NEW"]')).toHaveProperty("value", "0");
+    expect(document.querySelector('input[name="hidden_NEW"]')).toHaveProperty("checked", false);
+  });
+
+  it("offers no way to add a stage, because that is not a display choice", async () => {
+    const { StageConfig } = await import("./stage-config");
+    render(<StageConfig t={t} stages={stages} target={TARGET} action={vi.fn(() => Promise.resolve())} />);
+
+    // A new internal id would change what the model may return. There is one row per existing stage and
+    // no control that could create another.
+    expect(document.querySelectorAll("tbody tr")).toHaveLength(stages.length);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("says what hiding a column does and does not do", async () => {
+    const { StageConfig } = await import("./stage-config");
+    render(<StageConfig t={t} stages={stages} target={TARGET} action={vi.fn(() => Promise.resolve())} />);
+
+    expect(screen.getByText(text("stages.hiddenHint"))).toBeDefined();
+  });
+
+  it("reflects a stage already hidden", async () => {
+    const { StageConfig } = await import("./stage-config");
+    render(
+      <StageConfig
+        t={t}
+        stages={stages.map((stage) => (stage.stage === "NEW" ? { ...stage, hidden: true } : stage))}
+        target={TARGET}
+        action={vi.fn(() => Promise.resolve())}
+      />,
+    );
+
+    expect(document.querySelector('input[name="hidden_NEW"]')).toHaveProperty("checked", true);
+  });
+});

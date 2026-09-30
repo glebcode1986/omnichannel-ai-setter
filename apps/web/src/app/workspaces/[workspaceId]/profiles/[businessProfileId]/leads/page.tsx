@@ -10,11 +10,12 @@ import { isLeadStage } from "@omnichannel/domain";
 
 import { LeadBoard } from "@/ui/leads/lead-board";
 import { LeadPanel } from "@/ui/leads/lead-panel";
+import { StageConfig } from "@/ui/leads/stage-config";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
 import { requireBusinessProfileContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
-import { editLeadAction, moveLeadAction, recordAnswerAction } from "@/server/lead-actions";
+import { editLeadAction, moveLeadAction, recordAnswerAction, saveStagesAction } from "@/server/lead-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
 
 function one(value: string | string[] | undefined): string | undefined {
@@ -93,6 +94,8 @@ export default async function LeadsPage({
           {t.t("inbox.applyFilters")}
         </button>
       </form>
+
+      <StageConfig t={t} stages={stages} target={target} action={saveStagesAction} />
 
       <LeadBoard
         t={t}

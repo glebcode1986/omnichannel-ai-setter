@@ -131,5 +131,7 @@ describe("the Inbox components", () => {
     expect(files).toContain("style/style-example-list.tsx");
     expect(files).toContain("style/voice-editor.tsx");
     expect(files).toContain("leads/lead-board.tsx");
+    expect(files).toContain("leads/lead-panel.tsx");
+    expect(files).toContain("leads/stage-config.tsx");
   });
 });
