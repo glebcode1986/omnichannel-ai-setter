@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   checkWorkspace,
@@ -35,6 +35,21 @@ const realWorkspace = (() => {
     return pending;
   };
 })();
+
+/**
+ * Pays for that read in setup, where it belongs.
+ *
+ * Caching it was not enough on its own: the *first* test to ask for the workspace bore the whole cost of
+ * reading and parsing every source file in the repository, and on a slower runner that one read alone
+ * crossed the five-second test timeout while every other test in the file finished in milliseconds. A
+ * test that fails because it happened to be first says nothing about the code it checks.
+ *
+ * Its own generous timeout, because this is I/O over a workspace that keeps growing and a hook that timed
+ * out would reintroduce the same failure one level up.
+ */
+beforeAll(async () => {
+  await realWorkspace();
+}, 120_000);
 
 const scoped = (name: string) => `${WORKSPACE_SCOPE}${name}`;
 
