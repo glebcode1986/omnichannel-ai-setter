@@ -169,6 +169,34 @@ describe("the customer and the channel", () => {
     expect(document.querySelector('[data-mode-source="OVERRIDE"]')).not.toBeNull();
   });
 
+  it("says the channel is connected", () => {
+    render(<ContextPanel t={t} conversation={conversation()} />);
+
+    expect(screen.getByText(text("accountStatus.CONNECTED"))).toBeDefined();
+    expect(screen.queryByText(text("context.cannotSend"))).toBeNull();
+    expect(document.querySelector('[data-account-status] .badge')?.getAttribute("data-tone")).toBe("ok");
+  });
+
+  it.each(["NEEDS_REAUTH", "DISCONNECTED"])("warns that nothing can be sent while the account is %s", (status) => {
+    // The case where every other field on this screen looks healthy and no reply would actually leave.
+    render(<ContextPanel t={t} conversation={conversation({ accountStatus: status })} />);
+
+    expect(screen.getByText(text(`accountStatus.${status}` as never))).toBeDefined();
+    expect(screen.getByText(text("context.cannotSend"))).toBeDefined();
+    // Carried by the badge's tone as well as by the sentence: an operator scanning the pane should not
+    // have to read the paragraph to see that this channel is the problem.
+    expect(document.querySelector('[data-account-status] .badge')?.getAttribute("data-tone")).toBe("stop");
+  });
+
+  it("names a conversation that is no longer open, and stays quiet when it is", () => {
+    render(<ContextPanel t={t} conversation={conversation({ status: "ARCHIVED" })} />);
+    expect(screen.getByText(text("conversationStatus.ARCHIVED"))).toBeDefined();
+
+    cleanup();
+    render(<ContextPanel t={t} conversation={conversation()} />);
+    expect(screen.queryByText(text("conversationStatus.OPEN"))).toBeNull();
+  });
+
   it("says when each side last spoke", () => {
     render(<ContextPanel t={t} conversation={conversation()} />);
 

@@ -22,6 +22,8 @@ export interface ContextPanelProps {
 
 const KNOWN_STAGES = new Set(["NEW", "ENGAGED", "QUALIFYING", "QUALIFIED", "BOOKED", "WON", "LOST"]);
 const KNOWN_MODES = new Set(["OFF", "DRAFT", "AUTOPILOT"]);
+const KNOWN_ACCOUNT_STATUSES = new Set(["CONNECTED", "NEEDS_REAUTH", "DISCONNECTED"]);
+const KNOWN_CONVERSATION_STATUSES = new Set(["OPEN", "CLOSED", "ARCHIVED"]);
 
 export function ContextPanel({ t, conversation }: ContextPanelProps) {
   const draft = conversation.latestDraft;
@@ -63,6 +65,23 @@ export function ContextPanel({ t, conversation }: ContextPanelProps) {
         <p className="muted" data-mode-source={conversation.modeOverride === null ? "INHERITED" : "OVERRIDE"}>
           {conversation.modeOverride === null ? t.t("context.modeInherited") : t.t("context.modeOverridden")}
         </p>
+        {/*
+          Whether this channel can still send, which is the eligibility summary the spec's right pane asks
+          for. An account needing re-auth is the case where everything else on this screen looks healthy
+          and nothing would actually leave — so it is stated, not left to be inferred from a failed send
+          an hour later.
+        */}
+        <p data-account-status={conversation.accountStatus}>
+          <span className="badge" data-tone={conversation.accountStatus === "CONNECTED" ? "ok" : "stop"}>
+            {accountStatusLabel(t, conversation.accountStatus)}
+          </span>
+        </p>
+        {conversation.accountStatus === "CONNECTED" ? undefined : <p className="muted">{t.t("context.cannotSend")}</p>}
+        {conversation.status === "OPEN" ? undefined : (
+          <p className="muted" data-conversation-status={conversation.status}>
+            {conversationStatusLabel(t, conversation.status)}
+          </p>
+        )}
         <dl className="context-times">
           <dt>{t.t("context.lastInbound")}</dt>
           <dd>{conversation.lastInboundAt === null ? t.t("context.never") : t.date(conversation.lastInboundAt, { dateStyle: "medium", timeStyle: "short" })}</dd>
@@ -152,4 +171,12 @@ function stageLabel(t: Translator, stage: string): string {
 
 function modeLabel(t: Translator, mode: string): string {
   return KNOWN_MODES.has(mode) ? t.t(`aiMode.${mode}` as MessageKey) : mode;
+}
+
+function accountStatusLabel(t: Translator, status: string): string {
+  return KNOWN_ACCOUNT_STATUSES.has(status) ? t.t(`accountStatus.${status}` as MessageKey) : status;
+}
+
+function conversationStatusLabel(t: Translator, status: string): string {
+  return KNOWN_CONVERSATION_STATUSES.has(status) ? t.t(`conversationStatus.${status}` as MessageKey) : status;
 }
