@@ -9,7 +9,7 @@
 import Link from "next/link";
 import { listWorkspacesForUser } from "@omnichannel/db";
 
-import { workspacePickerText } from "@/ui/labels";
+import { requestTranslator } from "@/i18n/request-locale";
 import { auth } from "@/auth";
 import { getDb } from "@/server/db";
 import { UnauthenticatedError } from "@/server/workspace-context";
@@ -20,20 +20,21 @@ export default async function WorkspacesPage() {
     throw new UnauthenticatedError();
   }
   const workspaces = await listWorkspacesForUser(getDb(), userId);
+  const t = await requestTranslator();
 
   return (
     <main className="shell-main">
       <div className="page-header">
-        <h1>{workspacePickerText.title}</h1>
+        <h1>{t.t("workspaces.title")}</h1>
       </div>
-      {workspaces.length === 0 ? <p>{workspacePickerText.empty}</p> : undefined}
+      {workspaces.length === 0 ? <p>{t.t("workspaces.empty")}</p> : undefined}
       <ul className="card-grid" style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {workspaces.map((workspace) => (
           <li className="card" key={workspace.workspaceId}>
             <h2 style={{ margin: "0 0 4px", fontSize: "1.1rem" }}>
               <Link href={`/workspaces/${workspace.workspaceId}`}>{workspace.name}</Link>
             </h2>
-            <p className="muted">{workspacePickerText.roleLabel(workspace.role)}</p>
+            <p className="muted">{t.t("workspaces.role", { role: workspace.role.toLowerCase() })}</p>
           </li>
         ))}
       </ul>

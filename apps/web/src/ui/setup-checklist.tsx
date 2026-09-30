@@ -10,10 +10,19 @@
  * here is the authorization: the server re-checks it, because a disabled button is a hint and not a
  * boundary.
  */
-import { activationBlockerLabels, setupText, stepDescriptions, stepLabels, stepStateLabels, stepStateTones } from "./labels";
 import type { OnboardingState, OnboardingStep } from "@omnichannel/domain";
 
+import type { MessageKey } from "@/i18n/catalogue";
+import type { Translator } from "@/i18n/translate";
+
+const stepStateTones: Readonly<Record<string, "ok" | "muted" | "warn">> = {
+  COMPLETE: "ok",
+  SKIPPED: "muted",
+  INCOMPLETE: "warn",
+};
+
 export interface SetupChecklistProps {
+  readonly t: Translator;
   readonly state: OnboardingState;
   /** Whether this viewer may change setup. Owners and admins may; everyone else reads. */
   readonly canConfigure: boolean;
@@ -27,6 +36,7 @@ export interface SetupChecklistProps {
 }
 
 export function SetupChecklist({
+  t,
   state,
   canConfigure,
   activated,
@@ -39,44 +49,44 @@ export function SetupChecklist({
     <div className="stack">
       {staleNotice ? (
         <p className="notice" data-tone="stop" role="status">
-          {setupText.staleAction}
+          {t.t("setup.staleAction")}
         </p>
       ) : undefined}
 
       <section aria-labelledby="steps-heading" className="stack">
-        <h2 id="steps-heading">{setupText.title}</h2>
-        <p className="muted">{setupText.subtitle}</p>
-        <p>{state.nextStep === undefined ? setupText.allDone : setupText.resumeHint(stepLabels[state.nextStep])}</p>
+        <h2 id="steps-heading">{t.t("setup.title")}</h2>
+        <p className="muted">{t.t("setup.subtitle")}</p>
+        <p>{state.nextStep === undefined ? t.t("setup.allDone") : t.t("setup.resumeHint", { step: t.t(`step.${state.nextStep}` as MessageKey) })}</p>
         <ol className="step-list">
           {state.steps.map((status) => (
             <li className="step" key={status.step} data-current={String(status.step === state.nextStep)} data-step={status.step}>
-              <span className="step-name">{stepLabels[status.step]}</span>
+              <span className="step-name">{t.t(`step.${status.step}` as MessageKey)}</span>
               <span className="badge" data-tone={stepStateTones[status.state]}>
-                {stepStateLabels[status.state]}
+                {t.t(`stepState.${status.state}` as MessageKey)}
               </span>
               <span className="muted" style={{ flexBasis: "100%" }}>
-                {stepDescriptions[status.step]}
+                {t.t(`stepDescription.${status.step}` as MessageKey)}
               </span>
-              {renderSkipControl(status.step, status.state, status.skippable, canConfigure, skipAction, unskipAction)}
+              {renderSkipControl(t, status.step, status.state, status.skippable, canConfigure, skipAction, unskipAction)}
             </li>
           ))}
         </ol>
-        {canConfigure ? undefined : <p className="muted">{setupText.skipRestricted}</p>}
+        {canConfigure ? undefined : <p className="muted">{t.t("setup.skipRestricted")}</p>}
       </section>
 
       <section aria-labelledby="checklist-heading" className="stack">
-        <h2 id="checklist-heading">{setupText.checklistTitle}</h2>
+        <h2 id="checklist-heading">{t.t("setup.checklistTitle")}</h2>
         {activated ? (
           <p className="notice" role="status">
-            {setupText.activated}
+            {t.t("setup.activated")}
           </p>
         ) : state.activationBlockers.length === 0 ? (
-          <p>{setupText.checklistReady}</p>
+          <p>{t.t("setup.checklistReady")}</p>
         ) : (
           <ul className="blockers">
             {state.activationBlockers.map((blocker) => (
               <li key={blocker} data-blocker={blocker}>
-                {activationBlockerLabels[blocker]}
+                {t.t(`blocker.${blocker}` as MessageKey)}
               </li>
             ))}
           </ul>
@@ -91,19 +101,20 @@ export function SetupChecklist({
               // a role that may not activate. A single greyed-out button with no explanation is the thing
               // a non-technical owner cannot get past.
               disabled={!state.canActivate || !canConfigure}
-              title={canConfigure ? undefined : setupText.activationDenied}
+              title={canConfigure ? undefined : t.t("setup.activationDenied")}
             >
-              {setupText.activate}
+              {t.t("setup.activate")}
             </button>
           </form>
         )}
-        {canConfigure ? undefined : <p className="muted">{setupText.activationDenied}</p>}
+        {canConfigure ? undefined : <p className="muted">{t.t("setup.activationDenied")}</p>}
       </section>
     </div>
   );
 }
 
 function renderSkipControl(
+  t: Translator,
   step: OnboardingStep,
   stepState: OnboardingState["steps"][number]["state"],
   skippable: boolean,
@@ -119,7 +130,7 @@ function renderSkipControl(
     <form action={skipped ? unskipAction : skipAction}>
       <input type="hidden" name="step" value={step} />
       <button className="button" type="submit">
-        {skipped ? setupText.undoSkip : setupText.skip}
+        {skipped ? t.t("setup.undoSkip") : t.t("setup.skip")}
       </button>
     </form>
   );

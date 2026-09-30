@@ -291,6 +291,8 @@ model User {
   email         String?   @unique
   emailVerified DateTime? @map("email_verified")
   image         String?
+  /// BCP-47 tag, canonicalized on write. NULL means the product's fallback locale.
+  uiLocale      String?   @map("ui_locale")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 

@@ -11,7 +11,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluateOnboarding, type OnboardingFacts, type OnboardingStep } from "@omnichannel/domain";
 
 import { SetupChecklist } from "./setup-checklist";
-import { setupText } from "./labels";
+import { catalogues, type MessageKey } from "@/i18n/catalogue";
+import { createTranslator } from "@/i18n/translate";
+
+const t = createTranslator("en");
+/** The English text for a key, so assertions read as text without duplicating the catalogue. */
+const text = (key: MessageKey) => catalogues.en[key];
 
 afterEach(cleanup);
 
@@ -45,6 +50,7 @@ const renderChecklist = (
   const state = evaluateOnboarding(resolved, overrides.skipped ?? []);
   return render(
     <SetupChecklist
+      t={t}
       state={state}
       canConfigure={overrides.canConfigure ?? true}
       activated={resolved.activated}
@@ -56,13 +62,13 @@ const renderChecklist = (
   );
 };
 
-const activateButton = () => screen.getByRole("button", { name: setupText.activate });
+const activateButton = () => screen.getByRole("button", { name: text("setup.activate") });
 
 describe("the setup step list", () => {
   it("shows every step with what it is for", () => {
     renderChecklist();
 
-    expect(screen.getByRole("heading", { name: setupText.title })).toBeDefined();
+    expect(screen.getByRole("heading", { name: text("setup.title") })).toBeDefined();
     expect(screen.getAllByRole("listitem").length).toBeGreaterThanOrEqual(9);
     expect(screen.getByText(/knowledge controls facts, not writing style/i)).toBeDefined();
   });
@@ -70,13 +76,13 @@ describe("the setup step list", () => {
   it("tells a returning person where to pick up", () => {
     renderChecklist({ onboardingFacts: { knowledgeDocumentCount: 0 } });
 
-    expect(screen.getByText(setupText.resumeHint("Knowledge"))).toBeDefined();
+    expect(screen.getByText("Next: Knowledge")).toBeDefined();
   });
 
   it("says so when there is nothing left", () => {
     renderChecklist({ onboardingFacts: { activated: true } });
 
-    expect(screen.getByText(setupText.allDone)).toBeDefined();
+    expect(screen.getByText(text("setup.allDone"))).toBeDefined();
   });
 
   it("offers a skip only for a step that may be skipped", async () => {
@@ -90,21 +96,21 @@ describe("the setup step list", () => {
     expect(styleStep?.querySelector("button")).not.toBeNull();
     expect(knowledgeStep?.querySelector("button")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: setupText.skip }));
+    await user.click(screen.getByRole("button", { name: text("setup.skip") }));
     expect(skipAction).toHaveBeenCalledTimes(1);
   });
 
   it("offers to undo a skip, because people change their minds", () => {
     renderChecklist({ onboardingFacts: { styleConfigured: false }, skipped: ["STYLE"] });
 
-    expect(screen.getByRole("button", { name: setupText.undoSkip })).toBeDefined();
+    expect(screen.getByRole("button", { name: text("setup.undoSkip") })).toBeDefined();
   });
 
   it("does not offer setup controls to a viewer who may only read", () => {
     renderChecklist({ onboardingFacts: { styleConfigured: false }, canConfigure: false });
 
-    expect(screen.queryByRole("button", { name: setupText.skip })).toBeNull();
-    expect(screen.getByText(setupText.skipRestricted)).toBeDefined();
+    expect(screen.queryByRole("button", { name: text("setup.skip") })).toBeNull();
+    expect(screen.getByText(text("setup.skipRestricted"))).toBeDefined();
   });
 });
 
@@ -114,7 +120,7 @@ describe("the activation checklist", () => {
     const user = userEvent.setup();
     renderChecklist({ activateAction });
 
-    expect(screen.getByText(setupText.checklistReady)).toBeDefined();
+    expect(screen.getByText(text("setup.checklistReady"))).toBeDefined();
     expect(activateButton().hasAttribute("disabled")).toBe(false);
     await user.click(activateButton());
     expect(activateAction).toHaveBeenCalledTimes(1);
@@ -141,7 +147,7 @@ describe("the activation checklist", () => {
   it("does not hold a launch back over a style nobody wrote", () => {
     renderChecklist({ onboardingFacts: { styleConfigured: false }, skipped: ["STYLE"] });
 
-    expect(screen.getByText(setupText.checklistReady)).toBeDefined();
+    expect(screen.getByText(text("setup.checklistReady"))).toBeDefined();
     expect(activateButton().hasAttribute("disabled")).toBe(false);
   });
 
@@ -149,14 +155,14 @@ describe("the activation checklist", () => {
     renderChecklist({ canConfigure: false });
 
     expect(activateButton().hasAttribute("disabled")).toBe(true);
-    expect(screen.getAllByText(setupText.activationDenied).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(text("setup.activationDenied")).length).toBeGreaterThan(0);
   });
 
   it("does not offer to activate a profile that is already live", () => {
     renderChecklist({ onboardingFacts: { activated: true } });
 
-    expect(screen.queryByRole("button", { name: setupText.activate })).toBeNull();
-    expect(screen.getByText(setupText.activated)).toBeDefined();
+    expect(screen.queryByRole("button", { name: text("setup.activate") })).toBeNull();
+    expect(screen.getByText(text("setup.activated"))).toBeDefined();
   });
 
   it("explains a refusal caused by the setup moving underneath the page", () => {
@@ -164,7 +170,7 @@ describe("the activation checklist", () => {
 
     // "Stale review/send actions fail safely with a clear refresh reason" — the same requirement applies
     // to a setup action, and a silent no-op would be the worst version of it.
-    expect(screen.getByRole("status")).toHaveProperty("textContent", setupText.staleAction);
+    expect(screen.getByRole("status").textContent).toBe(text("setup.staleAction"));
   });
 
   it("is operable from the keyboard alone", async () => {

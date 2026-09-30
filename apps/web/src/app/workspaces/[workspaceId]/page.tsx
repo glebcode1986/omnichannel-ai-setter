@@ -8,7 +8,8 @@
 import Link from "next/link";
 import { listAuthorizedBusinessProfiles } from "@omnichannel/db";
 
-import { workspacePickerText } from "@/ui/labels";
+import { requestTranslator } from "@/i18n/request-locale";
+import type { MessageKey } from "@/i18n/catalogue";
 import { getDb } from "@/server/db";
 import { requireWorkspaceContext } from "@/server/request-context";
 
@@ -20,14 +21,15 @@ export default async function WorkspacePage({
   const { workspaceId } = await params;
   const context = await requireWorkspaceContext(workspaceId);
   const profiles = await listAuthorizedBusinessProfiles(getDb(), context);
+  const t = await requestTranslator();
 
   return (
     <main className="shell-main">
       <div className="page-header">
-        <h1>{workspacePickerText.profilesTitle}</h1>
-        <Link href="/workspaces">{workspacePickerText.title}</Link>
+        <h1>{t.t("workspaces.profilesTitle")}</h1>
+        <Link href="/workspaces">{t.t("workspaces.title")}</Link>
       </div>
-      {profiles.length === 0 ? <p>{workspacePickerText.profilesEmpty}</p> : undefined}
+      {profiles.length === 0 ? <p>{t.t("workspaces.profilesEmpty")}</p> : undefined}
       <ul className="card-grid" style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {profiles.map((profile) => (
           <li className="card" key={profile.businessProfileId}>
@@ -36,7 +38,7 @@ export default async function WorkspacePage({
             </h2>
             <p>
               <span className="badge" data-tone={profile.status === "ACTIVE" ? "ok" : "warn"}>
-                {workspacePickerText.statusLabel(profile.status)}
+                {t.t(`profileStatus.${profile.status}` as MessageKey)}
               </span>
             </p>
           </li>

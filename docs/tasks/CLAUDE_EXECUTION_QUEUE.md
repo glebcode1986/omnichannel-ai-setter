@@ -14,7 +14,19 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — P5-01 / Issue #27 (Stage D)
+### Current work — P5-10 / Issue #58 (Stage D)
+
+**Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
+production locales, per-user and independent of the language customers are answered in.
+
+**Issue #58 named two specs that did not exist**: `docs/specs/LOCALIZATION.md` and
+`docs/specs/MVP_RELEASE_SCOPE.md`. It is also the only P5 issue with no task contract under `docs/tasks/`.
+The issue's own Required behavior / Tests / Acceptance criteria were detailed enough to implement from, so
+this task writes `LOCALIZATION.md` as part of its output — the acceptance criterion says later Phase 5 work
+must *fail review* when it introduces unlocalized strings, and that needs a written rule to point at.
+`MVP_RELEASE_SCOPE.md` is still missing and is not this task's to invent.
+
+### Previous — P5-01 / Issue #27 (Stage D)
 
 **Branch `feat/p5-01-app-shell-onboarding`**, based on the accepted #72 head
 `9955ecf6c114145d54bb7dd46abbc902267bd00c`. It carries the authenticated workspace shell and the resumable

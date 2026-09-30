@@ -10,18 +10,13 @@
 import { readOnboarding, WORKSPACE_ADMIN_ROLES } from "@omnichannel/db";
 
 import { ChannelCards } from "@/ui/channel-cards";
-import { setupText } from "@/ui/labels";
+import { requestTranslator } from "@/i18n/request-locale";
+import type { MessageKey } from "@/i18n/catalogue";
 import { getDb } from "@/server/db";
 import { requireBusinessProfileContext } from "@/server/request-context";
 
-/** What the callback can report, mapped to something a person can act on. */
-const connectOutcomes: Readonly<Record<string, string>> = {
-  connected: "Instagram is connected.",
-  denied: "The authorization was declined, so nothing changed.",
-  expired: "That connection attempt timed out. Start it again.",
-  invalid: "That connection attempt could not be verified. Start it again.",
-  failed: "Instagram could not complete the connection. Start it again.",
-};
+/** What the callback can report. Each has its own message, because "it failed" is not actionable. */
+const CONNECT_OUTCOMES = ["connected", "denied", "expired", "invalid", "failed"] as const;
 
 export default async function ChannelsPage({
   params,
@@ -33,8 +28,12 @@ export default async function ChannelsPage({
   const { workspaceId, businessProfileId } = await params;
   const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
   const { facts } = await readOnboarding(getDb(), context);
+  const t = await requestTranslator();
   const outcome = (await searchParams).instagram;
-  const message = typeof outcome === "string" ? connectOutcomes[outcome] : undefined;
+  // Only outcomes this product knows about become messages: a query parameter is attacker-controlled, and
+  // echoing an unknown one would be rendering a stranger's text inside the shell.
+  const known = typeof outcome === "string" && (CONNECT_OUTCOMES as readonly string[]).includes(outcome) ? outcome : undefined;
+  const message = known === undefined ? undefined : t.t(`connect.${known}` as MessageKey);
 
   const canConfigure = WORKSPACE_ADMIN_ROLES.includes(context.role);
   const connectPath = `/api/workspaces/${workspaceId}/business-profiles/${businessProfileId}/channels/instagram/connect`;
@@ -42,7 +41,7 @@ export default async function ChannelsPage({
   return (
     <div className="stack">
       <div className="page-header">
-        <h1>{setupText.channelsTitle}</h1>
+        <h1>{t.t("setup.channelsTitle")}</h1>
       </div>
       {message === undefined ? undefined : (
         <p className="notice" role="status" data-tone={outcome === "connected" ? undefined : "stop"}>
@@ -50,6 +49,7 @@ export default async function ChannelsPage({
         </p>
       )}
       <ChannelCards
+        t={t}
         channels={facts.channels}
         offered={["INSTAGRAM"]}
         {...(canConfigure ? { instagramConnectPath: connectPath } : {})}

@@ -130,6 +130,14 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**Two languages, never coupled (#58 / P5-10).** The dashboard locale is a per-user preference on
+`users.ui_locale`; the language a customer is answered in comes from the Business Profile's style profile
+and the conversation. An agency operator may read Russian while replying in German for a business
+configured in English, and all three are correct at once. The separation is structural — different rows,
+different owners, no query that reads one to decide the other — and an integration test states it rather
+than trusting it. Missing keys throw in development and fall back to English in production, because a
+person mid-task must not be shown a raw key. See `docs/specs/LOCALIZATION.md`.
+
 **Onboarding readiness is evaluated, never stored (#27 / P5-01).** `BusinessProfile` already said why:
 status is not operational readiness, and readiness is evaluated at execution time. So the setup checklist
 is a pure function of the profile's own configuration, read now — which is also what makes onboarding
@@ -184,10 +192,13 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **P5-01 / Issue #27 is the open work.** The workspace shell and resumable setup surface on
+1. **P5-10 / Issue #58 is the open work.** EN/RU localization on `feat/p5-10-localization`, stacked on
+   P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
+   `MVP_RELEASE_SCOPE.md` alone.
+2. **P5-01 / Issue #27 is in review as PR #73.** The workspace shell and resumable setup surface on
    `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
-2. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
-   `apps/web/src/ui/labels.ts` so that task replaces one module instead of reopening every component.
+3. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
+   from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts` fails the build otherwise.
 3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
 4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
