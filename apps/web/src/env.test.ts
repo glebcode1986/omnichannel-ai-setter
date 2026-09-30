@@ -27,6 +27,10 @@ describe("loadWebEnv", () => {
       AI_EMBEDDING_MODEL: "voyage-3.5",
       AI_EMBEDDING_DIMENSIONS: 1_024,
       AI_EMBEDDING_REVISION: "v1",
+      // The reply model, for the simulation playground. Optional like the embedding key, and for the
+      // same reason: a deployment that never opens the playground should not fail to boot over it.
+      AI_REPLY_MODEL: "claude-opus-5",
+      AI_REPLY_MAX_OUTPUT_TOKENS: 4_096,
       ...required,
     });
   });
@@ -41,6 +45,10 @@ describe("loadWebEnv", () => {
 
     expect(env.VOYAGE_API_KEY).toBe("fake-key");
     expect(env.AI_EMBEDDING_DIMENSIONS).toBe(1_024);
+  });
+
+  it("takes no reply-model key, because the playground is not required to work", () => {
+    expect(loadWebEnv(required).ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   it("rejects invalid values", () => {

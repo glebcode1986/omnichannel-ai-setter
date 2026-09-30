@@ -35,10 +35,10 @@ const MAX_RESULTS = 10;
 export async function runRetrievalTrial(context: BusinessProfileContext, text: string): Promise<RetrievalTrial> {
   const query = text.trim();
   if (query === "") {
-    return { mode: modeOf(), hits: [], unavailable: false };
+    return { mode: retrievalModeOf(), hits: [], unavailable: false };
   }
 
-  const embedding = await embed(query);
+  const embedding = await embedQuery(query);
   try {
     const result = await createKnowledgeRetriever(getDb()).search({
       scope: { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId },
@@ -51,11 +51,11 @@ export async function runRetrievalTrial(context: BusinessProfileContext, text: s
     // A retrieval outage is reported as one. Rendering it as an empty result would tell an operator their
     // knowledge base is empty at the moment it is merely unreachable.
     getLogger().warn("knowledge.retrieval_trial_failed", { message: error instanceof Error ? error.message : "unknown" });
-    return { mode: modeOf(), hits: [], unavailable: true };
+    return { mode: retrievalModeOf(), hits: [], unavailable: true };
   }
 }
 
-function modeOf(): RetrievalMode {
+export function retrievalModeOf(): RetrievalMode {
   const env = loadWebEnv();
   return env.VOYAGE_API_KEY !== undefined && env.AI_EMBEDDING_DIMENSIONS === EMBEDDING_DIMENSIONS ? "HYBRID" : "LEXICAL_ONLY";
 }
@@ -67,7 +67,7 @@ function modeOf(): RetrievalMode {
  * query would return nothing and the tester would report a healthy corpus as empty. Refusing to embed at
  * all is the honest failure: the trial then says it searched lexically, which is what happened.
  */
-async function embed(text: string) {
+export async function embedQuery(text: string) {
   const env = loadWebEnv();
   if (env.VOYAGE_API_KEY === undefined || env.AI_EMBEDDING_DIMENSIONS !== EMBEDDING_DIMENSIONS) {
     return undefined;
@@ -113,10 +113,10 @@ export interface StyleTrial {
 export async function runStyleTrial(context: BusinessProfileContext, text: string): Promise<StyleTrial> {
   const query = text.trim();
   if (query === "") {
-    return { mode: modeOf(), hits: [], unavailable: false };
+    return { mode: retrievalModeOf(), hits: [], unavailable: false };
   }
 
-  const embedding = await embed(query);
+  const embedding = await embedQuery(query);
   try {
     const result = await createStyleRetriever(getDb()).search({
       scope: { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId },
@@ -127,6 +127,6 @@ export async function runStyleTrial(context: BusinessProfileContext, text: strin
     return { mode: embedding === undefined ? "LEXICAL_ONLY" : "HYBRID", hits: result.hits, unavailable: false };
   } catch (error) {
     getLogger().warn("style.retrieval_trial_failed", { message: error instanceof Error ? error.message : "unknown" });
-    return { mode: modeOf(), hits: [], unavailable: true };
+    return { mode: retrievalModeOf(), hits: [], unavailable: true };
   }
 }

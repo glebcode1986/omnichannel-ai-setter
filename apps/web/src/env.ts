@@ -45,6 +45,19 @@ export const webEnvSchema = runtimeEnvSchema.extend({
    * Nothing here is used to *write* embeddings. Indexing is the worker's, and the web app never chunks.
    */
   VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
+  /**
+   * The reply model, for the simulation playground only (Issue #30).
+   *
+   * Optional, unlike the worker's, because a deployment that never opens the playground should not fail
+   * to boot over it — and the playground degrades honestly without it: retrieval and the deterministic
+   * policy still run, and the screen says no model is configured rather than showing an empty reply.
+   *
+   * The simulation cannot send whether this is set or not. The `ReplyModel` port has no transport, no
+   * recipient and no tools, so a live run against a real provider still cannot reach a customer.
+   */
+  ANTHROPIC_API_KEY: z.string().min(1).max(512).optional(),
+  AI_REPLY_MODEL: z.string().min(1).max(128).default("claude-opus-5"),
+  AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
   AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
   AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
   AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
