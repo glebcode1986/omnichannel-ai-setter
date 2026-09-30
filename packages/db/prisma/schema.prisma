@@ -56,6 +56,20 @@ enum BusinessProfileStatus {
   INACTIVE
 }
 
+/// Steps of the guided setup (ONBOARDING_UX.md). Only the ones a person may legitimately pass over are
+/// ever stored; the rest are derived from configuration and never written down.
+enum OnboardingStep {
+  WORKSPACE
+  CHANNELS
+  AI_BEHAVIOUR
+  KNOWLEDGE
+  STYLE
+  TIMING_AND_HANDOFF
+  CHANNEL_POLICY
+  TEST_DRIVE
+  ACTIVATION
+}
+
 enum ChannelAccountStatus {
   CONNECTED
   NEEDS_REAUTH
@@ -292,6 +306,7 @@ model User {
   automationSuspensions     AutomationSuspension[] @relation("SuspensionBy")
   liftedSuspensions         AutomationSuspension[] @relation("SuspensionLiftedBy")
   approvedDeliveries        DeliveryJobRecord[]
+  onboardingSkips           OnboardingSkip[]
 
   @@map("users")
 }
@@ -393,10 +408,35 @@ model BusinessProfile {
   automationPolicies AutomationPolicy[]
   queueOutbox        QueueOutbox[]
   connectStates      ChannelConnectState[]
+  onboardingSkips    OnboardingSkip[]
 
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("business_profiles")
+}
+
+/// A person's decision to pass over an optional setup step (Issue #27).
+///
+/// The only part of onboarding that is stored. Every other step's completion is read from the
+/// configuration it produced — the channel account, the policy row, the knowledge documents — so there is
+/// no second copy of progress to drift from reality. A deliberate skip is the one fact the data cannot
+/// reveal on its own: "no style yet" and "we decided not to write one" look identical in a style table.
+model OnboardingSkip {
+  id                String          @id @default(uuid(7))
+  workspaceId       String          @map("workspace_id")
+  businessProfileId String          @map("business_profile_id")
+  step              OnboardingStep
+  /// Who decided. A skip is an operational decision and the audit question is always who made it.
+  skippedByUserId   String          @map("skipped_by_user_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  skippedBy       User            @relation(fields: [skippedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One row per step: skipping twice is the same decision, not two.
+  @@unique([workspaceId, businessProfileId, step])
+  @@index([workspaceId, businessProfileId])
+  @@map("onboarding_skips")
 }
 
 /// Explicit Business Profile grant for a SELECTED-scope member. Member and profile must share the Workspace.

@@ -16,7 +16,7 @@
  * authoritative — the delivery coordinator re-checks both before any reply leaves (PRODUCT_UX.md).
  */
 import { literalGuard } from "./enum";
-import type { AiMode, ChannelCapabilities, ChannelType } from "./channel";
+import type { AiMode, ChannelType } from "./channel";
 import type { ChannelAccountStatus } from "./channel-account";
 
 /**
@@ -44,11 +44,17 @@ export const isOnboardingStep = literalGuard(ONBOARDING_STEPS);
  * Steps a person may decide not to do, and still launch.
  *
  * Deliberately short. A skippable step is one where "no" is a legitimate answer for a small business:
- * style can be left to the platform default, and the test drive is a reassurance rather than a
- * requirement. Knowledge is not here — a setter with no facts invents them — and neither is anything that
- * decides whether a reply may be sent at all.
+ * style can be left to the platform default, the recommended timing preset is a real choice a business can
+ * make by not choosing, and the test drive is a reassurance rather than a requirement. Knowledge is not
+ * here — a setter with no facts invents them — and neither is anything that decides whether a reply may be
+ * sent at all.
+ *
+ * Timing is skippable for an honest reason rather than a convenient one: the product's defaults *are* its
+ * "Natural" preset, so nothing in the data distinguishes a business that chose them from one that never
+ * opened the step. Rather than invent a marker to fake that precision, the step asks to be either
+ * customised or passed over, and both are recorded truthfully.
  */
-export const SKIPPABLE_ONBOARDING_STEPS = ["STYLE", "TEST_DRIVE"] as const satisfies readonly OnboardingStep[];
+export const SKIPPABLE_ONBOARDING_STEPS = ["STYLE", "TIMING_AND_HANDOFF", "TEST_DRIVE"] as const satisfies readonly OnboardingStep[];
 export type SkippableOnboardingStep = (typeof SKIPPABLE_ONBOARDING_STEPS)[number];
 export const isSkippableOnboardingStep = literalGuard(SKIPPABLE_ONBOARDING_STEPS);
 
@@ -60,7 +66,14 @@ export type ChannelReadiness = (typeof CHANNEL_READINESS)[number];
 export interface ChannelOnboardingFacts {
   readonly channel: ChannelType;
   readonly status: ChannelAccountStatus;
-  readonly capabilities: ChannelCapabilities;
+  /**
+   * Whether the channel can carry a text reply at all.
+   *
+   * One boolean rather than the whole capability set, because that is the only capability question the
+   * readiness ladder asks — and asking persistence for a typed `ChannelCapabilities` would mean casting a
+   * JSON column into an interface, which is a promise the compiler cannot check.
+   */
+  readonly canCarryText: boolean;
   /** The effective automation mode for this account; `OFF` means nothing automated may go out. */
   readonly mode: AiMode;
   /**
@@ -123,7 +136,7 @@ export function channelReadiness(facts: ChannelOnboardingFacts): ChannelReadines
     // A row exists, so the channel is configured; it just cannot be used until the person re-authorizes.
     return "CONFIGURED";
   }
-  if (!canCarryAReply(facts.capabilities) || facts.mode === "OFF") {
+  if (!facts.canCarryText || facts.mode === "OFF") {
     // Connected to the provider, but nothing automated may leave: either the channel cannot carry a reply
     // or the business has switched automation off. Both are states, not errors.
     return "CONNECTED";
@@ -155,11 +168,6 @@ export function evaluateOnboarding(facts: OnboardingFacts, skipped: readonly Onb
     activationBlockers,
     canActivate: activationBlockers.length === 0 && !facts.activated,
   };
-}
-
-/** A channel that cannot carry a text reply cannot carry an AI reply, whatever else it supports. */
-function canCarryAReply(capabilities: ChannelCapabilities): boolean {
-  return capabilities.text;
 }
 
 function isStepComplete(step: OnboardingStep, facts: OnboardingFacts): boolean {

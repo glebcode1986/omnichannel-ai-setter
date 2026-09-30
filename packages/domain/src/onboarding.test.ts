@@ -6,7 +6,6 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { NO_CAPABILITIES } from "./channel";
 import {
   channelReadiness,
   evaluateOnboarding,
@@ -17,12 +16,10 @@ import {
   type OnboardingStep,
 } from "./onboarding";
 
-const TEXT_ONLY = { ...NO_CAPABILITIES, text: true };
-
 const connectedChannel = (overrides: Partial<ChannelOnboardingFacts> = {}): ChannelOnboardingFacts => ({
   channel: "INSTAGRAM",
   status: "CONNECTED",
-  capabilities: TEXT_ONLY,
+  canCarryText: true,
   mode: "DRAFT",
   outboundSuspended: false,
   ...overrides,
@@ -57,7 +54,7 @@ describe("the channel readiness ladder", () => {
 
   it("does not call a channel sendable when it cannot carry a reply", () => {
     // A channel with no text capability supports everything except the thing an AI setter does.
-    expect(channelReadiness(connectedChannel({ capabilities: NO_CAPABILITIES }))).toBe("CONNECTED");
+    expect(channelReadiness(connectedChannel({ canCarryText: false }))).toBe("CONNECTED");
   });
 
   it("reports a disconnected account as configured rather than absent", () => {
