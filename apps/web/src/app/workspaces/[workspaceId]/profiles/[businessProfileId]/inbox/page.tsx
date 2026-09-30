@@ -31,6 +31,8 @@ export default async function InboxPage({
         rows={screen.page.rows}
         view={screen.view}
         basePath={screen.basePath}
+        accounts={screen.accounts}
+        loadedAt={screen.loadedAt}
         {...(screen.nextCursor === undefined ? {} : { nextCursor: screen.nextCursor })}
       />
       {/* Holds the middle column open on a desktop so choosing a conversation does not shift the list. */}

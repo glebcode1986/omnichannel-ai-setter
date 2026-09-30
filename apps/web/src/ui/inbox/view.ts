@@ -11,6 +11,7 @@ export interface InboxView {
   readonly search?: string;
   readonly filter?: "awaitingReply" | "reviewNeeded" | "humanActive" | "mine";
   readonly channelAccountId?: string;
+  readonly leadStage?: string;
   readonly cursor?: string;
 }
 
@@ -26,6 +27,9 @@ export function inboxQueryString(view: InboxView): string {
   if (view.channelAccountId !== undefined) {
     params.set("account", view.channelAccountId);
   }
+  if (view.leadStage !== undefined) {
+    params.set("stage", view.leadStage);
+  }
   if (view.cursor !== undefined) {
     params.set("cursor", view.cursor);
   }
@@ -35,5 +39,5 @@ export function inboxQueryString(view: InboxView): string {
 
 /** Whether this view is narrowing the list, which decides which "nothing here" sentence is true. */
 export function isFilteredView(view: InboxView): boolean {
-  return view.search !== undefined || view.filter !== undefined || view.channelAccountId !== undefined;
+  return view.search !== undefined || view.filter !== undefined || view.channelAccountId !== undefined || view.leadStage !== undefined;
 }

@@ -44,7 +44,8 @@ const conversation = (overrides: Partial<ConversationDetail> = {}): Conversation
   handle: "@ann",
   status: "OPEN",
   leadStage: "ENGAGED",
-  mode: "DRAFT",
+  modeOverride: null,
+  effectiveMode: "DRAFT",
   aiEnabled: true,
   takeoverState: "NONE",
   takeoverReason: null,
@@ -149,6 +150,23 @@ describe("the customer and the channel", () => {
     expect(screen.getByText("@ann")).toBeDefined();
     expect(screen.getByText(text("channel.INSTAGRAM"))).toBeDefined();
     expect(screen.getByText(text("aiMode.DRAFT"))).toBeDefined();
+  });
+
+  it("shows the mode in force, not the conversation's empty override", () => {
+    // A conversation with no override inherits the channel's policy. Reading `null` as "off" would tell
+    // an operator automation was disabled while it was in fact drafting replies.
+    render(<ContextPanel t={t} conversation={conversation({ modeOverride: null, effectiveMode: "AUTOPILOT" })} />);
+
+    expect(screen.getByText(text("aiMode.AUTOPILOT"))).toBeDefined();
+    expect(screen.queryByText(text("aiMode.OFF"))).toBeNull();
+    expect(screen.getByText(text("context.modeInherited"))).toBeDefined();
+  });
+
+  it("says when the mode was set on this conversation rather than inherited", () => {
+    render(<ContextPanel t={t} conversation={conversation({ modeOverride: "OFF", effectiveMode: "OFF" })} />);
+
+    expect(screen.getByText(text("context.modeOverridden"))).toBeDefined();
+    expect(document.querySelector('[data-mode-source="OVERRIDE"]')).not.toBeNull();
   });
 
   it("says when each side last spoke", () => {

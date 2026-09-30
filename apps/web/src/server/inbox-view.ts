@@ -13,6 +13,7 @@
  * base64url so it survives a URL intact. Encoding it is not a security measure — it carries no authority,
  * and the store scopes every read to the profile in the route regardless of what the cursor says.
  */
+import { isLeadStage } from "@omnichannel/domain";
 import type { InboxCursor, InboxFilter } from "@omnichannel/db";
 
 import type { InboxView } from "@/ui/inbox/view";
@@ -39,6 +40,9 @@ export function parseInboxView(params: RawSearchParams): InboxView {
     ...(search === undefined || search === "" ? {} : { search }),
     ...(isFilterName(filter) ? { filter } : {}),
     ...(one(params["account"]) === undefined ? {} : { channelAccountId: one(params["account"]) ?? "" }),
+    // Validated against the domain's own list, so a hand-typed stage cannot reach a query as a filter
+    // nobody defined.
+    ...(isLeadStage(one(params["stage"])) ? { leadStage: one(params["stage"]) ?? "" } : {}),
     ...(one(params["cursor"]) === undefined ? {} : { cursor: one(params["cursor"]) ?? "" }),
   };
 }
@@ -54,6 +58,7 @@ export function inboxFilterOf(view: InboxView, viewerUserId: string): InboxFilte
   return {
     ...(view.search === undefined ? {} : { search: view.search }),
     ...(view.channelAccountId === undefined ? {} : { channelAccountId: view.channelAccountId }),
+    ...(isLeadStage(view.leadStage) ? { leadStage: view.leadStage } : {}),
     ...(view.filter === "awaitingReply" ? { awaitingReply: true } : {}),
     ...(view.filter === "reviewNeeded" ? { takeover: "REVIEW_REQUIRED" as const } : {}),
     ...(view.filter === "humanActive" ? { takeover: "HUMAN_ACTIVE" as const } : {}),

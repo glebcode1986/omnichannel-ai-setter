@@ -42,6 +42,31 @@ describe("parsing an Inbox URL", () => {
   });
 });
 
+describe("the lead stage in a URL", () => {
+  it("reads a stage the domain defines", () => {
+    expect(parseInboxView({ stage: "QUALIFIED" }).leadStage).toBe("QUALIFIED");
+  });
+
+  it("drops a stage nobody defined, and a stage in the wrong case", () => {
+    // The enum is the contract. A lowercase stage is a typo, not a second spelling.
+    expect(parseInboxView({ stage: "CUSTOMER" }).leadStage).toBeUndefined();
+    expect(parseInboxView({ stage: "qualified" }).leadStage).toBeUndefined();
+  });
+
+  it("passes a valid stage to the store and an invalid one to nothing", () => {
+    expect(inboxFilterOf({ leadStage: "BOOKED" }, VIEWER)).toEqual({ leadStage: "BOOKED" });
+    expect(inboxFilterOf({ leadStage: "NONSENSE" }, VIEWER)).toEqual({});
+  });
+
+  it("combines with a state filter rather than replacing it", () => {
+    expect(inboxFilterOf({ leadStage: "BOOKED", filter: "awaitingReply", channelAccountId: "ca_1" }, VIEWER)).toEqual({
+      leadStage: "BOOKED",
+      awaitingReply: true,
+      channelAccountId: "ca_1",
+    });
+  });
+});
+
 describe("the store filter a view asks for", () => {
   it("asks for conversations awaiting a reply", () => {
     expect(inboxFilterOf({ filter: "awaitingReply" }, VIEWER)).toEqual({ awaitingReply: true });

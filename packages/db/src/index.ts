@@ -33,6 +33,7 @@ export {
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
+export { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
 export {

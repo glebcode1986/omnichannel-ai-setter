@@ -632,3 +632,18 @@ a {
     padding: 0;
   }
 }
+
+/* The loading skeleton: a shape where a row will be, not a pretend conversation. */
+.skeleton-row {
+  display: block;
+  height: 44px;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.inbox-loaded-at {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  margin: var(--gap) 0 0;
+}

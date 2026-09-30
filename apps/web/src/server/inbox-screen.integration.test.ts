@@ -182,11 +182,54 @@ describe.skipIf(!databaseTestsEnabled())("the Inbox screen's query", () => {
     expect(await readConversation(db(), context, theirs)).toBeUndefined();
   }, 180_000);
 
-  it("shows the first page when the cursor in the URL is unusable", async () => {
-    const newest = await conversation({ name: "Stale Link", occurredAt: at(500) });
+  it("narrows to one connected account, and to one lead stage, and to both at once", async () => {
+    const onInstagram = await conversation({ name: "Stagey Instagram", occurredAt: at(900) });
+    const onWhatsapp = await conversation({ name: "Stagey Whatsapp", channelAccountId: whatsappAccountId, occurredAt: at(901) });
+    await db().conversation.update({ where: { id: onWhatsapp }, data: { leadStage: "BOOKED" } });
+    await db().conversation.update({ where: { id: onInstagram }, data: { leadStage: "BOOKED" } });
 
-    // A truncated or hand-edited cursor is a stale bookmark, not an error page.
-    expect((await screen({ cursor: "not-a-cursor" })).ids[0]).toBe(newest);
+    expect((await screen({ q: "Stagey", account: whatsappAccountId })).ids).toEqual([onWhatsapp]);
+    expect((await screen({ q: "Stagey", stage: "BOOKED" })).ids).toEqual([onWhatsapp, onInstagram]);
+    expect((await screen({ q: "Stagey", stage: "NEW" })).ids).toEqual([]);
+    // Both at once, which is the case a filter implemented as a spread would silently lose.
+    expect((await screen({ q: "Stagey", stage: "BOOKED", account: instagramAccountId })).ids).toEqual([onInstagram]);
+  }, 180_000);
+
+  it("ignores a lead stage the URL invented, rather than matching nothing at all", async () => {
+    const id = await conversation({ name: "Invented Stage", occurredAt: at(910) });
+
+    // A dropped filter shows more than asked for, which is visible; a filter passed through as a value
+    // the enum does not have would be a query error on a hand-edited link.
+    expect((await screen({ q: "Invented Stage", stage: "PLATINUM" })).ids).toEqual([id]);
+  }, 180_000);
+
+  it("reports the mode actually in force, not the conversation's empty override", async () => {
+    const id = await conversation({ name: "Inherits Mode", occurredAt: at(920) });
+    await db().automationPolicy.create({
+      data: {
+        workspaceId: context.workspaceId,
+        businessProfileId: context.businessProfileId,
+        channelAccountId: instagramAccountId,
+        mode: "AUTOPILOT",
+      },
+    });
+
+    const detail = await readConversation(db(), context, id);
+    const listed = (await listInbox(db(), context, { search: "Inherits Mode" })).rows[0];
+
+    // No override on the conversation, a policy on the account: the Inbox has to say AUTOPILOT, because
+    // reading the empty override as OFF would tell an operator automation was disabled while it ran.
+    expect(detail?.modeOverride).toBeNull();
+    expect(detail?.effectiveMode).toBe("AUTOPILOT");
+    expect(listed?.effectiveMode).toBe("AUTOPILOT");
+  }, 180_000);
+
+  it("shows the first page when the cursor in the URL is unusable", async () => {
+    const id = await conversation({ name: "Stale Link", occurredAt: at(500) });
+
+    // A truncated or hand-edited cursor is a stale bookmark, not an error page. Scoped by search rather
+    // than by "is it first", so the case does not depend on what the tests around it happened to create.
+    expect((await screen({ q: "Stale Link", cursor: "not-a-cursor" })).ids).toEqual([id]);
   }, 180_000);
 
   it("reads a conversation the list linked to, with its thread and its latest decision", async () => {

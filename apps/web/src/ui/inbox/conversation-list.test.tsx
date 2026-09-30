@@ -20,6 +20,11 @@ import { createTranslator } from "@/i18n/translate";
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
 const BASE = "/workspaces/ws_1/profiles/bp_1/inbox";
+const LEAD_STAGES = ["NEW", "ENGAGED", "QUALIFYING", "QUALIFIED", "BOOKED", "WON", "LOST"];
+const ACCOUNTS = [
+  { id: "ca_ig", channel: "INSTAGRAM", label: "@studio" },
+  { id: "ca_wa", channel: "WHATSAPP", label: "+34600111222" },
+] as const;
 
 afterEach(cleanup);
 
@@ -33,7 +38,8 @@ const row = (overrides: Partial<InboxRow> = {}): InboxRow => ({
   leadStage: "ENGAGED",
   takeoverState: "NONE",
   takeoverReviewMode: null,
-  mode: "DRAFT",
+  modeOverride: "DRAFT",
+  effectiveMode: "DRAFT",
   aiEnabled: true,
   lastMessageAt: new Date("2026-09-30T10:00:00.000Z"),
   awaitingReply: false,
@@ -99,11 +105,29 @@ describe("the conversation list", () => {
     expect(document.querySelectorAll('[data-takeover="REVIEW_REQUIRED"]')).toHaveLength(1);
   });
 
+  it("shows the AI mode in force on each row", () => {
+    render(
+      <ConversationList
+        t={t}
+        rows={[row({ id: "cv_a", modeOverride: null, effectiveMode: "AUTOPILOT" }), row({ id: "cv_b", modeOverride: "OFF", effectiveMode: "OFF" })]}
+        view={{}}
+        basePath={BASE}
+      />,
+    );
+
+    // Inherited AUTOPILOT has to show as AUTOPILOT: a badge built from the override would say OFF here,
+    // on the one conversation that is replying to customers unattended.
+    expect(document.querySelector('.conversation-row[data-selected="false"] [data-mode="AUTOPILOT"]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-mode="OFF"]')).toHaveLength(1);
+  });
+
   it("shows the lead stage as a word, not a code", () => {
     render(<ConversationList t={t} rows={[row({ leadStage: "QUALIFIED" })]} view={{}} basePath={BASE} />);
 
-    expect(screen.getByText(text("leadStage.QUALIFIED"))).toBeDefined();
-    expect(screen.queryByText("QUALIFIED")).toBeNull();
+    // Scoped to the row: the stage filter's own options carry the same words.
+    const rowElement = document.querySelector<HTMLElement>(".conversation-row") as HTMLElement;
+    expect(within(rowElement).getByText(text("leadStage.QUALIFIED"))).toBeDefined();
+    expect(within(rowElement).queryByText("QUALIFIED")).toBeNull();
   });
 
   it("links each row to its own URL", () => {
@@ -150,11 +174,43 @@ describe("the filters", () => {
   });
 
   it("carries the active filter through a search, so searching does not widen the view", () => {
-    render(<ConversationList t={t} rows={mixedChannels} view={{ filter: "mine", channelAccountId: "ca_wa" }} basePath={BASE} />);
+    render(
+      <ConversationList
+        t={t}
+        rows={mixedChannels}
+        view={{ filter: "mine", channelAccountId: "ca_wa", leadStage: "QUALIFIED" }}
+        basePath={BASE}
+        accounts={ACCOUNTS}
+      />,
+    );
 
     const form = screen.getByRole("search");
+    // The state filter is a link, so it rides along as a hidden field; the account and the stage are the
+    // form's own controls and have to come back pre-selected or applying a search would reset them.
     expect(form.querySelector('input[name="filter"]')?.getAttribute("value")).toBe("mine");
-    expect(form.querySelector('input[name="account"]')?.getAttribute("value")).toBe("ca_wa");
+    expect(screen.getByLabelText(text("inbox.filterChannel"))).toHaveProperty("value", "ca_wa");
+    expect(screen.getByLabelText(text("inbox.filterLeadStage"))).toHaveProperty("value", "QUALIFIED");
+  });
+
+  it("offers every connected account, and every channel as the default", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} />);
+
+    const select = screen.getByLabelText(text("inbox.filterChannel"));
+    expect([...select.querySelectorAll("option")].map((option) => option.getAttribute("value"))).toEqual(["", "ca_ig", "ca_wa"]);
+    expect(select).toHaveProperty("value", "");
+  });
+
+  it("hides the channel filter when the profile has no connected account to filter by", () => {
+    render(<ConversationList t={t} rows={[]} view={{}} basePath={BASE} accounts={[]} />);
+
+    expect(screen.queryByLabelText(text("inbox.filterChannel"))).toBeNull();
+  });
+
+  it("offers every lead stage the domain defines, in the domain's order", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} />);
+
+    const options = [...screen.getByLabelText(text("inbox.filterLeadStage")).querySelectorAll("option")];
+    expect(options.map((option) => option.getAttribute("value"))).toEqual(["", ...LEAD_STAGES]);
   });
 
   it("does not carry the cursor through a search", () => {
@@ -195,6 +251,43 @@ describe("paging", () => {
     render(<ConversationList t={t} rows={many} view={{}} basePath={BASE} nextCursor="Q2" />);
 
     expect(document.querySelectorAll(".conversation-row")).toHaveLength(30);
+  });
+});
+
+/**
+ * The states that are not "here are your conversations" (Issue #28).
+ *
+ * A server-rendered list is a snapshot, and the failure it invites is an operator watching a screen that
+ * looks live while a customer waits in a conversation that is not on it. So the pane says when it was
+ * rendered and offers the same URL back — reloading keeps the filters, which a browser refresh would too,
+ * but the link makes it something a person can find.
+ */
+describe("the stale view", () => {
+  it("says when it was loaded and offers the same view again", () => {
+    render(
+      <ConversationList
+        t={t}
+        rows={mixedChannels}
+        view={{ filter: "mine" }}
+        basePath={BASE}
+        loadedAt={new Date("2026-09-30T10:30:00.000Z")}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: text("inbox.reload") }).getAttribute("href")).toBe(`${BASE}?filter=mine`);
+    expect(document.querySelector(".inbox-loaded-at time")?.getAttribute("datetime")).toBe("2026-09-30T10:30:00.000Z");
+  });
+
+  it("keeps the cursor on the reload link, so the page someone is on is the page they get back", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{ cursor: "Q2" }} basePath={BASE} loadedAt={new Date()} />);
+
+    expect(screen.getByRole("link", { name: text("inbox.reload") }).getAttribute("href")).toBe(`${BASE}?cursor=Q2`);
+  });
+
+  it("says nothing about freshness when it was not told when it loaded", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} />);
+
+    expect(document.querySelector(".inbox-loaded-at")).toBeNull();
   });
 });
 
@@ -249,12 +342,16 @@ describe("the shared query string", () => {
 describe("keyboard operation", () => {
   it("reaches the search, the filters and the conversations by tabbing, in that order", async () => {
     const user = userEvent.setup();
-    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} nextCursor="Q2" />);
+    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
 
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
     await user.tab();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: text("inbox.searchApply") }));
+    expect(document.activeElement).toBe(screen.getByLabelText(text("inbox.filterChannel")));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByLabelText(text("inbox.filterLeadStage")));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: text("inbox.applyFilters") }));
     await user.tab();
     expect(document.activeElement?.textContent).toBe(text("inbox.filterAll"));
 
@@ -285,7 +382,8 @@ describe("the same list in Russian", () => {
     render(<ConversationList t={createTranslator("ru")} rows={mixedChannels} view={{}} basePath={BASE} />);
 
     expect(screen.getByText(catalogues.ru["inbox.filterAwaitingReply"])).toBeDefined();
-    expect(screen.getByText(catalogues.ru["leadStage.QUALIFIED"])).toBeDefined();
+    const waRow = document.querySelectorAll<HTMLElement>(".conversation-row")[1] as HTMLElement;
+    expect(within(waRow).getByText(catalogues.ru["leadStage.QUALIFIED"])).toBeDefined();
     // The preview is what the customer wrote. Translating it would be a lie about the conversation.
     expect(screen.getAllByText("Is Saturday free?").length).toBeGreaterThan(0);
   });

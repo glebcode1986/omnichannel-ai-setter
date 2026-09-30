@@ -1,7 +1,7 @@
 # Current Handoff
 
 **Date:** 2026-09-16  
-**Phase:** Phase 1 implementation in progress; Phase 2 Instagram/shared-AI fully specified; Phase 4 WhatsApp fully architected; Phase 5 SaaS UX fully specified/task-contracted  
+**Phase:** Stage D (Phase 5 SaaS UX) in progress; Phase 2 Instagram/shared-AI fully specified; Phase 4 WhatsApp fully architected; Phase 5 SaaS UX fully specified/task-contracted  
 **Repository:** `glebcode1986/omnichannel-ai-setter`
 
 ## Completed architecture/documentation
@@ -190,16 +190,33 @@ automation-policy rows the mode and limits came from. A claim whose facts have m
 state-changed, re-read and re-judged, and the change is normally what then cancels or holds the delivery.
 Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.md`.
 
+**The unified Inbox reads by cursor and admits what it does not know (#28 / PR pending).** One operational
+inbox over Instagram and WhatsApp, three panes on a desktop and one screen at a time on a phone. The view
+— search, filters, the open conversation, the page position — lives entirely in the URL, so a reload, the
+back button and a pasted link agree about it and the list works before JavaScript arrives. There are no
+read receipts: what an inbox calls unread is "the customer spoke last and nobody answered", so the filter
+says "Awaiting reply" and means it. Paging is `(lastMessageAt, id)` cursors over a bounded page rather
+than offsets, because an inbox reorders itself constantly and page two of an offset query repeats and
+skips rows. Two bugs came out of that work: the page returned a cursor whenever it *filled*, so data
+ending on a page boundary offered a "load older" link that loaded nothing — and in a refilled page the
+same mistake dropped every conversation behind the fill point outright. Mode badges show the mode in
+force, not the conversation's empty override, and the precedence now has one implementation
+(`packages/db/src/automation-mode.ts`) shared with the draft pipeline. The Inbox reads and does not act:
+approving and editing arrive with P5-03, and the panel says so rather than showing disabled buttons. See
+the implementation notes in `docs/specs/PRODUCT_UX.md`.
+
 ## Immediate next actions
 
-1. **P5-10 / Issue #58 is the open work.** EN/RU localization on `feat/p5-10-localization`, stacked on
-   P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
-   `MVP_RELEASE_SCOPE.md` alone.
-2. **P5-01 / Issue #27 is in review as PR #73.** The workspace shell and resumable setup surface on
-   `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
-3. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
-   from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts` fails the build otherwise.
-3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
+1. **#28 / P5-02 is the open work.** The unified Inbox on `feat/p5-02-unified-inbox`, stacked on P5-10.
+2. **PR #73 (P5-01) and PR #74 (P5-10) are awaiting review.** Both are CI-green with evidence posted.
+   Fixes for either go to the earliest affected branch and merge down the chain.
+3. **P5-03 / Issue #29 (Review queue and composer) is next in MASTER #61's order.** The Inbox deliberately
+   left the composer and every review action to it, and the context pane already says so in words.
+4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+   fails the build otherwise. New Inbox panes are also held by
+   `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
+   or names a provider payload type.
+5. No rebases, no force-pushes, and no merges to `main`.
 4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 

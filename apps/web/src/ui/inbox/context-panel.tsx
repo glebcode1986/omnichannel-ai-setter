@@ -54,9 +54,14 @@ export function ContextPanel({ t, conversation }: ContextPanelProps) {
         <p className="muted" data-channel={conversation.channel}>
           {t.t(`channel.${conversation.channel}` as MessageKey)}
         </p>
-        {/* The effective mode, which is the conversation's override when it has one. */}
-        <p className="muted" data-mode={conversation.mode ?? "INHERITED"}>
-          {conversation.mode === null ? t.t("aiMode.OFF") : modeLabel(t, conversation.mode)}
+        {/*
+          The mode in force, and where it came from. The conversation's override is not the effective
+          mode — a conversation with no override inherits the channel's policy, and reading `null` as
+          "off" would tell an operator automation was disabled when it was running.
+        */}
+        <p data-mode={conversation.effectiveMode}>{modeLabel(t, conversation.effectiveMode)}</p>
+        <p className="muted" data-mode-source={conversation.modeOverride === null ? "INHERITED" : "OVERRIDE"}>
+          {conversation.modeOverride === null ? t.t("context.modeInherited") : t.t("context.modeOverridden")}
         </p>
         <dl className="context-times">
           <dt>{t.t("context.lastInbound")}</dt>

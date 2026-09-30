@@ -43,6 +43,8 @@ export default async function ConversationPage({
         rows={screen.page.rows}
         view={screen.view}
         basePath={screen.basePath}
+        accounts={screen.accounts}
+        loadedAt={screen.loadedAt}
         selectedId={conversationId}
         {...(screen.nextCursor === undefined ? {} : { nextCursor: screen.nextCursor })}
       />

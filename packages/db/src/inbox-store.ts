@@ -25,6 +25,7 @@
  */
 import type { ConversationStatus, LeadStage } from "@omnichannel/domain";
 
+import { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 import type { DbExecutor } from "./client";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
@@ -63,7 +64,10 @@ export interface InboxRow {
   readonly leadStage: LeadStage;
   readonly takeoverState: string;
   readonly takeoverReviewMode: string | null;
-  readonly mode: string | null;
+  /** The conversation's own override, or `null` when it inherits. Not the mode in force — see below. */
+  readonly modeOverride: string | null;
+  /** The mode actually in force: the override, else this account's policy, else the profile's, else OFF. */
+  readonly effectiveMode: string;
   readonly aiEnabled: boolean;
   readonly lastMessageAt: Date;
   readonly awaitingReply: boolean;
@@ -95,6 +99,10 @@ export async function listInbox(
   const scope = profileScopeOf(context);
   const limit = Math.min(Math.max(Math.trunc(page.limit ?? DEFAULT_PAGE), 1), MAX_PAGE);
 
+  // One read for the page: the precedence rule needs the profile's policies, and asking per row would
+  // be a query per conversation on every screen.
+  const policies = await readModePolicies(db, scope);
+
   const kept: InboxRow[] = [];
   let cursor = page.cursor;
   let more = false;
@@ -116,7 +124,7 @@ export async function listInbox(
       if (filter.awaitingReply === true && !isAwaitingReply(row)) {
         continue;
       }
-      kept.push(toInboxRow(row));
+      kept.push(toInboxRow(row, policies));
       if (kept.length === limit) {
         // The page is full. The cursor is this row, not the batch's end, or the next page would skip
         // whatever sat between them.
@@ -142,7 +150,7 @@ function isAwaitingReply(row: { lastInboundAt: Date | null; lastOutboundAt: Date
   return row.lastInboundAt !== null && (row.lastOutboundAt === null || row.lastInboundAt.getTime() > row.lastOutboundAt.getTime());
 }
 
-function toInboxRow(row: InboxRecord): InboxRow {
+function toInboxRow(row: InboxRecord, policies: readonly ModePolicyRow[]): InboxRow {
   return {
     id: row.id,
     channelAccountId: row.channelAccountId,
@@ -153,7 +161,8 @@ function toInboxRow(row: InboxRecord): InboxRow {
     leadStage: row.leadStage,
     takeoverState: row.takeoverState,
     takeoverReviewMode: row.takeoverReviewMode,
-    mode: row.modeOverride,
+    modeOverride: row.modeOverride,
+    effectiveMode: resolveEffectiveMode(row.modeOverride, row.channelAccountId, policies),
     aiEnabled: row.aiEnabled,
     lastMessageAt: row.lastMessageAt,
     awaitingReply: isAwaitingReply(row),
@@ -273,7 +282,10 @@ export interface ConversationDetail {
   readonly handle: string;
   readonly status: string;
   readonly leadStage: string;
-  readonly mode: string | null;
+  /** The conversation's own override, or `null` when it inherits. */
+  readonly modeOverride: string | null;
+  /** The mode actually in force. See `automation-mode.ts` for the precedence. */
+  readonly effectiveMode: string;
   readonly aiEnabled: boolean;
   readonly takeoverState: string;
   readonly takeoverReason: string | null;
@@ -361,6 +373,7 @@ export async function readConversation(
   }
 
   const draft = row.aiDrafts[0];
+  const policies = await readModePolicies(db, scope);
   return {
     id: row.id,
     channel: row.channelIdentity.channelAccount.channel,
@@ -370,7 +383,8 @@ export async function readConversation(
     handle: row.channelIdentity.username ?? row.channelIdentity.externalUserId,
     status: row.status,
     leadStage: row.leadStage,
-    mode: row.modeOverride,
+    modeOverride: row.modeOverride,
+    effectiveMode: resolveEffectiveMode(row.modeOverride, row.channelAccountId, policies),
     aiEnabled: row.aiEnabled,
     takeoverState: row.takeoverState,
     takeoverReason: row.takeoverReason,

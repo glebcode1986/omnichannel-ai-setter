@@ -333,6 +333,48 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     expect((await listInbox(db(), context, { takeover: "REVIEW_REQUIRED" })).rows).toHaveLength(0);
   }, 180_000);
 
+  /**
+   * The mode the Inbox is allowed to show.
+   *
+   * Three cases, because the precedence only means something when they disagree: a conversation with no
+   * override inherits the account's policy, an override beats that policy, and nothing written anywhere
+   * is `OFF`. The middle one is the operator's own switch — someone turning automation off for one
+   * customer — and an Inbox that displayed the policy instead would report a reply as automatic when it
+   * was not going to be sent at all.
+   */
+  it("reports the mode in force, whichever level wrote it", async () => {
+    const inherits = await conversation({ name: "Mode Inherits", occurredAt: at(600) });
+    const overrides = await conversation({ name: "Mode Overrides", occurredAt: at(601) });
+    const unpoliced = await conversation({ name: "Mode Unpoliced", channelAccountId: whatsappAccountId, occurredAt: at(602) });
+
+    await db().automationPolicy.create({
+      data: {
+        workspaceId: context.workspaceId,
+        businessProfileId: context.businessProfileId,
+        channelAccountId: instagramAccountId,
+        mode: "AUTOPILOT",
+      },
+    });
+    await db().conversation.update({ where: { id: overrides }, data: { modeOverride: "OFF" } });
+
+    const rows = new Map((await listInbox(db(), context, { search: "Mode " })).rows.map((row) => [row.id, row]));
+
+    expect(rows.get(inherits)?.effectiveMode, "no override, so the account's policy is in force").toBe("AUTOPILOT");
+    expect(rows.get(overrides)?.effectiveMode, "the conversation's own OFF beats the account's AUTOPILOT").toBe("OFF");
+    expect(rows.get(unpoliced)?.effectiveMode, "no policy for this account and no profile default").toBe("OFF");
+    // The override is still reported as itself, so the panel can say where the mode came from.
+    expect(rows.get(inherits)?.modeOverride).toBeNull();
+    expect(rows.get(overrides)?.modeOverride).toBe("OFF");
+
+    // And the detail read has to agree with the list, including for the conversation that inherits —
+    // the case where reading the override alone would answer OFF while automation was on AUTOPILOT.
+    expect((await readConversation(db(), context, overrides))?.effectiveMode).toBe("OFF");
+    const inherited = await readConversation(db(), context, inherits);
+    expect(inherited?.effectiveMode).toBe("AUTOPILOT");
+    expect(inherited?.modeOverride).toBeNull();
+    expect((await readConversation(db(), context, unpoliced))?.effectiveMode).toBe("OFF");
+  }, 180_000);
+
   it("filters by lead stage", async () => {
     const qualified = await conversation({ name: "Qualified Lead", occurredAt: at(700) });
     await db().conversation.update({
