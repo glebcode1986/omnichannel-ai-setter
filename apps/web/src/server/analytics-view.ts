@@ -69,17 +69,31 @@ export function parseAnalyticsView(params: RawSearchParams): AnalyticsView {
   const zone = one(params["tz"]);
   const mode = one(params["mode"]);
   const stage = one(params["stage"]);
+  // Read once each. Calling `one()` twice per field to test it and then use it was how three
+  // unnecessary casts got in: the second call's type had no memory of the first one's check.
+  const account = one(params["account"]);
+  const owner = one(params["owner"]);
+  const term = one(params["q"]);
   return {
-    range: RANGE_PRESETS.includes(range as RangePreset) ? (range as RangePreset) : DEFAULT_RANGE,
+    range: isRangePreset(range) ? range : DEFAULT_RANGE,
     timeZone: zone !== undefined && isTimeZone(zone) ? zone : FALLBACK_TIME_ZONE,
-    ...(one(params["account"]) === undefined ? {} : { channelAccountId: one(params["account"]) as string }),
-    ...(AI_MODES.includes(mode as AiMode) ? { mode: mode as AiMode } : {}),
+    ...(account === undefined ? {} : { channelAccountId: account }),
+    ...(isAiMode(mode) ? { mode } : {}),
     // Validated against the domain's own list: a stage nobody defined is dropped rather than queried.
     ...(isLeadStage(stage) ? { leadStage: stage } : {}),
-    ...(one(params["owner"]) === undefined ? {} : { assignedUserId: one(params["owner"]) as string }),
+    ...(owner === undefined ? {} : { assignedUserId: owner }),
     kinds: many(params["kind"]).filter((kind) => isAuditEventKind(kind)),
-    ...(one(params["q"]) === undefined ? {} : { term: one(params["q"]) as string }),
+    ...(term === undefined ? {} : { term }),
   };
+}
+
+/** Narrowing guards, so a validated value keeps its narrowed type instead of needing a cast. */
+function isRangePreset(value: string | undefined): value is RangePreset {
+  return value !== undefined && RANGE_PRESETS.includes(value as RangePreset);
+}
+
+function isAiMode(value: string | undefined): value is AiMode {
+  return value !== undefined && AI_MODES.includes(value as AiMode);
 }
 
 /** The days a preset covers, ending at the reader's current local day inclusive. */

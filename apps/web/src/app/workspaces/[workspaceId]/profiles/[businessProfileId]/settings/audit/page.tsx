@@ -17,7 +17,7 @@ import { requestTranslator } from "@/i18n/request-locale";
 import { requireBusinessProfileContext, requireWorkspaceContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
 import { listAssignableMembers, listChannelAccounts, readStageDisplays } from "@omnichannel/db";
-import { analyticsQueryString, isFilteredView, parseAnalyticsView, windowOf, type RawSearchParams } from "@/server/analytics-view";
+import { analyticsQueryString, isFilteredView, parseAnalyticsView, windowOf, type AnalyticsView, type RawSearchParams } from "@/server/analytics-view";
 
 export default async function AuditPage({
   params,
@@ -79,16 +79,23 @@ export default async function AuditPage({
         rows={page.rows}
         restricted={page.restricted}
         timeZone={view.timeZone}
-        {...(page.nextCursor === undefined
-          ? {}
-          : {
-              olderHref: `${basePath}/settings/audit${analyticsQueryString(view)}${analyticsQueryString(view) === "" ? "?" : "&"}before=${encodeURIComponent(
-                `${page.nextCursor.occurredAt.toISOString()}|${page.nextCursor.id}`,
-              )}`,
-            })}
+        {...(page.nextCursor === undefined ? {} : { olderHref: olderPage(`${basePath}/settings/audit`, view, page.nextCursor) })}
       />
     </>
   );
+}
+
+/**
+ * The link to the next page, carrying the filters the reader chose.
+ *
+ * Built by `URLSearchParams` rather than by concatenating a query string and guessing whether it needs a
+ * `?` or an `&`. The guess was the bug waiting to happen: an unfiltered view produces an empty string,
+ * and the same helper was being called twice to ask what it had just returned.
+ */
+function olderPage(path: string, view: AnalyticsView, cursor: { readonly occurredAt: Date; readonly id: string }): string {
+  const params = new URLSearchParams(analyticsQueryString(view).replace(/^\?/u, ""));
+  params.set("before", `${cursor.occurredAt.toISOString()}|${cursor.id}`);
+  return `${path}?${params.toString()}`;
 }
 
 /**

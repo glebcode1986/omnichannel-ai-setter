@@ -15,7 +15,31 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — P3-02 / Issue #55
+### Current work — P5-08 / Issue #34
+
+**Branch `feat/p5-08-analytics-audit`**, stacked on P3-02. Operational analytics and a searchable,
+append-only audit log. The owner's directive on PR #81 placed this after P3-02, and it was held back until
+#82 was complete; the branch was then brought onto P3-02 by an ordinary merge rather than a rebase.
+
+**`docs/specs/ANALYTICS_DEFINITIONS.md` is written by this task** and is the definition of record: the
+store is the only implementation of any metric in it, because a metric with two implementations has two
+values and the day somebody notices is the day they stop trusting the page.
+
+**The hard invariant shapes the return type, not just the UI.** `deliveryOutcomes` has separate
+`application` and `provider` groups that are never summed. Outbound messages the provider has not spoken
+about are `awaitingReport`, which is the honest name for them — counting them as delivered because our own
+send succeeded is exactly the inference the separation exists to prevent.
+
+**`AMBIGUOUS_SEND_RESOLVED` has no writer, deliberately.** The spec asks for ambiguous-send *manual*
+resolution and there is no manual resolution path in the product yet; the worker's automatic reconciliation
+is not somebody's action, and recording it as one would put a name against something nobody did. The enum
+value stays so the log can record it the day that path exists.
+
+**Audit lives under Settings**, at `/settings/audit`, because `PRODUCT_UX.md` already places
+"security/audit" there and the seven navigation sections it names are product structure. An eighth
+top-level section would be a decision about the product rather than about this task.
+
+### Previous — P3-02 / Issue #55
 
 **Branch `feat/p3-02-goals-followups`**, based on P3-01's accepted head
 `13212612bb0ac73b2468c1adc99b1c5e48008c16` (verified before branching, and `e15c809` — #76's human
