@@ -202,6 +202,70 @@ enum AuditActorKind {
   SYSTEM
 }
 
+/// What a conversation is for (GOALS_FOLLOWUPS.md, Issue #55). `NONE` means explicitly nothing further.
+enum ConversationGoalKind {
+  ANSWER_QUESTION
+  BOOK_APPOINTMENT
+  QUALIFY_LEAD
+  COLLECT_DETAILS
+  CONFIRM_ATTENDANCE
+  RESOLVE_COMPLAINT
+  NONE
+}
+
+enum GoalStatus {
+  ACTIVE
+  ACHIEVED
+  ABANDONED
+}
+
+/// A model may propose a goal; only a person makes it the conversation's own.
+enum GoalSource {
+  AI_SUGGESTED
+  HUMAN_SET
+}
+
+enum FollowUpStatus {
+  PENDING
+  SENT
+  BLOCKED
+  CANCELLED
+  SUPERSEDED
+  EXHAUSTED
+}
+
+/// Why a follow-up stopped. Closed, so "why was this customer not chased" has an answer.
+enum FollowUpStopReason {
+  NEW_INBOUND
+  HUMAN_TAKEOVER
+  REVIEW_PENDING
+  OPTED_OUT
+  ENTITLEMENT_LOST
+  CHANNEL_INELIGIBLE
+  GOAL_TERMINAL
+  STALE_ANCHOR
+  MAX_ATTEMPTS
+  HUMAN_CANCELLED
+  SUPERSEDED_BY_NEWER
+  CONVERSATION_CLOSED
+}
+
+enum HumanTaskStatus {
+  OPEN
+  DONE
+  DISMISSED
+}
+
+enum HumanTaskKind {
+  CALL_CUSTOMER
+  CHECK_AVAILABILITY
+  PREPARE_QUOTE
+  VERIFY_DETAILS
+  ESCALATE_INTERNALLY
+  REVIEW_CONVERSATION
+  OTHER
+}
+
 enum MessageDirection {
   IN
   OUT
@@ -408,6 +472,13 @@ model User {
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
   auditEvents        AuditEvent[]
+  goalsSet             ConversationGoal[]
+  followUpsCreated     FollowUp[]
+  tasksAssigned        HumanTask[] @relation("HumanTaskAssignee")
+  tasksCreated         HumanTask[] @relation("HumanTaskCreator")
+  tasksCompleted       HumanTask[] @relation("HumanTaskCompleter")
+  suppressionsRecorded FollowUpSuppression[] @relation("SuppressionRecorder")
+  suppressionsLifted   FollowUpSuppression[] @relation("SuppressionLifter")
   @@map("users")
 }
 
@@ -470,6 +541,10 @@ model Workspace {
   leadQualificationAnswers LeadQualificationAnswer[]
 
   auditEvents        AuditEvent[]
+  conversationGoals    ConversationGoal[]
+  followUps            FollowUp[]
+  humanTasks           HumanTask[]
+  followUpSuppressions FollowUpSuppression[]
   @@map("workspaces")
 }
 
@@ -517,6 +592,7 @@ model BusinessProfile {
   policyChangeAudits PolicyChangeAudit[]
 
   auditEvents        AuditEvent[]
+  humanTasks           HumanTask[]
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("business_profiles")
@@ -699,6 +775,7 @@ model Contact {
   duplicateCandidates DuplicateContactCandidate[] @relation("DuplicateCandidateContact")
   duplicateCandidateOf DuplicateContactCandidate[] @relation("DuplicateCandidateOther")
 
+  followUpSuppressions FollowUpSuppression[]
   @@unique([workspaceId, businessProfileId, id])
   @@map("contacts")
 }
@@ -777,6 +854,9 @@ model Conversation {
 
   summary                  ConversationSummary?
 
+  goals                ConversationGoal[]
+  followUps            FollowUp[]
+  humanTasks           HumanTask[]
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, channelAccountId, id])
   /// One thread per provider participant per channel account (platform DM threads are 1:1).
@@ -1026,6 +1106,8 @@ model Message {
 
   customerFacts           CustomerFact[]
 
+  followUpAnchors      FollowUp[]
+  suppressionSources   FollowUpSuppression[]
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, conversationId, id])
   @@unique([workspaceId, businessProfileId, channelAccountId, channelMessageId], map: "messages_channel_message_key")
@@ -1094,6 +1176,8 @@ model AiDraft {
 
   customerFacts     CustomerFact[]
 
+  goalSuggestions      ConversationGoal[]
+  taskSuggestions      HumanTask[]
   @@unique([workspaceId, businessProfileId, id])
   /// One draft per logical generation, so a retried job is idempotent.
   @@unique([workspaceId, businessProfileId, generationKey], map: "ai_drafts_generation_key")
@@ -1459,6 +1543,148 @@ model AuditEvent {
   @@index([workspaceId, channelAccountId, occurredAt(sort: Desc)], map: "audit_events_channel_idx")
   @@index([workspaceId, conversationId, occurredAt(sort: Desc)], map: "audit_events_conversation_idx")
   @@map("audit_events")
+}
+
+// Goals, follow-ups and human tasks (P3-02): bounded goal execution, with the bounds in the database.
+// ---------------------------------------------------------------------------------------------------------
+
+model ConversationGoal {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String               @map("workspace_id")
+  businessProfileId String               @map("business_profile_id")
+  conversationId    String               @map("conversation_id")
+  kind              ConversationGoalKind
+  /// One active primary per conversation, which a partial unique index enforces: two would be two answers
+  /// to "what are we trying to do here".
+  isPrimary         Boolean              @map("is_primary")
+  status            GoalStatus           @default(ACTIVE)
+  source            GoalSource
+  /// Set exactly when a person decided; a CHECK holds the pair with `sourceDraftId`.
+  setByUserId       String?              @map("set_by_user_id")
+  sourceDraftId     String?              @map("source_draft_id")
+  note              String?
+  achievedAt        DateTime?            @map("achieved_at")
+  abandonedAt       DateTime?            @map("abandoned_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  conversation Conversation @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "conversation_goals_conversation_fkey")
+  setByUser    User?        @relation(fields: [setByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "conversation_goals_actor_fkey")
+  sourceDraft  AiDraft?     @relation(fields: [workspaceId, businessProfileId, sourceDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "conversation_goals_draft_fkey")
+  followUps    FollowUp[]
+
+  /// One active primary goal per conversation. Partial, because history must stay: a conversation that
+  /// achieved one goal and then took another has two rows and only one of them is current.
+  @@unique([workspaceId, businessProfileId, conversationId], where: raw("status = 'ACTIVE' AND is_primary"), map: "conversation_goals_active_primary_key")
+  @@index([workspaceId, businessProfileId, conversationId, createdAt(sort: Desc)], map: "conversation_goals_history_idx")
+  @@map("conversation_goals")
+}
+
+model FollowUp {
+  id                  String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String              @map("workspace_id")
+  businessProfileId   String              @map("business_profile_id")
+  conversationId      String              @map("conversation_id")
+  /// Required: a follow-up with no goal is chasing somebody for no stated reason.
+  goalId              String              @map("goal_id") @db.Uuid
+  status              FollowUpStatus      @default(PENDING)
+  dueAt               DateTime            @map("due_at")
+  /// The state this was planned against, revalidated at execution.
+  anchorMessageId     String              @map("anchor_message_id")
+  anchorStateVersion  Int                 @map("anchor_state_version")
+  attemptCount        Int                 @default(0) @map("attempt_count")
+  /// Bounded in the database: 1 to 5, and `attemptCount` never above it.
+  maxAttempts         Int                 @default(3) @map("max_attempts")
+  /// The Business Profile's own sending window, half-open and never zero-width.
+  daypartTimeZone     String              @map("daypart_time_zone")
+  daypartStartHour    Int                 @map("daypart_start_hour")
+  daypartEndHour      Int                 @map("daypart_end_hour")
+  stopReason          FollowUpStopReason? @map("stop_reason")
+  createdByUserId     String?             @map("created_by_user_id")
+  /// Set when an attempt reached the shared coordinator, so a follow-up and its send can be joined.
+  deliveryOperationId String?             @map("delivery_operation_id")
+  lastAttemptAt       DateTime?           @map("last_attempt_at")
+  settledAt           DateTime?           @map("settled_at")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  workspace    Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  conversation Conversation     @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "follow_ups_conversation_fkey")
+  goal         ConversationGoal @relation(fields: [goalId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "follow_ups_goal_fkey")
+  anchor       Message          @relation(fields: [workspaceId, businessProfileId, anchorMessageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "follow_ups_anchor_fkey")
+  createdBy    User?            @relation(fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "follow_ups_creator_fkey")
+
+  /// The duplicate-job guard. An index rather than a check in code, because the race it prevents is two
+  /// workers planning a follow-up at the same moment: whichever commits second is refused by the database,
+  /// which is the only place that can see both.
+  @@unique([workspaceId, businessProfileId, conversationId], where: raw("status = 'PENDING'"), map: "follow_ups_pending_conversation_key")
+  @@index([status, dueAt], map: "follow_ups_due_idx")
+  @@index([workspaceId, businessProfileId, status, dueAt], map: "follow_ups_profile_idx")
+  @@map("follow_ups")
+}
+
+/// Work for a person.
+///
+/// Note what is absent: no draft to send, no operation id, no delivery relation. That is the mechanism by
+/// which completing a task can never message a customer — there is nothing here for a send path to hold.
+model HumanTask {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id")
+  businessProfileId String          @map("business_profile_id")
+  /// Absent for a task about the business rather than one conversation.
+  conversationId    String?         @map("conversation_id")
+  kind              HumanTaskKind
+  status            HumanTaskStatus @default(OPEN)
+  title             String
+  detail            String?
+  dueAt             DateTime?       @map("due_at")
+  assignedUserId    String?         @map("assigned_user_id")
+  createdByUserId   String?         @map("created_by_user_id")
+  /// A model may raise a task, which is safe precisely because a task cannot send anything.
+  sourceDraftId     String?         @map("source_draft_id")
+  completedByUserId String?         @map("completed_by_user_id")
+  completedAt       DateTime?       @map("completed_at")
+  dismissedReason   String?         @map("dismissed_reason")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_business_profile_fkey")
+  conversation    Conversation?   @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_conversation_fkey")
+  assignedUser    User?           @relation("HumanTaskAssignee", fields: [assignedUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_assignee_fkey")
+  createdByUser   User?           @relation("HumanTaskCreator", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_creator_fkey")
+  completedByUser User?           @relation("HumanTaskCompleter", fields: [completedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_completer_fkey")
+  sourceDraft     AiDraft?        @relation(fields: [workspaceId, businessProfileId, sourceDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "human_tasks_draft_fkey")
+
+  @@index([workspaceId, businessProfileId, status, dueAt], map: "human_tasks_queue_idx")
+  @@index([workspaceId, businessProfileId, assignedUserId, status], map: "human_tasks_assignee_idx")
+  @@map("human_tasks")
+}
+
+/// A customer who asked not to be chased. Its own table because it is a claim with provenance.
+model FollowUpSuppression {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id")
+  businessProfileId String    @map("business_profile_id")
+  contactId         String    @map("contact_id")
+  reason            String
+  recordedByUserId  String?   @map("recorded_by_user_id")
+  sourceMessageId   String?   @map("source_message_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  /// Only a person lifts an opt-out. Nothing expires on its own.
+  liftedAt          DateTime? @map("lifted_at")
+  liftedByUserId    String?   @map("lifted_by_user_id")
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  contact       Contact   @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "followup_suppressions_contact_fkey")
+  recordedBy    User?     @relation("SuppressionRecorder", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "followup_suppressions_recorder_fkey")
+  liftedBy      User?     @relation("SuppressionLifter", fields: [liftedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "followup_suppressions_lifter_fkey")
+  sourceMessage Message?  @relation(fields: [workspaceId, businessProfileId, sourceMessageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "followup_suppressions_message_fkey")
+
+  /// One live suppression per customer per profile, so "are they opted out" is one row and not a count.
+  @@unique([workspaceId, businessProfileId, contactId], where: raw("lifted_at IS NULL"), map: "followup_suppressions_live_key")
+  @@map("followup_suppressions")
 }
 
 // ---------------------------------------------------------------------------------------------------------

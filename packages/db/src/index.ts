@@ -240,6 +240,43 @@ export {
   type TakeoverRate,
   type VolumePoint,
 } from "./analytics-store";
+export {
+  closeGoal,
+  readGoals,
+  setNextAction,
+  setPrimaryGoal,
+  suggestGoal,
+  type GoalOutcome,
+  type GoalView,
+} from "./goal-store";
+export {
+  cancelFollowUp,
+  cancelPendingFollowUps,
+  claimFollowUp,
+  dueFollowUps,
+  hourIn,
+  isSuppressed,
+  liftSuppression,
+  nextOpening,
+  planFollowUp,
+  readFollowUps,
+  recordFollowUpSent,
+  suppressFollowUps,
+  type FollowUpClaim,
+  type FollowUpOutcome,
+  type FollowUpView,
+} from "./followup-store";
+export {
+  assignTask,
+  completeTask,
+  createTask,
+  dismissTask,
+  listTasks,
+  suggestTask,
+  type TaskFilter,
+  type TaskOutcome,
+  type TaskView,
+} from "./human-task-store";
 export * from "./repositories/conversations";
 export * from "./repositories/messages";
 export * from "./repositories/workspaces";

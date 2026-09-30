@@ -41,8 +41,10 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**Stage D's Phase 5 surfaces are implemented** as PRs #73–#80, each stacked on its predecessor and each
-CI-green with evidence posted. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #82**, each branch stacked on its predecessor and each CI-green with evidence
+posted. PRs #73–#81 are completed by Claude and awaiting review; **#82 / P3-02 is the current task**.
+**Next after it is P5-08 / Issue #34**, per the owner's directive on PR #81 — and not before; that work
+exists on a local branch and is deliberately unpublished. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -52,7 +54,12 @@ head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, *
 Everything is one stacked chain of unmerged PRs, each branch based on its parent:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+
+**The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer — *after*
+#77 had been cut from it, so #77 through #81 were all missing the human-composed send path. It was merged
+down through each in order, verified and pushed. A correct PR base does **not** mean a branch contains its
+parent: check every link with `git merge-base --is-ancestor <parent> <child>` before building on one.
 
 | PR | Task | Issue |
 | --- | --- | --- |
@@ -65,6 +72,7 @@ Everything is one stacked chain of unmerged PRs, each branch based on its parent
 | #79 | P5-04 AI settings + no-send simulation | #30 |
 | #80 | P5-07 Leads pipeline | #33 |
 | #81 | P3-01 customer identity, search and memory | #54 |
+| #82 | P3-02 goals, follow-ups and human tasks | #55 |
 
 The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
 under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
@@ -237,30 +245,39 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **#54 / P3-01 is the latest work**, as PR #81 on `feat/p3-01-customer-identity-memory`, stacked on
-   P5-07. It adds the customer identity and durable-memory primitives with no UI; see
-   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which the issue referenced and the repository did not have.
-2. **PRs #73–#81 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+1. **#55 / P3-02 is the current work**, as PR #82 on `feat/p3-02-goals-followups`, stacked on P3-01's
+   accepted head `13212612bb0ac73b2468c1adc99b1c5e48008c16`. Conversation goals, bounded follow-ups and
+   human tasks, with no UI; see `docs/specs/GOALS_FOLLOWUPS.md`, which the issue referenced and the
+   repository did not have.
+   - Every follow-up is revalidated at execution rather than at planning, and a `READY` claim goes to the
+     **shared delivery coordinator**. There is no second send path.
+   - Attempts are bounded by CHECK constraints (1–5), so "no unlimited chasing" survives a careless
+     caller, a migration and a console session.
+   - `human_tasks` has no draft, operation or delivery column at all, which is how "completing a task
+     never messages a customer" holds without anybody remembering it.
+2. **#54 / P3-01 is accepted** at `13212612bb0ac73b2468c1adc99b1c5e48008c16`; see
+   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
+3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
    the earliest affected branch and merge down the chain.
-3. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+4. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
    owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
    all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
    order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
    `git merge-base --is-ancestor <parent> <child>`.
-4. **P5-08 / Issue #34 (Analytics + Audit) is the next Phase 5 surface**, and #35 P5-09 (E2E,
-   accessibility, responsive) follows it. Analytics must count the human-composed send path as well as the
-   automated one, which is the reason the repair above came first.
-5. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+5. **P5-08 / Issue #34 (Analytics + Audit) is next after #82**, per the owner's directive on PR #81, and
+   #35 P5-09 (E2E, accessibility, responsive) follows it. Analytics must count the human-composed send
+   path as well as the automated one, which is the reason the repair above came first.
+6. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
    require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
    so that is a decision, not a display preference.
-6. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+7. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
    or names a provider payload type. New tables are held by the cascade guard in
    `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
    foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
-7. No rebases, no force-pushes, and no merges to `main`.
-8. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+8. No rebases, no force-pushes, and no merges to `main`.
+9. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
