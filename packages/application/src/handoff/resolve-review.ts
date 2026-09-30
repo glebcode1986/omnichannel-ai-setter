@@ -67,7 +67,16 @@ export type ReviewDecision =
   /** Someone else got there first; their decision stands and this one changes nothing. */
   | { readonly kind: "ALREADY_RESOLVED" }
   | { readonly kind: "GONE" }
-  | { readonly kind: "FOREIGN_CONVERSATION" };
+  | { readonly kind: "FOREIGN_CONVERSATION" }
+  /**
+   * The customer wrote again, so this draft answers a question they have already replaced.
+   *
+   * Refused for sends only, and refused by the store inside the transaction that would have created the
+   * delivery — a check made earlier can be overtaken by an inbound message arriving before the commit.
+   * Dismissing and claiming a stale draft are still allowed: neither sends anything, and somebody has to
+   * be able to clear the item.
+   */
+  | { readonly kind: "STALE" };
 
 export interface ReviewStore {
   /**
@@ -149,6 +158,7 @@ export type ReviewOutcome =
   | { readonly status: "CLAIMED" }
   | { readonly status: "ALREADY_RESOLVED" }
   | { readonly status: "GONE" }
+  | { readonly status: "STALE" }
   | { readonly status: "REJECTED"; readonly reason: string };
 
 export async function resolveReview(dependencies: ReviewDependencies, command: ReviewCommand): Promise<ReviewOutcome> {
@@ -226,7 +236,12 @@ function outcomeOf(dependencies: ReviewDependencies, fields: Readonly<Record<str
       return { status: "DISMISSED" };
     case "SCHEDULED":
       return { status: "SCHEDULED", operationId: decision.operationId, edited: false };
-
+    case "STALE":
+      // Not a refusal of the person, and not a race with a colleague: their customer wrote again. Logged
+      // as its own event, because "somebody else resolved this" would send them looking for a colleague
+      // who did nothing.
+      dependencies.log.info("review.stale", fields);
+      return { status: "STALE" };
   }
 }
 

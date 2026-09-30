@@ -56,6 +56,7 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
   });
 
   const db = () => database.db;
+  const profileScope = () => ({ workspaceId: context.workspaceId, businessProfileId: context.businessProfileId });
 
   /** A conversation with one inbound message, so it has a preview and a last-message time. */
   const conversation = async (options: {
@@ -113,6 +114,47 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     expect(page.rows.map((row) => row.contactName)).not.toContain("Someone Else");
     expect((await listInbox(db(), neighbour)).rows.map((row) => row.contactName)).toEqual(["Someone Else"]);
   }, 180_000);
+
+  /** A draft plus a delivery in the given state, which is what "waiting to be sent" looks like. */
+  const pendingDelivery = async (conversationId: string, status: "SCHEDULED" | "SENDING", scheduledFor: Date) => {
+    seq += 1;
+    const draft = await db().aiDraft.create({
+      data: {
+        ...profileScope(),
+        conversationId,
+        anchorMessageId: (await db().message.findFirstOrThrow({ where: { conversationId }, select: { id: true } })).id,
+        anchorStateVersion: 1,
+        generationKey: `pending_${String(seq)}`,
+        text: "Queued reply",
+        // A usable draft carries both the text and the structured output the CHECK insists on: a reply
+        // with no record of what the model actually returned cannot be audited afterwards.
+        structuredOutput: { reply: "Queued reply" },
+        confidence: 0.9,
+        modelSuggestsSend: true,
+        needsReview: false,
+        status: "SCHEDULED",
+        modelProvider: "anthropic",
+        modelName: "claude-opus-5",
+        promptVersion: "reply.v1",
+        schemaVersion: "ai-draft.v1",
+      },
+      select: { id: true },
+    });
+    const operationId = `op-pending-${String(seq)}`;
+    await db().deliveryJobRecord.create({
+      data: {
+        ...profileScope(),
+        draftId: draft.id,
+        operationId,
+        correlationId: operationId,
+        status,
+        scheduledFor,
+        selectedDelayMs: 60_000,
+        ...(status === "SENDING" ? { claimedAt: scheduledFor } : {}),
+      },
+    });
+    return operationId;
+  };
 
   const neighbourAccount = async () => {
     const existing = await db().channelAccount.findFirst({
@@ -554,6 +596,42 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       expect(detail?.latestDraft?.needsReview).toBe(true);
       expect(detail?.latestDraft?.confidence).toBeCloseTo(0.42);
       expect(detail?.latestDraft?.intent).toBe("HOURS");
+    }, 180_000);
+
+    /**
+     * What is about to be sent, and whether it can still be stopped (Issue #29).
+     *
+     * `claimed` is the whole point. A delivery the worker has taken may be at the provider already, so the
+     * UI must not offer to cancel it — and reporting it as cancellable would imply the customer did not
+     * receive something they may well have.
+     */
+    it("reports the replies queued behind their delay, and which are past stopping", async () => {
+      const id = await conversation({ name: "Has Pending", occurredAt: at(1600) });
+      const queued = await pendingDelivery(id, "SCHEDULED", at(1610));
+      const inFlight = await pendingDelivery(id, "SENDING", at(1605));
+
+      const detail = await readConversation(db(), context, id);
+      const sends = new Map((detail?.pendingSends ?? []).map((send) => [send.operationId, send]));
+
+      expect(sends.get(queued)?.claimed).toBe(false);
+      expect(sends.get(inFlight)?.claimed).toBe(true);
+      expect(sends.get(queued)?.scheduledFor.toISOString()).toBe(at(1610).toISOString());
+      expect(sends.get(queued)?.text).toBe("Queued reply");
+    }, 180_000);
+
+    it("reports nothing pending for a conversation with nothing queued", async () => {
+      const id = await conversation({ name: "Nothing Pending", occurredAt: at(1700) });
+
+      expect((await readConversation(db(), context, id))?.pendingSends).toEqual([]);
+    }, 180_000);
+
+    it("does not report a settled delivery as pending", async () => {
+      const id = await conversation({ name: "Settled Delivery", occurredAt: at(1800) });
+      const operationId = await pendingDelivery(id, "SCHEDULED", at(1810));
+      await db().deliveryJobRecord.update({ where: { operationId }, data: { status: "CANCELLED_POLICY", cancelledAt: at(1811) } });
+
+      // A cancelled or sent reply is not waiting to go out, and offering to stop one would be nonsense.
+      expect((await readConversation(db(), context, id))?.pendingSends).toEqual([]);
     }, 180_000);
 
     it("names the person holding the conversation", async () => {

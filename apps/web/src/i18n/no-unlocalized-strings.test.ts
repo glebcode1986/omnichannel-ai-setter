@@ -54,10 +54,13 @@ function jsxTextLiterals(source: string): { line: number; text: string }[] {
     if (line.trim().startsWith("*") || line.trim().startsWith("//")) {
       return;
     }
-    for (const match of line.matchAll(/>([^<>{}\n]+)</g)) {
+    // The `>` must not be the tail of an arrow. A return type like `=> Promise<void>` puts a
+    // prose-shaped word between a `>` and a `<`, and a guard that read it as JSX text would force the
+    // code to write `void | Promise<void>` just to stay quiet. JSX's own `>` closes a tag, so it is
+    // preceded by a name, a quote or a slash — never by `=`.
+    for (const match of line.matchAll(/(?<!=)>([^<>{}\n]+)</g)) {
       const text = (match[1] ?? "").trim();
-      // A TypeScript type expression can look like JSX text: `=> void | Promise<void>` puts prose-shaped
-      // characters between a `>` and a `<`. Union bars and arrows never appear in a rendered sentence.
+      // A union of types can still look like text; a rendered sentence never contains a bar or an arrow.
       if (text === "" || NOT_PROSE.test(text) || text.includes("|") || text.includes("=>")) {
         continue;
       }
@@ -107,9 +110,11 @@ describe("the production UI", () => {
       '      <p>Nothing is sent to a customer until you activate.</p>',
       '      <button aria-label="Close this">{t.t("setup.skip")}</button>',
       '      readonly action: (formData: FormData) => void | Promise<void>;',
+      '      readonly takeOver: (target: ConversationTarget, formData: FormData) => Promise<void>;',
     ].join("\n");
 
-    // The prose is caught, the accessible name is caught, and the type annotation is not.
+    // The prose is caught, the accessible name is caught, and neither type annotation is — including the
+    // one with no union in it, which an earlier version of this matcher reported as the word "Promise".
     expect(jsxTextLiterals(sample).map((hit) => hit.text)).toEqual(["Nothing is sent to a customer until you activate."]);
     expect(accessibleNameLiterals(sample)).toHaveLength(1);
   });
@@ -119,6 +124,12 @@ describe("the production UI", () => {
 
     expect(jsxTextLiterals(sample)).toEqual([]);
     expect(accessibleNameLiterals(sample)).toEqual([]);
+  });
+
+  it("still catches a one-word literal, which is what the tightened matcher could have lost", () => {
+    // Skipping `=>` narrowed what counts as a text node. A single word between tags is still prose, and
+    // "Send" on a button is exactly the kind of literal this whole check exists for.
+    expect(jsxTextLiterals('      <button type="submit">Send</button>').map((hit) => hit.text)).toEqual(["Send"]);
   });
 
   it("looks at every production UI file, so a clean result means something", () => {

@@ -46,17 +46,39 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
    */
   const openDecision = async (
     tx: DbExecutor,
-    input: { readonly draftId: string; readonly conversationId: string; readonly decisionKey?: string },
+    input: {
+      readonly draftId: string;
+      readonly conversationId: string;
+      readonly decisionKey?: string;
+      /** Set for the decisions that send: only those are refused when the conversation has moved on. */
+      readonly mustBeCurrent?: boolean;
+    },
   ): Promise<{ readonly refusal: ReviewDecision } | { readonly replayOf: string | undefined }> => {
     const draft = await tx.aiDraft.findUnique({
       where: draftKey(input.draftId),
-      select: { conversationId: true, deliveryJob: { select: { operationId: true, decisionKey: true } } },
+      select: {
+        conversationId: true,
+        anchorStateVersion: true,
+        conversation: { select: { stateVersion: true } },
+        deliveryJob: { select: { operationId: true, decisionKey: true } },
+      },
     });
     if (draft === null) {
       return { refusal: { kind: "GONE" } };
     }
     if (draft.conversationId !== input.conversationId) {
       return { refusal: { kind: "FOREIGN_CONVERSATION" } };
+    }
+    // A draft answers the conversation as it stood at one state version. Once the customer writes again,
+    // it answers a question they have already replaced — so a *send* is refused here, inside the
+    // transaction that would otherwise create the delivery.
+    //
+    // Inside, and not in the caller: a check in a UI action or a use case is a check any other caller
+    // skips, and one made before the transaction can be overtaken by an inbound message arriving between
+    // the check and the commit. Dismissing and claiming are still allowed on a stale draft, because
+    // neither sends anything and somebody has to be able to clear the item.
+    if (input.mustBeCurrent === true && draft.anchorStateVersion !== draft.conversation.stateVersion) {
+      return { refusal: { kind: "STALE" } };
     }
     // A delivery created by *this same decision*: a retry after a lost answer, or the same click twice.
     // The send is already made, so it is named rather than refused.
@@ -84,7 +106,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
       const authority: SendAuthority = { kind: "HUMAN_APPROVED", approvedByUserId: context.userId, approvedAt: at, reviewMode };
       const decisionKey = keyOf(context.userId, decision);
       return db.$transaction(async (tx) => {
-        const opened = await openDecision(tx, { draftId, conversationId, decisionKey });
+        const opened = await openDecision(tx, { draftId, conversationId, decisionKey, mustBeCurrent: true });
         if ("refusal" in opened) {
           return opened.refusal;
         }

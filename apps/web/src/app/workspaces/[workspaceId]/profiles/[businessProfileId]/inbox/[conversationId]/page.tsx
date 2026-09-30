@@ -13,6 +13,9 @@ import { readConversation } from "@omnichannel/db";
 import { ConversationList } from "@/ui/inbox/conversation-list";
 import { MessageThread } from "@/ui/inbox/message-thread";
 import { ContextPanel } from "@/ui/inbox/context-panel";
+import { ConversationControls } from "@/ui/inbox/conversation-controls";
+import { OutcomeNotice } from "@/ui/outcome-notice";
+import { cancelSendAction, handBackAction, takeOverAction } from "@/server/review-actions";
 import { getDb } from "@/server/db";
 import { loadInboxScreen } from "@/server/inbox-page";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -54,10 +57,26 @@ export default async function ConversationPage({
         <Link className="inbox-back" href={`${screen.basePath}${inboxQueryString(screen.view)}`} data-inbox-back="true">
           {screen.t.t("inbox.backToList")}
         </Link>
+        <OutcomeNotice t={screen.t} outcome={outcomeOf(await searchParams)} />
         <MessageThread t={screen.t} conversation={conversation} />
+        <ConversationControls
+          t={screen.t}
+          conversation={conversation}
+          target={{ workspaceId, businessProfileId }}
+          viewerUserId={screen.context.userId}
+          takeoverByUserId={conversation.takeoverByUserId}
+          takeoverPausedUntil={conversation.takeoverPausedUntil}
+          actions={{ takeOver: takeOverAction, handBack: handBackAction, cancelSend: cancelSendAction }}
+        />
       </div>
       <ContextPanel t={screen.t} conversation={conversation} />
     </div>
   );
 }
 
+/** The outcome of the action that redirected here, if any. Rendered once and then gone with the URL. */
+function outcomeOf(params: RawSearchParams): string | undefined {
+  const value = params["outcome"];
+  const first = Array.isArray(value) ? value[0] : value;
+  return first === undefined || first === "" ? undefined : first;
+}

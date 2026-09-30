@@ -647,3 +647,145 @@ a {
   font-size: 13px;
   margin: var(--gap) 0 0;
 }
+
+/* ---- review queue and conversation controls ---------------------------------------------------- */
+
+.review-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.review-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+/* An overtaken item is marked by a border as well as by its badge and its sentence: three signals,
+   because approving one is the mistake this queue exists to prevent. */
+.review-card[data-stale="true"] {
+  border-color: var(--stop);
+}
+
+.review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-why,
+.review-draft {
+  margin-top: 10px;
+}
+
+.review-why h4,
+.review-draft h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gap);
+  margin-top: var(--gap);
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+
+.review-edit,
+.review-dismiss,
+.control-pause {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.review-edit label,
+.review-dismiss label,
+.control-pause label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.review-edit textarea,
+.review-dismiss input,
+.control-pause input {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.review-edit textarea {
+  min-width: 18rem;
+  resize: vertical;
+}
+
+.checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.conversation-controls {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.conversation-controls h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.control-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gap);
+}
+
+.pending-sends {
+  margin-top: var(--gap);
+  padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+
+.pending-sends ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pending-sends li {
+  padding: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}

@@ -55,6 +55,7 @@ export {
 } from "./review-queue-store";
 export { createIngestionStore } from "./ingestion-store";
 export {
+  type PendingSend,
   listInbox,
   readConversation,
   type ConversationDetail,

@@ -51,10 +51,13 @@ const conversation = (overrides: Partial<ConversationDetail> = {}): Conversation
   takeoverReason: null,
   takeoverReviewMode: null,
   takeoverByName: null,
+  takeoverByUserId: null,
+  takeoverPausedUntil: null,
   humanTakeoverAt: null,
   lastInboundAt: new Date("2026-09-30T10:00:00.000Z"),
   lastOutboundAt: new Date("2026-09-30T10:06:00.000Z"),
   messages: [],
+  pendingSends: [],
   latestDraft: draft(),
   ...overrides,
 });

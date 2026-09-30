@@ -8,6 +8,7 @@
  * hiding it, because a review item that vanishes is a decision nobody gets to make.
  */
 import { noRetrieval } from "@omnichannel/application";
+import type { ReasonCode } from "@omnichannel/domain";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -41,7 +42,7 @@ describe.skipIf(!databaseTestsEnabled())("the Review queue", () => {
     options: {
       readonly target?: SeededProfile;
       readonly text?: string | null;
-      readonly reasonCodes?: readonly string[];
+      readonly reasonCodes?: readonly ReasonCode[];
       readonly confidence?: number;
       readonly anchorStateVersion?: number;
       readonly status?: "PENDING" | "HELD";
