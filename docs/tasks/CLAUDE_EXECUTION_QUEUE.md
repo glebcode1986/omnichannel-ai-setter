@@ -15,7 +15,27 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — P3-01 / Issue #54
+### Current work — P3-02 / Issue #55
+
+**Branch `feat/p3-02-goals-followups`**, based on P3-01's accepted head
+`13212612bb0ac73b2468c1adc99b1c5e48008c16` (verified before branching, and `e15c809` — #76's human
+composer — verified as an ancestor). Conversation goals, next actions, bounded follow-ups, human tasks and
+customer opt-out. No UI.
+
+**Issue #55 named two specs that did not exist**: `docs/specs/GOALS_FOLLOWUPS.md`, written as part of this
+task, and `docs/specs/AI_ACTION_APPROVAL_MATRIX.md`, which is **not** written. A matrix for every AI action
+across the product is a larger document than this work justifies; `GOALS_FOLLOWUPS.md` carries the matrix
+for the actions this task introduces and says so. Same precedent as `MVP_RELEASE_SCOPE.md` for #58.
+
+**One deliberate reuse.** `NextAction` is `conversations.next_action` / `next_action_at`, which the leads
+work already added, rather than a new table. A lead's "what happens next" and a conversation's are the same
+question, and a second place to answer it would give two answers depending on which screen an operator
+opened. It also avoids changing core entity semantics, which needs an ADR.
+
+**P5-08 / Issue #34 is next**, per the owner's directive on PR #81 — and not before. Its work is committed
+on a local `feat/p5-08-analytics-audit` branch and deliberately unpushed.
+
+### Previous — P3-01 / Issue #54
 
 **Branch `feat/p3-01-customer-identity-memory`**, based on `feat/p5-07-leads-pipeline`. The MVP customer
 identity, search and durable-memory primitives: contact points, external identities, duplicate candidates,
