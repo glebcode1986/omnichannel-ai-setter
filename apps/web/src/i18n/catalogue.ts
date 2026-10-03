@@ -79,6 +79,7 @@ const en = {
 
   "blocker.NO_CONNECTED_CHANNEL": "Connect at least one channel and finish its authorization.",
   "blocker.NO_KNOWLEDGE": "Add the facts the assistant may rely on.",
+  "blocker.STYLE_NOT_CONFIGURED": "Set the voice the assistant should use, or skip that step on purpose.",
   "blocker.NO_POLICY": "Choose what the assistant should do and how it should behave.",
   "blocker.UNRESOLVED_REVIEW_ITEMS": "Deal with the conversations already waiting for a person.",
 
@@ -412,6 +413,7 @@ const ru: Catalogue = {
 
   "blocker.NO_CONNECTED_CHANNEL": "Подключите хотя бы один канал и завершите его авторизацию.",
   "blocker.NO_KNOWLEDGE": "Добавьте факты, на которые ассистент может опираться.",
+  "blocker.STYLE_NOT_CONFIGURED": "Задайте голос, которым будет говорить ассистент, или осознанно пропустите этот шаг.",
   "blocker.NO_POLICY": "Выберите, что должен делать ассистент и как себя вести.",
   "blocker.UNRESOLVED_REVIEW_ITEMS": "Разберитесь с диалогами, которые уже ждут человека.",
 

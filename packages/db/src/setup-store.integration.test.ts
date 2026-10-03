@@ -219,7 +219,19 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
           createdByUserId: context.userId,
         },
       });
+      // A voice, which the checklist requires one way or the other. Its absence is what made this
+      // fixture claim a clear checklist while leaving the style step unfinished.
+      await db().styleProfile.create({
+        data: { workspaceId: context.workspaceId, businessProfileId, persona: "Warm and brief", preferredPhrases: [], avoidedPhrases: [] },
+      });
       return { context, businessProfileId };
+    };
+
+    /** The same profile with no voice at all and no decision recorded about it. */
+    const voicelessProfile = async (label: string) => {
+      const ready = await readyProfile(label);
+      await db().styleProfile.deleteMany({ where: { workspaceId: ready.context.workspaceId, businessProfileId: ready.businessProfileId } });
+      return ready;
     };
 
     it("activates a profile whose checklist is clear", async () => {
@@ -229,6 +241,86 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
       expect(
         (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
       ).toBe("ACTIVE");
+    }, 120_000);
+
+    it("refuses to go live with a voice nobody wrote and nobody skipped", async () => {
+      const { context, businessProfileId } = await voicelessProfile("no-style");
+
+      const outcome = await activateBusinessProfile(db(), context);
+
+      // The blocker the review found missing. Everything else about this profile is ready, so this is
+      // the style gate and nothing else.
+      expect(outcome.kind).toBe("NOT_READY");
+      expect(outcome.kind === "NOT_READY" ? outcome.blockers : []).toEqual(["STYLE_NOT_CONFIGURED"]);
+      expect(
+        (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
+      ).toBe("SETUP");
+    }, 120_000);
+
+    it("goes live once a person deliberately skips the style step", async () => {
+      const { context, businessProfileId } = await voicelessProfile("skipped-style");
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(false);
+
+      // The decision, written through the validated path rather than inserted by hand — the gate has to
+      // accept the same row the product actually produces.
+      await skipOnboardingStep(db(), context, "STYLE");
+
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(true);
+      expect(await activateBusinessProfile(db(), context)).toEqual({ kind: "ACTIVATED" });
+      expect(
+        (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
+      ).toBe("ACTIVE");
+    }, 120_000);
+
+    it("re-checks the style gate inside the transaction, not only when the page rendered", async () => {
+      const { context, businessProfileId } = await readyProfile("style-vanished");
+      // The page showed a clear checklist and it was true then. The voice is deleted between the render
+      // and the click, which is the same race the knowledge case covers — and it must be the *same* rule
+      // rather than a second one that happens to agree today.
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(true);
+      await db().styleProfile.deleteMany({ where: { workspaceId: context.workspaceId, businessProfileId } });
+
+      const outcome = await activateBusinessProfile(db(), context);
+
+      expect(outcome.kind).toBe("NOT_READY");
+      expect(outcome.kind === "NOT_READY" ? outcome.blockers : []).toContain("STYLE_NOT_CONFIGURED");
+      expect(
+        (await db().businessProfile.findUniqueOrThrow({ where: { workspaceId_id: { workspaceId: context.workspaceId, id: businessProfileId } } })).status,
+      ).toBe("SETUP");
+    }, 120_000);
+
+    it("accepts a style example as a configured voice, not only a profile", async () => {
+      const { context } = await voicelessProfile("style-example");
+
+      // `HUMAN_TYPED` on purpose: `HUMAN_EDITED_DRAFT` needs a source draft, and a draft needs a
+      // conversation, none of which this gate depends on. The narrower fixture keeps the test about the
+      // gate rather than about seeding a thread.
+      const example = async (approved: boolean) =>
+        db().styleExample.create({
+          data: {
+            workspaceId: context.workspaceId,
+            businessProfileId: context.businessProfileId,
+            inboundContext: "Do you have Saturday?",
+            outboundText: "Saturday at eleven is free.",
+            provenance: "HUMAN_TYPED",
+            status: "ACTIVE",
+            ...(approved ? { approvedByUserId: context.userId } : {}),
+          },
+          select: { id: true },
+        });
+
+      // An example nobody approved is a suggestion, not a voice — `readOnboarding` counts only approved
+      // ones, and the gate must honour that rather than treating any row as configuration.
+      const unapproved = await example(false);
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(false);
+      await db().styleExample.delete({ where: { id: unapproved.id } });
+
+      await example(true);
+
+      // `styleConfigured` is a profile *or* an approved example, and the gate must read the same
+      // disjunction the checklist does rather than inventing a narrower one.
+      expect((await readOnboarding(db(), context)).state.canActivate).toBe(true);
+      expect(await activateBusinessProfile(db(), context)).toEqual({ kind: "ACTIVATED" });
     }, 120_000);
 
     it("refuses when the checklist is not clear, whatever a page was showing", async () => {
