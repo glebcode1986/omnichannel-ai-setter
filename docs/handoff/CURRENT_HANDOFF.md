@@ -192,15 +192,38 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **P5-10 / Issue #58 is the open work.** EN/RU localization on `feat/p5-10-localization`, stacked on
+1. **P5-10 / Issue #58 is under repair after an independent review.** Astra returned
+   `CHANGES_REQUESTED` for PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` with two blocking
+   localization defects, and this commit is the fix.
+
+   **Russian readers saw English role names.** The catalogue localized the sentence
+   `"Ваша роль: {role}"` and the page interpolated `workspace.role.toLowerCase()` into it, so a Russian
+   user read "Ваша роль: owner". These are user-facing product roles, not identifiers `LOCALIZATION.md`
+   exempts. There are now `role.*` keys in both locales, translated before interpolation, and a test
+   driven off the domain's own `WORKSPACE_ROLES` so a role added later fails the build instead of
+   reaching a reader in English.
+
+   **The guard that enforces all of this was bypassable by ordinary formatting.** It matched `>text<`
+   with a regular expression, one line at a time, and reported nothing for multiline JSX text, for
+   `{"a string literal"}` rendered as a child, or for a single-quoted accessible name. A guard with known
+   holes is worse than none, because it is cited as coverage. It now parses the file with the TypeScript
+   compiler's own parser, which removes the whole class — and with it the `|` and `=>` heuristics the
+   regex needed so that `=> void | Promise<void>` was not read as prose. Each of the three bypasses has
+   an adversarial test.
+2. **Two long-disclosed worker flakes are fixed in a separate commit**, at their root: BullMQ's
+   `RedisConnection.close()` ends with `removeAllListeners()`, so a connection attempt in flight at close
+   rejects afterwards and emits `error` with nothing listening — which throws inside a `.catch()` and
+   reaches `process-guards.ts` as an unhandled rejection. The guard is untouched; the containment is at
+   the clients we construct, which is where that file says it belongs.
+3. **P5-01 / Issue #27 is APPROVED** at `9cc9bff2905c648e0d67974018f2889d7dec20e0`. EN/RU localization on `feat/p5-10-localization`, stacked on
    P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
    `MVP_RELEASE_SCOPE.md` alone.
 2. **P5-01 / Issue #27 is in review as PR #73.** The workspace shell and resumable setup surface on
    `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
-3. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
+5. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
    from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts` fails the build otherwise.
-3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+6. No rebases, no force-pushes, and no merges to `main`.
+7. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
