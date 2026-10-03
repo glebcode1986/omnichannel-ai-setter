@@ -94,6 +94,7 @@ export const channelReadinessTones: Readonly<Record<ChannelReadiness, "ok" | "wa
 export const activationBlockerLabels: Readonly<Record<ActivationBlocker, string>> = {
   NO_CONNECTED_CHANNEL: "Connect at least one channel and finish its authorization.",
   NO_KNOWLEDGE: "Add the facts the assistant may rely on.",
+  STYLE_NOT_CONFIGURED: "Set the voice the assistant should use, or skip that step on purpose.",
   NO_POLICY: "Choose what the assistant should do and how it should behave.",
   UNRESOLVED_REVIEW_ITEMS: "Deal with the conversations already waiting for a person.",
 };

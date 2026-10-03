@@ -184,12 +184,32 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **P5-01 / Issue #27 is the open work.** The workspace shell and resumable setup surface on
-   `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
-2. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
+1. **P5-01 / Issue #27 is under repair after an independent review.** Astra returned
+   `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc` with one blocking
+   finding, and this commit is the fix.
+
+   **The blocker.** `ONBOARDING_UX.md` requires the activation checklist to enforce "style configured or
+   intentionally skipped". `blockersFor()` never received the skip set and had no style blocker at all,
+   so `canActivate` became true from channel, knowledge, policy and review facts alone: a profile with no
+   voice and no decision recorded about one could go live and answer every customer in whatever the model
+   defaults to.
+
+   **The fix is one rule in one place.** `blockersFor()` now takes the validated skip set and adds
+   `STYLE_NOT_CONFIGURED` when the step is neither complete nor deliberately skipped. Because
+   `activateBusinessProfile()` already re-reads through `readOnboarding()` inside its row-locked
+   transaction, the gate it enforces is that same rule rather than a second one that happens to agree.
+
+   **Three tests were passing on the bug**, which is why it survived: a domain test quoted the spec and
+   asserted its opposite; the integration fixture called a profile "ready" while configuring no style and
+   recording no skip; and a keyboard test used an unconfigured style as a stand-in for a ready profile,
+   so it only found an enabled button because the gate was broken.
+2. **The repair propagates through #74–#83 by ordinary merge**, each child's live head verified, before
+   P5-09 resumes. P5-09's work exists on a local branch and is deliberately unpublished until the
+   repaired ancestry reaches #83 green.
+3. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
    `apps/web/src/ui/labels.ts` so that task replaces one module instead of reopening every component.
-3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+4. No rebases, no force-pushes, no merges to `main`.
+5. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was

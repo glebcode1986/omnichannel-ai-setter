@@ -14,7 +14,30 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current gate — P5-01 / Issue #27 (Stage D)
+### Repair in progress — P5-01 / Issue #27, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc` and returned one blocking finding:
+**activation was permitted while the STYLE step was unfinished and had not been deliberately skipped.**
+
+`ONBOARDING_UX.md` says the checklist enforces "style configured **or intentionally skipped**" — a gate
+with two ways to clear it. `blockersFor()` had neither: it never received the skip set and carried no
+style blocker, so `canActivate` came out true from channel, knowledge, policy and review facts alone.
+
+The fix adds `STYLE_NOT_CONFIGURED` and passes the validated skip set into the gate.
+`activateBusinessProfile()` needed no separate change because it already re-reads through
+`readOnboarding()` inside its row-locked transaction — which is the point: one rule, not two that agree
+until somebody edits one.
+
+**Why it survived until an independent review.** Three tests were written against the bug rather than the
+spec. A domain test quoted the sentence and asserted its opposite. The integration fixture called a
+profile "ready" while creating no style profile, no approved style example and no STYLE skip. And a
+keyboard test passed `styleConfigured: false` as a stand-in for a ready profile, so it only ever found an
+enabled activation button because the gate was broken. All three are replaced.
+
+The repair propagates through #74–#83 by ordinary merge, each child's live head verified, before P5-09
+resumes.
+
+### Original gate — P5-01 / Issue #27 (Stage D)
 
 **Branch `feat/p5-01-app-shell-onboarding`**, based on the accepted #72 head
 `9955ecf6c114145d54bb7dd46abbc902267bd00c`. It carries the authenticated workspace shell and the resumable
