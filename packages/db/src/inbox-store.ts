@@ -27,6 +27,7 @@ import type { ConversationStatus, LeadStage } from "@omnichannel/domain";
 
 import { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 import type { DbExecutor } from "./client";
+import { deliveryOfConversation } from "./delivery-origin";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 30;
@@ -344,7 +345,9 @@ export async function readConversation(
   // Queued replies, read alongside rather than after: the thread cannot be drawn without them, because a
   // send the operator cannot see is a send they cannot stop.
   const pendingPromise = db.deliveryJobRecord.findMany({
-    where: { ...scope, status: { in: ["SCHEDULED", "SENDING"] }, draft: { conversationId } },
+    // Both legal origins: a reply a person wrote has no draft to reach this conversation through, and a
+    // queued send the operator cannot see is a send they cannot stop.
+    where: { ...scope, status: { in: ["SCHEDULED", "SENDING"] }, ...deliveryOfConversation(conversationId) },
     orderBy: [{ scheduledFor: "asc" }],
     take: 10,
     select: { operationId: true, draftId: true, status: true, scheduledFor: true, authority: true, humanText: true, draft: { select: { text: true } } },
