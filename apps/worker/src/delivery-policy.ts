@@ -7,11 +7,20 @@
  * between could tell. The coordinator now hands over the context it read, and everything below is derived
  * from it: one read, one judgement, one guard.
  *
+ * The kill switch followed the same path, and for a sharper reason. It is an operator's decision about the
+ * system rather than a fact about one conversation, so it was resolved here, outside the coordinator — but
+ * a value read outside the guarded read cannot be re-asserted by the claim, and a switch committed between
+ * the read and the claim was therefore invisible to the guard. `delivery-store.ts` now reads it twice,
+ * once with the rest of the state and once inside the claim's own transaction (#56 / #72). Nothing here
+ * resolves it, and nothing here should: a second answer to "is this send suspended" is how a switch
+ * acquires a path around itself.
+ *
  * Window evaluation uses the Instagram adapter's own rules rather than a second copy of them, but through
  * the narrow `WindowInputs` shape: answering "may a reply still be sent?" must not require the credentials
- * needed to actually send one.
+ * needed to actually send one. With the suspension read gone this module touches no infrastructure at all
+ * — it derives, and the reading is somebody else's job.
  */
-import type { DeliveryChannelState, DeliveryChannelStatePort, DeliverySendContext, PolicyInput } from "@omnichannel/application";
+import type { DeliveryChannelState, DeliveryChannelStatePort, DeliverySendContext } from "@omnichannel/application";
 import {
   evaluateHumanAgentEligibility,
   evaluateStandardWindow,
@@ -19,52 +28,12 @@ import {
   type HumanAgentApproval,
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
-import { createSuspensionStore, type DbClient } from "@omnichannel/db";
-import { activeSuspension, toBusinessProfileId, toChannelAccountId, toWorkspaceId } from "@omnichannel/domain";
-import type { DeliveryJob } from "@omnichannel/queue";
 
 /** Defaults used where an account has not recorded its own; the adapter owns the verified values. */
 const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowMs"> = {
   standardWindowMs: 24 * 60 * 60 * 1000,
   humanAgentWindowMs: 7 * 24 * 60 * 60 * 1000,
 };
-
-/**
- * Whether a kill switch covers this send.
- *
- * Deliberately not part of the state the claim binds. Every other fact a delivery rests on is something
- * *about the conversation*, read once and re-asserted as the send is taken; this one is an operator's
- * decision about the system, and it is read for the run rather than for the conversation. It is still
- * read here, with everything else the decision rests on, so the switch is honoured by the same gate that
- * honours every other rule — a separate check closer to the wire is how a switch acquires a path around
- * it.
- */
-export function createSuspensionResolver(db: DbClient, now: () => Date) {
-  const suspensions = createSuspensionStore(db);
-
-  return async function resolve(job: DeliveryJob): Promise<PolicyInput["outboundSuspended"] | undefined> {
-    const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
-    const conversation = await db.conversation.findUnique({
-      where: { workspaceId_businessProfileId_id: { ...scope, id: job.conversationId } },
-      select: { channelAccountId: true },
-    });
-    if (conversation === null) {
-      return undefined;
-    }
-
-    // The identifiers go through the domain's own constructors rather than a cast: these three decide
-    // which switches cover this send, and a blank or swapped one would silently widen or narrow that
-    // answer. A cast would make the type-checker agree to exactly the mistake worth catching.
-    const target = {
-      workspaceId: toWorkspaceId(scope.workspaceId),
-      businessProfileId: toBusinessProfileId(scope.businessProfileId),
-      channelAccountId: toChannelAccountId(conversation.channelAccountId),
-    };
-    const covering = await suspensions.loadCovering({ ...scope, channelAccountId: conversation.channelAccountId });
-    const suspended = activeSuspension(target, covering, now());
-    return suspended === undefined ? undefined : { scope: suspended.scope, reason: suspended.reason };
-  };
-}
 
 /**
  * The live channel facts, derived from the context the coordinator already read.
