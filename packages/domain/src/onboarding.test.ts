@@ -151,13 +151,49 @@ describe("the activation checklist", () => {
     expect(state.canActivate).toBe(false);
   });
 
-  it("does not block a launch on a style nobody wrote", () => {
-    // The checklist asks for style "configured or intentionally skipped", which is a question about the
-    // step and not about whether customers may be answered.
+  it("blocks a launch on a style nobody wrote and nobody skipped", () => {
+    // `ONBOARDING_UX.md`: the checklist enforces "style configured **or intentionally skipped**". Two
+    // ways to clear it, and neither is "leave it and launch anyway" — a profile that goes live with no
+    // voice answers every customer in whatever the model defaults to, which is the thing an owner is
+    // least able to predict and most likely to be judged on.
     const state = evaluateOnboarding(ready({ styleConfigured: false }));
+
+    expect(state.activationBlockers).toEqual(["STYLE_NOT_CONFIGURED"]);
+    expect(state.canActivate).toBe(false);
+  });
+
+  it("allows a launch once a voice is configured", () => {
+    const state = evaluateOnboarding(ready({ styleConfigured: true }));
 
     expect(state.activationBlockers).toEqual([]);
     expect(state.canActivate).toBe(true);
+  });
+
+  it("allows a launch when a person deliberately skipped the style step", () => {
+    // The second way to clear it. A skip is a decision somebody made and the product recorded, which is
+    // a different fact from the step simply being unfinished.
+    const state = evaluateOnboarding(ready({ styleConfigured: false }), ["STYLE"]);
+
+    expect(state.activationBlockers).toEqual([]);
+    expect(state.canActivate).toBe(true);
+    expect(state.steps.find((status) => status.step === "STYLE")?.state).toBe("SKIPPED");
+  });
+
+  it("does not let a skip of some other step unlock the style gate", () => {
+    // Otherwise skipping the test drive would quietly launch a profile with no voice.
+    const state = evaluateOnboarding(ready({ styleConfigured: false }), ["TEST_DRIVE", "TIMING_AND_HANDOFF"]);
+
+    expect(state.activationBlockers).toEqual(["STYLE_NOT_CONFIGURED"]);
+    expect(state.canActivate).toBe(false);
+  });
+
+  it("ignores a skip naming a step that may not be skipped", () => {
+    // `onboarding_skips` rows are validated on write, but the gate must not depend on that being the only
+    // way a row can appear. A fabricated skip of an unskippable step unlocks nothing.
+    const state = evaluateOnboarding(ready({ knowledgeDocumentCount: 0 }), ["KNOWLEDGE"]);
+
+    expect(state.activationBlockers).toContain("NO_KNOWLEDGE");
+    expect(state.canActivate).toBe(false);
   });
 
   it("does not offer to activate a profile that is already live", () => {
@@ -181,6 +217,13 @@ describe("the activation checklist", () => {
       activated: false,
     });
 
-    expect(state.activationBlockers).toEqual(["NO_CONNECTED_CHANNEL", "NO_KNOWLEDGE", "NO_POLICY", "UNRESOLVED_REVIEW_ITEMS"]);
+    // In the order `ONBOARDING_UX.md` lists them, which is the order a person should deal with them.
+    expect(state.activationBlockers).toEqual([
+      "NO_CONNECTED_CHANNEL",
+      "NO_KNOWLEDGE",
+      "STYLE_NOT_CONFIGURED",
+      "NO_POLICY",
+      "UNRESOLVED_REVIEW_ITEMS",
+    ]);
   });
 });
