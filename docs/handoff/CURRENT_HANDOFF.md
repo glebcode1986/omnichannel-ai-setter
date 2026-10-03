@@ -226,7 +226,29 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+1. **The Review queue could not show more than 25 items (#29).** Found while repairing the identical
+   blocker Astra raised on PR #77, by checking every paged store list against the screen that spends its
+   cursor. `listReviewQueue` pages at 25 and returns a `nextCursor`; the route called it with no cursor
+   and rendered no link. The label `review.loadMore` already existed in both catalogues and nothing used
+   it — the sentence was written and the link never was.
+
+   It mattered more here than in the library. `approveDraftAction`, `editAndSendAction`,
+   `dismissDraftAction` and `claimDraftAction` are imported by **one** file, the Review queue route. The
+   conversation screen can take over, hand back, cancel a send and compose a reply, but not decide a
+   draft. So the twenty-sixth item waiting for a person could not be approved, edited, dismissed or
+   claimed anywhere in the product; an operator could only take the conversation and type a reply
+   themselves, leaving the draft PENDING for good. In DRAFT mode every inbound message produces one.
+
+   Fixed with the shape proved on #77: the cursor through the route's query parameters, the assembly in
+   `review-page.ts` where a test can call it, and `review-screen.integration.test.ts` walking the loop a
+   browser walks. Two details specific to this queue: every *filter* link drops the cursor, because
+   changing what the queue shows means starting from the top of it, and a cursor is not a filter, so page
+   two of the whole queue does not explain itself with "nothing matches that filter".
+
+   **This moves an accepted head.** #76 was PASSED at `3db5d63`, so its verdict is now stale and the head
+   needs an independent re-review. Propagation to #77–#86 is deliberately **not** done yet: Astra is
+   mid-review of #77 at `b8d0eea`, and merging into it would invalidate the exact head she is reading.
+2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
    finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
    human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
    through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply

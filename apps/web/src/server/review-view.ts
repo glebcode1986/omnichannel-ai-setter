@@ -7,7 +7,7 @@
  * value is a 500 on a shared link.
  */
 import { REASON_CODES, type ReasonCode } from "@omnichannel/domain";
-import type { ReviewQueueFilter } from "@omnichannel/db";
+import type { ReviewCursor, ReviewQueueFilter } from "@omnichannel/db";
 
 import type { RawSearchParams } from "./inbox-view";
 
@@ -15,6 +15,8 @@ export interface ReviewView {
   readonly reasonCode?: ReasonCode;
   /** Whether to show only the items a person can still act on, or only the ones already overtaken. */
   readonly view?: "answerable" | "stale";
+  /** Where in the queue this page starts. Opaque, and absent for the first page. */
+  readonly cursor?: string;
 }
 
 function one(value: string | string[] | undefined): string | undefined {
@@ -29,9 +31,11 @@ function isReasonCode(value: string | undefined): value is ReasonCode {
 export function parseReviewView(params: RawSearchParams): ReviewView {
   const reason = one(params["reason"]);
   const view = one(params["view"]);
+  const cursor = one(params["cursor"]);
   return {
     ...(isReasonCode(reason) ? { reasonCode: reason } : {}),
     ...(view === "answerable" || view === "stale" ? { view } : {}),
+    ...(cursor === undefined ? {} : { cursor }),
   };
 }
 
@@ -42,7 +46,14 @@ export function reviewFilterOf(view: ReviewView): ReviewQueueFilter {
   };
 }
 
-/** `?reason=…&view=…`, or the empty string, so `${base}${query}` is always a URL. */
+/**
+ * `?reason=…&view=…`, or the empty string, so `${base}${query}` is always a URL.
+ *
+ * **The cursor is deliberately not included.** Every link on the page that changes what the queue shows
+ * goes through here, and a filter link that kept the cursor would drop the operator into the middle of a
+ * list they have not seen the start of. Changing the filter means starting again; only
+ * `reviewNextHref` adds a cursor, and only to the same filter.
+ */
 export function reviewQueryString(view: ReviewView): string {
   const params = new URLSearchParams();
   if (view.reasonCode !== undefined) {
@@ -55,7 +66,45 @@ export function reviewQueryString(view: ReviewView): string {
   return query === "" ? "" : `?${query}`;
 }
 
-/** Whether the queue is being narrowed, which decides which "nothing here" sentence is true. */
+/**
+ * Not secret, only opaque: the `(createdAt, id)` tuple the store pages by, so the link survives a
+ * bookmark. A cursor carries no authority — the store scopes every read to the profile in the route.
+ */
+export function encodeReviewCursor(cursor: ReviewCursor): string {
+  return Buffer.from(`${cursor.createdAt.toISOString()}|${cursor.id}`, "utf8").toString("base64url");
+}
+
+/** `undefined` for anything this module did not write, so a hand-edited URL shows page one. */
+export function decodeReviewCursor(encoded: string | undefined): ReviewCursor | undefined {
+  if (encoded === undefined || encoded === "") {
+    return undefined;
+  }
+  const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+  const separator = decoded.indexOf("|");
+  if (separator === -1) {
+    return undefined;
+  }
+  const createdAt = new Date(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+  if (Number.isNaN(createdAt.getTime()) || id === "") {
+    return undefined;
+  }
+  return { createdAt, id };
+}
+
+/** The next page of the same queue: the filters this view already carries, plus where to continue. */
+export function reviewNextHref(reviewPath: string, view: ReviewView, cursor: ReviewCursor): string {
+  const query = reviewQueryString(view);
+  const separator = query === "" ? "?" : "&";
+  return `${reviewPath}${query}${separator}cursor=${encodeReviewCursor(cursor)}`;
+}
+
+/**
+ * Whether the queue is being narrowed, which decides which "nothing here" sentence is true.
+ *
+ * The cursor is not a filter. Page two of the whole queue is still the whole queue, and saying
+ * "nothing matches that filter" there would explain an empty page with a filter nobody applied.
+ */
 export function isFilteredReviewView(view: ReviewView): boolean {
   return view.reasonCode !== undefined || view.view !== undefined;
 }

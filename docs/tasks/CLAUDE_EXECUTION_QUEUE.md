@@ -14,6 +14,21 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Follow-up repair — P5-03 / Issue #29, the Review queue's missing pagination
+
+Not a reviewer finding: found by checking every paged store list in the chain against the screen that
+spends its cursor, after Astra raised the same defect on #77. The owner asked for it to be fixed here
+rather than above the chain.
+
+`listReviewQueue` paged at 25 and returned a cursor the route never read, and no next link existed —
+while `review.loadMore` sat unused in both catalogues. Because approve/edit/dismiss/claim live only on
+this screen, an item it did not show was an item nobody could decide.
+
+`review-page.ts` now holds the assembly, the cursor travels through the query string, filter links reset
+it, and `review-screen.integration.test.ts` follows the link against a real database. This moves #76's
+accepted head, so its PASS is stale and the new head needs a re-review; propagation waits until #77's
+verdict lands.
+
 ### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
 
 Astra reviewed PR #76 at `dc68334` and found that a human-composed pending delivery could neither be
