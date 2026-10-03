@@ -34,7 +34,9 @@ export default async function WorkspacesPage() {
             <h2 style={{ margin: "0 0 4px", fontSize: "1.1rem" }}>
               <Link href={`/workspaces/${workspace.workspaceId}`}>{workspace.name}</Link>
             </h2>
-            <p className="muted">{t.t("workspaces.role", { role: workspace.role.toLowerCase() })}</p>
+            {/* Translated before interpolation. Lowercasing the enum localized the sentence and left the
+                role itself in English, which a Russian reader saw as "Ваша роль: owner". */}
+            <p className="muted">{t.t("workspaces.role", { role: t.t(`role.${workspace.role}`) })}</p>
           </li>
         ))}
       </ul>
