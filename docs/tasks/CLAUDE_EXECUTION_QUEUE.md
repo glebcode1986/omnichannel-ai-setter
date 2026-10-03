@@ -14,6 +14,19 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #76 at `dc68334` and found that a human-composed pending delivery could neither be
+displayed nor cancelled: the Inbox's pending-send query and the cancellation lookup both reached the
+conversation through `draft: { conversationId }`, and an ADR-018 Option B delivery has no draft. Correct,
+and the worse half is that the row still went out after the operator had been told it was not queued.
+
+Fixed by giving both queries one shared predicate, `deliveryOfConversation` in
+`packages/db/src/delivery-origin.ts`, so there is a single place that knows what "belongs to this
+conversation" means for either origin. A third instance surfaced during the repair — the reconciliation
+sweep's orphaned-row select — where the consequence was an ambiguous send that could never be raised for
+investigation, and that is disclosed on the PR rather than folded in silently.
+
 ### Repair in progress — P5-10 / Issue #58, after `CHANGES_REQUESTED`
 
 Astra reviewed PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` and returned two blocking findings,
