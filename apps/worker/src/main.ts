@@ -213,7 +213,7 @@ function main(): void {
         logger,
       });
       const suspensions = createSuspensionStore(db);
-      const monitor = createQueueMonitor({ connection });
+      const monitor = createQueueMonitor({ connection, logger });
       const reconciliationSweeper = startReconciliationSweeper({
         intervalMs: RECONCILIATION_SWEEP_INTERVAL_MS,
         retryAfterMs: RECONCILIATION_RETRY_AFTER_MS,
@@ -262,7 +262,16 @@ function main(): void {
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          await Promise.all([sweeper.close(), reconciliationSweeper.close(), backlogGuard.close(), health.close()]);
+          // `allSettled`, not `all`: four independent closes, and `Promise.all` leaves every rejection
+          // after the first unobserved — which `process-guards.ts` answers by killing the process.
+          const stopped = await Promise.allSettled([sweeper.close(), reconciliationSweeper.close(), backlogGuard.close(), health.close()]);
+          for (const outcome of stopped) {
+            if (outcome.status === "rejected") {
+              logger.warn("worker.loop_close_failed", {
+                errorName: outcome.reason instanceof Error ? outcome.reason.name : typeof outcome.reason,
+              });
+            }
+          }
           await workers.close();
           await monitor.close();
           await producer.close();
