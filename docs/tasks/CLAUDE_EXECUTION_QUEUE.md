@@ -37,6 +37,12 @@ Separately, the two long-disclosed worker flakes are fixed in their own commit o
 root, in the clients we construct, with `process-guards.ts` left alone because it argues correctly against
 exempting rejections by error code.
 
+That fix then failed CI while passing locally, which was the more useful finding: local verification
+exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, CI's `verify` job exports neither, so the worker's
+no-infrastructure tests — the ones these flakes live in — had never been run the way CI runs them. The
+allowlists in `main.test.ts` and `bundle.test.ts` now admit `queue.client_error` with its reason, and a
+clean-environment `pnpm verify` is part of verifying a head.
+
 ### Original gate — P5-10 / Issue #58 (Stage D)
 
 **Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
