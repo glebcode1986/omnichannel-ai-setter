@@ -150,6 +150,13 @@ describe("the production UI", () => {
       expect(found("const a = <p>This one is caught.</p>;")).toEqual(["This one is caught."]);
     });
 
+    it("still catches a single word, which is what a narrower checker would lose", () => {
+      // Carried over from the regex version, which had to skip `=>` to avoid reading a return type as
+      // prose and so risked losing short text. "Send" on a button is exactly the literal this whole
+      // check exists for, and the parser has no such trade to make.
+      expect(found('const a = <button type="submit">Send</button>;')).toEqual(["Send"]);
+    });
+
     it("catches text spread over several lines, which is ordinary formatting", () => {
       // The first bypass the review found. Line-at-a-time matching never saw it.
       expect(found("const a = (\n  <p>\n    This hard-coded sentence reaches the customer.\n  </p>\n);")).toEqual([

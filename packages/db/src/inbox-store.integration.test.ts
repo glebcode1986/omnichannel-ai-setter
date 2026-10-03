@@ -8,6 +8,7 @@
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { composeHumanReply } from "./composer-store";
 import { listInbox, readConversation } from "./inbox-store";
 import { appendInboundMessage } from "./repositories/messages";
 import { createChannelAccount } from "./repositories/channel-accounts";
@@ -56,6 +57,7 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
   });
 
   const db = () => database.db;
+  const profileScope = () => ({ workspaceId: context.workspaceId, businessProfileId: context.businessProfileId });
 
   /** A conversation with one inbound message, so it has a preview and a last-message time. */
   const conversation = async (options: {
@@ -113,6 +115,67 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     expect(page.rows.map((row) => row.contactName)).not.toContain("Someone Else");
     expect((await listInbox(db(), neighbour)).rows.map((row) => row.contactName)).toEqual(["Someone Else"]);
   }, 180_000);
+
+  /** A draft plus a delivery in the given state, which is what "waiting to be sent" looks like. */
+  const pendingDelivery = async (conversationId: string, status: "SCHEDULED" | "SENDING", scheduledFor: Date) => {
+    seq += 1;
+    const draft = await db().aiDraft.create({
+      data: {
+        ...profileScope(),
+        conversationId,
+        anchorMessageId: (await db().message.findFirstOrThrow({ where: { conversationId }, select: { id: true } })).id,
+        anchorStateVersion: 1,
+        generationKey: `pending_${String(seq)}`,
+        text: "Queued reply",
+        // A usable draft carries both the text and the structured output the CHECK insists on: a reply
+        // with no record of what the model actually returned cannot be audited afterwards.
+        structuredOutput: { reply: "Queued reply" },
+        confidence: 0.9,
+        modelSuggestsSend: true,
+        needsReview: false,
+        status: "SCHEDULED",
+        modelProvider: "anthropic",
+        modelName: "claude-opus-5",
+        promptVersion: "reply.v1",
+        schemaVersion: "ai-draft.v1",
+      },
+      select: { id: true },
+    });
+    const operationId = `op-pending-${String(seq)}`;
+    await db().deliveryJobRecord.create({
+      data: {
+        ...profileScope(),
+        draftId: draft.id,
+        operationId,
+        correlationId: operationId,
+        status,
+        scheduledFor,
+        selectedDelayMs: 60_000,
+        ...(status === "SENDING" ? { claimedAt: scheduledFor } : {}),
+      },
+    });
+    return operationId;
+  };
+
+  /**
+   * The other legal origin (ADR-018 Option B): a reply a person wrote, with no draft anywhere.
+   *
+   * Written through `composeHumanReply` rather than by hand, because the CHECKs on `delivery_jobs` are
+   * what make this origin legal and a hand-built row could satisfy the test while being impossible.
+   */
+  const composedDelivery = async (conversationId: string): Promise<string> => {
+    seq += 1;
+    const outcome = await composeHumanReply(db(), context, {
+      conversationId,
+      text: `A person's own reply (${String(seq)})`,
+      reviewMode: "NORMAL",
+      at: at(1900),
+    });
+    if (outcome.status !== "SCHEDULED") {
+      throw new Error(`the fixture expected a queued reply, got ${outcome.status}`);
+    }
+    return outcome.operationId;
+  };
 
   const neighbourAccount = async () => {
     const existing = await db().channelAccount.findFirst({
@@ -554,6 +617,82 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       expect(detail?.latestDraft?.needsReview).toBe(true);
       expect(detail?.latestDraft?.confidence).toBeCloseTo(0.42);
       expect(detail?.latestDraft?.intent).toBe("HOURS");
+    }, 180_000);
+
+    /**
+     * What is about to be sent, and whether it can still be stopped (Issue #29).
+     *
+     * `claimed` is the whole point. A delivery the worker has taken may be at the provider already, so the
+     * UI must not offer to cancel it — and reporting it as cancellable would imply the customer did not
+     * receive something they may well have.
+     */
+    it("reports the replies queued behind their delay, and which are past stopping", async () => {
+      const id = await conversation({ name: "Has Pending", occurredAt: at(1600) });
+      const queued = await pendingDelivery(id, "SCHEDULED", at(1610));
+      const inFlight = await pendingDelivery(id, "SENDING", at(1605));
+
+      const detail = await readConversation(db(), context, id);
+      const sends = new Map((detail?.pendingSends ?? []).map((send) => [send.operationId, send]));
+
+      expect(sends.get(queued)?.claimed).toBe(false);
+      expect(sends.get(inFlight)?.claimed).toBe(true);
+      expect(sends.get(queued)?.scheduledFor.toISOString()).toBe(at(1610).toISOString());
+      expect(sends.get(queued)?.text).toBe("Queued reply");
+    }, 180_000);
+
+    it("reports a reply the person wrote themselves, which has no draft to be found through", async () => {
+      // The blocking finding on PR #76. This query reached the conversation through
+      // `draft.conversationId`, so a human-composed delivery was invisible here — and a queued send the
+      // operator cannot see is a send they cannot stop, which is exactly what Issue #29 asks this pane
+      // to offer.
+      const id = await conversation({ name: "Human Composed", occurredAt: at(1900) });
+      const operationId = await composedDelivery(id);
+
+      const detail = await readConversation(db(), context, id);
+      const send = (detail?.pendingSends ?? []).find((pending) => pending.operationId === operationId);
+
+      expect(send).toBeDefined();
+      expect(send?.draftId).toBeNull();
+      expect(send?.text).toContain("A person's own reply");
+      expect(send?.claimed).toBe(false);
+      expect(send?.authority).toBe("HUMAN_APPROVED");
+    }, 180_000);
+
+    it("reports both origins together, in one pane", async () => {
+      // One conversation can hold a queued AI reply and then a person's own; the pane shows the words,
+      // not which table they came from.
+      const id = await conversation({ name: "Both Origins", occurredAt: at(1910) });
+      const fromModel = await pendingDelivery(id, "SCHEDULED", at(1911));
+      const fromPerson = await composedDelivery(id);
+
+      const sends = new Map(((await readConversation(db(), context, id))?.pendingSends ?? []).map((send) => [send.operationId, send]));
+
+      expect(sends.get(fromModel)?.text).toBe("Queued reply");
+      expect(sends.get(fromPerson)?.text).toContain("A person's own reply");
+    }, 180_000);
+
+    it("does not leak a human-composed reply into another profile's pane", async () => {
+      // The direct column is matched now, so the scope filter is the only thing keeping tenants apart
+      // here. It has to be enough on its own.
+      const id = await conversation({ name: "Composed Isolated", occurredAt: at(1920) });
+      await composedDelivery(id);
+
+      expect(await readConversation(db(), neighbour, id)).toBeUndefined();
+    }, 180_000);
+
+    it("reports nothing pending for a conversation with nothing queued", async () => {
+      const id = await conversation({ name: "Nothing Pending", occurredAt: at(1700) });
+
+      expect((await readConversation(db(), context, id))?.pendingSends).toEqual([]);
+    }, 180_000);
+
+    it("does not report a settled delivery as pending", async () => {
+      const id = await conversation({ name: "Settled Delivery", occurredAt: at(1800) });
+      const operationId = await pendingDelivery(id, "SCHEDULED", at(1810));
+      await db().deliveryJobRecord.update({ where: { operationId }, data: { status: "CANCELLED_POLICY", cancelledAt: at(1811) } });
+
+      // A cancelled or sent reply is not waiting to go out, and offering to stop one would be nonsense.
+      expect((await readConversation(db(), context, id))?.pendingSends).toEqual([]);
     }, 180_000);
 
     it("names the person holding the conversation", async () => {

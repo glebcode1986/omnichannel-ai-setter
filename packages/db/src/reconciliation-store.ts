@@ -65,7 +65,7 @@ export function createReconciliationStore(db: DbClient): ReconciliationStore {
       const subject: ReconciliationSubject = {
         operationId,
         deliveryJobId: job.id,
-        conversationId: job.draft.conversationId,
+        conversationId: conversationIdOf(job),
         status: job.status,
         ...(job.claimedAt === null ? {} : { claimedAt: job.claimedAt }),
         attemptCount: job.attemptCount,
@@ -80,7 +80,17 @@ export function createReconciliationStore(db: DbClient): ReconciliationStore {
       await db.$transaction(async (tx) => {
         const job = await tx.deliveryJobRecord.findUniqueOrThrow({
           where: { operationId },
-          select: { workspaceId: true, businessProfileId: true, draftId: true, status: true, draft: { select: { conversationId: true, conversation: { select: { channelAccountId: true } } } } },
+          select: {
+            workspaceId: true,
+            businessProfileId: true,
+            draftId: true,
+            status: true,
+            // Both origins, because a reconciled send may be a person's own words (ADR-018 Option B).
+            composedByUserId: true,
+            conversationId: true,
+            conversation: { select: { channelAccountId: true } },
+            draft: { select: { conversationId: true, conversation: { select: { channelAccountId: true } } } },
+          },
         });
         const scope = { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId };
         // Conditional on the ambiguous state, in the database rather than in a prior read: between the
@@ -96,27 +106,32 @@ export function createReconciliationStore(db: DbClient): ReconciliationStore {
         await tx.message.create({
           data: {
             ...scope,
-            channelAccountId: job.draft.conversation.channelAccountId,
-            conversationId: job.draft.conversationId,
+            channelAccountId: job.draft?.conversation.channelAccountId ?? job.conversation?.channelAccountId ?? "",
+            conversationId: conversationIdOf(job),
             channelMessageId: platformMessageId === "" ? null : platformMessageId,
             direction: "OUT",
-            source: "AI",
+            // Whoever actually wrote it. A reconciled human-composed send is still a person's words.
+            source: job.draftId === null ? "HUMAN" : "AI",
+            ...(job.composedByUserId === null || job.composedByUserId === undefined ? {} : { sentByUserId: job.composedByUserId }),
             kind: "TEXT",
             occurredAt: at,
             deliveryStatus: "SENT",
             transportPath: "STANDARD",
             operationId,
-            aiDraftId: job.draftId,
+            ...(job.draftId === null ? {} : { aiDraftId: job.draftId }),
           },
         });
         await tx.conversation.update({
-          where: { workspaceId_businessProfileId_id: { ...scope, id: job.draft.conversationId } },
+          where: { workspaceId_businessProfileId_id: { ...scope, id: conversationIdOf(job) } },
           data: { lastOutboundAt: at, lastMessageAt: at },
         });
-        await tx.aiDraft.update({
-          where: { workspaceId_businessProfileId_id: { ...scope, id: job.draftId } },
-          data: { status: "SENT" },
-        });
+        if (job.draftId !== null) {
+          // Only an AI draft has a status to move. A human-composed reply's record *is* the delivery.
+          await tx.aiDraft.update({
+            where: { workspaceId_businessProfileId_id: { ...scope, id: job.draftId } },
+            data: { status: "SENT" },
+          });
+        }
       });
     },
 
@@ -135,10 +150,12 @@ export function createReconciliationStore(db: DbClient): ReconciliationStore {
         if (resumed.count === 0) {
           return;
         }
-        await tx.aiDraft.updateMany({
-          where: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, id: job.draftId, status: { in: ["HELD_AMBIGUOUS", "SCHEDULED", "CLAIMED"] } },
-          data: { status: "SCHEDULED" },
-        });
+        if (job.draftId !== null) {
+          await tx.aiDraft.updateMany({
+            where: { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId, id: job.draftId, status: { in: ["HELD_AMBIGUOUS", "SCHEDULED", "CLAIMED"] } },
+            data: { status: "SCHEDULED" },
+          });
+        }
       });
     },
 
@@ -156,15 +173,19 @@ export function createReconciliationStore(db: DbClient): ReconciliationStore {
         // The draft becomes the review item: a person opens the conversation and sees the reply together
         // with the fact that whether it was sent is unknown. `ACCOUNT_UNHEALTHY` is not added here — the
         // account may be perfectly healthy; what is unhealthy is our knowledge of this one operation.
-        await tx.aiDraft.update({
-          where: { workspaceId_businessProfileId_id: { ...scope, id: job.draftId } },
-          data: {
-            status: "HELD",
-            needsReview: true,
-            reasonCodes: job.draft.reasonCodes.includes("REVIEW_PENDING") ? job.draft.reasonCodes : [...job.draft.reasonCodes, "REVIEW_PENDING"],
-            updatedAt: at,
-          },
-        });
+        if (job.draftId !== null && job.draft !== null) {
+          // Only an AI draft can become a review item. A human-composed reply has no draft to hold, and
+          // the ambiguity is recorded on the delivery itself — which is what a person opens it from.
+          await tx.aiDraft.update({
+            where: { workspaceId_businessProfileId_id: { ...scope, id: job.draftId } },
+            data: {
+              status: "HELD",
+              needsReview: true,
+              reasonCodes: job.draft.reasonCodes.includes("REVIEW_PENDING") ? job.draft.reasonCodes : [...job.draft.reasonCodes, "REVIEW_PENDING"],
+              updatedAt: at,
+            },
+          });
+        }
       });
     },
 
@@ -242,6 +263,12 @@ export async function findUnresolvedOperations(
         operationId: true,
         updatedAt: true,
         lastErrorCode: true,
+        // Both origins. `conversationIdOf` can only answer for a human-composed delivery if the direct
+        // column is actually selected, and without it an ambiguous reply a person wrote is raised with an
+        // empty conversation id — which the queue's payload schema rejects, so it is never raised at all.
+        // "We do not know whether the customer received this" is exactly the state that must not lose its
+        // way back to a person.
+        conversationId: true,
         draft: { select: { conversationId: true } },
       },
       orderBy: { updatedAt: "asc" },
@@ -269,7 +296,7 @@ export async function findUnresolvedOperations(
         ({
           workspaceId: row.workspaceId,
           businessProfileId: row.businessProfileId,
-          conversationId: row.draft.conversationId,
+          conversationId: conversationIdOf(row),
           correlationId: row.correlationId,
           deliveryJobId: row.id,
           operationId: row.operationId,
@@ -279,4 +306,17 @@ export async function findUnresolvedOperations(
         }) satisfies UnresolvedOperation,
     ),
   ];
+}
+
+/**
+ * The conversation a delivery belongs to, whichever origin wrote its words (ADR-018 Option B).
+ *
+ * An AI delivery reaches it through its draft; a human-composed one names it directly. Exactly one of the
+ * two is present, which a CHECK guarantees, so the fallback is a total function rather than a guess.
+ */
+function conversationIdOf(job: {
+  readonly draft?: { readonly conversationId: string } | null;
+  readonly conversationId?: string | null;
+}): string {
+  return job.draft?.conversationId ?? job.conversationId ?? "";
 }

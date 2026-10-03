@@ -8,11 +8,15 @@
  */
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { readConversation } from "@omnichannel/db";
+import { pendingHumanReply, readConversation } from "@omnichannel/db";
 
 import { ConversationList } from "@/ui/inbox/conversation-list";
 import { MessageThread } from "@/ui/inbox/message-thread";
 import { ContextPanel } from "@/ui/inbox/context-panel";
+import { ConversationControls } from "@/ui/inbox/conversation-controls";
+import { Composer } from "@/ui/inbox/composer";
+import { OutcomeNotice } from "@/ui/outcome-notice";
+import { cancelSendAction, composeReplyAction, handBackAction, takeOverAction } from "@/server/review-actions";
 import { getDb } from "@/server/db";
 import { loadInboxScreen } from "@/server/inbox-page";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -31,7 +35,10 @@ export default async function ConversationPage({
 }) {
   const { workspaceId, businessProfileId, conversationId } = await params;
   const screen = await loadInboxScreen(workspaceId, businessProfileId, await searchParams);
-  const conversation = await readConversation(getDb(), screen.context, conversationId);
+  const [conversation, pending] = await Promise.all([
+    readConversation(getDb(), screen.context, conversationId),
+    pendingHumanReply(getDb(), screen.context, conversationId),
+  ]);
   if (conversation === undefined) {
     notFound();
   }
@@ -54,10 +61,37 @@ export default async function ConversationPage({
         <Link className="inbox-back" href={`${screen.basePath}${inboxQueryString(screen.view)}`} data-inbox-back="true">
           {screen.t.t("inbox.backToList")}
         </Link>
+        <OutcomeNotice t={screen.t} outcome={outcomeOf(await searchParams)} />
         <MessageThread t={screen.t} conversation={conversation} />
+        <Composer
+          t={screen.t}
+          conversation={conversation}
+          target={{ workspaceId, businessProfileId }}
+          hasPendingReply={pending !== undefined}
+          // The provider's human-support path is only offered where the conversation is already waiting
+          // on one: the policy engine decides eligibility, and a checkbox that offered it everywhere
+          // would invite authorizing a send the gates will refuse.
+          humanAgentAvailable={conversation.takeoverReviewMode === "HUMAN_AGENT"}
+          action={composeReplyAction}
+        />
+        <ConversationControls
+          t={screen.t}
+          conversation={conversation}
+          target={{ workspaceId, businessProfileId }}
+          viewerUserId={screen.context.userId}
+          takeoverByUserId={conversation.takeoverByUserId}
+          takeoverPausedUntil={conversation.takeoverPausedUntil}
+          actions={{ takeOver: takeOverAction, handBack: handBackAction, cancelSend: cancelSendAction }}
+        />
       </div>
       <ContextPanel t={screen.t} conversation={conversation} />
     </div>
   );
 }
 
+/** The outcome of the action that redirected here, if any. Rendered once and then gone with the URL. */
+function outcomeOf(params: RawSearchParams): string | undefined {
+  const value = params["outcome"];
+  const first = Array.isArray(value) ? value[0] : value;
+  return first === undefined || first === "" ? undefined : first;
+}

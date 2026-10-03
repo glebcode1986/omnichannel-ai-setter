@@ -21,6 +21,7 @@ import {
   createReconciliationStore,
   createSuspensionStore,
   createWorkspaceWithOwner,
+  composeHumanReply,
   findUnresolvedOperations,
   readReliabilitySnapshot,
   recoverStaleSendingDeliveries,
@@ -289,6 +290,41 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
 
       expect(unresolved.map((operation) => operation.operationId)).toContain(operationId);
       expect(unresolved.find((operation) => operation.operationId === operationId)?.correlationId).toMatch(/^corr-rel-/);
+    });
+
+    it("finds a reply a person wrote, and names the conversation it belongs to", async () => {
+      // The same shape as the blocking finding on PR #76, one layer down. A human-composed delivery has
+      // no draft, and this query read the conversation through `draft.conversationId` only — so the
+      // sweeper raised the operation with an empty conversation id, the queue's payload schema refused
+      // it, and the row was never raised at all. "We do not know whether the customer received this" is
+      // the one state that must never lose its way back to a person.
+      seq += 1;
+      // Its own conversation, with no AI delivery in it: the composer allows one queued reply at a time,
+      // so reusing a conversation that already has one would refuse before this case began.
+      const identity = await createContactWithChannelIdentity(infra.db, context, { channelAccountId, externalUserId: `ig-user-composed-${String(seq)}` });
+      const conversation = await createConversation(infra.db, context, { channelAccountId, channelIdentityId: identity.channelIdentityId });
+      await appendInboundMessage(infra.db, context, { conversationId: conversation.id, kind: "TEXT", text: "Are you open?", occurredAt: NOW });
+      const outcome = await composeHumanReply(infra.db, context, {
+        conversationId: conversation.id,
+        text: "I will check and come back to you.",
+        reviewMode: "NORMAL",
+        at: NOW,
+      });
+      if (outcome.status !== "SCHEDULED") {
+        throw new Error(`the fixture expected a queued reply, got ${outcome.status}`);
+      }
+      await infra.db.deliveryJobRecord.update({
+        where: { operationId: outcome.operationId },
+        data: { status: "HELD_AMBIGUOUS", claimedAt: NOW, attemptCount: 1 },
+      });
+
+      const unresolved = await findUnresolvedOperations(infra.db, { retryBefore: AFTER_GRACE, limit: 50 });
+      const found = unresolved.find((operation) => operation.operationId === outcome.operationId);
+
+      expect(found).toBeDefined();
+      expect(found?.conversationId).toBe(conversation.id);
+      // An identifier the queue will accept, which an empty string is not.
+      expect(found?.conversationId).not.toBe("");
     });
 
     it("raises an investigation that stalled, without restarting its clock", async () => {

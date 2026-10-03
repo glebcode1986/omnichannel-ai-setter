@@ -27,6 +27,7 @@ import type { ConversationStatus, LeadStage } from "@omnichannel/domain";
 
 import { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 import type { DbExecutor } from "./client";
+import { deliveryOfConversation } from "./delivery-origin";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 30;
@@ -273,6 +274,24 @@ export interface LatestDraft {
   readonly createdAt: Date;
 }
 
+/**
+ * A reply that is queued but has not gone out yet (Issue #29).
+ *
+ * Shown so a person can stop it. `claimed` is the difference between "you can still cancel this" and "a
+ * worker has it, and what the customer received is no longer ours to decide" — ADR-012 forbids guessing
+ * about a send in flight, so the UI must not offer to cancel one.
+ */
+export interface PendingSend {
+  readonly operationId: string;
+  /** Absent when a person composed this reply themselves (ADR-018 Option B). */
+  readonly draftId: string | null;
+  readonly text: string | null;
+  readonly scheduledFor: Date;
+  readonly claimed: boolean;
+  /** Whether a person already authorized this send, or automation scheduled it. */
+  readonly authority: string;
+}
+
 export interface ConversationDetail {
   readonly id: string;
   readonly channel: string;
@@ -291,11 +310,17 @@ export interface ConversationDetail {
   readonly takeoverReason: string | null;
   readonly takeoverReviewMode: string | null;
   readonly takeoverByName: string | null;
+  /** Who is holding it, so a pane can say "you" instead of naming someone to themselves. */
+  readonly takeoverByUserId: string | null;
+  /** When automation may resume, for a takeover that was paused rather than ended. */
+  readonly takeoverPausedUntil: Date | null;
   readonly humanTakeoverAt: Date | null;
   readonly lastInboundAt: Date | null;
   readonly lastOutboundAt: Date | null;
   readonly messages: readonly ThreadMessage[];
   readonly latestDraft?: LatestDraft;
+  /** Replies queued behind their delay, newest first. Usually empty, and never more than a handful. */
+  readonly pendingSends: readonly PendingSend[];
 }
 
 /**
@@ -317,6 +342,16 @@ export async function readConversation(
   // The policies depend only on the profile, so they are read alongside the conversation rather than
   // after it: two sequential round trips for one screen is a round trip too many.
   const policiesPromise = readModePolicies(db, scope);
+  // Queued replies, read alongside rather than after: the thread cannot be drawn without them, because a
+  // send the operator cannot see is a send they cannot stop.
+  const pendingPromise = db.deliveryJobRecord.findMany({
+    // Both legal origins: a reply a person wrote has no draft to reach this conversation through, and a
+    // queued send the operator cannot see is a send they cannot stop.
+    where: { ...scope, status: { in: ["SCHEDULED", "SENDING"] }, ...deliveryOfConversation(conversationId) },
+    orderBy: [{ scheduledFor: "asc" }],
+    take: 10,
+    select: { operationId: true, draftId: true, status: true, scheduledFor: true, authority: true, humanText: true, draft: { select: { text: true } } },
+  });
   const row = await db.conversation.findFirst({
     where: { ...scope, id: conversationId },
     select: {
@@ -329,6 +364,8 @@ export async function readConversation(
       takeoverState: true,
       takeoverReason: true,
       takeoverReviewMode: true,
+      takeoverActorUserId: true,
+      takeoverPausedUntil: true,
       humanTakeoverAt: true,
       lastInboundAt: true,
       lastOutboundAt: true,
@@ -371,7 +408,7 @@ export async function readConversation(
       },
     },
   });
-  const policies = await policiesPromise;
+  const [policies, pending] = await Promise.all([policiesPromise, pendingPromise]);
   if (row === null) {
     return undefined;
   }
@@ -393,10 +430,23 @@ export async function readConversation(
     takeoverReason: row.takeoverReason,
     takeoverReviewMode: row.takeoverReviewMode,
     takeoverByName: row.takeoverActorUser?.name ?? null,
+    takeoverByUserId: row.takeoverActorUserId,
+    takeoverPausedUntil: row.takeoverPausedUntil,
     humanTakeoverAt: row.humanTakeoverAt,
     lastInboundAt: row.lastInboundAt,
     lastOutboundAt: row.lastOutboundAt,
     // Reversed here rather than in SQL: the query takes the newest window, the thread reads oldest first.
+    pendingSends: pending.map((job) => ({
+      operationId: job.operationId,
+      draftId: job.draftId,
+      // Whichever origin wrote it. The pane shows the words, not which table they came from.
+      text: job.draft?.text ?? job.humanText,
+      scheduledFor: job.scheduledFor,
+      // A claimed send is already at, or on its way to, the provider. Offering to cancel it would be
+      // offering something the database will refuse — and, worse, implying the customer did not get it.
+      claimed: job.status === "SENDING",
+      authority: job.authority,
+    })),
     messages: [...row.messages].reverse().map((message) => ({
       id: message.id,
       direction: message.direction,

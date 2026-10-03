@@ -312,4 +312,117 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
 
     expect(outcome).toEqual({ status: "GONE" });
   }, 120_000);
+
+  describe("a draft the customer has overtaken", () => {
+    /**
+     * The refusal that has to live in the transaction.
+     *
+     * A draft answers a conversation at one state version. Once an inbound message moves it on, the draft
+     * answers a question the customer has already replaced — so sending it is refused here, where the
+     * delivery would otherwise be created. A check in a use case or a UI action is one any other caller
+     * skips, and one made before the transaction can be overtaken by a message arriving before the commit.
+     */
+    const overtake = async (draftId: string) => {
+      const draft = await database.db.aiDraft.findUniqueOrThrow({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: draftId } },
+        select: { anchorStateVersion: true },
+      });
+      await database.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+        data: { stateVersion: draft.anchorStateVersion + 1 },
+      });
+    };
+
+    const restore = async (draftId: string) => {
+      const draft = await database.db.aiDraft.findUniqueOrThrow({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: draftId } },
+        select: { anchorStateVersion: true },
+      });
+      await database.db.conversation.update({
+        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+        data: { stateVersion: draft.anchorStateVersion },
+      });
+    };
+
+    it("refuses to send it as written, and creates no delivery", async () => {
+      const draftId = await pendingDraft();
+      await overtake(draftId);
+
+      const outcome = await resolveReview(dependencies(database.db), {
+        scope: { ...scope(), conversationId: profile.conversationId },
+        draftId,
+        action: { kind: "APPROVE" },
+        reviewMode: "NORMAL",
+      });
+
+      expect(outcome).toEqual({ status: "STALE" });
+      expect(await database.db.deliveryJobRecord.findFirst({ where: { draftId }, select: { id: true } })).toBeNull();
+      // And the draft is left for somebody to decide, not silently claimed by the refusal.
+      const draft = await database.db.aiDraft.findUniqueOrThrow({ where: { workspaceId_businessProfileId_id: { ...scope(), id: draftId } }, select: { status: true } });
+      expect(draft.status).toBe("PENDING");
+      await restore(draftId);
+    }, 120_000);
+
+    it("refuses to send an edited version of it either", async () => {
+      const draftId = await pendingDraft();
+      await overtake(draftId);
+
+      const outcome = await resolveReview(dependencies(database.db), {
+        scope: { ...scope(), conversationId: profile.conversationId },
+        draftId,
+        action: { kind: "EDIT", text: "We open at 11 actually.", saveAsStyleExample: true },
+        reviewMode: "NORMAL",
+      });
+
+      expect(outcome).toEqual({ status: "STALE" });
+      expect(await database.db.deliveryJobRecord.findFirst({ where: { draftId }, select: { id: true } })).toBeNull();
+      await restore(draftId);
+    }, 120_000);
+
+    it("still lets a person clear it", async () => {
+      const draftId = await pendingDraft();
+      await overtake(draftId);
+
+      const outcome = await resolveReview(dependencies(database.db), {
+        scope: { ...scope(), conversationId: profile.conversationId },
+        draftId,
+        action: { kind: "DISMISS" },
+        reviewMode: "NORMAL",
+      });
+
+      // Dismissing sends nothing, and somebody has to be able to empty the queue.
+      expect(outcome).toEqual({ status: "DISMISSED" });
+      await restore(draftId);
+    }, 120_000);
+
+    it("still lets a person take the conversation", async () => {
+      const draftId = await pendingDraft();
+      await overtake(draftId);
+
+      const outcome = await resolveReview(dependencies(database.db), {
+        scope: { ...scope(), conversationId: profile.conversationId },
+        draftId,
+        action: { kind: "CLAIM" },
+        reviewMode: "NORMAL",
+      });
+
+      expect(outcome).toEqual({ status: "CLAIMED" });
+      await restore(draftId);
+    }, 120_000);
+
+    it("sends a draft whose conversation has not moved", async () => {
+      const draftId = await pendingDraft();
+      await restore(draftId);
+
+      const outcome = await resolveReview(dependencies(database.db), {
+        scope: { ...scope(), conversationId: profile.conversationId },
+        draftId,
+        action: { kind: "APPROVE" },
+        reviewMode: "NORMAL",
+      });
+
+      // Otherwise the four refusals above would pass against a store that refused everything.
+      expect(outcome.status).toBe("SCHEDULED");
+    }, 120_000);
+  });
 });

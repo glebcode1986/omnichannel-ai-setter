@@ -7,9 +7,9 @@
  * provider-shaped `capabilities` blob, a credential shape carries a token, a webhook envelope carries
  * Meta's own nesting — and from then on the Inbox knows about Instagram.
  *
- * So this reads the Inbox's own source and checks what it imports and what it names. It is a coarse
- * instrument and says so: what it proves is that the panes depend on the neutral row and detail types and
- * on nothing from a channel package.
+ * So this reads the panes' own source — the Inbox and the Review queue both — and checks what they import
+ * and what they name. It is a coarse instrument and says so: what it proves is that they depend on the
+ * neutral row, item and detail types and on nothing from a channel package.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const inboxDir = path.dirname(fileURLToPath(import.meta.url));
+/** Every directory of panes this rule covers. The Review queue is held to the same criterion. */
+const paneDirs = [inboxDir, path.resolve(inboxDir, "../review")];
 
 /**
  * Comments are stripped before anything is matched.
@@ -31,9 +33,11 @@ function withoutComments(source: string): string {
 }
 
 function componentSources(): { readonly file: string; readonly source: string }[] {
-  return readdirSync(inboxDir)
-    .filter((entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry))
-    .map((entry) => ({ file: entry, source: withoutComments(readFileSync(path.join(inboxDir, entry), "utf8")) }));
+  return paneDirs.flatMap((dir) =>
+    readdirSync(dir)
+      .filter((entry) => /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry))
+      .map((entry) => ({ file: `${path.basename(dir)}/${entry}`, source: withoutComments(readFileSync(path.join(dir, entry), "utf8")) })),
+  );
 }
 
 describe("the Inbox components", () => {
@@ -114,9 +118,13 @@ describe("the Inbox components", () => {
   it("looks at every pane, so a clean result means something", () => {
     const files = componentSources().map((entry) => entry.file);
 
-    expect(files).toContain("conversation-list.tsx");
-    expect(files).toContain("message-thread.tsx");
-    expect(files).toContain("context-panel.tsx");
-    expect(files).toContain("view.ts");
+    expect(files).toContain("inbox/conversation-list.tsx");
+    expect(files).toContain("inbox/message-thread.tsx");
+    expect(files).toContain("inbox/context-panel.tsx");
+    expect(files).toContain("inbox/conversation-controls.tsx");
+    expect(files).toContain("inbox/view.ts");
+    // The Review queue is held to the same criterion, and is where a provider payload would be most
+    // tempting: a template name, a window state, an eligibility blob.
+    expect(files).toContain("review/review-card.tsx");
   });
 });

@@ -13,11 +13,14 @@ import {
   type DeliverySettlement,
   type DeliveryStore,
 } from "@omnichannel/application";
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { createAiDraftStore } from "./ai-draft-store";
+import { appendInboundMessage } from "./repositories/messages";
 import { createDbClient, type DbClient } from "./client";
 import { PrismaClient } from "./generated/prisma/client";
 import { createDeliveryStore, recoverStaleSendingDeliveries } from "./delivery-store";
@@ -258,6 +261,172 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
    * The barrier is the store itself — the first read is allowed to finish, the change is committed, and
    * only then is the claim made. No sleeps and no timing: the race is arranged rather than hoped for.
    */
+  /**
+   * A person's own reply, through the same coordinator (ADR-018 Option B, accepted 2026-09-30).
+   *
+   * The decision's whole promise is that there is one send path, not two. So the test is not that the
+   * composer works — that is `composer-store.integration.test.ts` — but that this store, the one the
+   * worker actually reads, produces a correct send context for the human origin and applies the same
+   * gates to it. Anything less would mean the composer had quietly become a second route.
+   */
+  describe("a delivery a person composed themselves", () => {
+    const composeDelivery = async (text = "I can move that to Friday."): Promise<string> => {
+      const operationId = randomUUID();
+      // Composed *after* the latest message, which is what actually happens: a person reads the thread
+      // and then types. Anchoring at a fixed NOW would make the delivery superseded by any message an
+      // earlier test left behind — the guard working correctly, against a premise that was never true.
+      const latest = await database.db.message.findFirst({
+        where: { ...scope(), conversationId: profile.conversationId },
+        orderBy: { occurredAt: "desc" },
+        select: { occurredAt: true },
+      });
+      const composedAt = new Date(Math.max(NOW.getTime(), (latest?.occurredAt.getTime() ?? 0) + 1_000));
+      await database.db.deliveryJobRecord.create({
+        data: {
+          ...scope(),
+          humanText: text,
+          composedByUserId: profile.context.userId,
+          conversationId: profile.conversationId,
+          operationId,
+          correlationId: operationId,
+          status: "SCHEDULED",
+          scheduledFor: composedAt,
+          selectedDelayMs: 0,
+          authority: "HUMAN_APPROVED",
+          approvedByUserId: profile.context.userId,
+          approvedAt: composedAt,
+          approvedReviewMode: "NORMAL",
+          decisionKey: `compose-${operationId}`,
+        },
+      });
+      return operationId;
+    };
+
+    it("loads for send with the person's wording and their authority", async () => {
+      const operationId = await composeDelivery();
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+
+      expect(context?.text).toBe("I can move that to Friday.");
+      // No draft id at all, rather than an invented one: the worker would otherwise reconcile against a
+      // row that does not exist.
+      expect(context?.draftId).toBeUndefined();
+      expect(context?.authority.kind).toBe("HUMAN_APPROVED");
+      // A person's own wording was never held for review; the review it needed was them writing it.
+      expect(context?.draftNeedsReview).toBe(false);
+      // And it reaches the same recipient the AI path would, through the same conversation.
+      expect(context?.conversationId).toBe(profile.conversationId);
+      expect(context?.recipientExternalId).toBeTruthy();
+    }, 120_000);
+
+    it("is claimed by the same atomic claim, once", async () => {
+      const operationId = await composeDelivery("Only once.");
+      const store = createDeliveryStore(database.db);
+
+      const first = await claimFresh(store, operationId);
+      const second = await claimFresh(store, operationId);
+
+      // ADR-012's claim does not care which origin wrote the words.
+      expect(first.kind).toBe("CLAIMED");
+      expect(second.kind).not.toBe("CLAIMED");
+    }, 120_000);
+
+    it("refuses the claim when the wording changed after it was judged", async () => {
+      const operationId = await composeDelivery("Judged wording.");
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId, NOW);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+
+      // Edited between the judgement and the claim. The guard's whole job is to notice: sending the new
+      // wording would send something nobody judged, and sending the old would send something nobody
+      // wrote. Refusing is the only answer that is true.
+      await database.db.deliveryJobRecord.update({ where: { operationId }, data: { humanText: "Changed underneath." } });
+
+      expect((await store.claim(context, NOW)).kind).toBe("STATE_CHANGED");
+      expect((await database.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } })).status).toBe("SCHEDULED");
+    }, 120_000);
+
+    it("refuses a second claim after the send was already recorded", async () => {
+      const operationId = await composeDelivery("Sent once already.");
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId, NOW);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+      await store.claim(context, NOW);
+      await store.settle(operationId, { kind: "SENT", platformMessageId: `mid-${operationId}` }, NOW);
+
+      // ADR-012: a send whose outcome is known must never be repeated, whichever origin wrote the words.
+      expect((await store.claim(context, NOW)).kind).not.toBe("CLAIMED");
+    }, 120_000);
+
+    it("carries the same account health, suspension and takeover facts the gates read", async () => {
+      const operationId = await composeDelivery("Same gates.");
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+
+      // Every fact the policy engine needs is present for this origin too. Missing any one of them would
+      // mean a human-composed send skipped a check rather than passing it.
+      expect(context?.account).toBeTruthy();
+      expect(context?.takeover).toBeDefined();
+      expect(context?.limits).toBeDefined();
+      expect(context?.replyCycle).toBeDefined();
+      expect(context?.guard).toBeTruthy();
+    }, 120_000);
+
+    it("is superseded by a message that arrived after it was composed", async () => {
+      const operationId = await composeDelivery("Overtaken.");
+      const composed = await database.db.deliveryJobRecord.findFirstOrThrow({ where: { operationId }, select: { approvedAt: true } });
+      await appendInboundMessage(database.db, profile.context, {
+        conversationId: profile.conversationId,
+        kind: "TEXT",
+        text: "actually never mind",
+        // After the person composed, which is the whole point of the case.
+        occurredAt: new Date((composed.approvedAt?.getTime() ?? NOW.getTime()) + 60_000),
+      });
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+
+      // The same rule as for a draft, measured from when the person composed rather than from a draft's
+      // anchor: a reply to a question the customer has already replaced must not go out unexamined.
+      expect(context?.replyCycle).toBe("SUPERSEDED");
+
+      // Removed again, because this message is deliberately dated later than anything else in the file
+      // and would supersede other tests' deliveries. Leaving it behind made a pre-existing case fail —
+      // correctly, against a premise this test had quietly broken.
+      await database.db.message.deleteMany({ where: { ...scope(), conversationId: profile.conversationId, text: "actually never mind" } });
+    }, 120_000);
+
+    it("records the outbound message as a person's, not the assistant's", async () => {
+      const operationId = await composeDelivery("Mine, not the model's.");
+      const store = createDeliveryStore(database.db);
+      await claimFresh(store, operationId);
+
+      await store.settle(operationId, { kind: "SENT", platformMessageId: `mid-${operationId}` }, NOW);
+
+      const message = await database.db.message.findFirstOrThrow({ where: { operationId }, select: { source: true, sentByUserId: true, aiDraftId: true } });
+      // Recording a person's words as `AI` would make the thread's own source distinction a lie.
+      expect(message.source).toBe("HUMAN");
+      expect(message.sentByUserId).toBe(profile.context.userId);
+      expect(message.aiDraftId).toBeNull();
+    }, 120_000);
+
+    it("knows it has already been sent, so a repeat cannot double-send it", async () => {
+      const operationId = await composeDelivery("Exactly once.");
+      const store = createDeliveryStore(database.db);
+      await claimFresh(store, operationId);
+      await store.settle(operationId, { kind: "SENT", platformMessageId: `mid-${operationId}` }, NOW);
+
+      const context = await store.loadForSend(operationId, NOW);
+
+      // An AI delivery answers this through its draft's sent message; a human-composed one through its
+      // operation id. ADR-012's rule does not depend on which origin wrote the words.
+      expect(context?.alreadySent).toBe(true);
+    }, 120_000);
+  });
+
   describe("a conversation that moves after the send was judged", () => {
     /**
      * A delivery that would genuinely be sent: automation on for this conversation, no takeover, and its

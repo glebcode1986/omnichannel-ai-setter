@@ -14,6 +14,34 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Follow-up repair — P5-03 / Issue #29, the Review queue's missing pagination
+
+Not a reviewer finding: found by checking every paged store list in the chain against the screen that
+spends its cursor, after Astra raised the same defect on #77. The owner asked for it to be fixed here
+rather than above the chain.
+
+`listReviewQueue` paged at 25 and returned a cursor the route never read, and no next link existed —
+while `review.loadMore` sat unused in both catalogues. Because approve/edit/dismiss/claim live only on
+this screen, an item it did not show was an item nobody could decide.
+
+`review-page.ts` now holds the assembly, the cursor travels through the query string, filter links reset
+it, and `review-screen.integration.test.ts` follows the link against a real database. This moves #76's
+accepted head, so its PASS is stale and the new head needs a re-review; propagation waits until #77's
+verdict lands.
+
+### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #76 at `dc68334` and found that a human-composed pending delivery could neither be
+displayed nor cancelled: the Inbox's pending-send query and the cancellation lookup both reached the
+conversation through `draft: { conversationId }`, and an ADR-018 Option B delivery has no draft. Correct,
+and the worse half is that the row still went out after the operator had been told it was not queued.
+
+Fixed by giving both queries one shared predicate, `deliveryOfConversation` in
+`packages/db/src/delivery-origin.ts`, so there is a single place that knows what "belongs to this
+conversation" means for either origin. A third instance surfaced during the repair — the reconciliation
+sweep's orphaned-row select — where the consequence was an ambiguous send that could never be raised for
+investigation, and that is disclosed on the PR rather than folded in silently.
+
 ### Repair in progress — P5-10 / Issue #58, after `CHANGES_REQUESTED`
 
 Astra reviewed PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` and returned two blocking findings,
@@ -182,3 +210,41 @@ Branch: `feat/p1-02-domain-channel-contracts` — implemented, PR #49.
 Phase 2 was started under the owner's Stage B directive (MASTER Issue #61) once the Issue #53 Business
 Profile sync completed, and is implemented as PRs #63–#71 in the chain above. Contracts: `docs/tasks/P2-*`.
 
+## Stage C — CURRENT STATE: Gate C PASS
+
+Stage C's only task, #56 / P3-03 (reliability controls, health, kill switches, reconciliation), was
+accepted as PR #72 at `9955ecf`. The whole #26→#72 chain has an independent PASS. Gate C's conditions
+hold: the dashboard may be closed while the server continues safely, dependency failures degrade
+narrowly, and outbound can be stopped without losing inbound.
+
+## Stage D — CURRENT STATE: in progress, seven branches
+
+Stacked in MASTER #61's order, each branch cut from the previous task's head because `main` carries
+documentation only. Every PR below is CI-green with an evidence comment and a
+`CLAUDE_READY_FOR_ASTRA` marker.
+
+| Task | Issue | Branch | PR |
+| --- | --- | --- | --- |
+| P5-01 app shell + resumable onboarding | #27 | `feat/p5-01-app-shell-onboarding` | #73 |
+| P5-10 EN/RU localization | #58 | `feat/p5-10-localization` | #74 |
+| P5-02 unified Inbox | #28 | `feat/p5-02-unified-inbox` | #75 |
+| P5-03 conversation operations + Review Queue | #29 | `feat/p5-03-review-conversation-ops` | #76 |
+| P5-05 Knowledge Library | #31 | `feat/p5-05-knowledge-library` | #77 |
+| P5-06 Style Training | #32 | `feat/p5-06-style-training` | #78 |
+| P5-04 AI settings + no-send simulation | #30 | `feat/p5-04-ai-settings-simulation` | #79 |
+| P5-07 Leads pipeline | #33 | `feat/p5-07-leads-pipeline` | store only, no PR yet |
+
+**P5-03 is complete.** ADR-018 was accepted as Option B on 2026-09-30, and the composer is built: a
+human-composed reply has an honest non-AI origin on the delivery record, goes through the one delivery
+coordinator with every gate re-asserted, and creates no `AiDraft` row.
+
+### Open questions for the owner
+
+1. **P5-07: may a Workspace add a lead stage?** `LEADS_ANALYTICS_UX.md` says it may. `LeadStage` is an
+   enum the draft engine returns in its structured output, so adding one is a change to what the model may
+   produce rather than a display preference. Rename, reorder and hide are built.
+2. **`docs/specs/MVP_RELEASE_SCOPE.md` does not exist** but Issue #58 referenced it. `LOCALIZATION.md` was
+   written as part of that task; this one was deliberately not invented.
+3. **The playground and the retrieval tester run in `apps/web`**, which now reads the worker's embedding
+   and reply-model settings (both optional). Moving them into the worker is a reasonable alternative if
+   you would rather the web app held no model configuration.

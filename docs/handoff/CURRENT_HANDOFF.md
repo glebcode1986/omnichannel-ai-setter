@@ -205,13 +205,75 @@ force, not the conversation's empty override, and the precedence now has one imp
 approving and editing arrive with P5-03, and the panel says so rather than showing disabled buttons. See
 the implementation notes in `docs/specs/PRODUCT_UX.md`.
 
+**Gate C is PASS.** Stage C's only task, #56 / P3-03, was accepted as PR #72 at `9955ecf`, and the whole
+#26→#72 chain has an independent PASS. Reliability controls, health reporting, kill switches and
+reconciliation are in place: the dashboard may be closed while the server continues safely, dependency
+failures degrade narrowly, and outbound can be stopped without losing inbound.
+
+**A human-composed reply has an honest origin (ADR-018 Option B, accepted 2026-09-30).** The composer was
+the one part of P5-03 that could not be built without a decision, because a delivery required an
+`ai_drafts` row and a person's words are not a generation. Option B was accepted: `delivery_jobs.draft_id`
+is nullable and the row carries `human_text` with its author, under CHECKs admitting **exactly one**
+origin — never none, never both, never anonymous human wording, never an author on a model's draft, never
+empty text, and never automation's authority on words a person typed. `ai_drafts` is untouched and stays
+model-only, so no human reply reaches `readReliabilitySnapshot`, `countUnusableGenerations` or the evals.
+
+The delivery coordinator is still the only path to a customer. A human-composed delivery is claimed by the
+same atomic claim, re-asserts the same conversation facts in the same conditional update, and is refused
+by the same policy, window, account-health, kill-switch and takeover gates. Its wording is part of the
+guard, so an edit between the judgement and the claim refuses rather than sending something nobody judged.
+Idempotency is the same decision digest the review path uses.
+
 ## Immediate next actions
 
-1. **#28 / P5-02 is the open work.** The unified Inbox on `feat/p5-02-unified-inbox`, stacked on P5-10.
-2. **PR #73 (P5-01) and PR #74 (P5-10) are awaiting review.** Both are CI-green with evidence posted.
-   Fixes for either go to the earliest affected branch and merge down the chain.
-3. **P5-03 / Issue #29 (Review queue and composer) is next in MASTER #61's order.** The Inbox deliberately
-   left the composer and every review action to it, and the context pane already says so in words.
+1. **The Review queue could not show more than 25 items (#29).** Found while repairing the identical
+   blocker Astra raised on PR #77, by checking every paged store list against the screen that spends its
+   cursor. `listReviewQueue` pages at 25 and returns a `nextCursor`; the route called it with no cursor
+   and rendered no link. The label `review.loadMore` already existed in both catalogues and nothing used
+   it — the sentence was written and the link never was.
+
+   It mattered more here than in the library. `approveDraftAction`, `editAndSendAction`,
+   `dismissDraftAction` and `claimDraftAction` are imported by **one** file, the Review queue route. The
+   conversation screen can take over, hand back, cancel a send and compose a reply, but not decide a
+   draft. So the twenty-sixth item waiting for a person could not be approved, edited, dismissed or
+   claimed anywhere in the product; an operator could only take the conversation and type a reply
+   themselves, leaving the draft PENDING for good. In DRAFT mode every inbound message produces one.
+
+   Fixed with the shape proved on #77: the cursor through the route's query parameters, the assembly in
+   `review-page.ts` where a test can call it, and `review-screen.integration.test.ts` walking the loop a
+   browser walks. Two details specific to this queue: every *filter* link drops the cursor, because
+   changing what the queue shows means starting from the top of it, and a cursor is not a filter, so page
+   two of the whole queue does not explain itself with "nothing matches that filter".
+
+   **This moves an accepted head.** #76 was PASSED at `3db5d63`, so its verdict is now stale and the head
+   needs an independent re-review. Propagation to #77–#86 is deliberately **not** done yet: Astra is
+   mid-review of #77 at `b8d0eea`, and merging into it would invalidate the exact head she is reading.
+2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+   finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
+   human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
+   through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply
+   a person had just written did not appear in the thread, `cancelSend` answered `GONE`, and the row sat
+   `SCHEDULED` and went out — the operator was told their reply was not queued, and then it was.
+
+   Both now spread `deliveryOfConversation(conversationId)` from `packages/db/src/delivery-origin.ts`,
+   one place that knows what "belongs to this conversation" means for either origin. A third instance of
+   the same mistake was found while fixing it: the reconciliation sweep's orphaned-row query selected the
+   conversation only through the draft, so an ambiguous human-composed send was raised with an empty
+   conversation id — which the queue's payload schema rejects, so it was never raised at all.
+
+   **The lesson, for the next nullable relation:** making a column optional is not the change. The change
+   is every query that assumed it was there, and the compiler cannot find them because a relation filter
+   that matches nothing is still valid. Grep for the relation, not for the column.
+2. **Stage D is open across six stacked branches**, each CI-green with evidence posted:
+   #73 (P5-01 shell/onboarding), #74 (P5-10 EN/RU), #75 (P5-02 Inbox), #76 (P5-03 review + composer,
+   now complete), #77 (P5-05 Knowledge), #78 (P5-06 Style), #79 (P5-04 AI settings + simulation).
+   `feat/p5-07-leads-pipeline` carries the P5-07 store and is not yet a PR.
+2. **Fixes go to the earliest affected branch and merge down the chain.** No rebases, no force-pushes,
+   no merges to `main`.
+3. **P5-07 / Issue #33 (Leads) is the open work.** Its store, migration and tests are committed; the
+   kanban and table views are not built yet. One product question is open: the spec allows a Workspace to
+   *add* stages, which would require `LeadStage` to stop being an enum — and the draft engine returns one
+   in its structured output, so that is a decision, not a display preference.
 4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package

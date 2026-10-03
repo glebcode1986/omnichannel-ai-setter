@@ -44,8 +44,19 @@ export {
   type AutomatedDeliveryInput,
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
+export { createConversationOperationStore } from "./conversation-operations-store";
+export { composeHumanReply, pendingHumanReply, type ComposeInput, type ComposeOutcome } from "./composer-store";
+export {
+  listReviewQueue,
+  type ReviewCursor,
+  type ReviewItem,
+  type ReviewQueueFilter,
+  type ReviewQueuePage,
+  type RetrievalProvenance,
+} from "./review-queue-store";
 export { createIngestionStore } from "./ingestion-store";
 export {
+  type PendingSend,
   listInbox,
   readConversation,
   type ConversationDetail,
