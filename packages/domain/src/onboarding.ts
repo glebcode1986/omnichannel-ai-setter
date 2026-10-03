@@ -114,6 +114,7 @@ export interface OnboardingStepStatus {
 export const ACTIVATION_BLOCKERS = [
   "NO_CONNECTED_CHANNEL",
   "NO_KNOWLEDGE",
+  "STYLE_NOT_CONFIGURED",
   "NO_POLICY",
   "UNRESOLVED_REVIEW_ITEMS",
 ] as const;
@@ -161,7 +162,7 @@ export function evaluateOnboarding(facts: OnboardingFacts, skipped: readonly Onb
     return { step, state: deliberatelySkipped.has(step) ? "SKIPPED" : "INCOMPLETE", skippable };
   });
 
-  const activationBlockers = blockersFor(facts);
+  const activationBlockers = blockersFor(facts, deliberatelySkipped);
   return {
     steps,
     ...(firstUnfinished(steps) === undefined ? {} : { nextStep: firstUnfinished(steps) }),
@@ -208,13 +209,30 @@ function firstUnfinished(steps: readonly OnboardingStepStatus[]): OnboardingStep
  * checklist in ONBOARDING_UX.md asks for it "configured or intentionally skipped", which is a step
  * question rather than a launch blocker.
  */
-function blockersFor(facts: OnboardingFacts): ActivationBlocker[] {
+/**
+ * Why activation is not available, given the facts *and* what a person deliberately set aside.
+ *
+ * The skip set is a parameter rather than something read from the facts, because a skip is a decision and
+ * not a state of the product: "nobody has written a voice yet" and "somebody decided this business does
+ * not need one" look identical in `facts` and must not get the same answer. `ONBOARDING_UX.md` says the
+ * checklist enforces "style configured **or intentionally skipped**", and both halves of that are here.
+ *
+ * Only the validated skips arrive: the caller filters them through `isSkippableOnboardingStep`, so a
+ * fabricated row naming an unskippable step cannot unlock anything.
+ */
+function blockersFor(facts: OnboardingFacts, deliberatelySkipped: ReadonlySet<OnboardingStep>): ActivationBlocker[] {
   const blockers: ActivationBlocker[] = [];
   if (!facts.channels.some((channel) => channel.status === "CONNECTED")) {
     blockers.push("NO_CONNECTED_CHANNEL");
   }
   if (facts.knowledgeDocumentCount === 0) {
     blockers.push("NO_KNOWLEDGE");
+  }
+  // A voice the assistant will speak in is part of going live, and this is the one blocker a person can
+  // clear two ways. Going live with neither means every customer hears whatever the model defaults to,
+  // which is the thing an owner is least able to predict and most likely to be judged on.
+  if (!facts.styleConfigured && !deliberatelySkipped.has("STYLE")) {
+    blockers.push("STYLE_NOT_CONFIGURED");
   }
   if (!facts.policyConfigured) {
     blockers.push("NO_POLICY");
