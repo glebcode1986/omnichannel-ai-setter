@@ -295,27 +295,24 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
       // `HUMAN_TYPED` on purpose: `HUMAN_EDITED_DRAFT` needs a source draft, and a draft needs a
       // conversation, none of which this gate depends on. The narrower fixture keeps the test about the
       // gate rather than about seeding a thread.
-      const example = async (approved: boolean) =>
-        db().styleExample.create({
-          data: {
-            workspaceId: context.workspaceId,
-            businessProfileId: context.businessProfileId,
-            inboundContext: "Do you have Saturday?",
-            outboundText: "Saturday at eleven is free.",
-            provenance: "HUMAN_TYPED",
-            status: "ACTIVE",
-            ...(approved ? { approvedByUserId: context.userId } : {}),
-          },
-          select: { id: true },
-        });
-
-      // An example nobody approved is a suggestion, not a voice — `readOnboarding` counts only approved
-      // ones, and the gate must honour that rather than treating any row as configuration.
-      const unapproved = await example(false);
+      // With no voice at all the gate refuses, which is what makes the single change below the thing
+      // under test rather than a coincidence.
       expect((await readOnboarding(db(), context)).state.canActivate).toBe(false);
-      await db().styleExample.delete({ where: { id: unapproved.id } });
 
-      await example(true);
+      // Approved on purpose: `readOnboarding` counts only examples a person has approved, because an
+      // example nobody judged is a suggestion and not a voice. Later in the chain a CHECK says the same
+      // thing, which is why this row cannot be written any other way.
+      await db().styleExample.create({
+        data: {
+          workspaceId: context.workspaceId,
+          businessProfileId: context.businessProfileId,
+          inboundContext: "Do you have Saturday?",
+          outboundText: "Saturday at eleven is free.",
+          provenance: "HUMAN_TYPED",
+          status: "ACTIVE",
+          approvedByUserId: context.userId,
+        },
+      });
 
       // `styleConfigured` is a profile *or* an approved example, and the gate must read the same
       // disjunction the checklist does rather than inventing a narrower one.
