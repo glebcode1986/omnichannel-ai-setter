@@ -33,6 +33,7 @@ export {
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
+export { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
 export {
@@ -44,6 +45,17 @@ export {
 } from "./delivery-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export { createIngestionStore } from "./ingestion-store";
+export {
+  listInbox,
+  readConversation,
+  type ConversationDetail,
+  type InboxCursor,
+  type InboxFilter,
+  type InboxPage,
+  type InboxRow,
+  type LatestDraft,
+  type ThreadMessage,
+} from "./inbox-store";
 export { countUnusableGenerations, DEFAULT_SNAPSHOT_WINDOW, readReliabilitySnapshot, type ReliabilitySnapshot, type SnapshotWindow } from "./reliability-metrics";
 export { createReconciliationStore, findUnresolvedOperations, type UnresolvedOperation } from "./reconciliation-store";
 export { createSuspensionStore, type NewSuspension, type SuspensionStore, type SuspensionTargetQuery, type SystemSuspension } from "./suspension-store";

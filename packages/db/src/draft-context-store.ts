@@ -10,6 +10,7 @@
 import type { ConversationSegment, DraftConversationSnapshot } from "@omnichannel/application";
 import type { AiMode } from "@omnichannel/domain";
 
+import { resolveEffectiveMode } from "./automation-mode";
 import type { DbClient } from "./client";
 
 const DEFAULT_HISTORY_LIMIT = 20;
@@ -115,7 +116,9 @@ function findBurstStart(messages: readonly { readonly direction: string }[]): nu
 
 /**
  * Conversation override first, then a channel-account policy, then the Business Profile default, then OFF.
- * OFF is the safe floor: a profile with no policy row has not opted into automation.
+ *
+ * The rule itself lives in `automation-mode.ts`, because the Inbox has to display the same answer this
+ * uses to decide whether to draft, and two implementations of that would eventually disagree.
  */
 async function resolveMode(
   db: DbClient,
@@ -130,5 +133,5 @@ async function resolveMode(
     where: { ...scope, OR: [{ channelAccountId }, { channelAccountId: null }] },
     select: { channelAccountId: true, mode: true },
   });
-  return policies.find((policy) => policy.channelAccountId === channelAccountId)?.mode ?? policies.find((policy) => policy.channelAccountId === null)?.mode ?? "OFF";
+  return resolveEffectiveMode(override, channelAccountId, policies);
 }

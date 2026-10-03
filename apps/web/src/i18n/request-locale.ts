@@ -8,6 +8,8 @@
  * A request with no session still gets a translator. Sign-in and error screens have to be readable, and
  * falling back is the right answer rather than a reason to fail.
  */
+import { cache } from "react";
+
 import { auth } from "@/auth";
 import { getDb } from "@/server/db";
 import { getLogger } from "@/server/logger";
@@ -15,14 +17,21 @@ import { getLogger } from "@/server/logger";
 import { FALLBACK_LOCALE, resolveUiLocale, type UiLocale } from "./locales";
 import { createTranslator, type Translator } from "./translate";
 
-export async function requestLocale(): Promise<UiLocale> {
+/**
+ * Cached per request, not per call.
+ *
+ * The document element, the shell, a loading fallback and the page itself each need the locale, and
+ * without this that is four session lookups and four user reads for one screen. `cache()` is request
+ * scoped, so it dedupes within a render and never leaks one reader's locale into another's request.
+ */
+export const requestLocale = cache(async (): Promise<UiLocale> => {
   const userId = (await auth())?.user?.id;
   if (userId === undefined || userId === "") {
     return FALLBACK_LOCALE;
   }
   const user = await getDb().user.findUnique({ where: { id: userId }, select: { uiLocale: true } });
   return resolveUiLocale(user?.uiLocale);
-}
+});
 
 /** A translator for this request, reporting missing keys through the deployment's own logger. */
 export async function requestTranslator(): Promise<Translator> {

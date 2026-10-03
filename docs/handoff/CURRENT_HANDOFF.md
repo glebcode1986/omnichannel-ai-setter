@@ -1,7 +1,7 @@
 # Current Handoff
 
 **Date:** 2026-09-16  
-**Phase:** Phase 1 implementation in progress; Phase 2 Instagram/shared-AI fully specified; Phase 4 WhatsApp fully architected; Phase 5 SaaS UX fully specified/task-contracted  
+**Phase:** Stage D (Phase 5 SaaS UX) in progress; Phase 2 Instagram/shared-AI fully specified; Phase 4 WhatsApp fully architected; Phase 5 SaaS UX fully specified/task-contracted  
 **Repository:** `glebcode1986/omnichannel-ai-setter`
 
 ## Completed architecture/documentation
@@ -190,50 +190,34 @@ automation-policy rows the mode and limits came from. A claim whose facts have m
 state-changed, re-read and re-judged, and the change is normally what then cancels or holds the delivery.
 Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.md`.
 
+**The unified Inbox reads by cursor and admits what it does not know (#28 / PR pending).** One operational
+inbox over Instagram and WhatsApp, three panes on a desktop and one screen at a time on a phone. The view
+— search, filters, the open conversation, the page position — lives entirely in the URL, so a reload, the
+back button and a pasted link agree about it and the list works before JavaScript arrives. There are no
+read receipts: what an inbox calls unread is "the customer spoke last and nobody answered", so the filter
+says "Awaiting reply" and means it. Paging is `(lastMessageAt, id)` cursors over a bounded page rather
+than offsets, because an inbox reorders itself constantly and page two of an offset query repeats and
+skips rows. Two bugs came out of that work: the page returned a cursor whenever it *filled*, so data
+ending on a page boundary offered a "load older" link that loaded nothing — and in a refilled page the
+same mistake dropped every conversation behind the fill point outright. Mode badges show the mode in
+force, not the conversation's empty override, and the precedence now has one implementation
+(`packages/db/src/automation-mode.ts`) shared with the draft pipeline. The Inbox reads and does not act:
+approving and editing arrive with P5-03, and the panel says so rather than showing disabled buttons. See
+the implementation notes in `docs/specs/PRODUCT_UX.md`.
+
 ## Immediate next actions
 
-1. **P5-10 / Issue #58 is under repair after an independent review.** Astra returned
-   `CHANGES_REQUESTED` for PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` with two blocking
-   localization defects, and this commit is the fix.
-
-   **Russian readers saw English role names.** The catalogue localized the sentence
-   `"Ваша роль: {role}"` and the page interpolated `workspace.role.toLowerCase()` into it, so a Russian
-   user read "Ваша роль: owner". These are user-facing product roles, not identifiers `LOCALIZATION.md`
-   exempts. There are now `role.*` keys in both locales, translated before interpolation, and a test
-   driven off the domain's own `WORKSPACE_ROLES` so a role added later fails the build instead of
-   reaching a reader in English.
-
-   **The guard that enforces all of this was bypassable by ordinary formatting.** It matched `>text<`
-   with a regular expression, one line at a time, and reported nothing for multiline JSX text, for
-   `{"a string literal"}` rendered as a child, or for a single-quoted accessible name. A guard with known
-   holes is worse than none, because it is cited as coverage. It now parses the file with the TypeScript
-   compiler's own parser, which removes the whole class — and with it the `|` and `=>` heuristics the
-   regex needed so that `=> void | Promise<void>` was not read as prose. Each of the three bypasses has
-   an adversarial test.
-2. **Two long-disclosed worker flakes are fixed in a separate commit**, at their root: BullMQ's
-   `RedisConnection.close()` ends with `removeAllListeners()`, so a connection attempt in flight at close
-   rejects afterwards and emits `error` with nothing listening — which throws inside a `.catch()` and
-   reaches `process-guards.ts` as an unhandled rejection. The guard is untouched; the containment is at
-   the clients we construct, which is where that file says it belongs.
-
-   Owning those errors means logging them, and the worker's two stderr allowlists
-   (`main.test.ts`, `bundle.test.ts`) did not admit `queue.client_error`, so CI's `pnpm verify` failed
-   while the same command passed locally. **Why it passed locally is the part worth keeping:** our local
-   verification always exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, and CI's `verify` job has
-   neither — so the no-infrastructure path, which is the one these worker tests are about, had never run
-   locally at all. Run `pnpm verify` in a clean environment (`env -i` with only `PATH`) before claiming a
-   head is green. Both allowlists now carry the event with its reason, the bundle test asserts the Redis
-   URL never appears in the log, and the outage test asserts `queue.client_error` *is* present — an
-   unowned client error is invisible until it ends the process.
-3. **P5-01 / Issue #27 is APPROVED** at `9cc9bff2905c648e0d67974018f2889d7dec20e0`. EN/RU localization on `feat/p5-10-localization`, stacked on
-   P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
-   `MVP_RELEASE_SCOPE.md` alone.
-2. **P5-01 / Issue #27 is in review as PR #73.** The workspace shell and resumable setup surface on
-   `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
-5. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
-   from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts` fails the build otherwise.
-6. No rebases, no force-pushes, and no merges to `main`.
-7. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+1. **#28 / P5-02 is the open work.** The unified Inbox on `feat/p5-02-unified-inbox`, stacked on P5-10.
+2. **PR #73 (P5-01) and PR #74 (P5-10) are awaiting review.** Both are CI-green with evidence posted.
+   Fixes for either go to the earliest affected branch and merge down the chain.
+3. **P5-03 / Issue #29 (Review queue and composer) is next in MASTER #61's order.** The Inbox deliberately
+   left the composer and every review action to it, and the context pane already says so in words.
+4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+   fails the build otherwise. New Inbox panes are also held by
+   `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
+   or names a provider payload type.
+5. No rebases, no force-pushes, and no merges to `main`.
+4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was

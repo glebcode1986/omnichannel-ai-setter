@@ -321,3 +321,329 @@ a {
 .notice[data-tone="stop"] {
   border-color: var(--stop);
 }
+
+/* ---- inbox ------------------------------------------------------------------------------------- */
+
+/*
+ * Hidden from the page, present for a screen reader. The Inbox's three panes are each a landmark with a
+ * heading, and several of those headings would be redundant on screen — but a region whose heading is
+ * only visual is a region a screen reader cannot announce, so the heading stays and the pixels go.
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.badge[data-tone="info"] {
+  color: var(--accent);
+}
+
+/*
+ * Three columns on a desktop, one screen at a time on a phone.
+ *
+ * The columns are fixed-width on the sides and flexible in the middle, so the thread takes the space a
+ * wide window gives it and the list does not grow into something that has to be scanned sideways.
+ */
+.inbox {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+  gap: var(--gap);
+  align-items: start;
+  /* The panes scroll inside the shell rather than the page scrolling as a whole: the filter bar and the
+     context panel are the things an operator refers back to while reading a long thread. */
+  max-height: calc(100vh - 40px);
+}
+
+.inbox > * {
+  min-height: 0;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.inbox-thread-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* On a desktop the list is already on screen, so the mobile "back" link would be noise. */
+.inbox-back {
+  display: none;
+}
+
+.inbox-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: var(--gap);
+}
+
+.inbox-search label {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.inbox-search input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.filter-row {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 var(--gap);
+  padding: 0;
+}
+
+.chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.chip[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.conversation-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conversation-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.conversation-row:hover {
+  background: var(--surface-sunken);
+}
+
+/* The selected row is named by a border and by weight, not by colour alone. */
+.conversation-row[data-selected="true"] {
+  border-color: var(--accent);
+  background: var(--surface-sunken);
+}
+
+.conversation-name {
+  font-weight: 600;
+}
+
+.conversation-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.conversation-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.thread-header {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.thread-header p {
+  margin: 2px 0 0;
+  font-size: 14px;
+}
+
+.thread-messages {
+  list-style: none;
+  margin: var(--gap) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.message {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  max-width: 44rem;
+}
+
+/* Inbound sits left, outbound right — the arrangement every messaging client trained people on. The
+   author is still stated in words on the bubble, because position is not readable aloud. */
+.message[data-direction="OUTBOUND"] {
+  margin-left: auto;
+  background: var(--surface-sunken);
+}
+
+.message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.message-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.inbox-thread-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.inbox-context section {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.inbox-context section:last-of-type {
+  border-bottom: 0;
+}
+
+.inbox-context h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.inbox-context h4 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.inbox-context p {
+  margin: 0 0 4px;
+}
+
+.context-times {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.context-times dt {
+  color: var(--text-muted);
+}
+
+.context-times dd {
+  margin: 0 0 6px;
+}
+
+.reason-codes,
+.cited-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * One pane at a time below the three-column width.
+ *
+ * Which pane is on screen follows the route, not a toggle: `/inbox` is the list and
+ * `/inbox/[conversationId]` is the thread. So the layout hides what this route is not about, the back
+ * link appears, and the phone gets working history and a shareable URL for free.
+ */
+@media (max-width: 900px) {
+  .inbox {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: none;
+  }
+
+  .inbox > * {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .inbox[data-pane="thread"] .inbox-list,
+  .inbox[data-pane="list"] .inbox-thread-empty {
+    display: none;
+  }
+
+  .inbox-back {
+    display: inline-block;
+  }
+
+  .inbox-thread-column {
+    border: 0;
+    padding: 0;
+  }
+}
+
+/* The loading skeleton: a shape where a row will be, not a pretend conversation. */
+.skeleton-row {
+  display: block;
+  height: 44px;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.inbox-loaded-at {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  margin: var(--gap) 0 0;
+}
