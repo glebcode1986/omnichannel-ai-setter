@@ -263,6 +263,12 @@ export async function findUnresolvedOperations(
         operationId: true,
         updatedAt: true,
         lastErrorCode: true,
+        // Both origins. `conversationIdOf` can only answer for a human-composed delivery if the direct
+        // column is actually selected, and without it an ambiguous reply a person wrote is raised with an
+        // empty conversation id — which the queue's payload schema rejects, so it is never raised at all.
+        // "We do not know whether the customer received this" is exactly the state that must not lose its
+        // way back to a person.
+        conversationId: true,
         draft: { select: { conversationId: true } },
       },
       orderBy: { updatedAt: "asc" },
