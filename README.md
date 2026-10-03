@@ -104,9 +104,19 @@ Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain 
 
 ### Continuous integration
 
-`docs/ci/verify.yml` is the GitHub Actions gate (Issue #37): on every pull request, on pushes to `main` and on manual dispatch it runs Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile` and `pnpm verify` (typecheck, ESLint, `lint:boundaries`, tests, build). A second job runs the infrastructure suites (`pnpm test:db`, `pnpm test:redis`, `pnpm test:e2e`) and the migration drift check against throwaway PostgreSQL and Redis service containers. Neither job needs a secret: the service containers are local to the runner, and without `TEST_DATABASE_URL`/`TEST_REDIS_URL` those suites skip themselves anyway.
+`.github/workflows/verify.yml` is the GitHub Actions gate (Issue #37). It runs on every pull request, on pushes to `main` and on manual dispatch, as two independent jobs. Neither needs a secret.
 
-The file is not active yet: it must live at `.github/workflows/verify.yml`, and pushing that path requires a credential with the GitHub `workflow` scope. Activate it with `git mv docs/ci/verify.yml .github/workflows/verify.yml` from such a checkout.
+| Job | What it runs | Infrastructure |
+| --- | --- | --- |
+| `pnpm verify` | Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile`, then `pnpm verify` — typecheck, ESLint (zero warnings) with `lint:boundaries`, tests, build | **none** |
+| `infrastructure suites` | the migration drift check, then `pnpm test:db`, `pnpm test:redis` and `pnpm test:e2e` | throwaway `pgvector/pgvector:pg17` and `redis:7-alpine` service containers, local to the runner |
+
+The split matters when you verify a branch locally. The `pnpm verify` job exports no `TEST_DATABASE_URL` and no `TEST_REDIS_URL`, so in that job the PostgreSQL and Redis suites skip themselves and anything that falls back to an unreachable address takes the fallback path. A local `pnpm verify` with those variables exported is therefore a *different* run, and a branch can be green locally and red in CI. To reproduce the CI job exactly, run it in a clean environment:
+
+```bash
+env -i PATH="$(dirname "$(which pnpm)"):$(dirname "$(which node)"):/usr/bin:/bin" HOME="$HOME" \
+  pnpm verify
+```
 
 ### Running the apps
 
