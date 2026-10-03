@@ -9,8 +9,16 @@ const appDir = path.resolve(import.meta.dirname, "..");
 // Inside apps/worker/node_modules so externalized dependencies resolve exactly as they do from dist/.
 const outDir = path.join(appDir, "node_modules", ".cache", "worker-bundle-test");
 
-/** Boot-time warnings this run legitimately produces: no Redis, and no Meta app credentials. */
-const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "worker.no_channel_adapter"];
+/**
+ * Boot-time warnings this run legitimately produces: no Redis, and no Meta app credentials.
+ *
+ * `queue.client_error` is each queue client reporting that failure in its own right — name and code,
+ * never the URL, once per queue family. The monitor used to drop it instead, which is what ended the
+ * process during an outage it was supposed to ride out, so it belongs on this list.
+ */
+const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "queue.client_error", "worker.no_channel_adapter"];
+/** Whatever this environment provides, the log must never echo it back. */
+const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
 
 describe.skipIf(process.platform === "win32")("production bundle", () => {
   it("builds and runs under plain node, shutting down gracefully on SIGTERM", async () => {
@@ -23,7 +31,7 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
           PATH: process.env.PATH ?? "",
           NODE_ENV: "production",
           LOG_LEVEL: "info",
-          REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1",
+          REDIS_URL,
           DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgresql://user:fake-password@127.0.0.1:1/omnichannel",
           ANTHROPIC_API_KEY: "sk-ant-fake-key-for-tests",
         },
@@ -52,6 +60,9 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
     for (const line of result.stderr.split("\n").filter((entry) => entry.trim().length > 0)) {
       expect(EXPECTED_STARTUP_WARNINGS).toContain((JSON.parse(line) as { event: string }).event);
     }
+    // The list above admits a connection error, so this is what keeps it from admitting a leak with it:
+    // a connection error's own message carries the host and can carry a password.
+    expect(result.stderr).not.toContain(REDIS_URL);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('"event":"worker.stopped"');
   }, 60_000);

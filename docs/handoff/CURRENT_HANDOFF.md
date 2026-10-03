@@ -215,6 +215,16 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
    rejects afterwards and emits `error` with nothing listening — which throws inside a `.catch()` and
    reaches `process-guards.ts` as an unhandled rejection. The guard is untouched; the containment is at
    the clients we construct, which is where that file says it belongs.
+
+   Owning those errors means logging them, and the worker's two stderr allowlists
+   (`main.test.ts`, `bundle.test.ts`) did not admit `queue.client_error`, so CI's `pnpm verify` failed
+   while the same command passed locally. **Why it passed locally is the part worth keeping:** our local
+   verification always exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, and CI's `verify` job has
+   neither — so the no-infrastructure path, which is the one these worker tests are about, had never run
+   locally at all. Run `pnpm verify` in a clean environment (`env -i` with only `PATH`) before claiming a
+   head is green. Both allowlists now carry the event with its reason, the bundle test asserts the Redis
+   URL never appears in the log, and the outage test asserts `queue.client_error` *is* present — an
+   unowned client error is invisible until it ends the process.
 3. **P5-01 / Issue #27 is APPROVED** at `9cc9bff2905c648e0d67974018f2889d7dec20e0`. EN/RU localization on `feat/p5-10-localization`, stacked on
    P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
    `MVP_RELEASE_SCOPE.md` alone.
