@@ -226,7 +226,23 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **Stage D is open across six stacked branches**, each CI-green with evidence posted:
+1. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+   finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
+   human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
+   through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply
+   a person had just written did not appear in the thread, `cancelSend` answered `GONE`, and the row sat
+   `SCHEDULED` and went out — the operator was told their reply was not queued, and then it was.
+
+   Both now spread `deliveryOfConversation(conversationId)` from `packages/db/src/delivery-origin.ts`,
+   one place that knows what "belongs to this conversation" means for either origin. A third instance of
+   the same mistake was found while fixing it: the reconciliation sweep's orphaned-row query selected the
+   conversation only through the draft, so an ambiguous human-composed send was raised with an empty
+   conversation id — which the queue's payload schema rejects, so it was never raised at all.
+
+   **The lesson, for the next nullable relation:** making a column optional is not the change. The change
+   is every query that assumed it was there, and the compiler cannot find them because a relation filter
+   that matches nothing is still valid. Grep for the relation, not for the column.
+2. **Stage D is open across six stacked branches**, each CI-green with evidence posted:
    #73 (P5-01 shell/onboarding), #74 (P5-10 EN/RU), #75 (P5-02 Inbox), #76 (P5-03 review + composer,
    now complete), #77 (P5-05 Knowledge), #78 (P5-06 Style), #79 (P5-04 AI settings + simulation).
    `feat/p5-07-leads-pipeline` carries the P5-07 store and is not yet a PR.
