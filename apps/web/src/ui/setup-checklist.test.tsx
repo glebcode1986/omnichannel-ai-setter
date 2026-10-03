@@ -176,14 +176,25 @@ describe("the activation checklist", () => {
   it("is operable from the keyboard alone", async () => {
     const activateAction = vi.fn();
     const user = userEvent.setup();
-    renderChecklist({ onboardingFacts: { styleConfigured: false }, activateAction });
+    // A genuinely ready profile. This used to pass `styleConfigured: false` and still find an enabled
+    // button, which only worked because the activation gate ignored the style step — a disabled button is
+    // skipped by Tab, so the override was quietly testing the wrong thing.
+    renderChecklist({ activateAction });
 
-    await user.tab();
-    await user.tab();
-    const focused = document.activeElement;
-    expect(focused?.tagName).toBe("BUTTON");
-    // Tab order reaches the activation control without a pointer.
+    // Tabbed until it arrives rather than a fixed number of times. A hard-coded count is a claim about
+    // how many controls the checklist happens to render, which changes with the facts — and the property
+    // worth holding is that the activation control is reachable at all, from the keyboard, with no
+    // pointer and no trap on the way.
+    const activate = activateButton();
+    let reached = false;
+    for (let step = 0; step < 20 && !reached; step += 1) {
+      await user.tab();
+      reached = document.activeElement === activate;
+    }
+
+    expect(reached, "the activation control must be reachable by Tab alone").toBe(true);
+    // And Enter on it submits, rather than needing a click.
     await user.keyboard("{Enter}");
-    expect(document.querySelectorAll("button").length).toBeGreaterThan(1);
+    expect(activateAction).toHaveBeenCalled();
   });
 });
