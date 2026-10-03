@@ -102,6 +102,22 @@ Package names use the `@omnichannel/*` scope. Internal packages export TypeScrip
 
 Per-package commands work with filters, e.g. `pnpm --filter @omnichannel/domain typecheck` or `pnpm --filter @omnichannel/worker test`.
 
+### Continuous integration
+
+`.github/workflows/verify.yml` is the GitHub Actions gate (Issue #37). It runs on every pull request, on pushes to `main` and on manual dispatch, as two independent jobs. Neither needs a secret.
+
+| Job | What it runs | Infrastructure |
+| --- | --- | --- |
+| `pnpm verify` | Node 24 with the pinned pnpm from `packageManager`, `pnpm install --frozen-lockfile`, then `pnpm verify` — typecheck, ESLint (zero warnings) with `lint:boundaries`, tests, build | **none** |
+| `infrastructure suites` | the migration drift check, then `pnpm test:db`, `pnpm test:redis` and `pnpm test:e2e` | throwaway `pgvector/pgvector:pg17` and `redis:7-alpine` service containers, local to the runner |
+
+The split matters when you verify a branch locally. The `pnpm verify` job exports no `TEST_DATABASE_URL` and no `TEST_REDIS_URL`, so in that job the PostgreSQL and Redis suites skip themselves and anything that falls back to an unreachable address takes the fallback path. A local `pnpm verify` with those variables exported is therefore a *different* run, and a branch can be green locally and red in CI. To reproduce the CI job exactly, run it in a clean environment:
+
+```bash
+env -i PATH="$(dirname "$(which pnpm)"):$(dirname "$(which node)"):/usr/bin:/bin" HOME="$HOME" \
+  pnpm verify
+```
+
 ### Running the apps
 
 - Web: `pnpm dev:web`, then `GET http://localhost:3000/api/health` returns `{"status":"ok","service":"web"}`. Production: `pnpm --filter @omnichannel/web build && pnpm --filter @omnichannel/web start`.
