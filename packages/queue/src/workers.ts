@@ -22,6 +22,7 @@ import {
   type InboundDebounceJob,
   type ReconciliationJob,
 } from "./payloads";
+import { closeAll } from "./close-all";
 import { createQueueProducer } from "./producer";
 import { createReplyCycleRegistry, type ReplyCycleOwnership } from "./reply-cycle";
 
@@ -126,8 +127,8 @@ export interface QueueWorkers {
 }
 
 const STALLED_FAILURE = "job stalled more than allowable limit";
+/** How long close waits for a first connection attempt before giving up on it. A bound, not a guess. */
 const CONNECTION_SETTLE_TIMEOUT_MS = 2_000;
-const CONNECTION_SETTLE_GRACE_MS = 50;
 
 export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
   const prefix = options.prefix ?? DEFAULT_QUEUE_PREFIX;
@@ -175,25 +176,6 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
     }
   }
 
-  // BullMQ drops its error listeners on close, so a first connection attempt that fails after close would
-  // surface as an unhandled rejection. Closing therefore waits until the first attempt has an outcome.
-  const connectionAttemptsSettled = new Promise<void>((resolve) => {
-    const settle = () => {
-      clearTimeout(timer);
-      options.connection.off("ready", settle);
-      options.connection.off("error", settle);
-      // Grace period for the workers' own connections, which were opened at the same time.
-      setTimeout(resolve, CONNECTION_SETTLE_GRACE_MS).unref();
-    };
-    const timer = setTimeout(settle, CONNECTION_SETTLE_TIMEOUT_MS);
-    timer.unref();
-    if (options.connection.status === "ready") {
-      settle();
-      return;
-    }
-    options.connection.on("ready", settle);
-    options.connection.on("error", settle);
-  });
 
   const workers = [
     worker(INBOUND_DEBOUNCE, async (job, context) => {
@@ -371,18 +353,55 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
     if (onFailed !== undefined) {
       created.on("failed", (job: Job | undefined, error: Error) => {
         if (job !== undefined) {
-          void onFailed(job, error);
+          // Caught, not `void`ed.
+          //
+          // `void` does not handle a rejection; it silences the lint rule and nothing else. So a failure
+          // handler that itself failed became an unhandled rejection, the process guard read that as
+          // unknown state, and the worker logged `worker.fatal` and exited 1.
+          //
+          // The case that actually happens: Redis goes down, a job fails because of it, and this handler
+          // reaches for Redis to record the failure. Killing the worker there is the exact opposite of
+          // riding out an outage, which is what it claims to do — and because it needs a job to fail
+          // inside the outage, it killed the process about once in thirteen runs rather than every time.
+          //
+          // Same shape as `reportFailure` above, and the same event: a reporter's own failure must never
+          // become the process's problem.
+          onFailed(job, error).catch((failure: unknown) => {
+            logger.warn("queue.failure_report_failed", { queue: family.queueName, errorName: errorName(failure) });
+          });
         }
       });
     }
     return created;
   }
 
+  /**
+   * Every worker's own first connection attempt, settled.
+   *
+   * BullMQ drops its error listeners on close, so a first attempt that fails *after* close surfaces as an
+   * unhandled rejection — and the process guard reads that as unknown state and kills the worker.
+   *
+   * This used to wait on the shared connection and then add a fixed 50ms "grace period for the workers'
+   * own connections". That grace was a guess standing in for a fact that can be asked for directly, and
+   * under load it was not enough: the bundle test SIGTERMs the moment `worker.started` appears, which is
+   * logged synchronously before anything is connected, so close raced the first attempt and the worker
+   * died about once in three runs on a busy machine.
+   *
+   * `waitUntilReady()` is that fact, per worker. The timeout stays as a bound rather than a guess: with
+   * `maxRetriesPerRequest: null` a worker retries a dead Redis forever, and close must not wait for it.
+   */
+  const connectionAttemptsSettled = Promise.race([
+    Promise.all(workers.map((created) => created.waitUntilReady().catch(() => undefined))).then(() => undefined),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, CONNECTION_SETTLE_TIMEOUT_MS).unref();
+    }),
+  ]);
+
   return {
     queueNames: workers.map((created) => created.name),
     async close({ force = false } = {}) {
       await connectionAttemptsSettled;
-      await Promise.all(workers.map((created) => created.close(force)));
+      await closeAll("workers", workers, async (created) => created.close(force), logger);
       await reconciliation.close();
     },
   };
