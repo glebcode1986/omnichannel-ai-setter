@@ -41,8 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**PR [#72](https://github.com/glebcode1986/omnichannel-ai-setter/pull/72) / P3-03 (Issue #56) is the
-earliest unresolved review gate**, on branch `feat/p3-03-reliability`. Everything before it in the chain
+**Stage D has started with P5-01 (Issue #27)**, on branch `feat/p5-01-app-shell-onboarding`, based on the
+accepted #72 head. Everything before it in the chain has an independent PASS at its published head,
+including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**. Everything before it in the chain
 has an independent PASS at its published head, including **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -129,6 +130,15 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**Onboarding readiness is evaluated, never stored (#27 / P5-01).** `BusinessProfile` already said why:
+status is not operational readiness, and readiness is evaluated at execution time. So the setup checklist
+is a pure function of the profile's own configuration, read now — which is also what makes onboarding
+resumable without a state machine, because the completed steps *are* the channel account, the policy row
+and the knowledge documents. The single stored fact is a deliberate skip, because "no style yet" and "we
+decided not to write one" look identical in a style table and only one of them should let a workspace go
+live. Activation re-judges the checklist inside the transaction that flips the status, so a page left open
+for an hour cannot assert what was true when it rendered. See `docs/specs/ONBOARDING_UX.md`.
+
 **A kill switch is only as strong as the boundary it is enforced at (#56 / PR #72).** Binding the switch
 to the delivery claim was not enough on its own: the ordering lived in a store method, so it bound callers
 who went through that method and nobody else — while this spec's own incident guidance says the table is
@@ -174,12 +184,32 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **PR #72 / P3-03 is the gate.** Address independent-review findings on `feat/p3-03-reliability`,
-   verify at the exact head, and publish readiness evidence. Do not merge it.
-2. **Nothing is downstream of #72.** The accepted #71 head is already merged down into it; there is no
-   further branch to propagate to until a new one is opened.
-3. No rebases, no force-pushes, no merges to `main`, and do not start Stage D.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+1. **P5-01 / Issue #27 is under repair after an independent review.** Astra returned
+   `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc` with one blocking
+   finding, and this commit is the fix.
+
+   **The blocker.** `ONBOARDING_UX.md` requires the activation checklist to enforce "style configured or
+   intentionally skipped". `blockersFor()` never received the skip set and had no style blocker at all,
+   so `canActivate` became true from channel, knowledge, policy and review facts alone: a profile with no
+   voice and no decision recorded about one could go live and answer every customer in whatever the model
+   defaults to.
+
+   **The fix is one rule in one place.** `blockersFor()` now takes the validated skip set and adds
+   `STYLE_NOT_CONFIGURED` when the step is neither complete nor deliberately skipped. Because
+   `activateBusinessProfile()` already re-reads through `readOnboarding()` inside its row-locked
+   transaction, the gate it enforces is that same rule rather than a second one that happens to agree.
+
+   **Three tests were passing on the bug**, which is why it survived: a domain test quoted the spec and
+   asserted its opposite; the integration fixture called a profile "ready" while configuring no style and
+   recording no skip; and a keyboard test used an unconfigured style as a stand-in for a ready profile,
+   so it only found an enabled button because the gate was broken.
+2. **The repair propagates through #74–#83 by ordinary merge**, each child's live head verified, before
+   P5-09 resumes. P5-09's work exists on a local branch and is deliberately unpublished until the
+   repaired ancestry reaches #83 green.
+3. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
+   `apps/web/src/ui/labels.ts` so that task replaces one module instead of reopening every component.
+4. No rebases, no force-pushes, no merges to `main`.
+5. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
