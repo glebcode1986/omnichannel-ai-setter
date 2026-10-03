@@ -24,6 +24,7 @@ import {
   authorizeBusinessProfileAccess,
   authorizeWorkspaceAccess,
   BusinessProfileAccessDeniedError,
+  WorkspaceAccessDeniedError,
   connectChannelAccount,
   createAiDraftStore,
   createBusinessProfile,
@@ -54,6 +55,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "../server/testing/database";
 import { resolveBusinessProfileContext, UnauthenticatedError } from "../server/workspace-context";
+
 
 const AT = new Date("2026-10-05T10:00:00.000Z");
 
@@ -104,6 +106,10 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
   /** A fresh conversation with one inbound message, which is where every operator journey starts. */
   const conversation = async (context: BusinessProfileContext, channelAccountId: string) => {
     seq += 1;
+    // Scoped by the context the caller passed, not by the main profile. Hardcoding one scope wrote
+    // messages whose conversation belonged to a different profile, which the composite foreign key
+    // refuses -- and rightly: a message is customer data and must sit in the profile that owns it.
+    const owner = { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId };
     const identity = await createContactWithChannelIdentity(db(), context, {
       channelAccountId,
       externalUserId: `journey-user-${String(seq)}`,
@@ -113,7 +119,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
     const conversationId = created.id;
     const message = await db().message.create({
       data: {
-        ...scope(),
+        ...owner,
         channelAccountId,
         conversationId,
         direction: "IN",
@@ -125,7 +131,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
       select: { id: true },
     });
     await db().conversation.update({
-      where: { workspaceId_businessProfileId_id: { ...scope(), id: conversationId } },
+      where: { workspaceId_businessProfileId_id: { ...owner, id: conversationId } },
       data: { lastMessageAt: AT, lastInboundAt: AT },
     });
     return { conversationId, messageId: message.id, contactId: identity.contactId };
@@ -134,15 +140,25 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
   const draftFor = async (
     context: BusinessProfileContext,
     target: { conversationId: string; messageId: string },
-    options: { needsReview?: boolean; reasons?: readonly ReasonCode[]; confidence?: number } = {},
+    options: { needsReview?: boolean; reasons?: readonly ReasonCode[]; confidence?: number; held?: boolean } = {},
   ) => {
     seq += 1;
+    // Scoped by the caller's context, like the conversation helper, so a draft for another profile's
+    // thread is written in the profile that owns it.
+    const owner = { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId };
+    // Anchored to the conversation's *actual* state version. A fresh conversation starts at 0, and a
+    // draft anchored at a guessed 1 is stale on arrival -- which is what `resolveApproval` said, and it
+    // was right: the draft claimed to answer a state the conversation had never been in.
+    const current = await db().conversation.findFirstOrThrow({
+      where: { ...owner, id: target.conversationId },
+      select: { stateVersion: true },
+    });
     const { aiDraftId } = await createAiDraftStore(db()).saveDraft({
-      scope: { ...scope(), conversationId: target.conversationId },
+      scope: { ...owner, conversationId: target.conversationId },
       generationKey: `journey-${String(seq)}`,
       trigger: "AUTOMATIC",
       anchorMessageId: target.messageId,
-      anchorStateVersion: 1,
+      anchorStateVersion: current.stateVersion,
       text: "Yes — Saturday at eleven is free.",
       structuredOutput: { reply: "Yes — Saturday at eleven is free." },
       confidence: options.confidence ?? 0.92,
@@ -151,14 +167,43 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
       reasonCodes: [...(options.reasons ?? [])],
       factualSourceIds: [],
       retrieval: noRetrieval("OK"),
-      status: options.needsReview === true ? "HELD" : "PENDING",
+      // `PENDING` unless the case is specifically about a held draft. A draft awaiting review is PENDING
+      // with `needsReview`; the review store claims from PENDING, so `HELD` is a draft nobody can decide
+      // and using it everywhere made every decision look already-resolved.
+      status: options.held === true ? "HELD" : "PENDING",
       provider: "anthropic",
       model: "claude-opus-5",
       promptVersion: "reply.v1",
       schemaVersion: "ai-draft.v1",
     });
-    expect(context).toBeDefined();
     return aiDraftId;
+  };
+
+  const accounts = new Map<string, string>();
+
+  /**
+   * The profile's live account for a channel, connected once.
+   *
+   * A Business Profile owns at most one live account per channel -- `connectChannelAccount` refuses a
+   * second with `different_account` -- so this memoizes rather than reconnecting. Every conversation in a
+   * profile arrives through the one account, which is what actually happens in the product.
+   */
+  const accountFor = async (context: BusinessProfileContext, channel: "INSTAGRAM" | "WHATSAPP" = "INSTAGRAM") => {
+    const key = `${context.businessProfileId}/${channel}`;
+    const existing = accounts.get(key);
+    if (existing !== undefined) {
+      return existing;
+    }
+    seq += 1;
+    const account = await connectChannelAccount(db(), context, {
+      channel,
+      externalAccountId: `journey-${channel.toLowerCase()}-${String(seq)}`,
+      displayName: `Journey ${channel} ${String(seq)}`,
+      capabilities: NO_CAPABILITIES,
+      credentialId: await credential(channel.toLowerCase()),
+    });
+    accounts.set(key, account.id);
+    return account.id;
   };
 
   /** A credential row, because an account must reference one. No provider secret: an opaque test value. */
@@ -179,17 +224,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
     return row.id;
   };
 
-  const liveAccount = async () => {
-    const context = await owner();
-    seq += 1;
-    return connectChannelAccount(db(), context, {
-      channel: "INSTAGRAM",
-      externalAccountId: `journey-account-${String(seq)}`,
-      displayName: `Journey Account ${String(seq)}`,
-      capabilities: NO_CAPABILITIES,
-      credentialId: await credential("instagram"),
-    });
-  };
+  const liveAccount = async () => ({ id: await accountFor(await owner()), status: "CONNECTED" as const });
 
   describe("1. setting the product up and taking it live", () => {
     it("refuses every step of the journey to a request with no session", async () => {
@@ -200,7 +235,9 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
       // A member of the workspace is the harder case than an outsider: the workspace check passes and only
       // the profile grant stops them.
       await expect(resolveBusinessProfileContext(as(agentId), workspaceId, otherProfileId)).rejects.toThrow(BusinessProfileAccessDeniedError);
-      await expect(resolveBusinessProfileContext(as(outsiderId), workspaceId, profileId)).rejects.toThrow(BusinessProfileAccessDeniedError);
+      // An outsider is refused one step earlier, at the workspace. Expecting the same error for both
+      // would pass without saying which check actually ran.
+      await expect(resolveBusinessProfileContext(as(outsiderId), workspaceId, profileId)).rejects.toThrow(WorkspaceAccessDeniedError);
       // And the granted one still works, so the refusals above are a grant check and not a broken helper.
       await expect(resolveBusinessProfileContext(as(agentId), workspaceId, profileId)).resolves.toBeDefined();
     }, 240_000);
@@ -246,8 +283,12 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
 
     it("lets an operator skip a step and put it back, and says which they skipped", async () => {
       const context = await owner();
-      const step = (await readOnboarding(db(), context)).state.steps.find((candidate) => candidate.skippable)?.step;
-      expect(step, "the checklist must offer something skippable, or this journey is untestable").toBeDefined();
+      // Skippable *and* unfinished. A step already complete stays COMPLETE when skipped, which is
+      // correct behaviour and makes it the wrong subject for this journey.
+      const step = (await readOnboarding(db(), context)).state.steps.find(
+        (candidate) => candidate.skippable && candidate.state === "INCOMPLETE",
+      )?.step;
+      expect(step, "the checklist must offer something skippable and unfinished, or this journey is untestable").toBeDefined();
 
       await skipOnboardingStep(db(), context, step ?? "");
       const skipped = await readOnboarding(db(), context);
@@ -279,13 +320,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
     it("shows an Agent nothing from the profile they were not granted", async () => {
       const ownerContext = await owner();
       const otherContext = await authorizeBusinessProfileAccess(db(), { userId: ownerId, workspaceId, businessProfileId: otherProfileId });
-      const account = await connectChannelAccount(db(), otherContext, {
-        channel: "INSTAGRAM",
-        externalAccountId: "journey-other-account",
-        displayName: "Other Profile Account",
-        capabilities: NO_CAPABILITIES,
-        credentialId: await credential("probe"),
-      });
+      const account = { id: await accountFor(otherContext, "INSTAGRAM") };
       const hidden = await conversation(otherContext, account.id);
 
       const agentContext = await resolveBusinessProfileContext(as(agentId), workspaceId, profileId);
@@ -300,13 +335,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
 
     it("refuses an operation on a conversation that is not this profile's", async () => {
       const otherContext = await authorizeBusinessProfileAccess(db(), { userId: ownerId, workspaceId, businessProfileId: otherProfileId });
-      const account = await connectChannelAccount(db(), otherContext, {
-        channel: "WHATSAPP",
-        externalAccountId: "journey-other-whatsapp",
-        displayName: "Other WhatsApp",
-        capabilities: NO_CAPABILITIES,
-        credentialId: await credential("probe"),
-      });
+      const account = { id: await accountFor(otherContext, "WHATSAPP") };
       const elsewhere = await conversation(otherContext, account.id);
 
       const operations = createConversationOperationStore(db(), await owner());
@@ -465,13 +494,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
 
     it("refuses to cancel a send named from another profile's conversation", async () => {
       const otherContext = await authorizeBusinessProfileAccess(db(), { userId: ownerId, workspaceId, businessProfileId: otherProfileId });
-      const account = await connectChannelAccount(db(), otherContext, {
-        channel: "INSTAGRAM",
-        externalAccountId: "journey-cancel-probe",
-        displayName: "Cancel Probe",
-        capabilities: NO_CAPABILITIES,
-        credentialId: await credential("probe"),
-      });
+      const account = { id: await accountFor(otherContext, "INSTAGRAM") };
       const elsewhere = await conversation(otherContext, account.id);
       const draftId = await draftFor(otherContext, elsewhere);
       const operationId = "journey-cross-profile-op";
@@ -505,7 +528,7 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
       const context = await owner();
       const account = await liveAccount();
       const target = await conversation(context, account.id);
-      const draftId = await draftFor(context, target, { needsReview: true, reasons: ["MISSING_FACT"], confidence: 0.4 });
+      const draftId = await draftFor(context, target, { needsReview: true, reasons: ["MISSING_FACT"], confidence: 0.4, held: true });
 
       const held = await db().aiDraft.findFirst({ where: { ...scope(), id: draftId }, select: { status: true, needsReview: true, reasonCodes: true } });
       const created = await createKnowledge(db(), context, { title: "Saturday hours", chunks: ["On Saturdays we close at four."] });

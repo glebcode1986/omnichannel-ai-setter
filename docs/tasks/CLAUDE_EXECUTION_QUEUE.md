@@ -32,7 +32,31 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — P5-08 / Issue #34
+### Current work — P5-09 / Issue #35
+
+**Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
+repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.
+
+**`docs/specs/UX_VERIFICATION.md` is written by this task** and is as explicit about what the suite does
+*not* prove as about what it does, because an unbounded coverage claim is the kind that gets cited in a
+review and turns out hollow.
+
+**There is no browser driver in this repository, and the contract says what it wants instead:** "E2E must
+exercise server authorization and stale-state behavior, not only happy-path DOM interactions." So each
+journey enters through `resolveBusinessProfileContext` and drives the same stores the server actions
+drive, against a migrated database, with an authorization probe and a stale-state probe per scenario.
+
+**Two things these tests found that nothing else had.** `--border-strong` failed WCAG SC 1.4.11 at 1.91:1
+light and 1.86:1 dark against the surface a `.button` actually sits on — a button whose edge a reader with
+low contrast sensitivity could not find. And P5-08 shipped the analytics and audit screens with **no CSS
+at all**, so an eight-column table pushed the whole document sideways at 375px.
+
+**What is not claimed.** jsdom evaluates no media queries and lays nothing out, so nothing here asserts a
+page looks right at a given width; the responsive tests hold that the rules exist and still name what the
+components render. Contrast is computed from tokens rather than sampled from pixels, which is strictly
+more than a browser-based auditor gives in jsdom — it needs paint and would report nothing.
+
+### Previous — P5-08 / Issue #34
 
 **Branch `feat/p5-08-analytics-audit`**, stacked on P3-02. Operational analytics and a searchable,
 append-only audit log. The owner's directive on PR #81 placed this after P3-02, and it was held back until
