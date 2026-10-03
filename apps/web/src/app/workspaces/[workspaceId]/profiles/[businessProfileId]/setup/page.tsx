@@ -12,7 +12,7 @@ import { readOnboarding, WORKSPACE_ADMIN_ROLES } from "@omnichannel/db";
 
 import { ChannelCards } from "@/ui/channel-cards";
 import { SetupChecklist } from "@/ui/setup-checklist";
-import { setupText } from "@/ui/labels";
+import { requestTranslator } from "@/i18n/request-locale";
 import { activateAction, restoreStepAction, skipStepAction } from "@/server/setup-actions";
 import { getDb } from "@/server/db";
 import { requireBusinessProfileContext } from "@/server/request-context";
@@ -25,6 +25,7 @@ export default async function SetupPage({
   const { workspaceId, businessProfileId } = await params;
   const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
   const { facts, state } = await readOnboarding(getDb(), context);
+  const t = await requestTranslator();
 
   const canConfigure = WORKSPACE_ADMIN_ROLES.includes(context.role);
   const target = { workspaceId, businessProfileId };
@@ -33,16 +34,18 @@ export default async function SetupPage({
   return (
     <div className="stack">
       <div className="page-header">
-        <h1>{setupText.title}</h1>
+        <h1>{t.t("setup.title")}</h1>
       </div>
 
       <ChannelCards
+        t={t}
         channels={facts.channels}
         offered={["INSTAGRAM"]}
         {...(canConfigure ? { instagramConnectPath: connectPath } : {})}
       />
 
       <SetupChecklist
+        t={t}
         state={state}
         canConfigure={canConfigure}
         activated={facts.activated}

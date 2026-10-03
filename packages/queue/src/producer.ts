@@ -18,6 +18,7 @@ import {
   type InboundDebounceJob,
   type ReconciliationJob,
 } from "./payloads";
+import { closeAll } from "./close-all";
 import { deliveryDelayFor } from "./delay";
 import { createReplyCycleRegistry } from "./reply-cycle";
 
@@ -184,7 +185,7 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
     },
 
     async close() {
-      await Promise.all([...queues.values()].map((queue) => queue.close()));
+      await closeAll("producer", [...queues.values()], async (queue) => queue.close(), options.logger);
       queues.clear();
     },
   };

@@ -14,30 +14,48 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Repair in progress — P5-01 / Issue #27, after `CHANGES_REQUESTED`
+### Repair in progress — P5-10 / Issue #58, after `CHANGES_REQUESTED`
 
-Astra reviewed PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc` and returned one blocking finding:
-**activation was permitted while the STYLE step was unfinished and had not been deliberately skipped.**
+Astra reviewed PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` and returned two blocking findings,
+both correct.
 
-`ONBOARDING_UX.md` says the checklist enforces "style configured **or intentionally skipped**" — a gate
-with two ways to clear it. `blockersFor()` had neither: it never received the skip set and carried no
-style blocker, so `canActivate` came out true from channel, knowledge, policy and review facts alone.
+**Russian readers saw English role names.** `"Ваша роль: {role}"` was localized and
+`workspace.role.toLowerCase()` was interpolated into it. Fixed with `role.*` keys in both locales,
+translated before interpolation, and a test driven off the domain's `WORKSPACE_ROLES` so a role added
+later cannot fall through.
 
-The fix adds `STYLE_NOT_CONFIGURED` and passes the validated skip set into the gate.
-`activateBusinessProfile()` needed no separate change because it already re-reads through
-`readOnboarding()` inside its row-locked transaction — which is the point: one rule, not two that agree
-until somebody edits one.
+**The enforcement guard was bypassable by ordinary JSX formatting** — multiline text, a string literal
+rendered as a child, a single-quoted accessible name. It now uses the TypeScript compiler's parser, so the
+whole class is gone along with the `|`/`=>` heuristics the regex needed. Each bypass has an adversarial
+test, and the suite was checked against a file containing all three.
 
-**Why it survived until an independent review.** Three tests were written against the bug rather than the
-spec. A domain test quoted the sentence and asserted its opposite. The integration fixture called a
-profile "ready" while creating no style profile, no approved style example and no STYLE skip. And a
-keyboard test passed `styleConfigured: false` as a stand-in for a ready profile, so it only ever found an
-enabled activation button because the gate was broken. All three are replaced.
+**A lesson worth carrying.** I wrote that guard and defended its narrowness as deliberate. Narrow in
+*what it judges* was the right call; narrow because *a regex could not see* the code was not, and only an
+outside reader found the difference.
 
-The repair propagates through #74–#83 by ordinary merge, each child's live head verified, before P5-09
-resumes.
+Separately, the two long-disclosed worker flakes are fixed in their own commit on this branch — at the
+root, in the clients we construct, with `process-guards.ts` left alone because it argues correctly against
+exempting rejections by error code.
 
-### Original gate — P5-01 / Issue #27 (Stage D)
+That fix then failed CI while passing locally, which was the more useful finding: local verification
+exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, CI's `verify` job exports neither, so the worker's
+no-infrastructure tests — the ones these flakes live in — had never been run the way CI runs them. The
+allowlists in `main.test.ts` and `bundle.test.ts` now admit `queue.client_error` with its reason, and a
+clean-environment `pnpm verify` is part of verifying a head.
+
+### Original gate — P5-10 / Issue #58 (Stage D)
+
+**Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
+production locales, per-user and independent of the language customers are answered in.
+
+**Issue #58 named two specs that did not exist**: `docs/specs/LOCALIZATION.md` and
+`docs/specs/MVP_RELEASE_SCOPE.md`. It is also the only P5 issue with no task contract under `docs/tasks/`.
+The issue's own Required behavior / Tests / Acceptance criteria were detailed enough to implement from, so
+this task writes `LOCALIZATION.md` as part of its output — the acceptance criterion says later Phase 5 work
+must *fail review* when it introduces unlocalized strings, and that needs a written rule to point at.
+`MVP_RELEASE_SCOPE.md` is still missing and is not this task's to invent.
+
+### Previous — P5-01 / Issue #27 (Stage D)
 
 **Branch `feat/p5-01-app-shell-onboarding`**, based on the accepted #72 head
 `9955ecf6c114145d54bb7dd46abbc902267bd00c`. It carries the authenticated workspace shell and the resumable

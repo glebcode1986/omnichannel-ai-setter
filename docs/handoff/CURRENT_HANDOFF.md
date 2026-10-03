@@ -130,6 +130,14 @@ exists with nobody owning the conversation. The policy engine judges "may this b
 an approval answers the gates that ask for a human and none of those about what is possible or permitted,
 and a takeover by anyone else still fails closed. See `docs/specs/HUMAN_HANDOFF.md`.
 
+**Two languages, never coupled (#58 / P5-10).** The dashboard locale is a per-user preference on
+`users.ui_locale`; the language a customer is answered in comes from the Business Profile's style profile
+and the conversation. An agency operator may read Russian while replying in German for a business
+configured in English, and all three are correct at once. The separation is structural — different rows,
+different owners, no query that reads one to decide the other — and an integration test states it rather
+than trusting it. Missing keys throw in development and fall back to English in production, because a
+person mid-task must not be shown a raw key. See `docs/specs/LOCALIZATION.md`.
+
 **Onboarding readiness is evaluated, never stored (#27 / P5-01).** `BusinessProfile` already said why:
 status is not operational readiness, and readiness is evaluated at execution time. So the setup checklist
 is a pure function of the profile's own configuration, read now — which is also what makes onboarding
@@ -184,32 +192,48 @@ Nothing is sent and no attempt is counted. See `docs/specs/DELIVERY_COORDINATOR.
 
 ## Immediate next actions
 
-1. **P5-01 / Issue #27 is under repair after an independent review.** Astra returned
-   `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc` with one blocking
-   finding, and this commit is the fix.
+1. **P5-10 / Issue #58 is under repair after an independent review.** Astra returned
+   `CHANGES_REQUESTED` for PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` with two blocking
+   localization defects, and this commit is the fix.
 
-   **The blocker.** `ONBOARDING_UX.md` requires the activation checklist to enforce "style configured or
-   intentionally skipped". `blockersFor()` never received the skip set and had no style blocker at all,
-   so `canActivate` became true from channel, knowledge, policy and review facts alone: a profile with no
-   voice and no decision recorded about one could go live and answer every customer in whatever the model
-   defaults to.
+   **Russian readers saw English role names.** The catalogue localized the sentence
+   `"Ваша роль: {role}"` and the page interpolated `workspace.role.toLowerCase()` into it, so a Russian
+   user read "Ваша роль: owner". These are user-facing product roles, not identifiers `LOCALIZATION.md`
+   exempts. There are now `role.*` keys in both locales, translated before interpolation, and a test
+   driven off the domain's own `WORKSPACE_ROLES` so a role added later fails the build instead of
+   reaching a reader in English.
 
-   **The fix is one rule in one place.** `blockersFor()` now takes the validated skip set and adds
-   `STYLE_NOT_CONFIGURED` when the step is neither complete nor deliberately skipped. Because
-   `activateBusinessProfile()` already re-reads through `readOnboarding()` inside its row-locked
-   transaction, the gate it enforces is that same rule rather than a second one that happens to agree.
+   **The guard that enforces all of this was bypassable by ordinary formatting.** It matched `>text<`
+   with a regular expression, one line at a time, and reported nothing for multiline JSX text, for
+   `{"a string literal"}` rendered as a child, or for a single-quoted accessible name. A guard with known
+   holes is worse than none, because it is cited as coverage. It now parses the file with the TypeScript
+   compiler's own parser, which removes the whole class — and with it the `|` and `=>` heuristics the
+   regex needed so that `=> void | Promise<void>` was not read as prose. Each of the three bypasses has
+   an adversarial test.
+2. **Two long-disclosed worker flakes are fixed in a separate commit**, at their root: BullMQ's
+   `RedisConnection.close()` ends with `removeAllListeners()`, so a connection attempt in flight at close
+   rejects afterwards and emits `error` with nothing listening — which throws inside a `.catch()` and
+   reaches `process-guards.ts` as an unhandled rejection. The guard is untouched; the containment is at
+   the clients we construct, which is where that file says it belongs.
 
-   **Three tests were passing on the bug**, which is why it survived: a domain test quoted the spec and
-   asserted its opposite; the integration fixture called a profile "ready" while configuring no style and
-   recording no skip; and a keyboard test used an unconfigured style as a stand-in for a ready profile,
-   so it only found an enabled button because the gate was broken.
-2. **The repair propagates through #74–#83 by ordinary merge**, each child's live head verified, before
-   P5-09 resumes. P5-09's work exists on a local branch and is deliberately unpublished until the
-   repaired ancestry reaches #83 green.
-3. **#58 / P5-10 is next in MASTER #61's order.** P5-01 keeps every user-facing string in
-   `apps/web/src/ui/labels.ts` so that task replaces one module instead of reopening every component.
-4. No rebases, no force-pushes, no merges to `main`.
-5. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+   Owning those errors means logging them, and the worker's two stderr allowlists
+   (`main.test.ts`, `bundle.test.ts`) did not admit `queue.client_error`, so CI's `pnpm verify` failed
+   while the same command passed locally. **Why it passed locally is the part worth keeping:** our local
+   verification always exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, and CI's `verify` job has
+   neither — so the no-infrastructure path, which is the one these worker tests are about, had never run
+   locally at all. Run `pnpm verify` in a clean environment (`env -i` with only `PATH`) before claiming a
+   head is green. Both allowlists now carry the event with its reason, the bundle test asserts the Redis
+   URL never appears in the log, and the outage test asserts `queue.client_error` *is* present — an
+   unowned client error is invisible until it ends the process.
+3. **P5-01 / Issue #27 is APPROVED** at `9cc9bff2905c648e0d67974018f2889d7dec20e0`. EN/RU localization on `feat/p5-10-localization`, stacked on
+   P5-01. Two specs it named were missing; it writes `LOCALIZATION.md` itself and leaves
+   `MVP_RELEASE_SCOPE.md` alone.
+2. **P5-01 / Issue #27 is in review as PR #73.** The workspace shell and resumable setup surface on
+   `feat/p5-01-app-shell-onboarding`, branched from the accepted #72 head because `main` carries no code.
+5. **#28 / P5-02 (unified Inbox) is next in MASTER #61's order.** Every surface it adds must take its text
+   from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts` fails the build otherwise.
+6. No rebases, no force-pushes, and no merges to `main`.
+7. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was

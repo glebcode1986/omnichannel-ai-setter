@@ -8,8 +8,10 @@
  */
 import { usePathname } from "next/navigation";
 
-import { Navigation } from "./navigation";
+import { Navigation, type NavigationProps } from "./navigation";
 
-export function NavigationBar({ basePath }: { readonly basePath: string }) {
-  return <Navigation basePath={basePath} currentPath={usePathname()} />;
+export type NavigationBarProps = Omit<NavigationProps, "currentPath">;
+
+export function NavigationBar(props: NavigationBarProps) {
+  return <Navigation {...props} currentPath={usePathname()} />;
 }
