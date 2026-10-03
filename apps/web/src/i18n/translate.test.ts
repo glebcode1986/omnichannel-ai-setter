@@ -7,6 +7,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { WORKSPACE_ROLES } from "@omnichannel/domain";
+
 import { catalogues, pluralCatalogues, type MessageKey } from "./catalogue";
 import { FALLBACK_LOCALE, resolveUiLocale, UI_LOCALES } from "./locales";
 import { createTranslator } from "./translate";
@@ -61,6 +63,29 @@ describe("the catalogues", () => {
 
     // Only proper nouns may legitimately match: two platform names and the product's own.
     expect(identical).toEqual(["channel.INSTAGRAM", "channel.WHATSAPP", "landing.title"]);
+  });
+
+  it("names every workspace role in every locale", () => {
+    // Driven off the domain's own list rather than a copy, so a role added later fails here instead of
+    // reaching a Russian reader in English. That is how the first version of this slipped: the sentence
+    // "Ваша роль: {role}" was localized and the role interpolated into it was not.
+    for (const locale of UI_LOCALES) {
+      for (const role of WORKSPACE_ROLES) {
+        expect(catalogues[locale][`role.${role}`], `${locale} is missing role.${role}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("renders the role in the reader's language, not the enum's", () => {
+    const english = createTranslator("en");
+    const russian = createTranslator("ru");
+
+    for (const role of WORKSPACE_ROLES) {
+      const line = russian.t("workspaces.role", { role: russian.t(`role.${role}`) });
+      // The defect an independent review found: a Russian user saw "Ваша роль: owner".
+      expect(line).not.toMatch(/[A-Za-z]/u);
+      expect(english.t("workspaces.role", { role: english.t(`role.${role}`) })).toContain("Your role:");
+    }
   });
 
   it("gives Russian the plural categories Russian has", () => {

@@ -14,7 +14,30 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — P5-10 / Issue #58 (Stage D)
+### Repair in progress — P5-10 / Issue #58, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` and returned two blocking findings,
+both correct.
+
+**Russian readers saw English role names.** `"Ваша роль: {role}"` was localized and
+`workspace.role.toLowerCase()` was interpolated into it. Fixed with `role.*` keys in both locales,
+translated before interpolation, and a test driven off the domain's `WORKSPACE_ROLES` so a role added
+later cannot fall through.
+
+**The enforcement guard was bypassable by ordinary JSX formatting** — multiline text, a string literal
+rendered as a child, a single-quoted accessible name. It now uses the TypeScript compiler's parser, so the
+whole class is gone along with the `|`/`=>` heuristics the regex needed. Each bypass has an adversarial
+test, and the suite was checked against a file containing all three.
+
+**A lesson worth carrying.** I wrote that guard and defended its narrowness as deliberate. Narrow in
+*what it judges* was the right call; narrow because *a regex could not see* the code was not, and only an
+outside reader found the difference.
+
+Separately, the two long-disclosed worker flakes are fixed in their own commit on this branch — at the
+root, in the clients we construct, with `process-guards.ts` left alone because it argues correctly against
+exempting rejections by error code.
+
+### Original gate — P5-10 / Issue #58 (Stage D)
 
 **Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
 production locales, per-user and independent of the language customers are answered in.
