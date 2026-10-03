@@ -16,6 +16,7 @@ import type { ConversationOperationStore } from "@omnichannel/application";
 
 import { recordAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
+import { deliveryOfConversation } from "./delivery-origin";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 /** The conversation belongs to this person from now on, with any earlier auto-resume deadline cleared. */
@@ -113,7 +114,10 @@ export function createConversationOperationStore(db: DbClient, context: Business
         // Scoped by the conversation *and* the profile: an operation id from elsewhere must not be
         // cancellable by naming a conversation here, or one tenant could stop another's sends.
         const job = await tx.deliveryJobRecord.findFirst({
-          where: { ...scope, operationId, draft: { conversationId } },
+          // Both legal origins, matched the same way: a person's own reply names the conversation
+          // directly and has no draft, and refusing to find it would leave them unable to stop a send
+          // this method exists to stop.
+          where: { ...scope, operationId, ...deliveryOfConversation(conversationId) },
           select: { status: true },
         });
         if (job === null) {
