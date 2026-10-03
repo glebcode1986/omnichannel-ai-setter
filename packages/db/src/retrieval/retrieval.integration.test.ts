@@ -33,6 +33,8 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
   let baseChunkId: string;
   let profileChunkId: string;
   let staleChunkIds: readonly string[];
+  let unpublishedEditChunkId: string;
+  let publishedChunkId: string;
   let archivedChunkId: string;
   let semanticOnlyChunkId: string;
   let constraintDocumentId: string;
@@ -86,6 +88,18 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       supersededChunks: [{ content: "A saturday session costs 25 euro." }],
     });
     staleChunkIds = versioned.supersededChunkIds;
+
+    // A live source somebody has edited and not published: v2 is saved, v1 is what customers get.
+    const unpublished = await seedKnowledgeDocument(database.db, {
+      workspaceId,
+      title: "Parking policy",
+      version: 2,
+      publishedVersion: 1,
+      chunks: [{ content: "Saturday parking is chargeable from July." }],
+      supersededChunks: [{ content: "Saturday parking is free for clients." }],
+    });
+    unpublishedEditChunkId = unpublished.chunkIds[0] ?? "";
+    publishedChunkId = unpublished.supersededChunkIds[0] ?? "";
 
     const archived = await seedKnowledgeDocument(database.db, {
       workspaceId,
@@ -184,6 +198,23 @@ describe.skipIf(!databaseTestsEnabled())("factual and style retrieval (PostgreSQ
       // The current version of the same document is returned.
       expect(facts.hits.map((hit) => hit.text)).toContain("A saturday session costs 40 euro.");
       expect(facts.hits.find((hit) => hit.text.includes("40 euro"))?.documentVersion).toBe(2);
+    });
+  });
+
+  describe("an edit that nobody published", () => {
+    it("answers with the published version, not the latest saved one", async () => {
+      // The blocking finding on PR #77, at the layer where it reaches a customer: the join followed
+      // `version`, so pressing Save on a live source published the new wording at once. It follows
+      // `published_version` now, and these two chunks are the same document — one approved, one not.
+      const facts = await knowledge().search(query({ text: "saturday parking", limit: 20 }));
+      const ids = facts.hits.map((hit) => hit.chunkId);
+
+      expect(ids).toContain(publishedChunkId);
+      expect(ids).not.toContain(unpublishedEditChunkId);
+      expect(facts.hits.map((hit) => hit.text)).toContain("Saturday parking is free for clients.");
+      expect(facts.hits.map((hit) => hit.text)).not.toContain("Saturday parking is chargeable from July.");
+      // Version 1 of a document whose current version is 2: the point is the pointer, not the number.
+      expect(facts.hits.find((hit) => hit.chunkId === publishedChunkId)?.documentVersion).toBe(1);
     });
   });
 

@@ -226,7 +226,38 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+**Reviewer note.** AntiGravity is temporarily unavailable due to reviewer limits, so Astra is the active
+independent reviewer for this cycle.
+
+1. **Three P5-05 blockers, all correct (#31 / PR #77).**
+
+   **Save published immediately.** Retrieval joined the document's latest *saved* version, so pressing
+   Save on a live source put the new wording in front of customers at once — while
+   `knowledge-editor.tsx` promised the opposite: "Never a live change... publishing is a separate,
+   deliberate act". An operator half-way through rewording a refund policy was already answering with the
+   half. `knowledge_documents.published_version` is now its own column, retrieval joins it, and only an
+   explicit publish moves it. Editing a live source keeps answering with the wording somebody approved,
+   and the detail page says which version is which, because an invariant the screen does not show is one
+   the operator cannot act on.
+
+   **An indexing result could certify content the worker never read.** `recordIndexingResult` took a
+   document and a result and applied it to whatever version happened to be current. A delayed success for
+   v1 arriving after an edit to v2 marked v2 INDEXED; a delayed failure archived a live source over a
+   problem that no longer existed. The result now carries the version it is about and applies
+   conditionally, in the database; anything else is `STALE` and writes nothing.
+
+   **The library stopped at 25 rows.** The store paged and returned a cursor; the route never read one and
+   the list never rendered a link, so the 26th source was unreachable unless the operator guessed a word
+   from its title. `knowledge-view.ts` carries the cursor through the URL, and the next link is built from
+   the incoming query rather than from re-serialized filters — a filter rebuilt from parsed values drifts
+   the moment a parameter is added and forgotten, and the symptom is a "load more" that silently drops the
+   search.
+
+   **The lesson across all three:** each was a correct piece of code reading a value that had stopped
+   meaning what it used to. `version` stopped meaning "what customers get" the moment publishing became
+   separate; a document id stopped identifying content the moment versions existed; a cursor the store
+   returns means nothing until a route spends it.
+2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
    finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
    human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
    through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply
