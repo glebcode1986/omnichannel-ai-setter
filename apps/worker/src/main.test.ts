@@ -57,7 +57,7 @@ const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
 
 /**
- * The three warnings these runs may legitimately produce, and nothing else.
+ * The four warnings these runs may legitimately produce, and nothing else.
  *
  * - `queue.redis_unavailable`: Redis is deliberately unreachable in most of these runs, and surviving it
  *   quietly (without echoing the URL) is the point.
@@ -66,12 +66,17 @@ const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVE
  * - `worker.lingering_after_stop`: the process outlived its own shutdown deadline because a handle some
  *   library owns stayed open after everything the worker owns had closed. Not a failed shutdown — the
  *   worker reports it and still exits 0 (see `shutdown.ts`). Rare locally, seen on loaded CI runners.
+ * - `queue.client_error`: a queue client's own connection failure, carrying the error's name and code
+ *   and never the URL. The monitor used to drop this one, and dropping it is what killed the worker
+ *   during the outage it was built to survive, so its presence here is the fix rather than noise. One
+ *   per queue family per outage, which is why a run without Redis produces four.
  *
  * A genuine shutdown timeout is a different event, at error level, and would fail both this check and
- * the exit code.
+ * the exit code. The URL check below is what keeps this list from becoming a way to admit a leak.
  */
 const PERMITTED_STDERR_EVENTS = new Set([
   "queue.redis_unavailable",
+  "queue.client_error",
   "worker.no_channel_adapter",
   "worker.lingering_after_stop",
 ]);
@@ -174,6 +179,11 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
     // The outage is logged and survived; the worker shuts down cleanly when asked to.
     expect(result.stderr).toContain("queue.redis_unavailable");
+    // And every queue client that failed said so. This is the assertion the earlier version of this
+    // suite was missing: an unowned client error is invisible right up to the moment it ends the
+    // process, so "the outage was survived" has to include "each client reported it".
+    expect(result.stderr).toContain("queue.client_error");
+    expect(result.stderr).not.toContain("127.0.0.1:1");
     expect(result.stderr).not.toContain("worker.fatal");
     expect(result.code).toBe(0);
   }, 30_000);
