@@ -5,6 +5,7 @@
  * Classification rule: retryable means "the same request can be sent again later and is expected to behave
  * differently" (throttling, transient platform errors). Anything policy- or permission-shaped is final.
  */
+import type { SendResult } from "@omnichannel/channel-core";
 import { z } from "zod";
 
 const errorBodySchema = z.looseObject({
@@ -48,6 +49,33 @@ const NON_RETRYABLE_CODES: ReadonlySet<number> = new Set([
   551, // this person is not available right now
   2022, // message send failure
 ]);
+
+/**
+ * Meta's code for a token it will not accept again: expired, revoked by the person, or invalidated by a
+ * password change. Its subcodes (session expired, invalid session, and the rest) all travel under it.
+ *
+ * This lives here, with the table, because the rest of the system is supposed to see only a normalized
+ * `SendResult`. A caller that matched on `"190"` itself would be keeping a copy of Meta's vocabulary
+ * outside the one package that is allowed to know it.
+ */
+const ACCESS_TOKEN_CODE = 190;
+
+/**
+ * True when a rejection means the credential is finished, not the message.
+ *
+ * The distinction is the whole point: a refused message is a message, and a refused token is an outage
+ * that will refuse every message until a person re-authorizes. Only `REJECTED` qualifies — a 5xx is
+ * `AMBIGUOUS`, and whether that one reached Meta is unknown, so it says nothing about the token.
+ */
+export function isAccessTokenRejection(result: SendResult): boolean {
+  if (result.outcome !== "REJECTED" || result.code === undefined) {
+    return false;
+  }
+  // `formatErrorCode` writes either `190` or `190/<subcode>`; nothing else in the vocabulary starts with
+  // a number followed by a slash, so the leading integer is the code.
+  const [code] = result.code.split("/");
+  return code !== undefined && Number.parseInt(code, 10) === ACCESS_TOKEN_CODE;
+}
 
 export function classifyMetaError(error: MetaError): boolean {
   if (error.code !== undefined && NON_RETRYABLE_CODES.has(error.code)) {

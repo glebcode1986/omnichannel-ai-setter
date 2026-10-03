@@ -24,9 +24,7 @@ import {
   fetchIdentity,
   INSTAGRAM_CAPABILITIES,
   INSTAGRAM_MESSAGING_SCOPES,
-  isRefreshEligible,
   missingScopes,
-  refreshLongLivedToken,
   type InstagramOAuthConfig,
 } from "@omnichannel/channel-instagram";
 import { ChannelConnectError, type BusinessProfileContext, type InstagramOnboardingStore } from "@omnichannel/db";
@@ -201,74 +199,6 @@ export async function disconnectInstagramAccount(
     businessProfileId: context.businessProfileId,
     channelAccountId,
   });
-}
-
-export type RefreshOutcome = "REFRESHED" | "NOT_DUE" | "NEEDS_REAUTH" | "UNAVAILABLE" | "NO_CREDENTIAL";
-
-/**
- * Keeps a long-lived token alive. Meta refuses to refresh a token younger than 24 hours or already expired,
- * so this checks both before calling: an expired token is not an error to retry, it is a re-authorization.
- */
-export async function refreshInstagramCredential(
-  dependencies: OnboardingDependencies,
-  context: BusinessProfileContext,
-  channelAccountId: string,
-): Promise<RefreshOutcome> {
-  const now = dependencies.now();
-  const account = await dependencies.store.findAccountById(context, channelAccountId);
-  if (account?.credentialId === undefined) {
-    return "NO_CREDENTIAL";
-  }
-  const stored = await dependencies.store.readCredential(context, { credentialId: account.credentialId, purpose: CREDENTIAL_PURPOSE });
-  if (stored === undefined || stored.expiresAt === null) {
-    return "NO_CREDENTIAL";
-  }
-  if (stored.expiresAt.getTime() <= now.getTime()) {
-    await dependencies.store.setAccountStatus(context, channelAccountId, "NEEDS_REAUTH");
-    return "NEEDS_REAUTH";
-  }
-  if (!isRefreshEligible(stored.mintedAt, stored.expiresAt, now)) {
-    // A token minted minutes ago (a fresh connect) must not be sent to Meta only to be rejected.
-    return "NOT_DUE";
-  }
-
-  const refreshed = await refreshLongLivedToken(dependencies.oauth, stored.token);
-  if (!refreshed.ok) {
-    if (refreshed.reason === "unavailable") {
-      return "UNAVAILABLE";
-    }
-    await dependencies.store.setAccountStatus(context, channelAccountId, "NEEDS_REAUTH");
-    dependencies.logger.warn("instagram.refresh_rejected", {
-      workspaceId: context.workspaceId,
-      businessProfileId: context.businessProfileId,
-      channelAccountId,
-      ...(refreshed.code === undefined ? {} : { code: refreshed.code }),
-    });
-    return "NEEDS_REAUTH";
-  }
-  const rotation = await dependencies.store.rotateCredential(context, {
-    credentialId: stored.credentialId,
-    purpose: CREDENTIAL_PURPOSE,
-    token: refreshed.value.accessToken,
-    expiresAt: new Date(now.getTime() + refreshed.value.expiresInSeconds * 1000),
-    refreshedAt: now,
-    // What this refresh was computed from. If the row has moved on since — disconnected, or
-    // re-authorized with a newer token — this write is stale and must not land.
-    mintedAt: stored.mintedAt,
-  });
-  if (rotation === "SUPERSEDED") {
-    // Somebody disconnected or reconnected the account while Meta was answering. The new token is
-    // dropped: it was minted for a state of the connection that no longer exists, and writing it would
-    // undo whatever replaced it.
-    dependencies.logger.info("instagram.refresh_discarded", {
-      workspaceId: context.workspaceId,
-      businessProfileId: context.businessProfileId,
-      channelAccountId,
-      reason: "credential changed during refresh",
-    });
-    return "NO_CREDENTIAL";
-  }
-  return "REFRESHED";
 }
 
 function fail(

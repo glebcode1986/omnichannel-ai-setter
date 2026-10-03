@@ -246,7 +246,25 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
+1. **The Instagram token lifecycle had no caller, and now does (#9).**
+   `refreshInstagramCredential` lived in `apps/web/src/server/`, was covered by eight tests, and was
+   called by no route, no action and no loop. A 60-day token therefore expired with
+   `channel_accounts.status` still `CONNECTED`, so the Inbox, the setup checklist and the health probe all
+   reported a healthy channel while every reply failed with Meta's code 190, and nobody was told to
+   reconnect.
+
+   The policy moved to the worker — `instagram-token-refresh.ts` for one connection,
+   `instagram-token-sweeper.ts` for the loop — which is where it belongs: a token expires on Meta's clock,
+   for every connected account, whether or not anybody opens the dashboard. All eight cases moved with it.
+   The send path marks `NEEDS_REAUTH` on a refused token as well, which covers the one case no refresh can
+   anticipate: a person revoking access at Meta. Both writes are conditional on the credential's mint time,
+   so a connection re-authorized while Meta was answering is left alone.
+
+   **The guard worth keeping:** no unit test can catch "nothing calls this" — the policy passes its own
+   tests either way. The worker now reports its running loops in `worker.started`, built from what actually
+   started, and `main.test.ts` asserts the list against the real process. When looking for this class of
+   bug elsewhere, search for an exported function whose only callers are its own tests.
+2. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
    #83. The full operator journey, an accessibility pass and responsive verification; see
    `docs/specs/UX_VERIFICATION.md`, which the contract asks for and which states the limitations as
    plainly as the coverage.

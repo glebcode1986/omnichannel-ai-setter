@@ -25,6 +25,7 @@ export {
   type InstagramConnectionState,
   type InstagramSecrets,
 } from "./config";
+export { isAccessTokenRejection } from "./errors";
 export { createFetchHttpPort, type InstagramHttpPort, type InstagramHttpRequest, type InstagramHttpResult } from "./http";
 export {
   buildAuthorizeUrl,
@@ -41,6 +42,7 @@ export {
   type ExchangedCode,
   type InstagramIdentity,
   type InstagramOAuthConfig,
+  type InstagramRefreshConfig,
   type LongLivedToken,
   type OAuthFailureReason,
   type OAuthResult,

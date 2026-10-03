@@ -83,6 +83,36 @@ Store provider secrets/tokens through the encrypted credential abstraction refer
 
 Implemented in P2-02: tokens are AES-256-GCM ciphertext in `channel_credentials`, with the key held outside the database and identified by `key_id` so it can be rotated. The ciphertext's additional authenticated data binds it to its Workspace, its credential row and its purpose, so a row copied into another tenant fails to decrypt rather than working. Connect state for an in-flight login is a single-use, short-lived `channel_connect_states` row paired with a `__Host-` cookie nonce whose hash is stored on the row; neither half alone completes a connection. A reconnect revives the account's own row so conversation history survives; disconnect marks it DISCONNECTED, frees the live-account slots (a profile can then connect a different account) and destroys the stored secret while keeping the row for audit.
 
+### Keeping a connection alive
+
+A long-lived Instagram token lasts 60 days and must be exchanged before it expires; Meta refuses to
+refresh one that is already expired, or one younger than 24 hours. That makes the lifecycle a background
+duty rather than a request-time one, and the worker owns it (`apps/worker/src/instagram-token-sweeper.ts`,
+`instagram-token-refresh.ts`).
+
+Four rules, each of which is a different wrong answer somebody could give:
+
+1. **Refresh before expiry, not after.** The sweep asks for connections whose token expires inside a
+   14-day horizon, oldest first, and runs every six hours — around fifty attempts per term, so a long
+   database or Meta outage still leaves many tries.
+2. **An expired token is a re-authorization, not a retry.** The account becomes `NEEDS_REAUTH` and no
+   request is made: Meta's answer is already known and only a person can change it.
+3. **An outage says nothing about the credential.** A timeout or a transient provider error leaves the
+   account `CONNECTED` and the token untouched. Treating silence as revocation would take a working
+   connection offline until somebody re-authorized it by hand.
+4. **A rotation that lost a race is dropped.** Writes are conditional on the mint time they were computed
+   from, so a token minted for a connection that has since been disconnected or re-authorized is
+   discarded rather than forced.
+
+The send path carries the other half. Meta's code 190 — an expired, revoked or invalidated token — is
+already final for the message (`NON_RETRYABLE_CODES`), and it now also marks the connection
+`NEEDS_REAUTH`, under the same mint-time guard. That covers the case no refresh can anticipate: a person
+revoking access at Meta. Without it, `channel_accounts.status` stayed `CONNECTED` while every reply
+failed, so the Inbox, the setup checklist and the health probe all reported a channel that could not send.
+
+The worker reports which background loops are running in its `worker.started` log, because the first
+version of this lifecycle was implemented, tested and called by nothing.
+
 ## Required fixture tests
 
 - webhook challenge/verification success and failure;

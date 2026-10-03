@@ -147,7 +147,20 @@ export async function exchangeForLongLivedToken(
   return readToken(await config.http.send({ url: url.toString(), method: "GET", headers: {}, timeoutMs: OAUTH_TIMEOUT_MS }));
 }
 
-export async function refreshLongLivedToken(config: InstagramOAuthConfig, longLivedToken: string): Promise<OAuthResult<LongLivedToken>> {
+/**
+ * What a refresh needs, and nothing more.
+ *
+ * The `ig_refresh_token` grant authenticates with the token it is refreshing, so it uses no app ID, no app
+ * secret and no redirect URI. Saying so in the type is what lets a background process — which has no
+ * business holding the app credentials — keep a connection alive. `InstagramOAuthConfig` satisfies this
+ * structurally, so the onboarding flow passes its own config unchanged.
+ */
+export interface InstagramRefreshConfig {
+  readonly http: InstagramHttpPort;
+  readonly graphHost?: string;
+}
+
+export async function refreshLongLivedToken(config: InstagramRefreshConfig, longLivedToken: string): Promise<OAuthResult<LongLivedToken>> {
   const url = new URL(`https://${config.graphHost ?? DEFAULT_GRAPH_HOST}/refresh_access_token`);
   url.searchParams.set("grant_type", "ig_refresh_token");
   url.searchParams.set("access_token", longLivedToken);

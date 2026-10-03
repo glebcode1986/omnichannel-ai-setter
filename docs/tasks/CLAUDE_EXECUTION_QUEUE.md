@@ -32,7 +32,22 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — P5-09 / Issue #35
+### Current work — Issue #9, the Instagram token lifecycle had no caller
+
+Found while auditing the repository's open work after Stage D, and reported on Issue #9 before being
+fixed, because the PR that owns the defect is accepted.
+
+`refreshInstagramCredential` was correct, tested eight ways, and called by nothing — no route, no action,
+no loop. The lifecycle the issue asked for was therefore implemented and unreachable: a 60-day token
+expired with `channel_accounts.status` still `CONNECTED`, every reply failed with Meta's code 190, and no
+part of the product said to reconnect.
+
+Branched from the Stage D tip rather than from #64, which owns the defect and is PASSED — a commit there
+would have moved the head that twenty-one accepted PRs stand on. The policy now lives in the worker beside
+the other recovery loops, the send path marks a credential Meta refused, and `worker.started` lists the
+loops that are actually running so a loop wired to nothing is visible as an absence rather than as silence.
+
+### Previous — P5-09 / Issue #35
 
 **Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
 repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.

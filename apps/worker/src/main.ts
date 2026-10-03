@@ -31,6 +31,7 @@ import { startHealthReporter } from "./health-reporter";
 import { createIncidentReporter } from "./incident-reporter";
 import { createOperationEvidencePort } from "./operation-evidence";
 import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handler";
+import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
@@ -224,6 +225,10 @@ function main(): void {
         logger,
         now: () => new Date(),
       });
+      // Without this, every part of the Instagram token lifecycle is implemented and none of it runs: a
+      // 60-day token expires, the account still reads CONNECTED, and every reply fails with a provider
+      // error nobody was warned about.
+      const tokenRefresh = startInstagramTokenRefresh(env, db, logger);
       const backlogGuard = startBacklogGuard({
         intervalMs: BACKLOG_GUARD_INTERVAL_MS,
         thresholds: {
@@ -259,12 +264,22 @@ function main(): void {
       });
       return {
         queueNames: workers.queueNames,
+        // Built from what actually started, not from a list written by hand: a loop that is wired to
+        // nothing has to be visible as an absence here. The Instagram token refresh was written, tested
+        // and never called, and this is where that would have shown.
+        loops: ["outbox", "reconciliation", ...(tokenRefresh.running ? ["instagram_tokens"] : []), "backlog_guard", "health"],
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: four independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: five independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
-          const stopped = await Promise.allSettled([sweeper.close(), reconciliationSweeper.close(), backlogGuard.close(), health.close()]);
+          const stopped = await Promise.allSettled([
+            sweeper.close(),
+            reconciliationSweeper.close(),
+            tokenRefresh.close(),
+            backlogGuard.close(),
+            health.close(),
+          ]);
           for (const outcome of stopped) {
             if (outcome.status === "rejected") {
               logger.warn("worker.loop_close_failed", {
