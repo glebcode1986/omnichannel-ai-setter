@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { composeHumanReply } from "./composer-store";
 import { createConversationOperationStore } from "./conversation-operations-store";
 import { createAiDraftStore } from "./ai-draft-store";
 import { noRetrieval } from "@omnichannel/application";
@@ -212,6 +213,106 @@ describe.skipIf(!databaseTestsEnabled())("conversation operations (PostgreSQL)",
       // "there" would be one action described two ways.
       expect(outcome).toEqual({ status: "GONE" });
       expect((await readJob(operationId)).status).toBe("SCHEDULED");
+    }, 120_000);
+  });
+
+  describe("cancelling a reply a person wrote themselves (ADR-018 Option B)", () => {
+    /**
+     * The blocking finding on PR #76: this lookup and the Inbox's pending-send query both reached the
+     * conversation through `draft.conversationId`, and a human-composed delivery has no draft. So
+     * `cancelSend` answered `GONE` while the row sat `SCHEDULED` and went out — the operator was told
+     * their reply was not queued, and then it was. These cases drive the real composer write path rather
+     * than a hand-built row, because the CHECKs on `delivery_jobs` are part of what makes an origin legal.
+     *
+     * Each case composes into a conversation of its own. Composing takes the conversation and allows one
+     * queued reply at a time, so sharing one would make these cases depend on each other's order — and
+     * on the fixture other describes assert against.
+     */
+    const freshConversation = async (target: SeededProfile): Promise<string> => {
+      seq += 1;
+      const targetScope = { workspaceId: target.context.workspaceId, businessProfileId: target.businessProfileId };
+      const contact = await database.db.contact.create({ data: { ...targetScope, displayName: `Composer Customer ${String(seq)}` }, select: { id: true } });
+      const identity = await database.db.channelIdentity.create({
+        data: { ...targetScope, channelAccountId: target.channelAccount.id, contactId: contact.id, externalUserId: `ig-user-composed-${String(seq)}` },
+        select: { id: true },
+      });
+      const conversation = await database.db.conversation.create({
+        data: { ...targetScope, channelAccountId: target.channelAccount.id, channelIdentityId: identity.id, contactId: contact.id },
+        select: { id: true },
+      });
+      return conversation.id;
+    };
+
+    const composed = async (target: SeededProfile = profile): Promise<{ readonly operationId: string; readonly conversationId: string }> => {
+      const conversationId = await freshConversation(target);
+      const outcome = await composeHumanReply(database.db, target.context, {
+        conversationId,
+        text: `Yes, we are open until six. (${String(seq)})`,
+        reviewMode: "NORMAL",
+        at: NOW,
+      });
+      if (outcome.status !== "SCHEDULED") {
+        throw new Error(`the fixture expected a queued reply, got ${outcome.status}`);
+      }
+      return { operationId: outcome.operationId, conversationId };
+    };
+
+    const cancel = (operationId: string, conversationId: string, as: BusinessProfileContext = profile.context) =>
+      operateConversation(dependencies(database.db, as), {
+        scope: { workspaceId: as.workspaceId, businessProfileId: as.businessProfileId, conversationId },
+        operation: { kind: "CANCEL_SEND", operationId },
+      });
+
+    it("stops it, and the row really leaves SCHEDULED", async () => {
+      const { operationId, conversationId } = await composed();
+
+      expect(await cancel(operationId, conversationId)).toMatchObject({ status: "SEND_CANCELLED" });
+      expect(await readJob(operationId)).toMatchObject({ status: "CANCELLED_HUMAN_TAKEOVER", cancelReason: "HUMAN_CANCELLED_FROM_INBOX" });
+    }, 120_000);
+
+    it("has no draft to end, and does not mind", async () => {
+      // `ai_drafts` stays model-only, which is the point of Option B: cancelling a person's reply must
+      // neither invent a draft to dismiss nor fail for the lack of one.
+      const { operationId, conversationId } = await composed();
+
+      await cancel(operationId, conversationId);
+
+      const job = await database.db.deliveryJobRecord.findFirstOrThrow({
+        where: { operationId },
+        select: { draftId: true, humanText: true, conversationId: true },
+      });
+      expect(job.draftId).toBeNull();
+      expect(job.humanText).not.toBeNull();
+      expect(job.conversationId).toBe(conversationId);
+    }, 120_000);
+
+    it("refuses one named from a different conversation in the same profile", async () => {
+      // The relation used to carry this isolation for free. Matching the direct column as well means the
+      // conversation in the request still has to be the conversation on the row.
+      const { operationId } = await composed();
+      const elsewhere = await freshConversation(profile);
+
+      expect(await cancel(operationId, elsewhere)).toEqual({ status: "GONE" });
+      expect((await readJob(operationId)).status).toBe("SCHEDULED");
+    }, 120_000);
+
+    it("cannot be pointed at another Workspace's reply by naming a conversation here", async () => {
+      const [theirProfile] = neighbour.profiles as [SeededProfile];
+      const { operationId } = await composed(theirProfile);
+      const ours = await freshConversation(profile);
+
+      expect(await cancel(operationId, ours)).toEqual({ status: "GONE" });
+      expect((await readJob(operationId)).status).toBe("SCHEDULED");
+    }, 120_000);
+
+    it("loses the race with a worker safely, exactly as the draft-origin path does", async () => {
+      // The claim is what moves the row out of SCHEDULED. Reporting "cancelled" here would tell someone
+      // their reply was stopped at the moment it reached the provider.
+      const { operationId, conversationId } = await composed();
+      await database.db.deliveryJobRecord.updateMany({ where: { operationId }, data: { status: "SENDING", claimedAt: NOW } });
+
+      expect(await cancel(operationId, conversationId)).toEqual({ status: "TOO_LATE", currentStatus: "SENDING" });
+      expect((await readJob(operationId)).status).toBe("SENDING");
     }, 120_000);
   });
 

@@ -8,6 +8,7 @@
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { composeHumanReply } from "./composer-store";
 import { listInbox, readConversation } from "./inbox-store";
 import { appendInboundMessage } from "./repositories/messages";
 import { createChannelAccount } from "./repositories/channel-accounts";
@@ -154,6 +155,26 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       },
     });
     return operationId;
+  };
+
+  /**
+   * The other legal origin (ADR-018 Option B): a reply a person wrote, with no draft anywhere.
+   *
+   * Written through `composeHumanReply` rather than by hand, because the CHECKs on `delivery_jobs` are
+   * what make this origin legal and a hand-built row could satisfy the test while being impossible.
+   */
+  const composedDelivery = async (conversationId: string): Promise<string> => {
+    seq += 1;
+    const outcome = await composeHumanReply(db(), context, {
+      conversationId,
+      text: `A person's own reply (${String(seq)})`,
+      reviewMode: "NORMAL",
+      at: at(1900),
+    });
+    if (outcome.status !== "SCHEDULED") {
+      throw new Error(`the fixture expected a queued reply, got ${outcome.status}`);
+    }
+    return outcome.operationId;
   };
 
   const neighbourAccount = async () => {
@@ -617,6 +638,46 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       expect(sends.get(inFlight)?.claimed).toBe(true);
       expect(sends.get(queued)?.scheduledFor.toISOString()).toBe(at(1610).toISOString());
       expect(sends.get(queued)?.text).toBe("Queued reply");
+    }, 180_000);
+
+    it("reports a reply the person wrote themselves, which has no draft to be found through", async () => {
+      // The blocking finding on PR #76. This query reached the conversation through
+      // `draft.conversationId`, so a human-composed delivery was invisible here — and a queued send the
+      // operator cannot see is a send they cannot stop, which is exactly what Issue #29 asks this pane
+      // to offer.
+      const id = await conversation({ name: "Human Composed", occurredAt: at(1900) });
+      const operationId = await composedDelivery(id);
+
+      const detail = await readConversation(db(), context, id);
+      const send = (detail?.pendingSends ?? []).find((pending) => pending.operationId === operationId);
+
+      expect(send).toBeDefined();
+      expect(send?.draftId).toBeNull();
+      expect(send?.text).toContain("A person's own reply");
+      expect(send?.claimed).toBe(false);
+      expect(send?.authority).toBe("HUMAN_APPROVED");
+    }, 180_000);
+
+    it("reports both origins together, in one pane", async () => {
+      // One conversation can hold a queued AI reply and then a person's own; the pane shows the words,
+      // not which table they came from.
+      const id = await conversation({ name: "Both Origins", occurredAt: at(1910) });
+      const fromModel = await pendingDelivery(id, "SCHEDULED", at(1911));
+      const fromPerson = await composedDelivery(id);
+
+      const sends = new Map(((await readConversation(db(), context, id))?.pendingSends ?? []).map((send) => [send.operationId, send]));
+
+      expect(sends.get(fromModel)?.text).toBe("Queued reply");
+      expect(sends.get(fromPerson)?.text).toContain("A person's own reply");
+    }, 180_000);
+
+    it("does not leak a human-composed reply into another profile's pane", async () => {
+      // The direct column is matched now, so the scope filter is the only thing keeping tenants apart
+      // here. It has to be enough on its own.
+      const id = await conversation({ name: "Composed Isolated", occurredAt: at(1920) });
+      await composedDelivery(id);
+
+      expect(await readConversation(db(), neighbour, id)).toBeUndefined();
     }, 180_000);
 
     it("reports nothing pending for a conversation with nothing queued", async () => {
