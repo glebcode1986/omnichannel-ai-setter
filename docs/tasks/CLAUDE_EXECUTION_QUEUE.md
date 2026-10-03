@@ -15,6 +15,23 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Blocker repair — P5-01 / Issue #27, propagated to every branch
+
+Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:
+**activation was permitted while the STYLE step was unfinished and had not been deliberately skipped.**
+Fixed at #73 and merged down through #74–#83, ordinary merges only, each branch verified at its own head.
+
+The gate is one rule in one place: `blockersFor()` takes the validated skip set and adds
+`STYLE_NOT_CONFIGURED`. `activateBusinessProfile()` already re-reads through `readOnboarding()` inside its
+row-locked transaction, so it enforces that rule rather than a second one that agrees until somebody edits
+it.
+
+**Two things worth carrying forward.** Three tests were written against the bug rather than the spec —
+including one that quoted the sentence and asserted its opposite — which is how it survived to an
+independent review. And a fixture valid at #73 was invalid from P5-06 onward, because
+`style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
+runs green on the branch it was written on is not coverage for the chain.
+
 ### Current work — P5-08 / Issue #34
 
 **Branch `feat/p5-08-analytics-audit`**, stacked on P3-02. Operational analytics and a searchable,

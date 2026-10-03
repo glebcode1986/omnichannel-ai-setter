@@ -262,23 +262,45 @@ Idempotency is the same decision digest the review path uses.
 3. **#54 / P3-01 is accepted**; see `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
 4. **PRs #73–#83 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
    the earliest affected branch and merge down the chain.
-5. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+5. **PR #73 was repaired on 2026-10-03 after an independent review, and the fix is in every branch here.**
+   Astra returned `CHANGES_REQUESTED` at `98895f4344ca3a0a2582ba69b497e9271dc263fc`: activation was
+   permitted while the STYLE step was unfinished and had not been deliberately skipped.
+   `ONBOARDING_UX.md` requires "style configured **or** intentionally skipped" — a gate with two ways to
+   clear it — and `blockersFor()` had neither the skip set nor a style blocker, so `canActivate` came out
+   true from channel, knowledge, policy and review facts alone.
+
+   `blockersFor()` now takes the validated skip set and adds `STYLE_NOT_CONFIGURED`.
+   `activateBusinessProfile()` needed no separate change, which is the point: it already re-reads through
+   `readOnboarding()` inside its row-locked transaction, so the gate it enforces *is* this rule. A second
+   readiness rule would agree until somebody edited one of them.
+
+   **Three tests were passing on the bug**, which is why it took an outside reader: a domain test quoted
+   the spec sentence and asserted its opposite; the integration fixture called a profile "ready" while
+   creating no style profile, no approved example and no skip; and a keyboard test used an unconfigured
+   style as a stand-in for a ready profile, so it only found an enabled button because the gate was
+   broken.
+
+   Propagated through #74–#83 by ordinary merge, every branch verified at its own head. One consequence
+   needed fixing at #73 and re-propagating: the new fixture wrote an unapproved `ACTIVE` style example,
+   which `style_examples_verified_check` refuses from P5-06 onward, so the test passed at #73 and failed
+   everywhere it was merged to.
+6. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
    owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
    all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
    order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
    `git merge-base --is-ancestor <parent> <child>`.
-6. **#35 / P5-09 (E2E, accessibility, responsive) is the next Phase 5 surface** after #83.
-7. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+7. **#35 / P5-09 (E2E, accessibility, responsive) is the next Phase 5 surface** after #83.
+8. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
    require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
    so that is a decision, not a display preference.
-8. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+9. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
    or names a provider payload type. New tables are held by the cascade guard in
    `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
    foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
-9. No rebases, no force-pushes, and no merges to `main`.
-10. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+10. No rebases, no force-pushes, and no merges to `main`.
+11. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
