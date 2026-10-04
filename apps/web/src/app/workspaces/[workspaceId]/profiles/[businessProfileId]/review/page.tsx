@@ -9,17 +9,14 @@
  * that a hard invariant rather than a preference.
  */
 import Link from "next/link";
-import { listReviewQueue } from "@omnichannel/db";
 import { REASON_CODES } from "@omnichannel/domain";
 
 import { ReviewCard } from "@/ui/review/review-card";
 import { OutcomeNotice } from "@/ui/outcome-notice";
-import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext } from "@/server/request-context";
-import { getDb } from "@/server/db";
 import { approveDraftAction, claimDraftAction, dismissDraftAction, editAndSendAction } from "@/server/review-actions";
+import { loadReviewScreen } from "@/server/review-page";
 import type { RawSearchParams } from "@/server/inbox-view";
-import { isFilteredReviewView, parseReviewView, reviewFilterOf, reviewQueryString } from "@/server/review-view";
+import { isFilteredReviewView, reviewQueryString } from "@/server/review-view";
 
 function one(value: string | string[] | undefined): string | undefined {
   const first = Array.isArray(value) ? value[0] : value;
@@ -34,15 +31,12 @@ export default async function ReviewPage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const t = await requestTranslator();
   const query = await searchParams;
-
-  // Parsed and validated in one place, tested there, so a reason nobody defined cannot reach a query.
-  const view = parseReviewView(query);
-  const page = await listReviewQueue(getDb(), context, reviewFilterOf(view));
-  const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}`;
-  const reviewPath = `${basePath}/review`;
+  // Every read this screen needs, assembled where a test can call it: the route used to do it here, and
+  // that is where the queue quietly lost everything after its twenty-fifth item.
+  const { t, view, page, basePath, reviewPath, nextHref } = await loadReviewScreen(workspaceId, businessProfileId, query);
+  // Filter links drop the cursor by construction — `reviewQueryString` does not serialize it — because
+  // changing what the queue shows means starting from the top of it.
   const href = (changes: Partial<typeof view>) => `${reviewPath}${reviewQueryString({ ...view, ...changes })}`;
 
   return (
@@ -113,6 +107,11 @@ export default async function ReviewPage({
               }}
             />
           ))}
+          {nextHref === undefined ? undefined : (
+            <Link className="button" href={nextHref} data-load-more="true">
+              {t.t("review.loadMore")}
+            </Link>
+          )}
         </div>
       )}
     </>
