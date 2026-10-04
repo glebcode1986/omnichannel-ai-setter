@@ -56,6 +56,7 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
         sourceType: "MANUAL",
         status: "ACTIVE",
         version: 1,
+        publishedVersion: 1,
         createdByUserId: second.context.userId,
       },
     });
@@ -216,6 +217,7 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
           sourceType: "MANUAL",
           status: "ACTIVE",
           version: 1,
+          publishedVersion: 1,
           createdByUserId: context.userId,
         },
       });
