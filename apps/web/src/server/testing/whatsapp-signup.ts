@@ -97,6 +97,7 @@ export const templates = (count = 2): WhatsAppHttpResult =>
       language: "en_US",
       category: "UTILITY",
       status: index === 0 ? "APPROVED" : "PENDING",
+      parameter_format: "positional",
       components: [{ type: "BODY", text: "Your appointment is at {{1}}." }],
     })),
   });

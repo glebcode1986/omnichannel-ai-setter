@@ -22,9 +22,12 @@
  */
 import { z } from "zod";
 
+import type { TemplateParameterFormat } from "@omnichannel/domain";
+
 import { DEFAULT_GRAPH_HOST, DEFAULT_GRAPH_VERSION } from "./config";
 import { formatErrorCode, parseWhatsAppError } from "./errors";
 import type { WhatsAppHttpPort, WhatsAppHttpResult } from "./http";
+import { readTemplateShape } from "./templates";
 
 /**
  * Least privilege. Management is needed to read the messaging account's numbers and templates and to
@@ -110,6 +113,15 @@ export interface MessageTemplateRecord {
   readonly status: string;
   /** Kept as provider JSON: the catalogue is an audit record, and re-modelling it here would lose detail. */
   readonly components?: readonly unknown[];
+  /**
+   * The approved shape, parsed here rather than at send time (Issue #20).
+   *
+   * The provider's two parameter formats serialize differently and a send in the wrong one is refused, so
+   * the shape is a stored fact. Parsed where the provider's own payload is read, which is the only place
+   * that should ever know what `components` looks like.
+   */
+  readonly parameterFormat: TemplateParameterFormat;
+  readonly parameters: readonly string[];
 }
 
 /**
@@ -385,7 +397,7 @@ export async function fetchMessageTemplates(
   wabaId: string,
 ): Promise<SignupResult<{ readonly templates: readonly MessageTemplateRecord[]; readonly complete: boolean }>> {
   const first = graphUrl(config, `${wabaId}/message_templates`);
-  first.searchParams.set("fields", "id,name,language,category,status,components");
+  first.searchParams.set("fields", "id,name,language,category,status,components,parameter_format");
   first.searchParams.set("limit", String(TEMPLATE_PAGE_SIZE));
 
   const templates: MessageTemplateRecord[] = [];
@@ -427,11 +439,19 @@ function readTemplate(row: unknown): MessageTemplateRecord | undefined {
     return undefined;
   }
   const components = row["components"];
+  const shape = readTemplateShape({
+    name,
+    language,
+    ...optional("parameterFormat", stringField(row, "parameter_format")),
+    ...(Array.isArray(components) ? { components: components as readonly unknown[] } : {}),
+  });
   return {
     providerTemplateId,
     name,
     language,
     status,
+    parameterFormat: shape.format,
+    parameters: shape.parameters,
     ...optional("category", stringField(row, "category")),
     ...(Array.isArray(components) ? { components: components as readonly unknown[] } : {}),
   };

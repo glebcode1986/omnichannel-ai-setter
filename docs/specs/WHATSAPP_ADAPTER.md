@@ -5,10 +5,46 @@ facts re-verified the same day; see the re-verification section of
 `docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`.
 
 What P4-01 covers: raw-body verification, inbound normalization, the four window states, free-form text and
-approved-template sending, and the read/typing presence effect. What it does not: Embedded Signup (#19), the
-template catalogue and outside-window policy (#20), outbound media and voice processing (#21), presence
-timing policy (#22), coexistence onboarding (#23) and the vertical slice (#24). The adapter reports
-`interactive: false` until #20 turns it on.
+approved-template sending, and the read/typing presence effect. What it does not: outbound media and voice
+processing (#21), presence timing policy (#22), coexistence onboarding (#23) and the vertical slice (#24).
+The adapter reports `interactive: false` until a task turns it on.
+
+Embedded Signup and the account lifecycle landed with P4-02 / Issue #19; see
+`docs/specs/WHATSAPP_ONBOARDING.md`.
+
+## Template catalogue and the outside-window policy (P4-03 / Issue #20)
+
+Platform rules re-verified 2026-10-04; see the Issue #20 section of
+`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`.
+
+**Only `APPROVED` sends, and approval is not permanent.** Quality feedback moves an approved template to
+`PAUSED` or `DISABLED`, unused templates are archived after twelve months, and none of it is announced
+synchronously. So a stored status carries `syncedAt`, a row older than the caller's freshness bound is
+treated as unknown rather than approved, and `message_template_status_update` is applied to every
+connection on the messaging account as it arrives.
+
+**A template is identified by name and language**, never by name alone.
+
+**The approved shape is parsed once, at sync.** `parameter_format` is `positional` or `named`, defaulting
+to positional, and the two serialize differently — a named template's values each carry a
+`parameter_name`. Deriving the shape at send time would put a parser in the dispatch path.
+
+**Eligibility is decided deterministically, before the policy engine sees it.** A model may rank or suggest
+a template; everything that makes a suggestion sendable is checked against the stored catalogue, and a
+suggestion that fails is refused rather than repaired — substituting a template that would have worked
+would be this layer choosing the words a customer reads. The policy engine is told two booleans and never
+which template.
+
+**The three ADR-016 modes behave as follows outside the window.** `SERVICE_WINDOW_ONLY` stops automation
+until the customer writes again. `TEMPLATE_REVIEW` holds for an authorized person, whatever the allowlist
+says. `TEMPLATE_AUTOPILOT` schedules an allowlisted template and otherwise holds for a person. With no
+approved template at all the matter ends rather than queueing a review nobody can resolve. Free-form
+content is refused in every mode, whoever approved it: no click reopens a messaging window.
+
+**Still open at P4-03.** Dispatching an outside-window template — composing the proposal, carrying it
+through the delivery command and recording the send — waits for a caller that can produce one. The draft
+engine proposes no template today, so building the dispatch path now would be unreachable code; the
+eligibility, validation and policy pieces it needs are in place and tested.
 
 ## Purpose
 

@@ -1811,6 +1811,11 @@ model WhatsAppMessageTemplate {
   status             String
   /// Provider JSON, kept as sent: the catalogue is an audit record and re-modelling it would lose detail.
   components         Json?
+  /// `POSITIONAL` or `NAMED`. The provider's two parameter formats serialize differently and a send in the
+  /// wrong one is refused, so the format is stored rather than guessed at dispatch (Issue #20).
+  parameterFormat    String   @default("POSITIONAL") @map("parameter_format")
+  /// The placeholders the approved wording carries, parsed once at sync: `["1","2"]`, or the names.
+  parameters         String[] @default([])
   syncedAt           DateTime @map("synced_at")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")

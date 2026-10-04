@@ -57,7 +57,7 @@ describe("the payload that goes on the wire", () => {
     const payload = buildTemplatePayload(template(), {
       templateName: "appointment_reminder",
       languageCode: "en_US",
-      parameters: [{ value: "10:00" }],
+      parameters: [{ name: "1", value: "10:00" }],
     });
 
     expect(payload).toMatchObject({
@@ -70,6 +70,47 @@ describe("the payload that goes on the wire", () => {
     });
     // Nothing in the payload carries body text: the approved template owns the wording.
     expect(JSON.stringify(payload)).not.toContain("We open at");
+  });
+
+  it("names every value for a named template, because Meta refuses them positionally", () => {
+    // Meta's two parameter formats are not interchangeable: a `{{first_name}}` template needs
+    // `parameter_name` on each value, and a business whose templates use names could not send at all
+    // while this builder emitted positional parameters for everything (Issue #20).
+    const payload = buildTemplatePayload(template(), {
+      templateName: "order_confirmation",
+      languageCode: "en_US",
+      parameters: [
+        { name: "first_name", value: "Jessica" },
+        { name: "order_number", value: "SKBUP2-4CPIG9" },
+      ],
+    });
+
+    expect(payload).toMatchObject({
+      template: {
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", parameter_name: "first_name", text: "Jessica" },
+              { type: "text", parameter_name: "order_number", text: "SKBUP2-4CPIG9" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("leaves a positional template's values unnamed, because Meta refuses a name there", () => {
+    const payload = buildTemplatePayload(template(), {
+      templateName: "appointment_reminder",
+      languageCode: "en_US",
+      parameters: [
+        { name: "1", value: "Tuesday" },
+        { name: "2", value: "10:00" },
+      ],
+    });
+
+    expect(JSON.stringify(payload)).not.toContain("parameter_name");
   });
 
   it("omits components for a template with no parameters, rather than sending an empty body", () => {

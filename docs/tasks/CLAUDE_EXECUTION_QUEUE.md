@@ -15,6 +15,20 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — P4-03 / Issue #20, template catalogue and outside-window policy
+
+**Branch `feat/p4-03-whatsapp-templates`**, based on `feat/p4-02-whatsapp-embedded-signup`. ADR-016's three
+outside-window modes, the template catalogue they decide from, and the eligibility rules in between.
+
+Meta's template and window rules were re-verified from the live documentation on 2026-10-04. One finding
+fixed a defect rather than confirming anything: **`parameter_format` is `positional` or `named` and the two
+do not serialize the same way** — a named template's values each need a `parameter_name` — so P4-01's
+payload builder could not send a named template at all.
+
+**Deliberately not in this task:** dispatching an outside-window template. The draft engine proposes no
+template today, so the composing/delivery/record path would be unreachable code; the eligibility,
+validation and policy pieces it needs are in place and tested. See the note in `WHATSAPP_ADAPTER.md`.
+
 ### Current work — P4-02 / Issue #19, WhatsApp Embedded Signup
 
 **Branch `feat/p4-02-whatsapp-embedded-signup`**, based on `feat/p4-01-whatsapp-adapter`. Multi-tenant

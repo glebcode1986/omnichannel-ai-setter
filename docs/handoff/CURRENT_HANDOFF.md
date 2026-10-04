@@ -260,6 +260,36 @@ Idempotency is the same decision digest the review path uses.
    cursor through untouched, and `style-screen.integration.test.ts` asserts exactly that: advancing one
    leaves the other equal to what it was.
 
+1. **P4-03 / Issue #20 — the template catalogue and the outside-window policy.** Branch
+   `feat/p4-03-whatsapp-templates`, based on #88.
+
+   **The finding worth carrying:** Meta's `parameter_format` is `positional` or `named`, and the two do not
+   serialize the same way — a named template's values each carry a `parameter_name`. P4-01's payload
+   builder emitted positional parameters for everything, so a business whose templates use named
+   parameters could not send a template at all. The format is now derived from the names (a positional
+   parameter's name *is* a number) and the approved shape is parsed once at sync rather than on the way to
+   a customer.
+
+   **Approval is not permanent.** Quality feedback moves an approved template to `PAUSED` or `DISABLED`,
+   unused templates are archived after twelve months and deleted 28 days later, and none of it is
+   announced synchronously. So a stored status carries `syncedAt`, a row older than the freshness bound is
+   unknown rather than approved, and `message_template_status_update` is applied as it arrives — to every
+   connection on the messaging account, because the template belongs to the account rather than to one of
+   its numbers.
+
+   **Eligibility is decided before the policy engine sees it**, and the engine is told two booleans and
+   never which template. A model may rank or suggest; a suggestion that fails any check is refused rather
+   than repaired, because substituting a template that would have worked is this layer choosing the words
+   a customer reads.
+
+   **The settings surface already existed.** P5-04 (#79) exposes all three ADR-016 modes and the
+   automation allowlist, including the empty-allowlist warning, so the configuration requirement was
+   already met.
+
+   **Deliberately left open:** dispatching an outside-window template — composing the proposal, carrying
+   it through the delivery command, recording the send. The draft engine proposes no template today, so
+   that path would be unreachable code; everything it needs (`selectTemplate`, `templateRouteOf`, the
+   catalogue read, the policy gate) is in place and tested. Flagged for the owner to sequence with P4-07.
 1. **P4-02 / Issue #19 — WhatsApp Embedded Signup is implemented.** Branch
    `feat/p4-02-whatsapp-embedded-signup`, based on #87.
 

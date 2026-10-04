@@ -137,10 +137,15 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
   for (const code of windowReasons) {
     reasons.add(code);
   }
-  if (windowReasons.includes("WINDOW_CLOSED") && !reasons.has("HUMAN_AGENT_REVIEW_REQUIRED")) {
+  if (windowReasons.includes("WINDOW_CLOSED") && !reasons.has("HUMAN_AGENT_REVIEW_REQUIRED") && !reasons.has("TEMPLATE_REQUIRED")) {
     // No permitted send path exists, now or by a human (product-owner decision on PR #67). A review item
     // here would be one nobody could act on, and a queue full of those is worse than an empty one — the
     // Inbox still shows the conversation with its operational state.
+    //
+    // `TEMPLATE_REQUIRED` joins the human-agent exception as a path a person *can* take: outside
+    // WhatsApp's service window an approved template still reaches the customer (ADR-016), so asking for
+    // one is a review item somebody can resolve. `NO_ELIGIBLE_TEMPLATE` deliberately is not — it means
+    // there is no approved template to resolve it with.
     terminal = true;
   }
 
@@ -195,6 +200,10 @@ function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefi
   if (isWindowOpen(input)) {
     return [];
   }
+  const templateRoute = evaluateTemplateGate(input, approved);
+  if (templateRoute !== undefined) {
+    return templateRoute;
+  }
   if (humanAgentPathAvailable(input)) {
     // The AI may draft; only a deliberate human action may initiate the tagged send. An approval that named
     // the human-agent path *is* that action, and nothing else is: an approval of an ordinary reply has not
@@ -205,6 +214,52 @@ function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefi
   // Includes HUMAN_ASSISTED_EXTENDED when Human Agent is expired, unapproved or unknown: eligibility is
   // never assumed, and an absent approval is not a weaker form of approval.
   return ["WINDOW_CLOSED"];
+}
+
+/**
+ * The WhatsApp outside-window template route (ADR-016).
+ *
+ * `undefined` means this channel and this policy have no template route, and the caller falls through to
+ * the window gate it had before — so a business that chose `SERVICE_WINDOW_ONLY` is in exactly the
+ * position it was in before this existed: automation stops until the customer writes again.
+ *
+ * Four things decide the answer, and each is a different sentence to the operator.
+ *
+ * **The window must be `TEMPLATE_ONLY`.** `NOT_ELIGIBLE` and `UNKNOWN` never get a template route:
+ * the first is the provider saying this recipient or account may not be messaged at all, and the second
+ * is us not knowing, which fails closed everywhere else in this file and must fail closed here.
+ *
+ * **There must be an approved template to send.** Without one the matter ends, because a review item
+ * asking a person to pick from nothing is one they cannot resolve.
+ *
+ * **The content must *be* a template.** A free-form draft composed while the window was open and
+ * dispatched after it closed cannot be sent whoever approved it: approving words is not approving a
+ * template, and no click reopens a messaging window.
+ *
+ * **Unattended sending needs the allowlist.** `TEMPLATE_AUTOPILOT` with nothing allowlisted sends nothing
+ * on its own — ADR-016 is explicit — and a human approval of this very template send is the other way
+ * through. In `TEMPLATE_REVIEW` only the second exists, which is the whole of that mode.
+ */
+function evaluateTemplateGate(input: PolicyInput, approved: HumanApproval | undefined): readonly ReasonCode[] | undefined {
+  const afterWindow = input.limits.afterWindow;
+  if (afterWindow.channel !== "WHATSAPP" || afterWindow.policy === "SERVICE_WINDOW_ONLY") {
+    return undefined;
+  }
+  if (input.window.state !== "TEMPLATE_ONLY") {
+    return undefined;
+  }
+  if (input.templateRoute === undefined || !input.templateRoute.approvedTemplateAvailable) {
+    return ["WINDOW_CLOSED", "NO_ELIGIBLE_TEMPLATE"];
+  }
+  if (input.draft.contentType !== "TEMPLATE") {
+    return ["WINDOW_CLOSED", "TEMPLATE_REQUIRED"];
+  }
+  if (approved !== undefined) {
+    // A person approved this template, with these values, after seeing them. That is the authorized human
+    // act ADR-016 asks for, and it is the only thing that can authorize a send in `TEMPLATE_REVIEW`.
+    return [];
+  }
+  return afterWindow.policy === "TEMPLATE_AUTOPILOT" && input.templateRoute.automatable ? [] : ["WINDOW_CLOSED", "TEMPLATE_REQUIRED"];
 }
 
 function isWindowOpen(input: PolicyInput): boolean {
