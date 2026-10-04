@@ -13,6 +13,7 @@ import {
   createKnowledge,
   editKnowledge,
   listKnowledge,
+  publishKnowledge,
   readKnowledge,
   recordIndexingResult,
   restoreKnowledge,
@@ -51,8 +52,18 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
     return outcome.documentId;
   };
 
-  const activate = async (documentId: string) => {
-    await recordIndexingResult(db(), profile.context, documentId, { ok: true, at: AT });
+  /** The real retriever, which is the only thing that can answer "would a customer be told this?". */
+  const retrieve = async (text: string): Promise<readonly string[]> => {
+    const hits = await createKnowledgeRetriever(db()).search({
+      scope: { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId },
+      text,
+      limit: 10,
+    });
+    return hits.hits.map((hit) => hit.text);
+  };
+
+  const activate = async (documentId: string, version = 1) => {
+    await recordIndexingResult(db(), profile.context, documentId, { ok: true, at: AT, version });
     return restoreKnowledge(db(), profile.context, documentId);
   };
 
@@ -116,7 +127,7 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
       const id = await created("Superseded prices", ["A manicure is 20 euros."]);
       await activate(id);
       await editKnowledge(db(), profile.context, id, { chunks: ["A manicure is 25 euros."] });
-      await activate(id);
+      await activate(id, 2);
 
       const hits = await createKnowledgeRetriever(db()).search({
         scope: { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId },
@@ -129,6 +140,39 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
       // served. Filtering on status alone would keep answering with last month's price.
       expect(contents.some((content) => content.includes("25 euros"))).toBe(true);
       expect(contents.some((content) => content.includes("20 euros"))).toBe(false);
+    }, 180_000);
+
+    it("does not publish what Save wrote: customers keep the version somebody approved", async () => {
+      // The blocking finding on PR #77. Retrieval joined the latest *saved* version, so pressing Save on a
+      // live source published the new wording at once — while the editor promised the opposite, and an
+      // operator half-way through rewording a price was already answering customers with the half.
+      const id = await created("Refund policy", ["Refunds are available within 14 days."]);
+      await activate(id);
+
+      await editKnowledge(db(), profile.context, id, { chunks: ["Refunds are available within 30 days."] });
+
+      const afterSave = await retrieve("refunds");
+      expect(afterSave.some((text) => text.includes("14 days"))).toBe(true);
+      expect(afterSave.some((text) => text.includes("30 days"))).toBe(false);
+
+      // And the library can say so, rather than leaving the operator to guess which one is live.
+      const staged = await readKnowledge(db(), profile.context, id);
+      expect(staged).toMatchObject({ version: 2, publishedVersion: 1, status: "ACTIVE" });
+      expect(staged?.versions.find((version) => version.published)?.version).toBe(1);
+      expect(staged?.versions.find((version) => version.current)?.version).toBe(2);
+    }, 180_000);
+
+    it("publishes it when somebody actually publishes it", async () => {
+      const id = await created("Opening hours", ["We open at 09:00."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["We open at 10:00."] });
+
+      expect(await publishKnowledge(db(), profile.context, id)).toEqual({ status: "RESTORED", version: 2 });
+
+      const afterPublish = await retrieve("open");
+      expect(afterPublish.some((text) => text.includes("10:00"))).toBe(true);
+      expect(afterPublish.some((text) => text.includes("09:00"))).toBe(false);
+      expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ version: 2, publishedVersion: 2 });
     }, 180_000);
 
     it("treats an identical save as no edit at all", async () => {
@@ -225,12 +269,54 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
     }, 180_000);
   });
 
+  describe("the library list", () => {
+    it("reaches past the first page, without repeating or dropping a row", async () => {
+      // The blocking finding on PR #77: the store paged at 25 and returned a cursor, and the route never
+      // read one — so a business with 26 sources could not reach the 26th at all.
+      const titles = Array.from({ length: 26 }, (_unused, index) => `Paged source ${String(index).padStart(2, "0")}`);
+      for (const title of titles) {
+        await created(title, [`A fact in ${title}.`], "BUSINESS_PROFILE");
+      }
+
+      const first = await listKnowledge(db(), profile.context, { scope: "BUSINESS_PROFILE", search: "Paged source" });
+      expect(first.documents).toHaveLength(25);
+      expect(first.nextCursor).toBeDefined();
+
+      const second = await listKnowledge(
+        db(),
+        profile.context,
+        { scope: "BUSINESS_PROFILE", search: "Paged source" },
+        { cursor: first.nextCursor },
+      );
+
+      const seen = [...first.documents, ...second.documents].map((document) => document.title);
+      // Every one of the 26, each exactly once: a cursor that overlapped would show a row twice, and one
+      // that skipped would lose a source an operator typed.
+      expect(new Set(seen).size).toBe(26);
+      expect([...new Set(seen)].sort()).toEqual([...titles].sort());
+      expect(second.nextCursor).toBeUndefined();
+    }, 300_000);
+
+    it("keeps the filter while paging, rather than widening it on page two", async () => {
+      await created("Filtered draft source", ["A fact in a draft."], "BUSINESS_PROFILE");
+      const live = await created("Filtered live source", ["A fact in a live source."], "BUSINESS_PROFILE");
+      await activate(live);
+
+      const page = await listKnowledge(db(), profile.context, { status: "ACTIVE", search: "Filtered" }, { limit: 1 });
+
+      expect(page.documents.map((document) => document.title)).toEqual(["Filtered live source"]);
+      const next = await listKnowledge(db(), profile.context, { status: "ACTIVE", search: "Filtered" }, { limit: 1, cursor: page.nextCursor });
+      // The draft is still excluded on the second page. A cursor that carried no filter would find it.
+      expect(next.documents.every((document) => document.status === "ACTIVE")).toBe(true);
+    }, 300_000);
+  });
+
   describe("a source that failed to index", () => {
     it("is taken out of retrieval in the same write that records the failure", async () => {
       const id = await created("Broken", ["A fact nothing could read."]);
       await activate(id);
 
-      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: false, error: "embedding provider refused the request" });
+      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: false, error: "embedding provider refused the request", version: 1 });
 
       expect(outcome).toEqual({ status: "INDEXING_FAILED", wasActive: true });
       const detail = await readKnowledge(db(), profile.context, id);
@@ -242,7 +328,7 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
     it("keeps a draft a draft, because a draft was never answering anyone", async () => {
       const id = await created("Broken draft", ["A fact nothing could read."]);
 
-      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed" });
+      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed", version: 1 });
 
       expect(outcome).toEqual({ status: "INDEXING_FAILED", wasActive: false });
       expect((await readKnowledge(db(), profile.context, id))?.status).toBe("DRAFT");
@@ -250,13 +336,52 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
 
     it("cannot be made active again until it is fixed", async () => {
       const id = await created("Still broken", ["A fact nothing could read."]);
-      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed" });
+      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed", version: 1 });
 
       expect(await restoreKnowledge(db(), profile.context, id)).toEqual({
         status: "REJECTED",
         reason: "this source failed to index and cannot be made active until it is fixed",
       });
       expect((await readKnowledge(db(), profile.context, id))?.status).toBe("DRAFT");
+    }, 180_000);
+
+    it("ignores a success that arrives for a version the source has moved past", async () => {
+      // Indexing takes seconds to minutes; an edit takes none. A delayed success used to be applied
+      // blindly, so the library claimed v2 had been indexed when the worker had only ever read v1.
+      const id = await created("Racing success", ["The first wording."]);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The second wording."] });
+
+      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: true, at: AT, version: 1 });
+
+      expect(outcome).toEqual({ status: "STALE", indexedVersion: 1, currentVersion: 2 });
+      const detail = await readKnowledge(db(), profile.context, id);
+      expect(detail?.indexingState).toBe("PENDING");
+      expect(detail?.indexedAt).toBeNull();
+    }, 180_000);
+
+    it("ignores a failure for a superseded version, and leaves a live source live", async () => {
+      // The dangerous half of the same race: a delayed v1 failure would archive the document, taking a
+      // published source out of retrieval over a problem that no longer exists.
+      const id = await created("Racing failure", ["The first wording."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The second wording."] });
+
+      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: false, error: "embedding provider refused the request", version: 1 });
+
+      expect(outcome).toEqual({ status: "STALE", indexedVersion: 1, currentVersion: 2 });
+      const detail = await readKnowledge(db(), profile.context, id);
+      expect(detail).toMatchObject({ status: "ACTIVE", publishedVersion: 1, indexingState: "PENDING" });
+      expect(detail?.indexingError).toBeNull();
+      expect((await retrieve("wording")).some((text) => text.includes("The first wording"))).toBe(true);
+    }, 180_000);
+
+    it("applies the result for the version that was actually indexed", async () => {
+      // The counter-case, so the two above cannot pass by refusing everything.
+      const id = await created("Current result", ["The only wording."]);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The newer wording."] });
+
+      expect(await recordIndexingResult(db(), profile.context, id, { ok: true, at: AT, version: 2 })).toEqual({ status: "INDEXED", version: 2 });
+      expect((await readKnowledge(db(), profile.context, id))?.indexingState).toBe("INDEXED");
     }, 180_000);
 
     /**
@@ -268,21 +393,24 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
      */
     it("cannot be made active by writing SQL either", async () => {
       const id = await created("SQL cannot help", ["A fact nothing could read."]);
-      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed" });
+      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed", version: 1 });
 
-      await expect(db().$executeRaw`UPDATE "knowledge_documents" SET "status" = 'ACTIVE' WHERE "id" = ${id}`).rejects.toThrow(
-        /knowledge_documents_failed_not_active_check/u,
-      );
+      // Publishing a version in the same statement, so the only rule left to refuse this is the one this
+      // case is about. Without it the row would also be missing a published version, and the database
+      // would stop at whichever CHECK it evaluated first — a green test about the wrong invariant.
+      await expect(
+        db().$executeRaw`UPDATE "knowledge_documents" SET "status" = 'ACTIVE', "published_version" = "version" WHERE "id" = ${id}`,
+      ).rejects.toThrow(/knowledge_documents_failed_not_active_check/u);
     }, 180_000);
 
     it("clears the error when it indexes successfully afterwards", async () => {
       const id = await created("Fixed", ["A fact that finally read."]);
-      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed" });
+      await recordIndexingResult(db(), profile.context, id, { ok: false, error: "chunking failed", version: 1 });
 
-      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: true, at: AT });
+      const outcome = await recordIndexingResult(db(), profile.context, id, { ok: true, at: AT, version: 1 });
 
       // A stale error on a healthy source would be read as a current problem.
-      expect(outcome).toEqual({ status: "INDEXED" });
+      expect(outcome).toEqual({ status: "INDEXED", version: 1 });
       const detail = await readKnowledge(db(), profile.context, id);
       expect(detail?.indexingError).toBeNull();
       expect(detail?.indexedAt?.toISOString()).toBe(AT.toISOString());

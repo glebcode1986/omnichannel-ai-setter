@@ -27,6 +27,7 @@ const document_ = (overrides: Partial<KnowledgeSummary> = {}): KnowledgeSummary 
   sourceType: "MANUAL",
   sourceUri: null,
   version: 2,
+  publishedVersion: 2,
   status: "ACTIVE",
   scope: "BUSINESS_PROFILE",
   indexingState: "INDEXED",
@@ -152,5 +153,17 @@ describe("in Russian", () => {
     expect(screen.getByText(catalogues.ru["knowledgeStatus.ACTIVE"])).toBeDefined();
     expect(screen.getByText(catalogues.ru["indexing.INDEXED"])).toBeDefined();
     expect(screen.getByText("Opening hours")).toBeDefined();
+  });
+});
+
+describe("getting to the rest of the library", () => {
+  it("offers the next page only when there is one", () => {
+    // Without this link a business with 26 sources could reach 25 of them. The route decides whether
+    // there is a next page; the list must not invent one, and must not hide one either.
+    const { rerender } = render(<KnowledgeList t={t} documents={[document_()]} basePath={BASE} filtered={false} />);
+    expect(screen.queryByRole("link", { name: t.t("knowledge.loadMore") })).toBeNull();
+
+    rerender(<KnowledgeList t={t} documents={[document_()]} basePath={BASE} filtered={false} nextHref={`${BASE}?cursor=abc`} />);
+    expect(screen.getByRole("link", { name: t.t("knowledge.loadMore") }).getAttribute("href")).toBe(`${BASE}?cursor=abc`);
   });
 });
