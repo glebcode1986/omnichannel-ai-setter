@@ -125,6 +125,26 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
     return recordIndexingResult(shim, profile.context, documentId, { ok: false, error: "the embedder refused mid-publish", version });
   };
 
+  /** Publishes with an archive landing between the publish's read and its conditional write. */
+  const publishWithInterleavedArchive = async (documentId: string, version: number) => {
+    const real = db();
+    let reads = 0;
+    const shim = {
+      knowledgeDocument: {
+        findFirst: async (args: Parameters<typeof real.knowledgeDocument.findFirst>[0]) => {
+          const row = await real.knowledgeDocument.findFirst(args);
+          reads += 1;
+          if (reads === 1) {
+            await archiveKnowledge(real, profile.context, documentId);
+          }
+          return row;
+        },
+        updateMany: (args: Parameters<typeof real.knowledgeDocument.updateMany>[0]) => real.knowledgeDocument.updateMany(args),
+      },
+    } as unknown as typeof real;
+    return publishKnowledge(shim, profile.context, documentId, { expectedVersion: version, act: "PUBLISH" });
+  };
+
   /** Publishes with an indexing failure for the same version landing between the read and the write. */
   const publishWithInterleavedFailure = async (documentId: string, version: number) => {
     const real = db();
@@ -293,6 +313,76 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
 
       expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 1 })).toEqual({ status: "RESTORED", version: 1 });
       expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ status: "ACTIVE", version: 1, publishedVersion: 1 });
+    }, 180_000);
+
+    it("refuses a stale Publish for a source somebody archived, instead of resurrecting it", async () => {
+      // Astra's finding on the repaired head. Archiving deliberately leaves the version alone, so the
+      // expected version still matches — and a version-only condition let the stale click write ACTIVE
+      // over an archive another operator had made, and report success. The source was back in retrieval
+      // with nothing on screen to say why.
+      const id = await created("Archived under a stale tab", ["A fact somebody withdrew."]);
+
+      // Tab B renders Publish for the draft. Tab A archives it. Tab B clicks.
+      await archiveKnowledge(db(), profile.context, id);
+
+      expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 1, act: "PUBLISH" })).toEqual({
+        status: "STALE_STATE",
+        expected: "DRAFT|ACTIVE",
+        current: "ARCHIVED",
+      });
+      expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ status: "ARCHIVED", publishedVersion: null });
+      expect(await retrieve("withdrew")).toEqual([]);
+    }, 180_000);
+
+    it("refuses a stale Publish for a live source somebody archived, keeping it out of retrieval", async () => {
+      // The same race against an ACTIVE source with a staged version, which is the state the detail page
+      // renders Publish for.
+      const id = await created("Live then archived", ["The wording that answered customers."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["A newer wording staged for publishing."], expectedVersion: 1 });
+      await archiveKnowledge(db(), profile.context, id);
+
+      expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 2, act: "PUBLISH" })).toMatchObject({
+        status: "STALE_STATE",
+        current: "ARCHIVED",
+      });
+      expect((await readKnowledge(db(), profile.context, id))?.status).toBe("ARCHIVED");
+      expect(await retrieve("answered customers")).toEqual([]);
+    }, 180_000);
+
+    it("refuses a stale Restore for a source somebody already brought back", async () => {
+      // The same defect from the other side: the button was rendered for an archived source, and
+      // re-publishing one a colleague has already restored would move the published version silently.
+      const id = await created("Restored twice", ["A fact that came back."]);
+      await activate(id);
+      await archiveKnowledge(db(), profile.context, id);
+      await restoreKnowledge(db(), profile.context, id, { expectedVersion: 1, act: "RESTORE" });
+
+      expect(await restoreKnowledge(db(), profile.context, id, { expectedVersion: 1, act: "RESTORE" })).toEqual({
+        status: "STALE_STATE",
+        expected: "ARCHIVED",
+        current: "ACTIVE",
+      });
+    }, 180_000);
+
+    it("refuses an archive that lands between the publish's read and its write", async () => {
+      // The interleaved form of the same race: every read the publish makes is consistent, and the
+      // archive commits in the gap. The conditional write names the status it read, so it misses.
+      const id = await created("Archived mid-publish", ["A fact withdrawn mid-publish."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["A newer wording."], expectedVersion: 1 });
+
+      const outcome = await publishWithInterleavedArchive(id, 2);
+
+      expect(outcome).toMatchObject({ status: "STALE_STATE", current: "ARCHIVED" });
+      expect((await readKnowledge(db(), profile.context, id))?.status).toBe("ARCHIVED");
+    }, 180_000);
+
+    it("still lets a caller with no screen behind it publish, which is what the act being optional means", async () => {
+      // A system caller has no button to be stale about. It keeps the version and health checks.
+      const id = await created("System publish", ["A fact published by a job."]);
+
+      expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 1 })).toEqual({ status: "RESTORED", version: 1 });
     }, 180_000);
 
     it("refuses a staged publish whose ingestion failed between the read and the write", async () => {
