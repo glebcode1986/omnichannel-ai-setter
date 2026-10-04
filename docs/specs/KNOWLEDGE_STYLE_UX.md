@@ -28,6 +28,17 @@ Show knowledge sources with:
 ### Editing
 Editing creates a new version rather than mutating provenance invisibly. Old versions remain auditable and inactive when superseded.
 
+### Publishing
+Save and Publish are separate acts. Saving stores a new version; only publishing moves the version retrieval answers with. A live source can therefore carry an unpublished edit, and the screen must show which version customers are getting.
+
+Every control that decides about a version submits the version it was rendered against, and the store refuses a mismatch rather than applying the decision to whatever is current. A stale tab is told what changed; it is never silently obeyed, and a submission that carries no version is refused before the store is reached rather than completed against the latest one.
+
+A version that is not the published one is publishable whatever the source's status, so an edited live source always has a reachable control for making its staged version answerable.
+
+Archiving carries no expected version: it stops the source answering whatever its current wording is, and refusing it on staleness would strand the one control that takes a source out of retrieval.
+
+Recording a failed ingestion and publishing the same version are decided against the same row state, so the two cannot interleave into a source that is simultaneously live and unsearchable. Whichever loses the race is told what happened; neither receives a database error.
+
 ### Test retrieval
 User enters a customer question and sees top factual hits and provenance. This is retrieval testing, not an LLM answer test.
 
