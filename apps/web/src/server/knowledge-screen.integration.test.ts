@@ -20,14 +20,19 @@ import {
   createBusinessProfile,
   createKnowledge,
   createWorkspaceWithOwner,
+  editKnowledge,
   listKnowledge,
+  publishKnowledge,
+  readKnowledge,
+  recordIndexingResult,
   type BusinessProfileContext,
 } from "@omnichannel/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import type { RawSearchParams } from "./inbox-view";
-import { decodeKnowledgeCursor, knowledgeFilterOf, knowledgeNextHref, one } from "./knowledge-view";
+import { decodeKnowledgeCursor, knowledgeFilterOf, knowledgeLifecycleOf, knowledgeNextHref, one } from "./knowledge-view";
+import { expectedVersionOf } from "./knowledge-submission";
 
 const BASE = "/workspaces/ws/profiles/bp/knowledge";
 
@@ -123,6 +128,87 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library screen's query",
     const href = knowledgeNextHref(BASE, { q: "Source 1" }, { updatedAt: new Date(), id: "kd_1" });
     expect(new URL(href, "https://example.test").searchParams.get("q")).toBe("Source 1");
   }, 300_000);
+
+  /**
+   * The detail screen's own loop: what the page would render, and what the button it rendered does.
+   *
+   * Astra's first finding was a gap between exactly these two. The store could publish a staged version
+   * of a live source, the page showed the warning saying customers were still being answered with the old
+   * one, and the only control it rendered for an ACTIVE document was Archive. Every piece worked and the
+   * operator was stuck — so the test has to walk the whole way across: read what the page reads, take the
+   * control the page would render, submit the field that control carries, and check what customers get.
+   */
+  describe("one source, through its lifecycle", () => {
+    /** The page's own decision plus the hidden field its form submits, as the browser would post it. */
+    const rendered = async (documentId: string) => {
+      const detail = await readKnowledge(database.db, context, documentId);
+      if (detail === undefined) {
+        throw new Error("the fixture expected a readable document");
+      }
+      const form = new FormData();
+      form.set("expectedVersion", String(detail.version));
+      return { detail, lifecycle: knowledgeLifecycleOf(detail), form };
+    };
+
+    /** The publish action's own path: the guard, then the store, with nothing in between. */
+    const publishAsRendered = async (documentId: string, form: FormData) => {
+      const expectedVersion = expectedVersionOf(form);
+      if (expectedVersion === undefined) {
+        throw new Error("the control the page rendered carried no version");
+      }
+      return publishKnowledge(database.db, context, documentId, { expectedVersion });
+    };
+
+    const staged = async (title: string) => {
+      const created = await createKnowledge(database.db, context, { title, chunks: ["The wording that was published."], scope: "BUSINESS_PROFILE" });
+      if (created.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${created.status}`);
+      }
+      const id = created.documentId;
+      await recordIndexingResult(database.db, context, id, { ok: true, at: new Date("2026-10-04T12:00:00.000Z"), version: 1 });
+      await publishKnowledge(database.db, context, id, { expectedVersion: 1 });
+      await editKnowledge(database.db, context, id, { chunks: ["The wording somebody has since saved."], expectedVersion: 1 });
+      return id;
+    };
+
+    it("offers a publish for an edited live source, and publishing it changes what customers are told", async () => {
+      const id = await staged("Edited live source");
+
+      const before = await rendered(id);
+      expect(before.detail).toMatchObject({ status: "ACTIVE", version: 2, publishedVersion: 1 });
+      // The finding, as one assertion: the page used to decide "ACTIVE, so Archive" here.
+      expect(before.lifecycle).toBe("publish");
+
+      expect(await publishAsRendered(id, before.form)).toEqual({ status: "RESTORED", version: 2 });
+
+      const after = await rendered(id);
+      expect(after.detail).toMatchObject({ status: "ACTIVE", version: 2, publishedVersion: 2 });
+      // And the control is gone, because there is nothing left to publish.
+      expect(after.lifecycle).toBeUndefined();
+    }, 300_000);
+
+    it("refuses the publish when the page the operator clicked on was out of date", async () => {
+      const id = await staged("Stale detail screen");
+
+      // Tab B renders at v2. Tab A then saves v3.
+      const tabB = await rendered(id);
+      await editKnowledge(database.db, context, id, { chunks: ["The wording tab A saved afterwards."], expectedVersion: 2 });
+
+      expect(await publishAsRendered(id, tabB.form)).toEqual({ status: "CONFLICT", expectedVersion: 2, currentVersion: 3 });
+      // Nothing moved: v1 is still what customers are answered with, which is what the refusal says.
+      expect(await readKnowledge(database.db, context, id)).toMatchObject({ version: 3, publishedVersion: 1 });
+    }, 300_000);
+
+    it("offers nothing to publish on a live source nobody has edited", async () => {
+      const created = await createKnowledge(database.db, context, { title: "Untouched live source", chunks: ["A published fact."] });
+      if (created.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${created.status}`);
+      }
+      await publishKnowledge(database.db, context, created.documentId, { expectedVersion: 1 });
+
+      expect((await rendered(created.documentId)).lifecycle).toBeUndefined();
+    }, 300_000);
+  });
 
   it("ignores a filter value the store does not know, rather than passing it through", async () => {
     const page = await screen({ status: "NOT_A_STATUS", indexing: "", scope: "WORKSPACE" });

@@ -14,6 +14,41 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
+
+Astra re-reviewed `fcd4983` and returned four blocking findings. All four were in the space between
+pieces that were individually correct.
+
+1. An edited ACTIVE source had no UI path to publish its staged version: the page rendered the
+   "saved v2, answered with v1" warning above a control row whose only button was Archive.
+   `knowledgeLifecycleOf` now states the rule — a version that is not the published one is publishable
+   whatever the status.
+2. `editKnowledgeAction` omitted an unusable `expectedVersion`, and the store checks staleness only when
+   it is present, so a form without the field edited whatever was current and reported `VERSIONED`. The
+   guard moved to `knowledge-submission.ts`, refuses before the store is reached, and is tested against
+   requests no browser builds.
+3. Publish was not bound to the version the operator saw. It travels page → control → action → store
+   now, and a mismatch is a `CONFLICT`.
+4. Publishing and recording an indexing failure could race into a raw `23514` constraint error. Each
+   write names every column its decision came from, and the health write re-decides once against the
+   state that replaced it.
+
+### Second blocker repair — P5-05 / Issue #31, the concurrency interleavings
+
+Astra re-reviewed `c12dd43` and returned three blocking findings. Two were introduced by the previous
+repair: separating Save from Publish created interleavings the repair did not close.
+
+1. Publish wrote conditionally and discarded the count, so a save in the gap meant nothing was published
+   and the operator was told otherwise. It returns a typed `CONFLICT` now.
+2. Save carried no expected version, so a stale tab overwrote a colleague's work and two simultaneous
+   submits raced for the same next version. `expectedVersion` travels page → form → action → store.
+3. A failure to index an unpublished version archived the document, stopping the healthy published
+   version. The CHECK is now about the published version, and so is the store.
+
+Also closed: the knowledge outcome family was absent from `OutcomeNotice`, so no knowledge write had ever
+shown the operator a message. A typed conflict nobody sees is not a fix.
+
+### Blocker repair — P5-05 / Issue #31, after `CHANGES_REQUESTED`
 ### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
 
 The third instance of the defect Astra raised on #77, found by the same sweep over every paged store list
