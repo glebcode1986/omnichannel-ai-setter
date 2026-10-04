@@ -229,6 +229,40 @@ Idempotency is the same decision digest the review path uses.
 **Reviewer note.** AntiGravity is temporarily unavailable due to reviewer limits, so Astra is the active
 independent reviewer for this cycle.
 
+1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
+   branch. The previous repair was correct on every path its own tests walked; all four findings were
+   about paths they did not.
+
+   **An edited live source had no way to publish its staged version.** The store deliberately leaves an
+   edited ACTIVE document at `publishedVersion = 1`, the page rendered the "saved v2, customers are
+   answered with v1" warning — and its control branch offered Archive to every ACTIVE document and
+   Publish only to DRAFTs. The store could do it and the operator could not reach it. The rule now lives
+   in `knowledgeLifecycleOf`: a version that is not the published one is publishable whatever the
+   status.
+
+   **A missing version was accepted by the action that claimed to refuse it.** `editKnowledgeAction`
+   parsed `expectedVersion` and, when it could not read one, omitted the property — and the store checks
+   staleness only when it is present. A form that left the field out therefore edited whatever was
+   current and reported `VERSIONED`: the whole stale-tab mechanism, steppable around by sending one fewer
+   field. The decision moved to `knowledge-submission.ts`, where it is refused before the store is
+   reached and can be run against requests no browser built.
+
+   **Publish was not bound to the version the operator saw.** The form submitted no version, the action
+   took no `FormData`, and the store published whatever was current when it started. Two tabs on the same
+   draft was enough: one saves, the other clicks Publish, and content nobody reviewed is live under a
+   success notice. The version now travels page → control → action → store, and a mismatch is a
+   `CONFLICT`.
+
+   **Publishing and recording an indexing failure could race into a raw constraint error.** Both read the
+   row, decided, then wrote conditional on the version alone — so each could write the other's premise
+   away and produce ACTIVE + FAILED + published-at-this-version, the triple the CHECK refuses. Each write
+   now names every column its decision came from: the publish refuses with the sentence the pre-read
+   would have given, and the health write re-decides once against the state that replaced it, archiving
+   the source whose published version the publish just moved.
+
+   **The lesson:** a correct store plus a correct screen is not a correct product. Three of the four were
+   gaps *between* two correct pieces — a control that was never rendered, a field that was never required,
+   a predicate that named one of the two facts it read.
 1. **Three P5-05 concurrency blockers, two of them introduced by the previous repair.** Astra re-reviewed
    the repaired head and found that separating Save from Publish had not closed the interleavings it
    created. All three were correct.

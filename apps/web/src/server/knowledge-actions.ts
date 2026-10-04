@@ -9,51 +9,32 @@
  * Nothing here can turn a message, a draft or a style example into a fact. The only way text reaches the
  * factual corpus is a person typing or pasting it into a form and pressing save, which is the whole of
  * ADR-011's separation: style is learned from human writing, facts are stated.
+ *
+ * **Every write that changes an existing source carries the version the screen was rendered against.** Not
+ * as a convenience — as the condition. These are public endpoints, so "the form always sends it" is not a
+ * guarantee about what arrives; a submission without a usable version is refused here, before the store is
+ * called, because the alternative is applying it to whatever happens to be current. The decision is in
+ * `knowledge-submission.ts` so that it can be run against requests no browser built.
  */
 import { archiveKnowledge, createKnowledge, editKnowledge, publishKnowledge, restoreKnowledge } from "@omnichannel/db";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { getDb } from "./db";
+import {
+  expectedVersionOf,
+  factsOf,
+  field,
+  knowledgeEditOf,
+  knowledgeOutcomeOf,
+  type KnowledgeOutcome,
+  type KnowledgeTarget,
+} from "./knowledge-submission";
 import { requireBusinessProfileContext } from "./request-context";
 
-export interface KnowledgeTarget {
-  readonly workspaceId: string;
-  readonly businessProfileId: string;
-}
-
-export type KnowledgeOutcome =
-  | "CREATED"
-  | "VERSIONED"
-  | "UNCHANGED"
-  | "PUBLISHED"
-  | "ARCHIVED"
-  | "RESTORED"
-  /** Somebody else moved the source between the screen being drawn and the write. */
-  | "CONFLICT"
-  | "GONE"
-  | "REJECTED";
+export type { KnowledgeOutcome, KnowledgeTarget } from "./knowledge-submission";
 
 const libraryPath = (target: KnowledgeTarget) => `/workspaces/${target.workspaceId}/profiles/${target.businessProfileId}/knowledge`;
-
-function field(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * One fact per line.
- *
- * Splitting is the operator's decision made visible, not a hidden heuristic: they can see exactly which
- * lines became which facts, and a retrieval hit later points at one of them. A silent splitter would make
- * provenance unexplainable — "which sentence did it cite?" would have no answer on screen.
- */
-function factsOf(formData: FormData): readonly string[] {
-  return field(formData, "facts")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-}
 
 function finish(target: KnowledgeTarget, outcome: KnowledgeOutcome, documentId?: string): never {
   const path = libraryPath(target);
@@ -63,6 +44,7 @@ function finish(target: KnowledgeTarget, outcome: KnowledgeOutcome, documentId?:
 
 export async function createKnowledgeAction(target: KnowledgeTarget, formData: FormData): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
+  // Creation is the one write with no prior version to be stale against: there is nothing to overwrite.
   const outcome = await createKnowledge(getDb(), context, {
     title: field(formData, "title"),
     chunks: factsOf(formData),
@@ -71,56 +53,48 @@ export async function createKnowledgeAction(target: KnowledgeTarget, formData: F
   if (outcome.status === "CREATED") {
     finish(target, "CREATED", outcome.documentId);
   }
-  finish(target, outcome.status === "REJECTED" ? "REJECTED" : "GONE");
+  finish(target, knowledgeOutcomeOf(outcome.status));
 }
 
 export async function editKnowledgeAction(target: KnowledgeTarget, documentId: string, formData: FormData): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
-  // The version the form was rendered against. A submission with none is a form written before this
-  // existed, or one somebody constructed; both are refused rather than guessed at.
-  const expected = Number.parseInt(field(formData, "expectedVersion") ?? "", 10);
-  const outcome = await editKnowledge(getDb(), context, documentId, {
-    title: field(formData, "title"),
-    chunks: factsOf(formData),
-    ...(Number.isSafeInteger(expected) && expected > 0 ? { expectedVersion: expected } : {}),
-  });
-  finish(
-    target,
-    outcome.status === "VERSIONED"
-      ? "VERSIONED"
-      : outcome.status === "UNCHANGED"
-        ? "UNCHANGED"
-        : outcome.status === "CONFLICT"
-          ? "CONFLICT"
-          : outcome.status === "REJECTED"
-            ? "REJECTED"
-            : "GONE",
-    outcome.status === "GONE" ? undefined : documentId,
-  );
+  const edit = knowledgeEditOf(formData);
+  if (edit === undefined) {
+    // A submission that does not say which version it was composed against. Refused rather than applied
+    // to whatever is current: that is the stale-tab overwrite this whole mechanism exists to prevent, and
+    // it cannot be allowed to come back through a form that simply left the field out.
+    finish(target, "REJECTED", documentId);
+  }
+  const outcome = await editKnowledge(getDb(), context, documentId, edit);
+  finish(target, knowledgeOutcomeOf(outcome.status), outcome.status === "GONE" ? undefined : documentId);
 }
 
-export async function publishKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
+export async function publishKnowledgeAction(target: KnowledgeTarget, documentId: string, formData: FormData): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
-  const outcome = await publishKnowledge(getDb(), context, documentId);
-  finish(
-    target,
-    outcome.status === "RESTORED" ? "PUBLISHED" : outcome.status === "CONFLICT" ? "CONFLICT" : outcome.status === "REJECTED" ? "REJECTED" : "GONE",
-    documentId,
-  );
+  const expectedVersion = expectedVersionOf(formData);
+  if (expectedVersion === undefined) {
+    finish(target, "REJECTED", documentId);
+  }
+  // Publishing is the only act that changes what customers are told, so it is bound to the version the
+  // operator was looking at when they decided to. A save that landed first makes this a CONFLICT.
+  const outcome = await publishKnowledge(getDb(), context, documentId, { expectedVersion });
+  finish(target, knowledgeOutcomeOf(outcome.status, "PUBLISHED"), documentId);
 }
 
 export async function archiveKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
+  // Archiving needs no version: it takes the source out of retrieval whatever its current wording is, so
+  // there is no newer version it could be deciding about by mistake.
   const outcome = await archiveKnowledge(getDb(), context, documentId);
-  finish(target, outcome.status === "ARCHIVED" ? "ARCHIVED" : "GONE", documentId);
+  finish(target, knowledgeOutcomeOf(outcome.status), documentId);
 }
 
-export async function restoreKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
+export async function restoreKnowledgeAction(target: KnowledgeTarget, documentId: string, formData: FormData): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
-  const outcome = await restoreKnowledge(getDb(), context, documentId);
-  finish(
-    target,
-    outcome.status === "RESTORED" ? "RESTORED" : outcome.status === "CONFLICT" ? "CONFLICT" : outcome.status === "REJECTED" ? "REJECTED" : "GONE",
-    documentId,
-  );
+  const expectedVersion = expectedVersionOf(formData);
+  if (expectedVersion === undefined) {
+    finish(target, "REJECTED", documentId);
+  }
+  const outcome = await restoreKnowledge(getDb(), context, documentId, { expectedVersion });
+  finish(target, knowledgeOutcomeOf(outcome.status), documentId);
 }

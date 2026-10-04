@@ -10,7 +10,7 @@
  * a separate, deliberate act, and the button for it says what it does rather than "Save".
  */
 import type { Translator } from "@/i18n/translate";
-import type { KnowledgeTarget } from "@/server/knowledge-actions";
+import type { KnowledgeTarget } from "@/server/knowledge-submission";
 
 export interface KnowledgeEditorProps {
   readonly t: Translator;

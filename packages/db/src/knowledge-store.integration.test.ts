@@ -90,6 +90,61 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
     return restoreKnowledge(shim, profile.context, documentId);
   };
 
+  /**
+   * Records an indexing failure with a publish landing between the health write's read and its write.
+   *
+   * The second of the two orderings that used to end in a raw constraint error. The transaction's reads
+   * are intercepted, so the publish commits on its own connection while the failure still holds the
+   * decision it made from the older row — which is exactly the window a worker and an operator working at
+   * the same time produce.
+   */
+  const failWithInterleavedPublish = async (documentId: string, version: number) => {
+    const real = db();
+    let reads = 0;
+    const shim = {
+      $transaction: (run: (tx: unknown) => Promise<unknown>) =>
+        real.$transaction(async (tx) => {
+          const interleaved = {
+            knowledgeDocument: {
+              findFirst: async (args: Parameters<typeof tx.knowledgeDocument.findFirst>[0]) => {
+                const row = await tx.knowledgeDocument.findFirst(args);
+                reads += 1;
+                if (reads === 1) {
+                  await publishKnowledge(real, profile.context, documentId, { expectedVersion: version });
+                }
+                return row;
+              },
+              updateMany: (args: Parameters<typeof tx.knowledgeDocument.updateMany>[0]) => tx.knowledgeDocument.updateMany(args),
+            },
+          };
+          return run(interleaved);
+        }),
+      // Test-only: `recordIndexingResult` reaches for exactly these, and a narrower type would have to
+      // restate the whole client to say so.
+    } as unknown as typeof real;
+    return recordIndexingResult(shim, profile.context, documentId, { ok: false, error: "the embedder refused mid-publish", version });
+  };
+
+  /** Publishes with an indexing failure for the same version landing between the read and the write. */
+  const publishWithInterleavedFailure = async (documentId: string, version: number) => {
+    const real = db();
+    let reads = 0;
+    const shim = {
+      knowledgeDocument: {
+        findFirst: async (args: Parameters<typeof real.knowledgeDocument.findFirst>[0]) => {
+          const row = await real.knowledgeDocument.findFirst(args);
+          reads += 1;
+          if (reads === 1) {
+            await recordIndexingResult(real, profile.context, documentId, { ok: false, error: "the embedder refused mid-publish", version });
+          }
+          return row;
+        },
+        updateMany: (args: Parameters<typeof real.knowledgeDocument.updateMany>[0]) => real.knowledgeDocument.updateMany(args),
+      },
+    } as unknown as typeof real;
+    return publishKnowledge(shim, profile.context, documentId, { expectedVersion: version });
+  };
+
   const activate = async (documentId: string, version = 1) => {
     await recordIndexingResult(db(), profile.context, documentId, { ok: true, at: AT, version });
     return restoreKnowledge(db(), profile.context, documentId);
@@ -213,6 +268,70 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
       expect(outcome).toEqual({ status: "CONFLICT", expectedVersion: 1, currentVersion: 2 });
       // And the published version is still v1: nothing was published, which is what the refusal says.
       expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ version: 2, publishedVersion: 1 });
+    }, 180_000);
+
+    it("refuses a publish from a tab that was showing an older version", async () => {
+      // Astra's third finding, and the one the interleaving test above could not reach: here the save
+      // lands *before* the publish action even starts, so every read the store makes is consistent and
+      // the only thing wrong is the screen the operator clicked on. Two tabs show DRAFT v1, tab A saves
+      // v2, tab B clicks Publish — and without the version tab B was rendered against, tab B publishes
+      // content B has never seen and is told it succeeded.
+      const id = await created("Stale publish", ["The wording tab B is looking at."]);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The wording tab A saved."], expectedVersion: 1 });
+
+      expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 1 })).toEqual({
+        status: "CONFLICT",
+        expectedVersion: 1,
+        currentVersion: 2,
+      });
+      // Nothing is live, so tab A's wording is not answering customers on tab B's decision either.
+      expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ status: "DRAFT", publishedVersion: null });
+    }, 180_000);
+
+    it("publishes the version the operator was looking at", async () => {
+      const id = await created("Named publish", ["The wording on screen."]);
+
+      expect(await publishKnowledge(db(), profile.context, id, { expectedVersion: 1 })).toEqual({ status: "RESTORED", version: 1 });
+      expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ status: "ACTIVE", version: 1, publishedVersion: 1 });
+    }, 180_000);
+
+    it("refuses a staged publish whose ingestion failed between the read and the write", async () => {
+      // Astra's fourth finding, first ordering. Published v1 is live, v2 is saved and still PENDING, and
+      // the operator publishes v2 at the moment the embedder rejects it. The publish used to write
+      // ACTIVE over a row that had just become FAILED at its published version — the one triple the
+      // CHECK refuses — so the operator received a raw constraint error instead of an answer.
+      const id = await created("Failing mid-publish", ["The heliotrope policy that indexed."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The heliotrope policy the embedder refused."], expectedVersion: 1 });
+
+      const outcome = await publishWithInterleavedFailure(id, 2);
+
+      expect(outcome).toEqual({ status: "REJECTED", reason: "this source failed to index and cannot be made active until it is fixed" });
+      // v1 keeps answering: the failure was in content nobody has been shown, and the publish of it was
+      // refused rather than half-applied.
+      expect(await readKnowledge(db(), profile.context, id)).toMatchObject({ status: "ACTIVE", version: 2, publishedVersion: 1, indexingState: "FAILED" });
+      const stillAnswering = await retrieve("heliotrope");
+      expect(stillAnswering.some((text) => text.includes("that indexed"))).toBe(true);
+      expect(stillAnswering.some((text) => text.includes("the embedder refused"))).toBe(false);
+    }, 180_000);
+
+    it("archives the source when a publish moves the published version under a failure", async () => {
+      // The same race in the other order. The health write decided "do not archive, the failing version
+      // is not the published one" and then a publish made it the published one; writing that decision
+      // would have produced the refused triple from the other side. The decision is made again against
+      // the row that replaced it, so what gets recorded is the consequence that is now true.
+      const id = await created("Published mid-failure", ["The marzipan policy that indexed."]);
+      await activate(id);
+      await editKnowledge(db(), profile.context, id, { chunks: ["The marzipan policy the embedder refused."], expectedVersion: 1 });
+
+      const outcome = await failWithInterleavedPublish(id, 2);
+
+      expect(outcome).toEqual({ status: "INDEXING_FAILED", wasActive: true });
+      const detail = await readKnowledge(db(), profile.context, id);
+      expect(detail).toMatchObject({ status: "ARCHIVED", version: 2, publishedVersion: 2, indexingState: "FAILED" });
+      // And nothing of it is reachable any more, because a source that cannot be searched cannot be live
+      // — which is the invariant both orderings were threatening.
+      expect((await retrieve("marzipan")).some((text) => text.includes("marzipan"))).toBe(false);
     }, 180_000);
 
     it("publishes it when somebody actually publishes it", async () => {
