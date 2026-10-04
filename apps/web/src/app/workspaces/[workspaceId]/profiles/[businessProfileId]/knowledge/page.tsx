@@ -5,27 +5,15 @@
  * style example into knowledge: the only route into the factual corpus is a person typing into the form
  * below, which is ADR-011's separation made physical.
  */
-import { listKnowledge, type KnowledgeFilter } from "@omnichannel/db";
-
 import { KnowledgeList } from "@/ui/knowledge/knowledge-list";
 import { KnowledgeEditor } from "@/ui/knowledge/knowledge-editor";
 import { RetrievalResults } from "@/ui/knowledge/retrieval-results";
 import { OutcomeNotice } from "@/ui/outcome-notice";
-import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext } from "@/server/request-context";
-import { getDb } from "@/server/db";
 import { createKnowledgeAction } from "@/server/knowledge-actions";
+import { loadKnowledgeScreen } from "@/server/knowledge-page";
+import { KNOWLEDGE_INDEXING_STATES, KNOWLEDGE_STATUSES, one } from "@/server/knowledge-view";
 import { runRetrievalTrial } from "@/server/retrieval-tester";
 import type { RawSearchParams } from "@/server/inbox-view";
-
-function one(value: string | string[] | undefined): string | undefined {
-  const first = Array.isArray(value) ? value[0] : value;
-  return first === undefined || first === "" ? undefined : first;
-}
-
-const STATUSES = ["DRAFT", "ACTIVE", "ARCHIVED"] as const;
-const INDEXING = ["PENDING", "INDEXED", "FAILED"] as const;
-const SCOPES = ["WORKSPACE", "BUSINESS_PROFILE"] as const;
 
 export default async function KnowledgePage({
   params,
@@ -35,23 +23,10 @@ export default async function KnowledgePage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const t = await requestTranslator();
   const query = await searchParams;
-
-  const status = one(query["status"]);
-  const indexing = one(query["indexing"]);
-  const scope = one(query["scope"]);
-  const search = one(query["q"]);
-  const filter: KnowledgeFilter = {
-    ...((STATUSES as readonly string[]).includes(status ?? "") ? { status: status as KnowledgeFilter["status"] } : {}),
-    ...((INDEXING as readonly string[]).includes(indexing ?? "") ? { indexingState: indexing as KnowledgeFilter["indexingState"] } : {}),
-    ...((SCOPES as readonly string[]).includes(scope ?? "") ? { scope: scope as KnowledgeFilter["scope"] } : {}),
-    ...(search === undefined ? {} : { search }),
-  };
-
-  const page = await listKnowledge(getDb(), context, filter);
-  const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}/knowledge`;
+  // Every read this screen needs, assembled in one tested place: the route used to do it here, and that
+  // is where the library quietly lost everything after its 25th source.
+  const { t, filter, page, basePath, nextHref, context } = await loadKnowledgeScreen(workspaceId, businessProfileId, query);
 
   // The tester runs the real retriever. Asking with no question is not asking, which is why the empty
   // query returns a trial that says nothing was searched rather than "nothing was found".
@@ -92,12 +67,12 @@ export default async function KnowledgePage({
         <h2>{t.t("knowledge.listLabel")}</h2>
         <form action={basePath} method="get" role="search" className="inbox-search">
           <label htmlFor="knowledge-q">{t.t("knowledge.searchLabel")}</label>
-          <input id="knowledge-q" name="q" type="search" defaultValue={search ?? ""} />
+          <input id="knowledge-q" name="q" type="search" defaultValue={filter.search ?? ""} />
 
           <label htmlFor="knowledge-status">{t.t("knowledge.filterStatus")}</label>
           <select id="knowledge-status" name="status" defaultValue={filter.status ?? ""}>
             <option value="">{t.t("knowledge.allStatuses")}</option>
-            {STATUSES.map((value) => (
+            {KNOWLEDGE_STATUSES.map((value) => (
               <option key={value} value={value}>
                 {t.t(`knowledgeStatus.${value}`)}
               </option>
@@ -107,7 +82,7 @@ export default async function KnowledgePage({
           <label htmlFor="knowledge-indexing">{t.t("knowledge.filterIndexing")}</label>
           <select id="knowledge-indexing" name="indexing" defaultValue={filter.indexingState ?? ""}>
             <option value="">{t.t("knowledge.allIndexing")}</option>
-            {INDEXING.map((value) => (
+            {KNOWLEDGE_INDEXING_STATES.map((value) => (
               <option key={value} value={value}>
                 {t.t(`indexing.${value}`)}
               </option>
@@ -132,6 +107,7 @@ export default async function KnowledgePage({
           documents={page.documents}
           basePath={basePath}
           filtered={Object.keys(filter).length > 0}
+          {...(nextHref === undefined ? {} : { nextHref })}
         />
       </section>
     </>

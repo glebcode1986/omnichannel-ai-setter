@@ -7,7 +7,15 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { isFilteredReviewView, parseReviewView, reviewFilterOf, reviewQueryString } from "./review-view";
+import {
+  decodeReviewCursor,
+  encodeReviewCursor,
+  isFilteredReviewView,
+  parseReviewView,
+  reviewFilterOf,
+  reviewNextHref,
+  reviewQueryString,
+} from "./review-view";
 
 describe("parsing a Review queue URL", () => {
   it("reads a reason the domain defines", () => {
@@ -77,5 +85,61 @@ describe("the query string it builds back", () => {
     expect(isFilteredReviewView({})).toBe(false);
     expect(isFilteredReviewView({ view: "stale" })).toBe(true);
     expect(isFilteredReviewView({ reasonCode: "MISSING_FACT" })).toBe(true);
+  });
+});
+
+describe("paging the queue", () => {
+  const CURSOR = { createdAt: new Date("2026-09-30T11:00:00.000Z"), id: "ad_25" };
+  const PATH = "/workspaces/ws_1/profiles/bp_1/review";
+
+  it("round-trips a cursor through a URL", () => {
+    expect(decodeReviewCursor(encodeReviewCursor(CURSOR))).toEqual(CURSOR);
+    // URL-safe: no `+`, no `/`, no padding for something well-meaning to strip.
+    expect(encodeReviewCursor(CURSOR)).toMatch(/^[A-Za-z0-9_-]+$/u);
+  });
+
+  it("refuses anything this module did not write, so a hand-edited URL shows page one", () => {
+    for (const nonsense of [undefined, "", "not-a-cursor", Buffer.from("no-separator", "utf8").toString("base64url"), Buffer.from("not-a-date|ad_1", "utf8").toString("base64url"), Buffer.from("2026-09-30T11:00:00.000Z|", "utf8").toString("base64url")]) {
+      expect(decodeReviewCursor(nonsense)).toBeUndefined();
+    }
+  });
+
+  it("reads a cursor out of the query", () => {
+    const encoded = encodeReviewCursor(CURSOR);
+
+    expect(parseReviewView({ cursor: encoded, view: "stale" })).toEqual({ cursor: encoded, view: "stale" });
+  });
+
+  it("keeps the filter in the next link", () => {
+    const href = reviewNextHref(PATH, { reasonCode: "MISSING_FACT", view: "answerable" }, CURSOR);
+
+    const url = new URL(href, "https://example.test");
+    expect(url.pathname).toBe(PATH);
+    expect(url.searchParams.get("reason")).toBe("MISSING_FACT");
+    expect(url.searchParams.get("view")).toBe("answerable");
+    expect(decodeReviewCursor(url.searchParams.get("cursor") ?? undefined)).toEqual(CURSOR);
+  });
+
+  it("builds a valid link for the unfiltered queue too", () => {
+    // `?` rather than `&` when there is nothing before it, which is the kind of thing that only breaks
+    // on the one page nobody filtered.
+    const url = new URL(reviewNextHref(PATH, {}, CURSOR), "https://example.test");
+
+    expect(url.search.startsWith("?cursor=")).toBe(true);
+    expect(decodeReviewCursor(url.searchParams.get("cursor") ?? undefined)).toEqual(CURSOR);
+  });
+
+  it("drops the cursor from every filter link, rather than landing mid-list", () => {
+    // A filter link that kept the cursor would show page two of a list the operator has not seen the
+    // start of. Changing what the queue shows means starting from the top of it.
+    const encoded = encodeReviewCursor(CURSOR);
+
+    expect(reviewQueryString({ reasonCode: "MISSING_FACT", cursor: encoded })).toBe("?reason=MISSING_FACT");
+    expect(reviewQueryString({ cursor: encoded })).toBe("");
+  });
+
+  it("does not call page two of the whole queue a filtered view", () => {
+    // Otherwise an empty last page explains itself with a filter nobody applied.
+    expect(isFilteredReviewView({ cursor: encodeReviewCursor(CURSOR) })).toBe(false);
   });
 });

@@ -9,14 +9,11 @@
  * suggestion is inert until somebody approves it, and mixing the two lists would make "in use" a badge
  * somebody has to read rather than a place they are looking.
  */
-import { listStyleExamples, readStyleProfiles } from "@omnichannel/db";
-
 import { StyleExampleList } from "@/ui/style/style-example-list";
 import { VoiceEditor } from "@/ui/style/voice-editor";
 import { OutcomeNotice } from "@/ui/outcome-notice";
-import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext } from "@/server/request-context";
-import { getDb } from "@/server/db";
+import { loadStyleScreen } from "@/server/style-page";
+import { one } from "@/server/style-view";
 import { runStyleTrial } from "@/server/retrieval-tester";
 import {
   addStyleExampleAction,
@@ -28,11 +25,6 @@ import {
 } from "@/server/style-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
 
-function one(value: string | string[] | undefined): string | undefined {
-  const first = Array.isArray(value) ? value[0] : value;
-  return first === undefined || first === "" ? undefined : first;
-}
-
 export default async function StylePage({
   params,
   searchParams,
@@ -41,17 +33,15 @@ export default async function StylePage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const t = await requestTranslator();
   const query = await searchParams;
   const target = { workspaceId, businessProfileId };
-  const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}/style`;
-
-  const [layers, verified, suggestions] = await Promise.all([
-    readStyleProfiles(getDb(), context),
-    listStyleExamples(getDb(), context, { status: "ACTIVE" }),
-    listStyleExamples(getDb(), context, { status: "SUGGESTED" }),
-  ]);
+  // Every read this screen needs, assembled where a test can call it. Each list carries its own cursor,
+  // so paging the suggestions cannot move the verified library underneath the operator.
+  const { t, layers, verified, suggestions, basePath, verifiedNextHref, suggestionsNextHref, context } = await loadStyleScreen(
+    workspaceId,
+    businessProfileId,
+    query,
+  );
 
   const ask = one(query["ask"]);
   const trial = await runStyleTrial(context, ask ?? "");
@@ -121,7 +111,14 @@ export default async function StylePage({
 
       <section>
         <h2>{t.t("style.suggestionsTitle")}</h2>
-        <StyleExampleList t={t} examples={suggestions.examples} target={target} kind="SUGGESTED" actions={actions} />
+        <StyleExampleList
+          t={t}
+          examples={suggestions.examples}
+          target={target}
+          kind="SUGGESTED"
+          actions={actions}
+          {...(suggestionsNextHref === undefined ? {} : { nextHref: suggestionsNextHref })}
+        />
       </section>
 
       <section>
@@ -135,7 +132,14 @@ export default async function StylePage({
             {t.t("style.addExample")}
           </button>
         </form>
-        <StyleExampleList t={t} examples={verified.examples} target={target} kind="VERIFIED" actions={actions} />
+        <StyleExampleList
+          t={t}
+          examples={verified.examples}
+          target={target}
+          kind="VERIFIED"
+          actions={actions}
+          {...(verifiedNextHref === undefined ? {} : { nextHref: verifiedNextHref })}
+        />
       </section>
     </>
   );
