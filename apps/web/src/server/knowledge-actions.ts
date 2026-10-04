@@ -75,9 +75,11 @@ export async function publishKnowledgeAction(target: KnowledgeTarget, documentId
   if (expectedVersion === undefined) {
     finish(target, "REJECTED", documentId);
   }
-  // Publishing is the only act that changes what customers are told, so it is bound to the version the
-  // operator was looking at when they decided to. A save that landed first makes this a CONFLICT.
-  const outcome = await publishKnowledge(getDb(), context, documentId, { expectedVersion });
+  // Publishing is the only act that changes what customers are told, so it is bound to both premises the
+  // screen rendered: the version the operator was looking at, and the fact that it offered *Publish*. A
+  // save that landed first makes this a CONFLICT; an archive makes it a STALE_STATE, which a version
+  // check cannot see because archiving leaves the version alone.
+  const outcome = await publishKnowledge(getDb(), context, documentId, { expectedVersion, act: "PUBLISH" });
   finish(target, knowledgeOutcomeOf(outcome.status, "PUBLISHED"), documentId);
 }
 
@@ -95,6 +97,8 @@ export async function restoreKnowledgeAction(target: KnowledgeTarget, documentId
   if (expectedVersion === undefined) {
     finish(target, "REJECTED", documentId);
   }
-  const outcome = await restoreKnowledge(getDb(), context, documentId, { expectedVersion });
+  // `RESTORE` rather than `PUBLISH`: this button was rendered for an archived source, and a source
+  // somebody has already brought back is not one to quietly re-publish.
+  const outcome = await restoreKnowledge(getDb(), context, documentId, { expectedVersion, act: "RESTORE" });
   finish(target, knowledgeOutcomeOf(outcome.status), documentId);
 }

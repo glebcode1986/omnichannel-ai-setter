@@ -288,6 +288,16 @@ export type KnowledgeWriteOutcome =
    * from the operator's side, which is why the answer has to be a different word.
    */
   | { readonly status: "CONFLICT"; readonly expectedVersion: number; readonly currentVersion: number }
+  /**
+   * The source's *lifecycle* moved while the operator was looking at it, rather than its wording.
+   *
+   * Separate from `CONFLICT` because the two are different mistakes with the same symptom. A conflict
+   * means somebody edited the words; this means somebody archived — or brought back — the source itself,
+   * and the button the operator pressed was the one the old state offered. Archiving deliberately leaves
+   * the version alone, so a version check cannot see it: without this, a stale Publish silently
+   * resurrects a source another operator removed from retrieval, and reports success.
+   */
+  | { readonly status: "STALE_STATE"; readonly expected: string; readonly current: string }
   | { readonly status: "GONE" }
   | { readonly status: "REJECTED"; readonly reason: string };
 
@@ -447,6 +457,22 @@ export async function archiveKnowledge(db: DbExecutor, context: BusinessProfileC
 const INDEX_FAILED_REASON = "this source failed to index and cannot be made active until it is fixed";
 
 /**
+ * Which act the operator's screen offered them.
+ *
+ * Publishing a staged version and bringing an archived source back are the same write and two different
+ * decisions, and until this existed the store could not tell them apart — so a Publish rendered for a
+ * draft would happily land on a source that had been archived in the meantime. The act is the screen's
+ * premise, carried into the write so the database can refuse it.
+ */
+export type KnowledgeLifecycleAct = "PUBLISH" | "RESTORE";
+
+/** The statuses each act expects to find. Anything else means the lifecycle moved under the operator. */
+const EXPECTED_STATUS: Readonly<Record<KnowledgeLifecycleAct, readonly string[]>> = {
+  PUBLISH: ["DRAFT", "ACTIVE"],
+  RESTORE: ["ARCHIVED"],
+};
+
+/**
  * Back into retrieval — but only if it is actually searchable, and only the version the operator saw.
  *
  * A document that failed to index cannot be restored to ACTIVE; the database refuses the combination and
@@ -459,21 +485,29 @@ const INDEX_FAILED_REASON = "this source failed to index and cannot be made acti
  * the publish is refused and they are shown what changed. It stays optional only for a caller with no
  * screen behind it; every button carries it.
  *
- * The conditional write names `indexingState` as well as the version, because that is the other fact the
- * refusal above was decided from. An indexing failure for this same version can land between the read and
- * the write, and an update naming only the version would write ACTIVE over it — producing the
- * active/failed/published-at-this-version triple the CHECK refuses, and handing the operator a raw
- * constraint error in place of the sentence this returns.
+ * The conditional write names `indexingState` and `status` as well as the version, because those are the
+ * other two facts the refusals above were decided from. An indexing failure for this same version can land
+ * between the read and the write, and an update naming only the version would write ACTIVE over it —
+ * producing the active/failed/published-at-this-version triple the CHECK refuses, and handing the operator
+ * a raw constraint error in place of the sentence this returns. An *archive* can land in the same gap, and
+ * it is worse: archiving leaves the version alone, so a version-only condition still matches and the write
+ * silently resurrects a source another operator removed from retrieval.
+ *
+ * `act` is which button the screen offered, and it is the premise this refuses on. Publishing a staged
+ * version and bringing an archived source back are the same write and two different decisions: a Publish
+ * rendered for a draft must not land on a source that has since been archived, and a Restore rendered for
+ * an archived one must not quietly re-publish a source somebody already brought back. Optional for a
+ * caller with no screen behind it, which then gets the version and health checks alone.
  */
 export async function restoreKnowledge(
   db: DbExecutor,
   context: BusinessProfileContext,
   documentId: string,
-  options: { readonly expectedVersion?: number } = {},
+  options: { readonly expectedVersion?: number; readonly act?: KnowledgeLifecycleAct } = {},
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
   const where = { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) };
-  const document = await db.knowledgeDocument.findFirst({ where, select: { indexingState: true, version: true } });
+  const document = await db.knowledgeDocument.findFirst({ where, select: { indexingState: true, version: true, status: true } });
   if (document === null) {
     return { status: "GONE" };
   }
@@ -482,29 +516,43 @@ export async function restoreKnowledge(
     // answer that cannot be given is the one that looks like success.
     return { status: "CONFLICT", expectedVersion: options.expectedVersion, currentVersion: document.version };
   }
+  const expected = options.act === undefined ? undefined : EXPECTED_STATUS[options.act];
+  if (expected !== undefined && !expected.includes(document.status)) {
+    // The lifecycle moved, not the wording. A version check cannot see this: archiving deliberately
+    // leaves the version alone, which is exactly how a stale Publish used to resurrect an archived source.
+    return { status: "STALE_STATE", expected: expected.join("|"), current: document.status };
+  }
   if (document.indexingState === "FAILED") {
     return { status: "REJECTED", reason: INDEX_FAILED_REASON };
   }
   const published = await db.knowledgeDocument.updateMany({
-    where: { ...where, version: document.version, indexingState: { not: "FAILED" } },
+    where: { ...where, version: document.version, indexingState: { not: "FAILED" }, status: document.status },
     // This is the deliberate act the editor promises. It is the only write that moves
-    // `publishedVersion`, so what customers are told changes here and nowhere else — and it names both
-    // facts it read, so neither a save nor an indexing failure landing in between can be published over.
+    // `publishedVersion`, so what customers are told changes here and nowhere else — and it names every
+    // fact it read, so neither a save, an indexing failure nor an archive landing in between can be
+    // published over.
     data: { status: "ACTIVE", publishedVersion: document.version },
   });
   if (published.count === 1) {
     return { status: "RESTORED", version: document.version };
   }
   // The condition did its job and nothing was written, so reporting "published" would be a lie about the
-  // one thing an operator came here to do. Which of the two conditions missed decides what they are told.
-  const current = await db.knowledgeDocument.findFirst({ where, select: { version: true, indexingState: true } });
+  // one thing an operator came here to do. Which of the three conditions missed decides what they are told.
+  const current = await db.knowledgeDocument.findFirst({ where, select: { version: true, indexingState: true, status: true } });
   if (current === null) {
     return { status: "GONE" };
   }
-  if (current.version === document.version && current.indexingState === "FAILED") {
+  if (current.version !== document.version) {
+    return { status: "CONFLICT", expectedVersion: document.version, currentVersion: current.version };
+  }
+  if (current.indexingState === "FAILED") {
     // The version did not move; ingestion failed underneath this publish. Calling that a conflict would
     // send them looking for a colleague's edit that does not exist.
     return { status: "REJECTED", reason: INDEX_FAILED_REASON };
+  }
+  if (current.status !== document.status) {
+    // Somebody archived it — or brought it back — in the gap.
+    return { status: "STALE_STATE", expected: document.status, current: current.status };
   }
   return { status: "CONFLICT", expectedVersion: document.version, currentVersion: current.version };
 }
