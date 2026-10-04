@@ -50,6 +50,18 @@ Also closed: the knowledge outcome family was absent from `OutcomeNotice`, so no
 shown the operator a message. A typed conflict nobody sees is not a fix.
 
 ### Blocker repair — P5-05 / Issue #31, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #77 at `7eb5251` and returned three blocking findings, all correct. AntiGravity is
+temporarily unavailable due to reviewer limits, so Astra is the active reviewer for this cycle.
+
+1. **Save was a publish.** Retrieval joined the latest saved version, so editing a live source exposed the
+   new wording immediately, against the editor's own promise. `published_version` is now a column of its
+   own, moved only by an explicit publish, and retrieval joins it.
+2. **Indexing results were not version-bound.** A delayed result for v1 certified or failed v2. Results
+   now carry their version and apply conditionally; anything else is `STALE`.
+3. **The library truncated at 25.** The cursor the store returns is now carried through the route's query
+   parameters, with the next link built from the incoming query so filters cannot drift.
+
 ### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
 
 ### Current work — P3-01 / Issue #54
