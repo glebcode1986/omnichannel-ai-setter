@@ -229,6 +229,21 @@ Idempotency is the same decision digest the review path uses.
 **Reviewer note.** AntiGravity is temporarily unavailable due to reviewer limits, so Astra is the active
 independent reviewer for this cycle.
 
+1. **The archive a stale Publish could undo (#31 / PR #77, fifth cycle).** Astra confirmed the four
+   earlier repairs and found one more, in the same R5 stale-UI class.
+
+   **Archiving leaves the version alone.** That one fact is the whole defect: a tab that rendered Publish
+   still carried a matching expected version after another operator archived the source, and the
+   conditional write named only the version and the indexing state — so the stale click wrote `ACTIVE`
+   over the archive and reported success. A source deliberately withdrawn from retrieval was answering
+   customers again.
+
+   The write is now bound to the act the screen offered (`PUBLISH` vs `RESTORE`), refuses a status that
+   act does not expect, and names `status` in its predicate so an archive landing in the gap misses. The
+   answer is a typed `STALE_STATE`; the screen shows the same "reload and look" sentence a conflict gets.
+
+   **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
+   facts than the decision was made from. A version is not the only premise a screen renders.
 1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
    branch. The previous repair was correct on every path its own tests walked; all four findings were
    about paths they did not.

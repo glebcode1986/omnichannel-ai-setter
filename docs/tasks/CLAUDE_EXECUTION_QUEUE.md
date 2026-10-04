@@ -14,6 +14,44 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
+
+Astra re-reviewed `e4e640a`, confirmed the four findings of the previous cycle repaired, and returned one
+more in the same R5 stale-UI class.
+
+**A stale Publish silently resurrected an archived source.** Archiving deliberately leaves the version
+alone, so the expected version a tab rendered still matched after another operator archived the source —
+and the conditional write named only the version and the indexing state, so the click wrote `ACTIVE` over
+the archive and reported success. A source somebody had deliberately removed from retrieval was answering
+customers again, with nothing on screen to say why.
+
+The write is now bound to the act the screen offered. `restoreKnowledge` takes
+`act: "PUBLISH" | "RESTORE"`, refuses a status that act does not expect, and names `status` in its
+conditional write so an archive landing in the gap misses instead of being published over. The answer is a
+typed `STALE_STATE`, which the screen shows as the same "reload and look" sentence a conflict gets while
+the store keeps the two apart for the audit. It stays optional for a caller with no screen behind it,
+which then gets the version and health checks alone.
+
+### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
+
+Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
+individually correct.
+
+1. An edited ACTIVE source had no UI path to publish its staged version: the page rendered the
+   "saved v2, answered with v1" warning above a control row whose only button was Archive.
+   `knowledgeLifecycleOf` now states the rule — a version that is not the published one is publishable
+   whatever the status.
+2. `editKnowledgeAction` omitted an unusable `expectedVersion`, and the store checks staleness only when
+   it is present, so a form without the field edited whatever was current and reported `VERSIONED`. The
+   guard moved to `knowledge-submission.ts` and refuses before the store is reached.
+3. Publish was not bound to the version the operator saw. It travels page → control → action → store now,
+   and a mismatch is a `CONFLICT`.
+4. Publishing and recording an indexing failure could race into a raw `23514` constraint error. Each write
+   names every column its decision came from, and the health write re-decides once.
+
+This file was not updated in that cycle, which Astra was right to call out: the canonical launch state was
+still describing the three-blocker repair below.
+
 ### Second blocker repair — P5-05 / Issue #31, the concurrency interleavings
 
 Astra re-reviewed `c12dd43` and returned three blocking findings. Two were introduced by the previous
