@@ -55,6 +55,8 @@ export async function seedKnowledge(
       title: input.title,
       sourceType: "MANUAL",
       version,
+      // Live, and therefore published: retrieval joins the published version's chunks.
+      publishedVersion: version,
       status: "ACTIVE",
     },
     select: { id: true },

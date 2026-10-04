@@ -944,6 +944,10 @@ model KnowledgeDocument {
   sourceType        KnowledgeSourceType     @map("source_type")
   sourceUri         String?                 @map("source_uri")
   version           Int                     @default(1)
+  /// The version retrieval answers with. Moved only by an explicit publish, never by Save, so editing a
+  /// live source keeps serving the wording somebody approved (CHECK: ACTIVE requires one, and it can
+  /// never name a version the document has not had).
+  publishedVersion  Int?                    @map("published_version")
   status            KnowledgeDocumentStatus @default(DRAFT)
   contentHash       String?                 @map("content_hash")
   /// Whether this version's content is searchable. A CHECK forbids an ACTIVE document that failed to index.
