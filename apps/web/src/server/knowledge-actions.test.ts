@@ -146,13 +146,24 @@ describe("a publish", () => {
     expect(store.publishKnowledge).not.toHaveBeenCalled();
   });
 
-  it("is bound to the version the operator was reading", async () => {
+  it("is bound to the version the operator was reading and to the button they pressed", async () => {
     store.publishKnowledge.mockResolvedValue({ status: "RESTORED", version: 2 });
 
     const path = await outcomeOf(() => publishKnowledgeAction(TARGET, DOCUMENT, form({ expectedVersion: "2" })));
 
     expect(path).toBe(`${LIBRARY}/${DOCUMENT}?outcome=PUBLISHED`);
-    expect(store.publishKnowledge).toHaveBeenCalledWith(expect.anything(), expect.anything(), DOCUMENT, { expectedVersion: 2 });
+    // Both premises the screen rendered. The act matters because archiving leaves the version alone, so a
+    // version check alone cannot tell a stale Publish from a current one.
+    expect(store.publishKnowledge).toHaveBeenCalledWith(expect.anything(), expect.anything(), DOCUMENT, { expectedVersion: 2, act: "PUBLISH" });
+  });
+
+  it("tells the operator to look when the source was archived under them", async () => {
+    // Astra's finding: without this the stale click resurrected an archived source and said "Published".
+    store.publishKnowledge.mockResolvedValue({ status: "STALE_STATE", expected: "DRAFT|ACTIVE", current: "ARCHIVED" });
+
+    expect(await outcomeOf(() => publishKnowledgeAction(TARGET, DOCUMENT, form({ expectedVersion: "1" })))).toBe(
+      `${LIBRARY}/${DOCUMENT}?outcome=CONFLICT`,
+    );
   });
 
   it("reports a conflict as a conflict, not as a publish", async () => {
@@ -189,7 +200,9 @@ describe("using an archived source again", () => {
     // `RESTORED` rather than `PUBLISHED`: the operator asked to use a source again, and that is the
     // sentence they should get back.
     expect(path).toBe(`${LIBRARY}/${DOCUMENT}?outcome=RESTORED`);
-    expect(store.restoreKnowledge).toHaveBeenCalledWith(expect.anything(), expect.anything(), DOCUMENT, { expectedVersion: 3 });
+    // `RESTORE`, not `PUBLISH`: this button was rendered for an archived source, and one a colleague has
+    // already brought back is not one to quietly re-publish.
+    expect(store.restoreKnowledge).toHaveBeenCalledWith(expect.anything(), expect.anything(), DOCUMENT, { expectedVersion: 3, act: "RESTORE" });
   });
 
   it("is refused without a version too", async () => {

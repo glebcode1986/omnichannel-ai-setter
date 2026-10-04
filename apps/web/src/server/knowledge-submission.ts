@@ -86,6 +86,9 @@ const OUTCOMES: Readonly<Record<string, KnowledgeOutcome>> = {
   UNCHANGED: "UNCHANGED",
   ARCHIVED: "ARCHIVED",
   CONFLICT: "CONFLICT",
+  // The same sentence as a conflict, because it is the same instruction: reload and look at what the
+  // other person did. The store keeps them apart so the reason it refused is precise in an audit.
+  STALE_STATE: "CONFLICT",
   GONE: "GONE",
   REJECTED: "REJECTED",
 };
