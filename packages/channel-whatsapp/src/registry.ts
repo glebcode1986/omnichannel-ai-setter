@@ -16,7 +16,7 @@ import type { ChannelAccountStatus, ChannelType } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 
 import { createWhatsAppAdapter, type WhatsAppAdapter } from "./adapter";
-import type { WhatsAppSecrets } from "./config";
+import type { WhatsAppConnectionState, WhatsAppSecrets } from "./config";
 import type { WhatsAppHttpPort } from "./http";
 
 /**
@@ -76,9 +76,24 @@ export function createWhatsAppAdapterRegistry(options: WhatsAppRegistryOptions):
         http: options.http,
         // Carried through rather than defaulted to CONNECTED: an account that needs re-auth must fail
         // closed at the adapter, not only at the policy layer.
-        connectionState: account.status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
+        connectionState: connectionStateOf(account.status),
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       });
     },
   };
+}
+
+/**
+ * Provider health as the transport needs it.
+ *
+ * **A degraded account can still send.** Holding its *unattended* replies is the policy engine's job
+ * (`ACCOUNT_UNHEALTHY`); refusing here would refuse the approved ones too, so a person pressing Send on a
+ * flagged number would get a retryable "account is not connected" and their reply would never leave. The
+ * provider still honours the connection — that is what distinguishes `DEGRADED` from `NEEDS_REAUTH`.
+ */
+function connectionStateOf(status: ChannelAccountStatus): WhatsAppConnectionState {
+  if (status === "CONNECTED" || status === "DEGRADED") {
+    return "CONNECTED";
+  }
+  return status === "NEEDS_REAUTH" ? "NEEDS_REAUTH" : "DISCONNECTED";
 }

@@ -15,6 +15,22 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — P4-02 / Issue #19, WhatsApp Embedded Signup
+
+**Branch `feat/p4-02-whatsapp-embedded-signup`**, based on `feat/p4-01-whatsapp-adapter`. Multi-tenant
+WhatsApp onboarding through Meta's official Embedded Signup, and the account lifecycle around it.
+
+Meta's current process, scopes and deadlines were re-verified from the live documentation on 2026-10-04.
+Two findings shaped the implementation rather than merely being recorded: **Embedded Signup v2 and v3 are
+deprecated on 2026-10-15**, so this targets v4 only; and **`waba_id` now denotes the messaging-account ID**
+as Meta splits the WhatsApp Business Account into a WhatsApp Account and a Messaging Account, which
+vindicates keeping it a field of its own rather than deriving it.
+
+What landed: the provider calls in `packages/channel-whatsapp/src/onboarding.ts`, a
+`WhatsAppOnboardingStore` and two tables in `packages/db`, the state/CSRF-bound OWNER/ADMIN flow in
+`apps/web/src/server/whatsapp-onboarding.ts`, three endpoints, and `DEGRADED` as a channel-account status
+the onboarding spec requires.
+
 ### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
 
 Astra re-reviewed `fcd4983` and returned four blocking findings. All four were in the space between

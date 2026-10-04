@@ -260,6 +260,38 @@ Idempotency is the same decision digest the review path uses.
    cursor through untouched, and `style-screen.integration.test.ts` asserts exactly that: advancing one
    leaves the other equal to what it was.
 
+1. **P4-02 / Issue #19 — WhatsApp Embedded Signup is implemented.** Branch
+   `feat/p4-02-whatsapp-embedded-signup`, based on #87.
+
+   **Two live findings shaped it, not just the PR body.** Embedded Signup v2 and v3 — including their
+   public previews — are deprecated on **2026-10-15**, so the implementation targets v4 only. And Meta is
+   splitting the WhatsApp Business Account into a WhatsApp Account (numbers, identity) and a Messaging
+   Account (templates, billing, webhook subscriptions): existing `waba_id` values keep working and now
+   **denote the messaging account**. Keeping `wabaId` a separate field in #18 turned out to be the right
+   call, and the store keeps the business portfolio as a third identifier.
+
+   **The code lives 30 seconds.** That one number decides the shape of the flow: the exchange happens in
+   the request that receives the code, nothing persists or queues it, and an expiry is a refusal the
+   operator resumes from.
+
+   **Nothing the browser says about assets is believed.** The `phone_number_id` is looked up *on* the
+   `waba_id` with the exchanged token, and the token is checked against this app with `debug_token`. Those
+   two checks are what stop a customer's own browser connecting someone else's number — both identifiers
+   arrive from a page.
+
+   **A failed provider step persists nothing.** Subscription and registration must both succeed before any
+   row is written, so there is no half-connected account; both calls are idempotent, so retrying is free.
+   `connected_at` is the claim and CHECK constraints hold it, with the coexistence exemption from phone
+   registration written out in the constraint rather than implied in code.
+
+   **New status value: `DEGRADED`.** The onboarding spec asks for it, and it means the provider flagged the
+   number — a red quality rating. The credential and the assets are fine, so a person may still approve a
+   reply and the policy engine holds every unattended one. **Found while wiring it:** both channel
+   registries mapped `status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED"`, so a degraded account would
+   have been refused by the *transport* — a human-approved reply would have got a retryable "account is not
+   connected" and never left. Fixed in both.
+
+   **Not stored: the two-step PIN.** Used once for registration, never logged, returned or persisted.
 1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
    branch. The previous repair was correct on every path its own tests walked; all four findings were
    about paths they did not.

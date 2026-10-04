@@ -22,8 +22,15 @@ const NONCE_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
 const AAD_VERSION = "v1";
 
-/** Never widened casually: each purpose is bound into the ciphertext and cannot be reinterpreted later. */
-export type CredentialPurpose = "INSTAGRAM_ACCESS_TOKEN";
+/**
+ * Never widened casually: each purpose is bound into the ciphertext and cannot be reinterpreted later.
+ *
+ * Adding a value is safe for what is already stored — an existing ciphertext keeps the purpose it was
+ * sealed with, and a row read under a different one fails to decrypt rather than opening. What is not
+ * safe is reusing a value for a second kind of secret, because then the binding stops distinguishing
+ * them: `WHATSAPP_BUSINESS_TOKEN` is the business-integration system-user token and nothing else.
+ */
+export type CredentialPurpose = "INSTAGRAM_ACCESS_TOKEN" | "WHATSAPP_BUSINESS_TOKEN";
 
 export interface CredentialScope {
   readonly workspaceId: string;

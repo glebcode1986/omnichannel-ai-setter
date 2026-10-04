@@ -28,6 +28,32 @@ export {
 export { isAccessTokenRejection, OUTSIDE_SERVICE_WINDOW_CODE } from "./errors";
 export { createFetchHttpPort, type WhatsAppHttpPort, type WhatsAppHttpRequest, type WhatsAppHttpResult } from "./http";
 export { normalizeWhatsAppWebhook } from "./normalize";
+export {
+  coexistenceCorroborated,
+  EMBEDDED_SIGNUP_SCOPES,
+  exchangeSignupCode,
+  fetchGrantedAccess,
+  fetchMessageTemplates,
+  findPhoneNumberAsset,
+  missingSignupScopes,
+  onboardingModeOf,
+  PHONE_PIN_LENGTH,
+  readSignupNotice,
+  registerPhoneNumber,
+  SIGNUP_CODE_TTL_MS,
+  subscribeMessagingAccount,
+  SYSTEM_USER_SCOPE,
+  unsubscribeMessagingAccount,
+  type BusinessToken,
+  type GrantedAccess,
+  type MessageTemplateRecord,
+  type PhoneNumberAsset,
+  type SignupFailureReason,
+  type SignupNotice,
+  type SignupResult,
+  type WhatsAppOnboardingMode,
+  type WhatsAppSignupConfig,
+} from "./onboarding";
 export { providerTime } from "./payload";
 export { createWhatsAppAdapterRegistry, type RegistryAccount, type WhatsAppBinding, type WhatsAppRegistryOptions } from "./registry";
 export { buildTemplatePayload, buildTextPayload, checkSendable, markReadAndTyping, sendMessage } from "./send";

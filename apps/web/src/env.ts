@@ -35,6 +35,29 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   INSTAGRAM_HUMAN_AGENT_APPROVAL: z.enum(["APPROVED", "NOT_APPROVED", "UNKNOWN"]).default("UNKNOWN"),
 
   /**
+   * Meta app credentials for WhatsApp Embedded Signup (ADR-015, Issue #19).
+   *
+   * All three are optional so a deployment that does not offer WhatsApp still boots; where any is absent
+   * the connect flow is not composed at all, so the endpoint refuses before touching a database rather
+   * than starting a signup it cannot finish.
+   *
+   * `WHATSAPP_SIGNUP_CONFIG_ID` is the Business Login configuration the client launches. It is the only
+   * one of the three that reaches the browser, and it is not a secret: it names which permissions the
+   * flow asks for, and Meta will only honour it for this app on an allow-listed domain.
+   */
+  WHATSAPP_APP_ID: z.string().min(1).max(64).optional(),
+  WHATSAPP_APP_SECRET: z.string().min(1).max(256).optional(),
+  WHATSAPP_SIGNUP_CONFIG_ID: z.string().min(1).max(64).optional(),
+  /**
+   * Graph API version for the onboarding calls.
+   *
+   * A default of this deployment rather than a constant of the code: Meta deprecates a version after two
+   * years, and moving with them must not need a release. Embedded Signup v2 and v3 die on 2026-10-15, so
+   * the client flow is v4 regardless of what this says — this is the Graph version, not the flow's.
+   */
+  WHATSAPP_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/u).max(16).default("v26.0"),
+
+  /**
    * Embeddings, for the Knowledge Library's retrieval tester only (ADR-011, Issue #31).
    *
    * These must match the worker's. The tester exists to answer "would the assistant find this fact?", and

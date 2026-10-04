@@ -113,3 +113,124 @@ Do not freeze automatic template sending without product-owner approval.
 ## Sources checked 2026-09-16
 
 Official Meta WhatsApp Business Platform/Postman collection was used to verify Cloud API messages/media/templates, WABA subscription, phone registration, Embedded Signup, typing/read receipts and status webhook behavior. Public product/provider documentation was used only as secondary evidence for coexistence; implementation must verify current Meta eligibility directly.
+
+## Re-verification for P4-02 / Issue #19 — Embedded Signup, 2026-10-04
+
+Read directly from Meta's live documentation on 2026-10-04. Every value below is a **provider rule of the
+day**, not a domain constant: the package holds them as defaults an operator can override, exactly as the
+transport holds the Graph version.
+
+### The deadline that shapes this task
+
+**Embedded Signup versions 2 and 3 — including their public previews — are deprecated on 15 October 2026.**
+Meta's banner appears on every Embedded Signup page: migrate to **version 4** before that date. Eleven days
+from today, so the implementation targets v4 only. There is no "support both" option worth building; v2/v3
+stop working.
+
+### The account model is splitting, and `waba_id` has quietly changed meaning
+
+Meta is separating the WhatsApp Business Account into a **WhatsApp Account (WAAC)** — phone numbers and
+identity — and a **Messaging Account** — templates, billing and webhook subscriptions. Existing `waba_id`
+values keep working and **now denote the messaging-account ID**; the implementation page says so in the
+field table for the session-log payload:
+
+> `waba_id` … "which now denotes the messaging account ID"
+
+This vindicates keeping `wabaId` a field of its own in #18 rather than deriving it. The onboarding store
+keeps `waba_id` as the messaging-account identifier and `phone_number_id` as the sending asset, and treats
+the business portfolio ID as a third, separate thing. Nothing in the core domain learns any of the three.
+
+### Scopes and roles
+
+- `whatsapp_business_management` — manage the messaging account, templates, phone numbers;
+- `whatsapp_business_messaging` — send and receive;
+- `business_management` — needed by the system user whose token the provider supplies, which must also hold
+  an **Admin** or **Finance Editor** role in the business portfolio.
+
+The Business Login configuration is built from the **"WhatsApp Embedded Signup configuration with 60-day
+token"** template, and Meta's own guidance is to request only the assets actually needed: a customer who
+reaches a catalogue-selection screen for a product that does not use catalogues abandons the flow and asks
+why.
+
+### The client flow (v4)
+
+```js
+FB.login(fbLoginCallback, {
+  config_id: '<CONFIGURATION_ID>',
+  response_type: 'code',
+  override_default_response_type: true,
+  extras: { setup: {} },
+});
+```
+
+Two channels carry the result, and they are not interchangeable:
+
+1. **`window.postMessage`**, filtered on `event.origin.endsWith('facebook.com')`, with
+   `data.type === 'WA_EMBEDDED_SIGNUP'`. On success it carries `phone_number_id`, `waba_id`,
+   `business_id`, optional `waba_ids`/`page_ids`/`catalog_ids`/… arrays, and `event` ∈
+   `FINISH`, `FINISH_ONLY_WABA`, `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, `FINISH_OBO_MIGRATION`,
+   `FINISH_GRANT_ONLY_API_ACCESS`, `ERROR`. On abandonment `event: 'CANCEL'` with `data.current_step`. A
+   reported error carries `error_message`, `error_code`, `session_id`, `timestamp`.
+2. **The login callback**, whose `response.authResponse.code` is the exchangeable token code.
+
+**Closing the final screen counts as success**, not as a cancel: Meta states that both pressing Done and
+dismissing the popup on the last screen return the code and the session object.
+
+**The exchangeable code is valid for 30 seconds.** That single number decides the shape of the server
+flow: the code may never be persisted, queued or retried later — the exchange happens in the request that
+receives it, and an expiry is an ordinary refusal with a resumable state rather than an error.
+
+`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` is the flow finishing with a number that is on the WhatsApp
+Business App — which is what makes coexistence a *provider-reported* mode rather than something the UI may
+promise in advance.
+
+### The server-side onboarding calls, in order
+
+All of them server-to-server; Meta says explicitly not to make these from the client.
+
+1. **Exchange the code for the business token**
+
+   ```
+   GET https://graph.facebook.com/<version>/oauth/access_token
+       ?client_id=<APP_ID>&client_secret=<APP_SECRET>&code=<CODE>
+   ```
+
+   Returns the business-integration system-user access token ("business token").
+
+2. **Subscribe the app to the customer's messaging account**
+
+   ```
+   POST https://graph.facebook.com/<version>/<WABA_ID>/subscribed_apps
+   Authorization: Bearer <BUSINESS_TOKEN>
+   → { "success": true }
+   ```
+
+   The app must already be subscribed to the **`account_update`** webhook field, which fires every time a
+   customer completes Embedded Signup.
+
+3. **Register the customer's phone number for the Cloud API**
+
+   ```
+   POST https://graph.facebook.com/<version>/<PHONE_NUMBER_ID>/register
+   Authorization: Bearer <BUSINESS_TOKEN>
+   { "messaging_product": "whatsapp", "pin": "<SIX_DIGITS>" }
+   → { "success": true }
+   ```
+
+   The PIN is the number's two-step verification code and is exactly six digits.
+
+4. *(optional)* a test message, which also opens the service window.
+
+5. **Calling is off by default.** The WhatsApp Business Calling API has to be enabled per phone number;
+   nothing in this product turns it on.
+
+6. **The customer adds a payment method** in WhatsApp Manager
+   (`https://business.facebook.com/wa/manage/home/`). Until they do, onboarding is not finished on Meta's
+   side however complete it looks on ours — which is why the connection carries a provider-derived health
+   state rather than a boolean.
+
+### Testing
+
+Meta's own test path is to run the flow with the provider's Meta credentials; anyone added to the app as
+Admin or Developer can do the same. **Test accounts expire after 30 days.** No production credential of
+any kind appears in this repository's tests; every provider response in the suite is a fixture.

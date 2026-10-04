@@ -164,7 +164,16 @@ export {
   type EncryptedCredential,
 } from "./credentials";
 export * from "./repositories/channel-connect-states";
-export { createInstagramOnboardingStore, type ConnectedAccountRef, type InstagramOnboardingStore } from "./onboarding-store";
+export { createInstagramOnboardingStore, type ConnectedAccountRef, type ChannelOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
+export {
+  createWhatsAppOnboardingStore,
+  type ConnectWhatsAppInput,
+  type WhatsAppConnectionRecord,
+  type WhatsAppOnboardingModeValue,
+  type WhatsAppOnboardingStore,
+  type WhatsAppPhoneAsset,
+  type WhatsAppTemplateInput,
+} from "./whatsapp-onboarding-store";
 export {
   activateBusinessProfile,
   readOnboarding,

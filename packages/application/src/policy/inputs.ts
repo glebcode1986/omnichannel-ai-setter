@@ -42,8 +42,15 @@ export type HumanAgentAvailability =
   | { readonly state: "ELIGIBLE"; readonly expiresAt: Date }
   | { readonly state: "UNAVAILABLE"; readonly reason: "EXPIRED" | "NOT_APPROVED" | "UNKNOWN" | "NOT_SUPPORTED" };
 
-/** Connection health as the policy layer needs it: healthy enough to send, or not. */
-export type AccountHealth = "CONNECTED" | "NEEDS_REAUTH" | "DISCONNECTED";
+/**
+ * Connection health as the policy layer needs it: healthy enough to send unattended, or not.
+ *
+ * Everything that is not `CONNECTED` holds the reply for a person, including `DEGRADED`. A provider that
+ * has flagged a number — WhatsApp reports a red quality rating — is telling us the next unattended
+ * message is the risky one, and `ACCOUNT_UNHEALTHY` holds rather than cancels, so nothing is lost: an
+ * operator approves it, or fixes the account first.
+ */
+export type AccountHealth = "CONNECTED" | "DEGRADED" | "NEEDS_REAUTH" | "DISCONNECTED";
 
 /**
  * Whether this draft still answers the newest state of the conversation. `SUPERSEDED` means the customer

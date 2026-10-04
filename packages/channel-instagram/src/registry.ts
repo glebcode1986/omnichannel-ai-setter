@@ -17,7 +17,7 @@ import type { ChannelAccountStatus, ChannelType } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 
 import { createInstagramAdapter, type InstagramAdapter } from "./adapter";
-import type { HumanAgentApproval, InstagramSecrets } from "./config";
+import type { HumanAgentApproval, InstagramConnectionState, InstagramSecrets } from "./config";
 import type { InstagramHttpPort } from "./http";
 
 /** Structurally the application's `WebhookAccount`; see the note above on why it is not imported. */
@@ -73,10 +73,25 @@ export function createInstagramAdapterRegistry(options: InstagramRegistryOptions
         http: options.http,
         // Carried through rather than defaulted to CONNECTED: an account that needs re-auth must fail
         // closed at the adapter, not only at the policy layer.
-        connectionState: account.status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
+        connectionState: connectionStateOf(account.status),
         humanAgentApproval: binding.humanAgentApproval ?? "UNKNOWN",
         ...(options.logger === undefined ? {} : { logger: options.logger }),
       });
     },
   };
+}
+
+/**
+ * Provider health as the transport needs it.
+ *
+ * **A degraded account can still send.** Holding its *unattended* replies is the policy engine's job
+ * (`ACCOUNT_UNHEALTHY`); refusing here would refuse the approved ones too, so a person pressing Send on a
+ * flagged account would get a retryable "account is not connected" and their reply would never leave. The
+ * provider still honours the connection — that is what distinguishes `DEGRADED` from `NEEDS_REAUTH`.
+ */
+function connectionStateOf(status: ChannelAccountStatus): InstagramConnectionState {
+  if (status === "CONNECTED" || status === "DEGRADED") {
+    return "CONNECTED";
+  }
+  return status === "NEEDS_REAUTH" ? "NEEDS_REAUTH" : "DISCONNECTED";
 }

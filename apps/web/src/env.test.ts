@@ -31,8 +31,30 @@ describe("loadWebEnv", () => {
       // same reason: a deployment that never opens the playground should not fail to boot over it.
       AI_REPLY_MODEL: "claude-opus-5",
       AI_REPLY_MAX_OUTPUT_TOKENS: 4_096,
+      // WhatsApp onboarding (Issue #19). The app credentials are optional — a deployment that does not
+      // offer WhatsApp refuses the connect endpoints rather than failing to boot — but the Graph version
+      // has a default, so the onboarding calls cannot be made against an unset one.
+      WHATSAPP_GRAPH_VERSION: "v26.0",
       ...required,
     });
+  });
+
+  it("boots without a WhatsApp app, because not every deployment offers WhatsApp", () => {
+    // The connect endpoints refuse with `not_configured` instead, which is better than walking an
+    // operator through Meta's whole flow and failing at the exchange after assets exist on their account.
+    const env = loadWebEnv(required);
+
+    expect(env.WHATSAPP_APP_ID).toBeUndefined();
+    expect(env.WHATSAPP_APP_SECRET).toBeUndefined();
+    expect(env.WHATSAPP_SIGNUP_CONFIG_ID).toBeUndefined();
+  });
+
+  it("refuses a Graph version that is not one", () => {
+    // It goes straight into a request path. A typo here would send every onboarding call to a URL Meta
+    // answers with an error that reads nothing like "your configuration is wrong".
+    expect(() => loadWebEnv({ ...required, WHATSAPP_GRAPH_VERSION: "26.0" })).toThrow();
+    expect(() => loadWebEnv({ ...required, WHATSAPP_GRAPH_VERSION: "latest" })).toThrow();
+    expect(loadWebEnv({ ...required, WHATSAPP_GRAPH_VERSION: "v27.0" }).WHATSAPP_GRAPH_VERSION).toBe("v27.0");
   });
 
   it("takes no embedding key, because lexical-only retrieval is a supported mode", () => {
