@@ -19,6 +19,7 @@ import {
   authorizeWorkspaceAccess,
   createBusinessProfile,
   createKnowledge,
+  archiveKnowledge,
   createWorkspaceWithOwner,
   editKnowledge,
   listKnowledge,
@@ -150,13 +151,19 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library screen's query",
       return { detail, lifecycle: knowledgeLifecycleOf(detail), form };
     };
 
-    /** The publish action's own path: the guard, then the store, with nothing in between. */
-    const publishAsRendered = async (documentId: string, form: FormData) => {
+    /**
+     * The publish action's own path: the guard, then the store, with nothing in between.
+     *
+     * It carries *both* premises the control rendered — the version and the act — because that is what
+     * the action does, and the act is the one a version check cannot stand in for: archiving leaves the
+     * version alone.
+     */
+    const publishAsRendered = async (documentId: string, form: FormData, act: "PUBLISH" | "RESTORE" = "PUBLISH") => {
       const expectedVersion = expectedVersionOf(form);
       if (expectedVersion === undefined) {
         throw new Error("the control the page rendered carried no version");
       }
-      return publishKnowledge(database.db, context, documentId, { expectedVersion });
+      return publishKnowledge(database.db, context, documentId, { expectedVersion, act });
     };
 
     const staged = async (title: string) => {
@@ -197,6 +204,24 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library screen's query",
       expect(await publishAsRendered(id, tabB.form)).toEqual({ status: "CONFLICT", expectedVersion: 2, currentVersion: 3 });
       // Nothing moved: v1 is still what customers are answered with, which is what the refusal says.
       expect(await readKnowledge(database.db, context, id)).toMatchObject({ version: 3, publishedVersion: 1 });
+    }, 300_000);
+
+    it("refuses the Publish a stale tab rendered before somebody archived the source", async () => {
+      // Astra's finding on the repaired head, through the screen's own path. Archiving deliberately
+      // leaves the version alone, so the expected version the page rendered still matches — and the click
+      // used to write ACTIVE over the archive and report success, putting a withdrawn source back in
+      // front of customers with nothing on screen to say why.
+      const id = await staged("Archived under a stale tab");
+
+      // Tab B renders Publish for the staged version. Tab A archives the source.
+      const tabB = await rendered(id);
+      expect(tabB.lifecycle).toBe("publish");
+      await archiveKnowledge(database.db, context, id);
+
+      expect(await publishAsRendered(id, tabB.form)).toMatchObject({ status: "STALE_STATE", current: "ARCHIVED" });
+      expect(await readKnowledge(database.db, context, id)).toMatchObject({ status: "ARCHIVED", publishedVersion: 1 });
+      // And the page an operator reloads now offers to use it again, which is a different decision.
+      expect((await rendered(id)).lifecycle).toBe("restore");
     }, 300_000);
 
     it("offers nothing to publish on a live source nobody has edited", async () => {
