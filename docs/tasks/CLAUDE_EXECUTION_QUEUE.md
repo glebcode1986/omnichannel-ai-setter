@@ -64,6 +64,12 @@ temporarily unavailable due to reviewer limits, so Astra is the active reviewer 
 
 ### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
 
+The third instance of the defect Astra raised on #77, found by the same sweep over every paged store list
+and fixed at the owner's request. Both example lists paged at 25 in the store and neither paged on screen.
+
+Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
+carries the other list's cursor through, so paging the suggestions cannot move the verified library.
+
 ### Current work — P3-01 / Issue #54
 
 **Branch `feat/p3-01-customer-identity-memory`**, based on `feat/p5-07-leads-pipeline`. The MVP customer
