@@ -90,3 +90,29 @@ export function knowledgeNextHref(basePath: string, query: RawSearchParams, curs
   params.set("cursor", encodeKnowledgeCursor(cursor));
   return `${basePath}?${params.toString()}`;
 }
+
+/**
+ * The lifecycle action a source needs next, as one decision.
+ *
+ * It exists as a function because the branch it replaced was wrong in a way no component test could see:
+ * the detail page offered Archive to *every* ACTIVE document and Publish only to DRAFTs, so a live source
+ * edited into a staged version had no way to publish it. The page said "saved v2, customers are answered
+ * with v1" and offered no button that would change that — the store could do it, and the operator could
+ * not reach it.
+ *
+ * So the rule is stated once, where a test can read it: **a version that is not the published one can be
+ * published, whatever the document's status.** An archived source says "use it again" instead, because
+ * that is the sentence its operator is looking for; it is the same write.
+ */
+export type KnowledgeLifecycle = "publish" | "restore" | undefined;
+
+export function knowledgeLifecycleOf(document: {
+  readonly status: string;
+  readonly version: number;
+  readonly publishedVersion: number | null;
+}): KnowledgeLifecycle {
+  if (document.status === "ARCHIVED") {
+    return "restore";
+  }
+  return document.version === document.publishedVersion ? undefined : "publish";
+}

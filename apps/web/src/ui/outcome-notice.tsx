@@ -30,15 +30,19 @@ const OUTCOMES = [
   "ALREADY_PENDING",
   "NOT_OPEN",
   // Knowledge and Style report their own outcomes through the same notice, for the same reason: a refusal
-  // that survives a reload is one somebody actually reads.
+  // that survives a reload is one somebody actually reads. The Knowledge family was missing once, and
+  // every save, publish and archive redirected with an outcome this component then ignored — the
+  // operator pressed Save and was told nothing, which is indistinguishable from nothing happening.
   "SAVED",
   "CREATED",
   "VERSIONED",
   "UNCHANGED",
   "PUBLISHED",
+  "ARCHIVED",
   "ACTIVATED",
   "REJECTED_EXAMPLE",
   "RESTORED",
+  "CONFLICT",
   "REFUSED",
   "MOVED",
   "STALE_STAGE",
@@ -56,6 +60,9 @@ const REFUSALS = new Set<string>([
   "NOT_OPEN",
   "REFUSED",
   "STALE_STAGE",
+  // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
+  // their edit or their publish landed.
+  "CONFLICT",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {

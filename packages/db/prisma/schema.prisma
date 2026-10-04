@@ -1236,7 +1236,9 @@ model KnowledgeDocument {
   publishedVersion  Int?                    @map("published_version")
   status            KnowledgeDocumentStatus @default(DRAFT)
   contentHash       String?                 @map("content_hash")
-  /// Whether this version's content is searchable. A CHECK forbids an ACTIVE document that failed to index.
+  /// Whether the *current* version's content is searchable; every edit resets it to PENDING. A CHECK
+  /// forbids an ACTIVE document whose failure is about the version it publishes — a failure in a saved
+  /// but unpublished version is recorded without taking the published one out of retrieval.
   indexingState     KnowledgeIndexingState  @default(PENDING) @map("indexing_state")
   /// Set exactly when `indexingState` is FAILED (CHECK): an error with no failure reads as a current problem.
   indexingError     String?                 @map("indexing_error")
