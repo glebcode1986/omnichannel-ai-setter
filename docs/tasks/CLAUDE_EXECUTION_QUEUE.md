@@ -15,6 +15,63 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
+
+Astra re-reviewed `fcd4983` and returned four blocking findings. All four were in the space between
+pieces that were individually correct.
+
+1. An edited ACTIVE source had no UI path to publish its staged version: the page rendered the
+   "saved v2, answered with v1" warning above a control row whose only button was Archive.
+   `knowledgeLifecycleOf` now states the rule — a version that is not the published one is publishable
+   whatever the status.
+2. `editKnowledgeAction` omitted an unusable `expectedVersion`, and the store checks staleness only when
+   it is present, so a form without the field edited whatever was current and reported `VERSIONED`. The
+   guard moved to `knowledge-submission.ts`, refuses before the store is reached, and is tested against
+   requests no browser builds.
+3. Publish was not bound to the version the operator saw. It travels page → control → action → store
+   now, and a mismatch is a `CONFLICT`.
+4. Publishing and recording an indexing failure could race into a raw `23514` constraint error. Each
+   write names every column its decision came from, and the health write re-decides once against the
+   state that replaced it.
+
+### Second blocker repair — P5-05 / Issue #31, the concurrency interleavings
+
+Astra re-reviewed `c12dd43` and returned three blocking findings. Two were introduced by the previous
+repair: separating Save from Publish created interleavings the repair did not close.
+
+1. Publish wrote conditionally and discarded the count, so a save in the gap meant nothing was published
+   and the operator was told otherwise. It returns a typed `CONFLICT` now.
+2. Save carried no expected version, so a stale tab overwrote a colleague's work and two simultaneous
+   submits raced for the same next version. `expectedVersion` travels page → form → action → store.
+3. A failure to index an unpublished version archived the document, stopping the healthy published
+   version. The CHECK is now about the published version, and so is the store.
+
+Also closed: the knowledge outcome family was absent from `OutcomeNotice`, so no knowledge write had ever
+shown the operator a message. A typed conflict nobody sees is not a fix.
+
+### Blocker repair — P5-05 / Issue #31, after `CHANGES_REQUESTED`
+
+Astra reviewed PR #77 at `7eb5251` and returned three blocking findings, all correct. AntiGravity is
+temporarily unavailable due to reviewer limits, so Astra is the active reviewer for this cycle.
+
+1. **Save was a publish.** Retrieval joined the latest saved version, so editing a live source exposed the
+   new wording immediately, against the editor's own promise. `published_version` is now a column of its
+   own, moved only by an explicit publish, and retrieval joins it.
+2. **Indexing results were not version-bound.** A delayed result for v1 certified or failed v2. Results
+   now carry their version and apply conditionally; anything else is `STALE`.
+3. **The library truncated at 25.** The cursor the store returns is now carried through the route's query
+   parameters, with the next link built from the incoming query so filters cannot drift.
+
+### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
+
+The third instance of the defect Astra raised on #77, found by the same sweep over every paged store list
+and fixed at the owner's request. Both example lists paged at 25 in the store and neither paged on screen.
+
+Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
+carries the other list's cursor through, so paging the suggestions cannot move the verified library.
+
+### Current work — P3-01 / Issue #54
+### Current work — P3-02 / Issue #55
 ### Current work — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
 
 Started at the owner's word, with Stage D's chain still in review. `packages/channel-whatsapp` now

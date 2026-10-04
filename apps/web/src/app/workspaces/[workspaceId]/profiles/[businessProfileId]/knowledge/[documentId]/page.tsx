@@ -8,6 +8,7 @@
 import { notFound } from "next/navigation";
 import { readKnowledge } from "@omnichannel/db";
 
+import { KnowledgeControls } from "@/ui/knowledge/knowledge-controls";
 import { KnowledgeEditor } from "@/ui/knowledge/knowledge-editor";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
@@ -16,11 +17,7 @@ import { requireBusinessProfileContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
 import { archiveKnowledgeAction, editKnowledgeAction, publishKnowledgeAction, restoreKnowledgeAction } from "@/server/knowledge-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
-
-function one(value: string | string[] | undefined): string | undefined {
-  const first = Array.isArray(value) ? value[0] : value;
-  return first === undefined || first === "" ? undefined : first;
-}
+import { one } from "@/server/knowledge-view";
 
 export default async function KnowledgeDocumentPage({
   params,
@@ -67,27 +64,19 @@ export default async function KnowledgeDocumentPage({
         </div>
       ) : undefined}
 
-      <div className="control-row">
-        {document.status === "ACTIVE" ? (
-          <form action={archiveKnowledgeAction.bind(null, target, documentId)}>
-            <button className="button" type="submit" data-action="archive">
-              {t.t("knowledge.archive")}
-            </button>
-          </form>
-        ) : (
-          <form action={(document.status === "DRAFT" ? publishKnowledgeAction : restoreKnowledgeAction).bind(null, target, documentId)}>
-            <button className="button" type="submit" data-action={document.status === "DRAFT" ? "publish" : "restore"}>
-              {document.status === "DRAFT" ? t.t("knowledge.publish") : t.t("knowledge.restore")}
-            </button>
-          </form>
-        )}
-      </div>
+      <KnowledgeControls
+        t={t}
+        target={target}
+        documentId={documentId}
+        document={{ status: document.status, version: document.version, publishedVersion: document.publishedVersion }}
+        actions={{ publish: publishKnowledgeAction, restore: restoreKnowledgeAction, archive: archiveKnowledgeAction }}
+      />
 
       <section>
         <KnowledgeEditor
           t={t}
           target={target}
-          document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope }}
+          document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope, version: document.version }}
           action={editKnowledgeAction.bind(null, target, documentId)}
         />
       </section>
