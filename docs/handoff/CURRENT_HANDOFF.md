@@ -246,6 +246,135 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+1. **Style Training could not show more than 25 of either list (#32).** The third instance of one defect,
+   found by checking every paged store list against the screen that spends its cursor after Astra raised
+   it on PR #77. `listStyleExamples` pages at 25 and returns a cursor; the route called it twice — once
+   for the verified library, once for the suggestions — with no cursor either time, and no component
+   offered a link. A suggestion nobody can reach is one nobody can approve or reject, so it stays
+   SUGGESTED.
+
+   **What is different here, and what made it worth its own module:** two lists page on one page. A single
+   `cursor` parameter would make "show more suggestions" also advance the verified library, so an operator
+   paging one would lose their place in the other — a bug that looks like data disappearing. Each list has
+   a parameter of its own (`verifiedCursor`, `suggestedCursor`), the next link carries the other list's
+   cursor through untouched, and `style-screen.integration.test.ts` asserts exactly that: advancing one
+   leaves the other equal to what it was.
+
+1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
+   branch. The previous repair was correct on every path its own tests walked; all four findings were
+   about paths they did not.
+
+   **An edited live source had no way to publish its staged version.** The store deliberately leaves an
+   edited ACTIVE document at `publishedVersion = 1`, the page rendered the "saved v2, customers are
+   answered with v1" warning — and its control branch offered Archive to every ACTIVE document and
+   Publish only to DRAFTs. The store could do it and the operator could not reach it. The rule now lives
+   in `knowledgeLifecycleOf`: a version that is not the published one is publishable whatever the
+   status.
+
+   **A missing version was accepted by the action that claimed to refuse it.** `editKnowledgeAction`
+   parsed `expectedVersion` and, when it could not read one, omitted the property — and the store checks
+   staleness only when it is present. A form that left the field out therefore edited whatever was
+   current and reported `VERSIONED`: the whole stale-tab mechanism, steppable around by sending one fewer
+   field. The decision moved to `knowledge-submission.ts`, where it is refused before the store is
+   reached and can be run against requests no browser built.
+
+   **Publish was not bound to the version the operator saw.** The form submitted no version, the action
+   took no `FormData`, and the store published whatever was current when it started. Two tabs on the same
+   draft was enough: one saves, the other clicks Publish, and content nobody reviewed is live under a
+   success notice. The version now travels page → control → action → store, and a mismatch is a
+   `CONFLICT`.
+
+   **Publishing and recording an indexing failure could race into a raw constraint error.** Both read the
+   row, decided, then wrote conditional on the version alone — so each could write the other's premise
+   away and produce ACTIVE + FAILED + published-at-this-version, the triple the CHECK refuses. Each write
+   now names every column its decision came from: the publish refuses with the sentence the pre-read
+   would have given, and the health write re-decides once against the state that replaced it, archiving
+   the source whose published version the publish just moved.
+
+   **The lesson:** a correct store plus a correct screen is not a correct product. Three of the four were
+   gaps *between* two correct pieces — a control that was never rendered, a field that was never required,
+   a predicate that named one of the two facts it read.
+1. **Three P5-05 concurrency blockers, two of them introduced by the previous repair.** Astra re-reviewed
+   the repaired head and found that separating Save from Publish had not closed the interleavings it
+   created. All three were correct.
+
+   **A publish could report success having published nothing.** `restoreKnowledge` writes conditionally on
+   the version it read — and discarded the row count, so a save landing in the gap meant zero rows changed
+   while the action still mapped the result to `PUBLISHED`. The condition was there and its answer was
+   thrown away, which is the mistake `recordIndexingResult` had been fixed for the day before.
+
+   **A save was not bound to the version the form showed.** Two tabs at v1: A saves and becomes v2, B —
+   still showing v1 — saves over it with wording composed against content it never saw. `expectedVersion`
+   now travels page → form → action → store, the document moves first and conditionally, and the chunks
+   are written only if it did. Two simultaneous submits cannot both become v2; the loser gets a conflict
+   rather than a unique-constraint error from the chunks' position key.
+
+   **A failure in an unpublished version archived the published one.** After publish/index v1 and Save v2,
+   a failure to index v2 — content no customer has ever seen — took the document out of ACTIVE and stopped
+   healthy v1 answering. `knowledge_documents_failed_not_active_check` was written when a document had one
+   version; it is now about the version customers are answered with, and so is the store.
+
+   **Found while fixing it:** the whole knowledge outcome family — CREATED, VERSIONED, UNCHANGED,
+   PUBLISHED, ARCHIVED, RESTORED — was missing from `OutcomeNotice`'s allowlist and from both catalogues,
+   so every save and publish redirected with an outcome the page ignored. The operator pressed Save and was
+   told nothing, which is indistinguishable from pressing Save and nothing happening. A typed conflict
+   nobody can see would have been the same defect in a new place.
+
+   **The lesson:** a conditional write is only half a fix. The other half is reading what it did — and
+   saying so on screen.
+2. **Three P5-05 blockers, all correct (#31 / PR #77).**
+
+   Three screens now share one shape — `knowledge-page.ts`, `review-page.ts`, `style-page.ts`, each with a
+   `*-screen.integration.test.ts` that follows the link it rendered. **The pattern worth keeping is the
+   test, not the module:** every one of these bugs was a correct store, a correct component and an
+   assembly nobody could call.
+2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+   finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
+   human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
+   through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply
+   a person had just written did not appear in the thread, `cancelSend` answered `GONE`, and the row sat
+   `SCHEDULED` and went out — the operator was told their reply was not queued, and then it was.
+
+   Both now spread `deliveryOfConversation(conversationId)` from `packages/db/src/delivery-origin.ts`,
+   one place that knows what "belongs to this conversation" means for either origin. A third instance of
+   the same mistake was found while fixing it: the reconciliation sweep's orphaned-row query selected the
+   conversation only through the draft, so an ambiguous human-composed send was raised with an empty
+   conversation id — which the queue's payload schema rejects, so it was never raised at all.
+
+   **The lesson, for the next nullable relation:** making a column optional is not the change. The change
+   is every query that assumed it was there, and the compiler cannot find them because a relation filter
+   that matches nothing is still valid. Grep for the relation, not for the column.
+2. **Stage D is open across six stacked branches**, each CI-green with evidence posted:
+   #73 (P5-01 shell/onboarding), #74 (P5-10 EN/RU), #75 (P5-02 Inbox), #76 (P5-03 review + composer,
+   now complete), #77 (P5-05 Knowledge), #78 (P5-06 Style), #79 (P5-04 AI settings + simulation).
+   `feat/p5-07-leads-pipeline` carries the P5-07 store and is not yet a PR.
+2. **Fixes go to the earliest affected branch and merge down the chain.** No rebases, no force-pushes,
+   no merges to `main`.
+3. **P5-07 / Issue #33 (Leads) is the open work.** Its store, migration and tests are committed; the
+   kanban and table views are not built yet. One product question is open: the spec allows a Workspace to
+   *add* stages, which would require `LeadStage` to stop being an enum — and the draft engine returns one
+   in its structured output, so that is a decision, not a display preference.
+4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+
+1. **#54 / P3-01 is the latest work**, as PR #81 on `feat/p3-01-customer-identity-memory`, stacked on
+   P5-07. It adds the customer identity and durable-memory primitives with no UI; see
+   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which the issue referenced and the repository did not have.
+2. **PRs #73–#81 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+1. **#55 / P3-02 is the current work**, as PR #82 on `feat/p3-02-goals-followups`, stacked on P3-01's
+   accepted head `13212612bb0ac73b2468c1adc99b1c5e48008c16`. Conversation goals, bounded follow-ups and
+   human tasks, with no UI; see `docs/specs/GOALS_FOLLOWUPS.md`, which the issue referenced and the
+   repository did not have.
+   - Every follow-up is revalidated at execution rather than at planning, and a `READY` claim goes to the
+     **shared delivery coordinator**. There is no second send path.
+   - Attempts are bounded by CHECK constraints (1–5), so "no unlimited chasing" survives a careless
+     caller, a migration and a console session.
+   - `human_tasks` has no draft, operation or delivery column at all, which is how "completing a task
+     never messages a customer" holds without anybody remembering it.
+2. **#54 / P3-01 is accepted** at `13212612bb0ac73b2468c1adc99b1c5e48008c16`; see
+   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
+3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+1. **#34 / P5-08 is the current work**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
+1. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
 1. **The Instagram token lifecycle had no caller, and now does (#9).**
    `refreshInstagramCredential` lived in `apps/web/src/server/`, was covered by eight tests, and was
    called by no route, no action and no loop. A 60-day token therefore expired with
