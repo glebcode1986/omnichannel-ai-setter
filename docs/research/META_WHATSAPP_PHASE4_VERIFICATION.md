@@ -2,6 +2,29 @@
 
 **Purpose:** implementation-time baseline for the official WhatsApp Business Platform. Re-verify current Meta documentation/API version before shipping or App Review; platform behavior can change.
 
+## Re-verification 2026-10-04 (P4-01 implementation)
+
+Checked against Meta's live documentation while implementing `packages/channel-whatsapp`. Three things
+changed or sharpened since the 2026-09-16 baseline:
+
+- **Graph API version.** The current version is **v26.0**, released 2026-07-29, and Meta's own Cloud API
+  examples now use it. The adapter's default moved from the draft value to v26.0. v23.0 remains available
+  until 2027-10-08, so this is a default, not a cliff.
+- **Typing indicator.** Confirmed as a combined read receipt plus `typing_indicator: { type: "text" }` on
+  `POST /<PHONE_NUMBER_ID>/messages`, answering `{"success": true}`. Newly recorded, because it decides
+  where the call belongs: **the indicator disappears when the reply arrives or after 25 seconds**, whichever
+  is first, while the product's human-like delay is 30–120 seconds. Emitting typing at scheduling time
+  would show it, drop it, and leave the customer watching nothing — so presence must be emitted near the
+  send, which is now stated in the adapter rather than implied.
+- **Error codes.** `131047` is documented as "Last message sent to recipient was more than 24 hours ago.
+  Send a template message instead" — the platform stating the window model in one line. `130429` (rate
+  limit) and `131048` (per-number messaging limits) are the transient ones; `131026`, `131051`, `131052`,
+  `131053`, `131031`, `368` and the `132xxx` template failures are final. One addition against the draft:
+  `131052` is their *download* of our media failing and `131053` their *upload* of it, and both are final.
+
+Still implementation-time capability rather than guarantee, unchanged from the baseline: coexistence echo
+fields, and whether a given account may use the coexistence path at all.
+
 ## Verified official platform direction
 
 - Use **WhatsApp Cloud API**, not WhatsApp Web/Baileys/QR automation, for production transport.

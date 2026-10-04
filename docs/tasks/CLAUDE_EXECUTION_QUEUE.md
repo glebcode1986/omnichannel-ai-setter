@@ -15,6 +15,22 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
+
+Started at the owner's word, with Stage D's chain still in review. `packages/channel-whatsapp` now
+implements the shared `ChannelAdapter`: raw-body verification, deterministic normalization of text, media,
+voice notes, replies, interactive replies and statuses, the four window states, free-form text and
+approved-template sending, and the read/typing presence effect. 65 tests, fixture-driven.
+
+Branched from the chain tip (`fix/dead-suspension-resolver`), so it carries every Stage D repair.
+
+Meta's live docs were re-checked rather than trusted from the baseline, as Issue #18 requires: the current
+Graph API version is v26.0, and the typing indicator's 25-second lifetime is why presence belongs near the
+send rather than at scheduling time.
+
+Next in Stage E: #19 Embedded Signup and account lifecycle, then #20 templates and outside-window policy.
+
+
 ### Blocker repair — P5-01 / Issue #27, propagated to every branch
 
 Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:

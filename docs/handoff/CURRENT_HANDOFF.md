@@ -246,6 +246,31 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+**Stage E has started.** Its gate — the Stage D handoff recorded on Issue #36, plus the owner advancing it —
+is satisfied; the owner asked for Stage E to begin while the Stage D chain is in review.
+
+1. **P4-01 / Issue #18: the WhatsApp Cloud API transport adapter is implemented**
+   (`packages/channel-whatsapp`, 65 tests). It mirrors the Instagram adapter's shape deliberately — the two
+   packages may not import each other, so the similarity is in structure and not in shared code.
+
+   **What is genuinely different from Instagram, and why:**
+
+   - **Four window states instead of two.** Outside the 24-hour customer-service window a WhatsApp
+     conversation is not closed, it is `TEMPLATE_ONLY`: an approved template may still reach the customer.
+     Collapsing that into `NOT_ELIGIBLE` would discard the only business-initiated route the platform has.
+     The adapter reports the state; whether to use a template is product policy.
+   - **Two provider identifiers, kept apart.** `phone_number_id` is the sending asset and the webhook's
+     `metadata.phone_number_id`; the WABA owns the subscription and the template catalogue. The display
+     phone number is deliberately not an identity — the verification note is explicit that it must not be a
+     tenant or idempotency key — and it is used for exactly one thing: recognizing a coexistence echo.
+   - **The status-event dedupe key carries the state.** One `wamid` produces sent, delivered and read; a
+     bare-`wamid` key would let the first arrival silence the rest and the Inbox would never leave "sent".
+
+   **Two corrections from re-verifying Meta's live docs today**, which the issue asks for: the current Graph
+   API version is v26.0 (the draft default was v23.0), and the typing indicator disappears after a reply or
+   **25 seconds**, while the product's delay is 30–120 — so presence must be emitted near the send, which
+   the adapter now says out loud rather than leaving to a future reader.
+
 1. **The Instagram token lifecycle had no caller, and now does (#9).**
    `refreshInstagramCredential` lived in `apps/web/src/server/`, was covered by eight tests, and was
    called by no route, no action and no loop. A 60-day token therefore expired with
