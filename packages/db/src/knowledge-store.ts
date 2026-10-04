@@ -271,6 +271,15 @@ export type KnowledgeWriteOutcome =
    * exists.
    */
   | { readonly status: "STALE"; readonly indexedVersion: number; readonly currentVersion: number }
+  /**
+   * Somebody changed this document between the version the caller was looking at and the write.
+   *
+   * Returned rather than applied, and never reported as success. A publish that quietly published
+   * nothing, or a save that overwrote a colleague's wording with content derived from an older version,
+   * are the two failures this exists to make impossible — and both of them look exactly like success
+   * from the operator's side, which is why the answer has to be a different word.
+   */
+  | { readonly status: "CONFLICT"; readonly expectedVersion: number; readonly currentVersion: number }
   | { readonly status: "GONE" }
   | { readonly status: "REJECTED"; readonly reason: string };
 
@@ -327,7 +336,19 @@ export async function editKnowledge(
   db: DbClient,
   context: BusinessProfileContext,
   documentId: string,
-  input: { readonly title?: string; readonly chunks?: readonly string[] },
+  input: {
+    readonly title?: string;
+    readonly chunks?: readonly string[];
+    /**
+     * The version the editor was showing when this was submitted.
+     *
+     * Optional only so a system caller with no screen behind it can omit it; every human edit carries it,
+     * because without it two tabs opened at v1 both save and the second one wins with wording derived
+     * from content it never saw. Optional or not, the write below is conditional, so two simultaneous
+     * submits cannot both become the same next version.
+     */
+    readonly expectedVersion?: number;
+  },
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
 
@@ -338,6 +359,12 @@ export async function editKnowledge(
     });
     if (document === null) {
       return { status: "GONE" };
+    }
+
+    if (input.expectedVersion !== undefined && input.expectedVersion !== document.version) {
+      // A stale tab. Refusing is the whole point: the wording in that form was composed against a
+      // version somebody has already replaced, and saving it would silently undo their work.
+      return { status: "CONFLICT", expectedVersion: input.expectedVersion, currentVersion: document.version };
     }
 
     const title = input.title === undefined ? document.title : input.title.trim();
@@ -361,11 +388,12 @@ export async function editKnowledge(
     }
 
     const version = document.version + 1;
-    // A title-only change still makes a version: the title is what an operator searches by, and a history
-    // that recorded content but not naming would not explain why a source became hard to find.
-    await writeChunks(tx, scope.workspaceId, documentId, version, chunks);
-    await tx.knowledgeDocument.update({
-      where: { workspaceId_id: { workspaceId: scope.workspaceId, id: documentId } },
+    // The document moves first, conditional on the version this edit was computed from, and the chunks
+    // are written only if it did. Two simultaneous submits therefore cannot both become version 2: the
+    // second one matches no row and stops here, instead of colliding on the chunks' unique position and
+    // surfacing as a database error with nothing an operator can do about it.
+    const claimed = await tx.knowledgeDocument.updateMany({
+      where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId), version: document.version },
       data: {
         title,
         version,
@@ -377,6 +405,12 @@ export async function editKnowledge(
         indexedAt: null,
       },
     });
+    if (claimed.count !== 1) {
+      return { status: "CONFLICT", expectedVersion: document.version, currentVersion: document.version + 1 };
+    }
+    // A title-only change still makes a version: the title is what an operator searches by, and a history
+    // that recorded content but not naming would not explain why a source became hard to find.
+    await writeChunks(tx, scope.workspaceId, documentId, version, chunks);
     return { status: "VERSIONED", documentId, version };
   });
 }
@@ -410,13 +444,26 @@ export async function restoreKnowledge(db: DbExecutor, context: BusinessProfileC
   if (document.indexingState === "FAILED") {
     return { status: "REJECTED", reason: "this source failed to index and cannot be made active until it is fixed" };
   }
-  await db.knowledgeDocument.updateMany({
+  const published = await db.knowledgeDocument.updateMany({
     where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId), version: document.version },
     // This is the deliberate act the editor promises. It is the only write that moves
     // `publishedVersion`, so what customers are told changes here and nowhere else — and it names the
     // version it read, so a save landing in between publishes nothing by accident.
     data: { status: "ACTIVE", publishedVersion: document.version },
   });
+  if (published.count !== 1) {
+    // The condition did its job and nothing was written, so saying "published" would be a lie about the
+    // one thing an operator came here to do. A save landed in the gap; they need to look at it and
+    // publish again.
+    const current = await db.knowledgeDocument.findFirst({
+      where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) },
+      select: { version: true },
+    });
+    if (current === null) {
+      return { status: "GONE" };
+    }
+    return { status: "CONFLICT", expectedVersion: document.version, currentVersion: current.version };
+  }
   return { status: "RESTORED", version: document.version };
 }
 
@@ -426,9 +473,14 @@ export const publishKnowledge = restoreKnowledge;
 /**
  * What ingestion actually managed, recorded where an operator can see it.
  *
- * A failure takes a live source out of retrieval in the *same* write. Doing it in a second statement
- * leaves a window in which a source known to be broken is still answering customers — and the CHECK would
- * reject the pair anyway, which is the database making the same point.
+ * A failure in the **published** version takes a live source out of retrieval in the *same* write. Doing
+ * it in a second statement leaves a window in which a source known to be broken is still answering
+ * customers — and the CHECK would reject the pair anyway, which is the database making the same point.
+ *
+ * A failure in a version nobody published does not. After publish/index v1 and Save v2, a failure to index
+ * v2 is a failure of content no customer has ever seen; archiving the document would stop healthy
+ * published v1 over a problem in a draft. The failure is recorded and the published version keeps
+ * answering, which is the pair the CHECK now permits.
  *
  * A source that was not live keeps whatever status it had. Archiving a DRAFT that failed to index would
  * throw away the operator's own state to satisfy a rule that was never about drafts: they are not
@@ -449,7 +501,7 @@ export async function recordIndexingResult(
   const versioned = { ...where, version: result.version };
 
   return db.$transaction(async (tx) => {
-    const document = await tx.knowledgeDocument.findFirst({ where, select: { status: true, version: true } });
+    const document = await tx.knowledgeDocument.findFirst({ where, select: { status: true, version: true, publishedVersion: true } });
     if (document === null) {
       return { status: "GONE" };
     }
@@ -460,7 +512,12 @@ export async function recordIndexingResult(
       const indexed = await tx.knowledgeDocument.updateMany({ where: versioned, data: { indexingState: "INDEXED", indexedAt: result.at, indexingError: null } });
       return indexed.count === 1 ? { status: "INDEXED", version: result.version } : { status: "STALE", indexedVersion: result.version, currentVersion: document.version };
     }
-    const wasActive = document.status === "ACTIVE";
+    // Archiving is for a failure in the version customers are being answered with. After publish/index
+    // v1 and Save v2, a failure to index v2 is a failure of content nobody has ever been shown, and
+    // taking the whole document out of retrieval would stop healthy published v1 over a problem in a
+    // draft. The failure is still recorded, and the CHECK permits exactly this pair.
+    const failingIsPublished = document.publishedVersion === null || document.publishedVersion === result.version;
+    const wasActive = document.status === "ACTIVE" && failingIsPublished;
     const failed = await tx.knowledgeDocument.updateMany({
       where: versioned,
       data: {

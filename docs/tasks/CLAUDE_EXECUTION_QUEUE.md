@@ -14,6 +14,21 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Second blocker repair — P5-05 / Issue #31, the concurrency interleavings
+
+Astra re-reviewed `c12dd43` and returned three blocking findings. Two were introduced by the previous
+repair: separating Save from Publish created interleavings the repair did not close.
+
+1. Publish wrote conditionally and discarded the count, so a save in the gap meant nothing was published
+   and the operator was told otherwise. It returns a typed `CONFLICT` now.
+2. Save carried no expected version, so a stale tab overwrote a colleague's work and two simultaneous
+   submits raced for the same next version. `expectedVersion` travels page → form → action → store.
+3. A failure to index an unpublished version archived the document, stopping the healthy published
+   version. The CHECK is now about the published version, and so is the store.
+
+Also closed: the knowledge outcome family was absent from `OutcomeNotice`, so no knowledge write had ever
+shown the operator a message. A typed conflict nobody sees is not a fix.
+
 ### Blocker repair — P5-05 / Issue #31, after `CHANGES_REQUESTED`
 
 Astra reviewed PR #77 at `7eb5251` and returned three blocking findings, all correct. AntiGravity is

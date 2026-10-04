@@ -87,7 +87,7 @@ export default async function KnowledgeDocumentPage({
         <KnowledgeEditor
           t={t}
           target={target}
-          document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope }}
+          document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope, version: document.version }}
           action={editKnowledgeAction.bind(null, target, documentId)}
         />
       </section>

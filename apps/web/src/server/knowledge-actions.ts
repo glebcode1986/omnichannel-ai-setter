@@ -22,7 +22,17 @@ export interface KnowledgeTarget {
   readonly businessProfileId: string;
 }
 
-export type KnowledgeOutcome = "CREATED" | "VERSIONED" | "UNCHANGED" | "PUBLISHED" | "ARCHIVED" | "RESTORED" | "GONE" | "REJECTED";
+export type KnowledgeOutcome =
+  | "CREATED"
+  | "VERSIONED"
+  | "UNCHANGED"
+  | "PUBLISHED"
+  | "ARCHIVED"
+  | "RESTORED"
+  /** Somebody else moved the source between the screen being drawn and the write. */
+  | "CONFLICT"
+  | "GONE"
+  | "REJECTED";
 
 const libraryPath = (target: KnowledgeTarget) => `/workspaces/${target.workspaceId}/profiles/${target.businessProfileId}/knowledge`;
 
@@ -66,10 +76,25 @@ export async function createKnowledgeAction(target: KnowledgeTarget, formData: F
 
 export async function editKnowledgeAction(target: KnowledgeTarget, documentId: string, formData: FormData): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
-  const outcome = await editKnowledge(getDb(), context, documentId, { title: field(formData, "title"), chunks: factsOf(formData) });
+  // The version the form was rendered against. A submission with none is a form written before this
+  // existed, or one somebody constructed; both are refused rather than guessed at.
+  const expected = Number.parseInt(field(formData, "expectedVersion") ?? "", 10);
+  const outcome = await editKnowledge(getDb(), context, documentId, {
+    title: field(formData, "title"),
+    chunks: factsOf(formData),
+    ...(Number.isSafeInteger(expected) && expected > 0 ? { expectedVersion: expected } : {}),
+  });
   finish(
     target,
-    outcome.status === "VERSIONED" ? "VERSIONED" : outcome.status === "UNCHANGED" ? "UNCHANGED" : outcome.status === "REJECTED" ? "REJECTED" : "GONE",
+    outcome.status === "VERSIONED"
+      ? "VERSIONED"
+      : outcome.status === "UNCHANGED"
+        ? "UNCHANGED"
+        : outcome.status === "CONFLICT"
+          ? "CONFLICT"
+          : outcome.status === "REJECTED"
+            ? "REJECTED"
+            : "GONE",
     outcome.status === "GONE" ? undefined : documentId,
   );
 }
@@ -77,7 +102,11 @@ export async function editKnowledgeAction(target: KnowledgeTarget, documentId: s
 export async function publishKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
   const outcome = await publishKnowledge(getDb(), context, documentId);
-  finish(target, outcome.status === "RESTORED" ? "PUBLISHED" : outcome.status === "REJECTED" ? "REJECTED" : "GONE", documentId);
+  finish(
+    target,
+    outcome.status === "RESTORED" ? "PUBLISHED" : outcome.status === "CONFLICT" ? "CONFLICT" : outcome.status === "REJECTED" ? "REJECTED" : "GONE",
+    documentId,
+  );
 }
 
 export async function archiveKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
@@ -89,5 +118,9 @@ export async function archiveKnowledgeAction(target: KnowledgeTarget, documentId
 export async function restoreKnowledgeAction(target: KnowledgeTarget, documentId: string): Promise<void> {
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
   const outcome = await restoreKnowledge(getDb(), context, documentId);
-  finish(target, outcome.status === "RESTORED" ? "RESTORED" : outcome.status === "REJECTED" ? "REJECTED" : "GONE", documentId);
+  finish(
+    target,
+    outcome.status === "RESTORED" ? "RESTORED" : outcome.status === "CONFLICT" ? "CONFLICT" : outcome.status === "REJECTED" ? "REJECTED" : "GONE",
+    documentId,
+  );
 }

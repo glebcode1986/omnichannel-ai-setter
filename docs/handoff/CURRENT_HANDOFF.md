@@ -229,7 +229,35 @@ Idempotency is the same decision digest the review path uses.
 **Reviewer note.** AntiGravity is temporarily unavailable due to reviewer limits, so Astra is the active
 independent reviewer for this cycle.
 
-1. **Three P5-05 blockers, all correct (#31 / PR #77).**
+1. **Three P5-05 concurrency blockers, two of them introduced by the previous repair.** Astra re-reviewed
+   the repaired head and found that separating Save from Publish had not closed the interleavings it
+   created. All three were correct.
+
+   **A publish could report success having published nothing.** `restoreKnowledge` writes conditionally on
+   the version it read — and discarded the row count, so a save landing in the gap meant zero rows changed
+   while the action still mapped the result to `PUBLISHED`. The condition was there and its answer was
+   thrown away, which is the mistake `recordIndexingResult` had been fixed for the day before.
+
+   **A save was not bound to the version the form showed.** Two tabs at v1: A saves and becomes v2, B —
+   still showing v1 — saves over it with wording composed against content it never saw. `expectedVersion`
+   now travels page → form → action → store, the document moves first and conditionally, and the chunks
+   are written only if it did. Two simultaneous submits cannot both become v2; the loser gets a conflict
+   rather than a unique-constraint error from the chunks' position key.
+
+   **A failure in an unpublished version archived the published one.** After publish/index v1 and Save v2,
+   a failure to index v2 — content no customer has ever seen — took the document out of ACTIVE and stopped
+   healthy v1 answering. `knowledge_documents_failed_not_active_check` was written when a document had one
+   version; it is now about the version customers are answered with, and so is the store.
+
+   **Found while fixing it:** the whole knowledge outcome family — CREATED, VERSIONED, UNCHANGED,
+   PUBLISHED, ARCHIVED, RESTORED — was missing from `OutcomeNotice`'s allowlist and from both catalogues,
+   so every save and publish redirected with an outcome the page ignored. The operator pressed Save and was
+   told nothing, which is indistinguishable from pressing Save and nothing happening. A typed conflict
+   nobody can see would have been the same defect in a new place.
+
+   **The lesson:** a conditional write is only half a fix. The other half is reading what it did — and
+   saying so on screen.
+2. **Three P5-05 blockers, all correct (#31 / PR #77).**
 
    **Save published immediately.** Retrieval joined the document's latest *saved* version, so pressing
    Save on a live source put the new wording in front of customers at once — while
