@@ -31,6 +31,14 @@ export interface KnowledgeSummary {
   readonly sourceType: string;
   readonly sourceUri: string | null;
   readonly version: number;
+  /**
+   * The version customers are answered with, or `null` for a source that has never been published.
+   *
+   * Separate from `version` because Save and Publish are separate acts. When they differ, somebody has
+   * edited a live source and not published it yet — which the library has to be able to show, or the
+   * promise that Save is never a live change is kept by the database and broken by the screen.
+   */
+  readonly publishedVersion: number | null;
   readonly status: string;
   /**
    * Whose knowledge this is. `WORKSPACE` is base knowledge every profile sees; `BUSINESS_PROFILE` belongs
@@ -108,6 +116,7 @@ export async function listKnowledge(
       sourceType: true,
       sourceUri: true,
       version: true,
+      publishedVersion: true,
       status: true,
       businessProfileId: true,
       indexingState: true,
@@ -143,6 +152,7 @@ type LibraryRow = {
   sourceType: string;
   sourceUri: string | null;
   version: number;
+  publishedVersion: number | null;
   status: string;
   businessProfileId: string | null;
   indexingState: string;
@@ -160,6 +170,7 @@ function toSummary(row: LibraryRow): KnowledgeSummary {
     sourceType: row.sourceType,
     sourceUri: row.sourceUri,
     version: row.version,
+    publishedVersion: row.publishedVersion,
     status: row.status,
     scope: row.businessProfileId === null ? "WORKSPACE" : "BUSINESS_PROFILE",
     indexingState: row.indexingState,
@@ -174,12 +185,15 @@ function toSummary(row: LibraryRow): KnowledgeSummary {
 /** One stored version's content, for the history a reviewer reads. */
 export interface KnowledgeVersion {
   readonly version: number;
+  /** The latest saved one. Not necessarily the one customers get. */
   readonly current: boolean;
+  /** The one retrieval answers with. */
+  readonly published: boolean;
   readonly chunks: readonly { readonly id: string; readonly ordinal: number; readonly content: string }[];
 }
 
 export interface KnowledgeDetail extends KnowledgeSummary {
-  /** Every stored version, newest first. The current one is the only one retrieval can reach. */
+  /** Every stored version, newest first. The published one is the only one retrieval can reach. */
   readonly versions: readonly KnowledgeVersion[];
 }
 
@@ -198,6 +212,7 @@ export async function readKnowledge(
       sourceType: true,
       sourceUri: true,
       version: true,
+      publishedVersion: true,
       status: true,
       businessProfileId: true,
       indexingState: true,
@@ -224,7 +239,7 @@ export async function readKnowledge(
     ...toSummary(row),
     versions: [...byVersion.entries()]
       .sort(([left], [right]) => right - left)
-      .map(([version, chunks]) => ({ version, current: version === row.version, chunks })),
+      .map(([version, chunks]) => ({ version, current: version === row.version, published: version === row.publishedVersion, chunks })),
   };
 }
 
@@ -243,10 +258,20 @@ export type KnowledgeWriteOutcome =
   | { readonly status: "VERSIONED"; readonly documentId: string; readonly version: number }
   | { readonly status: "UNCHANGED"; readonly documentId: string; readonly version: number }
   | { readonly status: "ARCHIVED" }
-  | { readonly status: "RESTORED" }
-  | { readonly status: "INDEXED" }
+  /** Published. `version` is what customers are now answered with. */
+  | { readonly status: "RESTORED"; readonly version: number }
+  | { readonly status: "INDEXED"; readonly version: number }
   /** Indexing failed. `wasActive` says whether this also took a live source out of retrieval. */
   | { readonly status: "INDEXING_FAILED"; readonly wasActive: boolean }
+  /**
+   * The result described a version the document has moved past, so nothing was written.
+   *
+   * Indexing takes seconds to minutes and an edit takes none, so this is ordinary rather than
+   * exceptional. The alternative is worse than it sounds: a delayed success would certify content the
+   * worker never read, and a delayed failure would archive a live source over a problem that no longer
+   * exists.
+   */
+  | { readonly status: "STALE"; readonly indexedVersion: number; readonly currentVersion: number }
   | { readonly status: "GONE" }
   | { readonly status: "REJECTED"; readonly reason: string };
 
@@ -386,7 +411,7 @@ export async function restoreKnowledge(db: DbExecutor, context: BusinessProfileC
   const scope = profileScopeOf(context);
   const document = await db.knowledgeDocument.findFirst({
     where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) },
-    select: { indexingState: true },
+    select: { indexingState: true, version: true },
   });
   if (document === null) {
     return { status: "GONE" };
@@ -395,10 +420,13 @@ export async function restoreKnowledge(db: DbExecutor, context: BusinessProfileC
     return { status: "REJECTED", reason: "this source failed to index and cannot be made active until it is fixed" };
   }
   await db.knowledgeDocument.updateMany({
-    where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) },
-    data: { status: "ACTIVE" },
+    where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId), version: document.version },
+    // This is the deliberate act the editor promises. It is the only write that moves
+    // `publishedVersion`, so what customers are told changes here and nowhere else — and it names the
+    // version it read, so a save landing in between publishes nothing by accident.
+    data: { status: "ACTIVE", publishedVersion: document.version },
   });
-  return { status: "RESTORED" };
+  return { status: "RESTORED", version: document.version };
 }
 
 /** Publishes a DRAFT, under the same rule: nothing that failed to index becomes answerable. */
@@ -419,23 +447,31 @@ export async function recordIndexingResult(
   db: DbClient,
   context: BusinessProfileContext,
   documentId: string,
-  result: { readonly ok: true; readonly at: Date } | { readonly ok: false; readonly error: string },
+  result:
+    | { readonly ok: true; readonly at: Date; readonly version: number }
+    | { readonly ok: false; readonly error: string; readonly version: number },
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
   const where = { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) };
+  // The version this result is about, in the database rather than in a prior read. Indexing is slow and
+  // an edit is instant, so a result is always a statement about a version that may no longer be current.
+  const versioned = { ...where, version: result.version };
 
   return db.$transaction(async (tx) => {
-    const document = await tx.knowledgeDocument.findFirst({ where, select: { status: true } });
+    const document = await tx.knowledgeDocument.findFirst({ where, select: { status: true, version: true } });
     if (document === null) {
       return { status: "GONE" };
     }
+    if (document.version !== result.version) {
+      return { status: "STALE", indexedVersion: result.version, currentVersion: document.version };
+    }
     if (result.ok) {
-      await tx.knowledgeDocument.updateMany({ where, data: { indexingState: "INDEXED", indexedAt: result.at, indexingError: null } });
-      return { status: "INDEXED" };
+      const indexed = await tx.knowledgeDocument.updateMany({ where: versioned, data: { indexingState: "INDEXED", indexedAt: result.at, indexingError: null } });
+      return indexed.count === 1 ? { status: "INDEXED", version: result.version } : { status: "STALE", indexedVersion: result.version, currentVersion: document.version };
     }
     const wasActive = document.status === "ACTIVE";
-    await tx.knowledgeDocument.updateMany({
-      where,
+    const failed = await tx.knowledgeDocument.updateMany({
+      where: versioned,
       data: {
         indexingState: "FAILED",
         indexingError: result.error,
@@ -443,7 +479,7 @@ export async function recordIndexingResult(
         ...(wasActive ? { status: "ARCHIVED" as const } : {}),
       },
     });
-    return { status: "INDEXING_FAILED", wasActive };
+    return failed.count === 1 ? { status: "INDEXING_FAILED", wasActive } : { status: "STALE", indexedVersion: result.version, currentVersion: document.version };
   });
 }
 

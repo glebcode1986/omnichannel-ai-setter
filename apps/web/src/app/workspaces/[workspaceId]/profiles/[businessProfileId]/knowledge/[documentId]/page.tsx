@@ -11,6 +11,7 @@ import { readKnowledge } from "@omnichannel/db";
 import { KnowledgeEditor } from "@/ui/knowledge/knowledge-editor";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
+import type { Translator } from "@/i18n/translate";
 import { requireBusinessProfileContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
 import { archiveKnowledgeAction, editKnowledgeAction, publishKnowledgeAction, restoreKnowledgeAction } from "@/server/knowledge-actions";
@@ -91,12 +92,18 @@ export default async function KnowledgeDocumentPage({
         />
       </section>
 
+      {document.publishedVersion !== null && document.publishedVersion !== document.version ? (
+        <p className="notice" data-tone="warn" data-unpublished="true">
+          {t.t("knowledge.unpublishedEdit", { saved: String(document.version), published: String(document.publishedVersion) })}
+        </p>
+      ) : undefined}
+
       <section className="knowledge-history">
         <h2>{t.t("knowledge.versionHistory")}</h2>
         <ol>
           {document.versions.map((version) => (
-            <li key={version.version} data-version={version.version} data-current={String(version.current)}>
-              <h3>{version.current ? t.t("knowledge.versionCurrent", { version: version.version }) : t.t("knowledge.versionOld", { version: version.version })}</h3>
+            <li key={version.version} data-version={version.version} data-current={String(version.current)} data-published={String(version.published)}>
+              <h3>{versionLabel(t, version)}</h3>
               <ul>
                 {version.chunks.map((chunk) => (
                   <li key={chunk.id}>{chunk.content}</li>
@@ -108,4 +115,16 @@ export default async function KnowledgeDocumentPage({
       </section>
     </>
   );
+}
+
+/**
+ * Three states, because an edit to a live source creates a real difference between them: the version
+ * customers are answered with, the version somebody has saved on top of it, and the ones replaced before
+ * either. Labelling the latest save "in use now" is what made Save look like a publish.
+ */
+function versionLabel(t: Translator, version: { readonly version: number; readonly current: boolean; readonly published: boolean }): string {
+  if (version.published) {
+    return t.t(version.current ? "knowledge.versionCurrent" : "knowledge.versionPublished", { version: String(version.version) });
+  }
+  return t.t(version.current ? "knowledge.versionSaved" : "knowledge.versionOld", { version: String(version.version) });
 }
