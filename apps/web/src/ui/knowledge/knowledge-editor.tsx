@@ -10,13 +10,25 @@
  * a separate, deliberate act, and the button for it says what it does rather than "Save".
  */
 import type { Translator } from "@/i18n/translate";
-import type { KnowledgeTarget } from "@/server/knowledge-actions";
+import type { KnowledgeTarget } from "@/server/knowledge-submission";
 
 export interface KnowledgeEditorProps {
   readonly t: Translator;
   readonly target: KnowledgeTarget;
-  /** Absent when writing a new source; present when editing one. */
-  readonly document?: { readonly id: string; readonly title: string; readonly facts: readonly string[]; readonly scope: string };
+  /**
+   * Absent when writing a new source; present when editing one.
+   *
+   * `version` is the one the form was rendered against, and it is submitted with the edit. Two tabs
+   * opened on the same source both show v1; without it the second save overwrites the first with wording
+   * composed against content it never saw, and nothing on either screen says so.
+   */
+  readonly document?: {
+    readonly id: string;
+    readonly title: string;
+    readonly facts: readonly string[];
+    readonly scope: string;
+    readonly version: number;
+  };
   readonly action: (formData: FormData) => Promise<void>;
   /** A fact suggested by a review item the assistant could not answer. */
   readonly suggestedTitle?: string;
@@ -27,6 +39,10 @@ export function KnowledgeEditor({ t, document, action, suggestedTitle }: Knowled
 
   return (
     <form action={action} className="knowledge-editor">
+      {/* What this form was rendered against. The store refuses an edit whose expected version is not the
+          current one, so a stale tab is told rather than silently winning. */}
+      {document === undefined ? undefined : <input type="hidden" name="expectedVersion" value={String(document.version)} />}
+
       <label htmlFor="knowledge-title">{t.t("knowledge.titleLabel")}</label>
       <input id="knowledge-title" name="title" type="text" defaultValue={document?.title ?? suggestedTitle ?? ""} required />
 
