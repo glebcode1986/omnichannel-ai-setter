@@ -105,6 +105,7 @@ export {
   type KnowledgeDetail,
   type KnowledgeFilter,
   type KnowledgeLibraryPage,
+  type KnowledgeLifecycleAct,
   type KnowledgeScope,
   type KnowledgeSummary,
   type KnowledgeVersion,
