@@ -83,11 +83,16 @@ export function candidateLimit(limit: number): number {
 const SEMANTIC_ORDER = `ORDER BY "score" DESC`;
 
 /**
- * Active, current-version chunks of one workspace, visible to one Business Profile.
+ * Active, **published**-version chunks of one workspace, visible to one Business Profile.
  *
  * The version predicate is what makes a superseded fact unreachable: editing a document creates a new
  * version and leaves the old chunks in place for audit, so filtering on `status` alone would keep serving
  * last month's prices from rows that are still, technically, ACTIVE.
+ *
+ * It follows `published_version` rather than `version`, and the difference is a customer-visible one. Save
+ * moves `version`; only an explicit publish moves `published_version`. Joining the latest saved version
+ * made Save a live change — an operator half-way through rewording a refund policy was already answering
+ * customers with the half — while the editor promised publishing was a separate, deliberate act.
  */
 const knowledgeFrom = (extraJoin = ""): string => `
   FROM "knowledge_chunks" c
@@ -96,7 +101,7 @@ const knowledgeFrom = (extraJoin = ""): string => `
   WHERE c."workspace_id" = $1
     AND (d."business_profile_id" IS NULL OR d."business_profile_id" = $2)
     AND d."status" = 'ACTIVE'
-    AND c."document_version" = d."version"`;
+    AND c."document_version" = d."published_version"`;
 
 const KNOWLEDGE_COLUMNS = `
     c."id" AS "chunk_id",

@@ -9,6 +9,7 @@
  * Every example says who stood behind it. A verified example with nobody's name on it cannot exist — a
  * CHECK refuses it — so the absence of a name is itself information: this one is waiting.
  */
+import Link from "next/link";
 import type { StyleExampleView } from "@omnichannel/db";
 
 import type { MessageKey } from "@/i18n/catalogue";
@@ -21,6 +22,13 @@ export interface StyleExampleListProps {
   readonly target: StyleTarget;
   /** Which library this is: the verified one, or the queue of suggestions. */
   readonly kind: "VERIFIED" | "SUGGESTED";
+  /**
+   * Where the rest of this list is. Absent when this is all of it.
+   *
+   * Each list on this page pages on its own, so this is per-list rather than per-page: following one must
+   * not move the other.
+   */
+  readonly nextHref?: string;
   readonly actions: {
     readonly approve: (target: StyleTarget, exampleId: string) => Promise<void>;
     readonly reject: (target: StyleTarget, exampleId: string) => Promise<void>;
@@ -32,7 +40,7 @@ export interface StyleExampleListProps {
 const KNOWN_STATUSES = new Set(["ACTIVE", "SUGGESTED", "REJECTED", "ARCHIVED"]);
 const KNOWN_PROVENANCE = new Set(["HUMAN_TYPED", "HUMAN_EDITED_DRAFT"]);
 
-export function StyleExampleList({ t, examples, target, kind, actions }: StyleExampleListProps) {
+export function StyleExampleList({ t, examples, target, kind, actions, nextHref }: StyleExampleListProps) {
   if (examples.length === 0) {
     return (
       <p className="muted" data-empty={kind}>
@@ -102,6 +110,13 @@ export function StyleExampleList({ t, examples, target, kind, actions }: StyleEx
           )}
         </li>
       ))}
+      {nextHref === undefined ? undefined : (
+        <li data-load-more={kind}>
+          <Link className="button" href={nextHref}>
+            {t.t("style.loadMore")}
+          </Link>
+        </li>
+      )}
     </ul>
   );
 }

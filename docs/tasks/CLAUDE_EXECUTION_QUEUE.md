@@ -14,6 +14,18 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
+
+The third instance of the defect Astra raised on #77, found by the same sweep over every paged store list
+and fixed at the owner's request. Both example lists paged at 25 in the store and neither paged on screen.
+
+Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
+carries the other list's cursor through, so paging the suggestions cannot move the verified library.
+
+Note on ordering: this branch does **not** yet contain the newer heads of #76 (`68cb3ac`, the Review
+queue's pagination) or #77 (`b8d0eea`, the P5-05 blockers). Propagation waits for #77's verdict, because
+merging into #77 would change the exact head being reviewed; when it lands, the whole chain gets one pass.
+
 ### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
 
 Astra reviewed PR #76 at `dc68334` and found that a human-composed pending delivery could neither be

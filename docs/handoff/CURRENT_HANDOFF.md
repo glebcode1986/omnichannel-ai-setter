@@ -226,7 +226,25 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
+1. **Style Training could not show more than 25 of either list (#32).** The third instance of one defect,
+   found by checking every paged store list against the screen that spends its cursor after Astra raised
+   it on PR #77. `listStyleExamples` pages at 25 and returns a cursor; the route called it twice — once
+   for the verified library, once for the suggestions — with no cursor either time, and no component
+   offered a link. A suggestion nobody can reach is one nobody can approve or reject, so it stays
+   SUGGESTED.
+
+   **What is different here, and what made it worth its own module:** two lists page on one page. A single
+   `cursor` parameter would make "show more suggestions" also advance the verified library, so an operator
+   paging one would lose their place in the other — a bug that looks like data disappearing. Each list has
+   a parameter of its own (`verifiedCursor`, `suggestedCursor`), the next link carries the other list's
+   cursor through untouched, and `style-screen.integration.test.ts` asserts exactly that: advancing one
+   leaves the other equal to what it was.
+
+   Three screens now share one shape — `knowledge-page.ts`, `review-page.ts`, `style-page.ts`, each with a
+   `*-screen.integration.test.ts` that follows the link it rendered. **The pattern worth keeping is the
+   test, not the module:** every one of these bugs was a correct store, a correct component and an
+   assembly nobody could call.
+2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
    finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
    human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation
    through `draft: { conversationId }`: the Inbox's pending sends and the cancellation lookup. So a reply
