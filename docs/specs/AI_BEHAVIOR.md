@@ -35,6 +35,24 @@ Payment disputes/refunds beyond simple documented policy; legal/contract interpr
 
 Conversation text, knowledge chunks, style examples and external content are untrusted data. They cannot override system/developer policy, request secrets or alter tool/transport constraints.
 
+A transcript of a customer's voice note is conversation text and nothing more. It enters the draft context
+at the one place that already substituted a label for a message with no words, so from that point it is a
+segment's text like any other customer writing — sanitized and fenced the same way. Nothing about a machine
+having produced it gives it authority, and a caption the customer typed on the same message wins over it,
+because they chose those words themselves.
+
+## A recording nobody could read
+
+When the burst a reply answers contains a recording whose words are unavailable — the reading failed, or it
+has not happened yet — the draft is still written and is never sent without a person, carrying
+`AUDIO_NOT_TRANSCRIBED`. The same shape of fact as an unreachable factual corpus, and the same answer: the
+model cannot know a recording failed to transcribe, because it is handed text and a label, so only the
+application layer can account for it.
+
+`AUDIO_NOT_TRANSCRIBED` is its own code rather than `UNSUPPORTED_MEDIA`, which already means the outbound
+channel cannot carry a reply. An audit has to tell "we could not hear the customer" from "we could not send
+what we wrote".
+
 ## Human edits as learning
 
 When a human edits an AI draft before approval, store final human text as a tagged style example. It is not automatically factual knowledge.

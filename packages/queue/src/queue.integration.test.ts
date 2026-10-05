@@ -71,6 +71,7 @@ describe.skipIf(!redisTestsEnabled())("queue primitives (Redis)", () => {
   };
 
   const handlers = (overrides: Partial<QueueHandlers> = {}): QueueHandlers => ({
+    transcribeMedia: () => Promise.resolve(),
     onInboundDebounceElapsed: vi.fn(() => Promise.resolve()),
     generateAiDraft: vi.fn(() => Promise.resolve()),
     deliver: vi.fn(

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDraftContextStore, type DraftContextStore } from "./draft-context-store";
 import { appendInboundMessage } from "./repositories/messages";
+import { createPendingTranscripts, loadTranscriptionWork, recordTranscript, recordTranscriptionFailure } from "./transcript-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
 
@@ -148,5 +149,193 @@ describe.skipIf(!databaseTestsEnabled())("draft context store (PostgreSQL)", () 
     const context = await store.load(query({ anchorMessageId: media.id }));
 
     expect(context?.inbound.at(-1)).toMatchObject({ provenance: media.id, text: "[image with no text]" });
+  });
+
+  /**
+   * What a voice note contributes to the reply it is supposed to answer (Issue #21).
+   *
+   * Two facts, and the draft engine needs both: the words, when there are words, and whether the burst
+   * contains a recording nobody could read. The second one is not derivable from the first — a message
+   * whose reading failed and a message with nothing in it look identical from the text alone, and only one
+   * of them means a customer asked something nobody heard.
+   */
+  describe("a recording in the conversation", () => {
+    let voiceSequence = 0;
+
+    /** A voice note stored the way ingestion stores one, with its pending reading alongside. */
+    const voiceNote = async (options: { readonly at: Date; readonly caption?: string } = { at: new Date("2026-09-18T12:00:00.000Z") }) => {
+      const providerMediaId = `media-ctx-${++voiceSequence}`;
+      const message = await appendInboundMessage(db(), profile.context, {
+        conversationId: profile.conversationId,
+        channelMessageId: unique("mid-voice"),
+        kind: "AUDIO",
+        ...(options.caption === undefined ? {} : { text: options.caption }),
+        media: [{ kind: "AUDIO", providerMediaId, mimeType: "audio/ogg; codecs=opus" }],
+        occurredAt: options.at,
+      });
+      await createPendingTranscripts(db(), {
+        workspaceId: profile.context.workspaceId,
+        businessProfileId: profile.businessProfileId,
+        messageId: message.id,
+        media: [{ providerMediaId, mimeType: "audio/ogg; codecs=opus" }],
+        at: options.at,
+      });
+      const [work] = await loadTranscriptionWork(db(), { workspaceId: profile.context.workspaceId, messageId: message.id });
+      // A reading finishes after it was requested, and the CHECK says so — so the completion time is
+      // derived from the note's own clock rather than from a constant.
+      return { messageId: message.id, transcriptId: work?.transcriptId ?? "", providerMediaId, completedAt: new Date(options.at.getTime() + 1_000) };
+    };
+
+    const read = (note: { readonly transcriptId: string; readonly completedAt: Date }, text: string) =>
+      recordTranscript(db(), {
+        workspaceId: profile.context.workspaceId,
+        transcriptId: note.transcriptId,
+        transcript: { text, provider: "openai", model: "gpt-transcribe", latencyMs: 700 },
+        at: note.completedAt,
+      });
+
+    const failed = (note: { readonly transcriptId: string; readonly completedAt: Date }) =>
+      recordTranscriptionFailure(db(), {
+        workspaceId: profile.context.workspaceId,
+        transcriptId: note.transcriptId,
+        reason: "UNSUPPORTED_AUDIO",
+        retryable: false,
+        permanentlyUnsupported: true,
+        at: note.completedAt,
+      });
+
+    const cleanUp = async (messageIds: readonly string[]) => {
+      await db().messageTranscript.deleteMany({ where: { messageId: { in: [...messageIds] } } });
+      await db().message.deleteMany({ where: { id: { in: [...messageIds] } } });
+    };
+
+    it("puts the words of a successful reading where the reply can answer them", async () => {
+      const note = await voiceNote({ at: new Date("2026-09-18T12:00:00.000Z") });
+      await read(note, "Can I move my Saturday slot to Sunday?");
+
+      const context = await store.load(query({ anchorMessageId: note.messageId }));
+
+      // The transcript is a segment's text like any other customer writing — which is what makes it
+      // untrusted by construction, sanitized and fenced by the draft engine downstream.
+      expect(context?.inbound.at(-1)).toMatchObject({ kind: "INBOUND", provenance: note.messageId, text: "Can I move my Saturday slot to Sunday?" });
+      expect(context?.unreadableAudio).toBe(false);
+      await cleanUp([note.messageId]);
+    });
+
+    it("lets the caption the customer typed outrank any reading of the recording", async () => {
+      const note = await voiceNote({ at: new Date("2026-09-18T12:05:00.000Z"), caption: "Sorry — ignore the voice note, I meant Sunday." });
+      await read(note, "Can I move my Saturday slot to Saturday?");
+
+      const context = await store.load(query({ anchorMessageId: note.messageId }));
+
+      // They chose those words themselves; a machine's reading of the same message does not get to
+      // replace them.
+      expect(context?.inbound.at(-1)?.text).toBe("Sorry — ignore the voice note, I meant Sunday.");
+      await cleanUp([note.messageId]);
+    });
+
+    it("marks the burst unreadable when a reading failed, and still keeps the turn", async () => {
+      const note = await voiceNote({ at: new Date("2026-09-18T12:10:00.000Z") });
+      await failed(note);
+
+      const context = await store.load(query({ anchorMessageId: note.messageId }));
+
+      expect(context?.unreadableAudio).toBe(true);
+      expect(context?.inbound.at(-1)).toMatchObject({ provenance: note.messageId, text: "[audio with no text]" });
+      await cleanUp([note.messageId]);
+    });
+
+    it("marks the burst unreadable while the reading is still pending", async () => {
+      const note = await voiceNote({ at: new Date("2026-09-18T12:15:00.000Z") });
+
+      // "Not yet" and "never" are different facts about the provider and the same fact about this draft:
+      // the words are not available to write a reply from.
+      expect((await store.load(query({ anchorMessageId: note.messageId })))?.unreadableAudio).toBe(true);
+      await cleanUp([note.messageId]);
+    });
+
+    it("marks the burst unreadable for a recording that has no reading row at all", async () => {
+      const message = await appendInboundMessage(db(), profile.context, {
+        conversationId: profile.conversationId,
+        channelMessageId: unique("mid-voice"),
+        kind: "AUDIO",
+        media: [{ kind: "AUDIO", providerMediaId: "media-ctx-orphan", mimeType: "audio/ogg" }],
+        occurredAt: new Date("2026-09-18T12:20:00.000Z"),
+      });
+
+      // A voice note from before this feature existed, or one whose pending row was never written.
+      // Reading the recordings off the readings table would make this look like an empty message.
+      expect((await store.load(query({ anchorMessageId: message.id })))?.unreadableAudio).toBe(true);
+      await cleanUp([message.id]);
+    });
+
+    it("ignores an unread recording that is history rather than the question", async () => {
+      const old = await voiceNote({ at: new Date("2026-09-18T12:25:00.000Z") });
+      await failed(old);
+      const reply = await db().message.create({
+        data: {
+          workspaceId: profile.context.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          channelAccountId: profile.channelAccount.id,
+          conversationId: profile.conversationId,
+          channelMessageId: unique("mid-out"),
+          direction: "OUT",
+          source: "HUMAN",
+          kind: "TEXT",
+          text: "Of course, moved to Sunday.",
+          occurredAt: new Date("2026-09-18T12:26:00.000Z"),
+        },
+      });
+      const next = await appendInboundMessage(db(), profile.context, {
+        conversationId: profile.conversationId,
+        channelMessageId: unique("mid"),
+        kind: "TEXT",
+        text: "Thanks!",
+        occurredAt: new Date("2026-09-18T12:27:00.000Z"),
+      });
+
+      const context = await store.load(query({ anchorMessageId: next.id }));
+
+      // An unread voice note from before the last reply is a turn somebody already answered. Holding
+      // every later draft for a person because of it would never clear.
+      expect(context?.unreadableAudio).toBe(false);
+      expect(context?.history.some((segment) => segment.provenance === old.messageId)).toBe(true);
+      await cleanUp([old.messageId, reply.id, next.id]);
+    });
+
+    it("keeps the words it has and still holds the reply when only one of two recordings was read", async () => {
+      const first = "media-ctx-pair-a";
+      const second = "media-ctx-pair-b";
+      const message = await appendInboundMessage(db(), profile.context, {
+        conversationId: profile.conversationId,
+        channelMessageId: unique("mid-voice"),
+        kind: "AUDIO",
+        media: [
+          { kind: "AUDIO", providerMediaId: first, mimeType: "audio/ogg" },
+          { kind: "AUDIO", providerMediaId: second, mimeType: "audio/ogg" },
+        ],
+        occurredAt: new Date("2026-09-18T12:35:00.000Z"),
+      });
+      await createPendingTranscripts(db(), {
+        workspaceId: profile.context.workspaceId,
+        businessProfileId: profile.businessProfileId,
+        messageId: message.id,
+        media: [{ providerMediaId: first }, { providerMediaId: second }],
+        at: new Date("2026-09-18T12:35:00.000Z"),
+      });
+      const work = await loadTranscriptionWork(db(), { workspaceId: profile.context.workspaceId, messageId: message.id });
+      await read(
+        { transcriptId: work.find((row) => row.providerMediaId === first)?.transcriptId ?? "", completedAt: new Date("2026-09-18T12:35:01.000Z") },
+        "First half of the question.",
+      );
+
+      const context = await store.load(query({ anchorMessageId: message.id }));
+
+      // Partly heard is not heard. The half that was read is still the best text available for the turn,
+      // and the half that was not is why the reply waits for a person.
+      expect(context?.inbound.at(-1)?.text).toBe("First half of the question.");
+      expect(context?.unreadableAudio).toBe(true);
+      await cleanUp([message.id]);
+    });
   });
 });

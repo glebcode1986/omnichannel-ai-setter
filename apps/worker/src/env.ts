@@ -48,6 +48,48 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
   AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
 
   /**
+   * Transcription provider, for inbound voice notes (Issue #21).
+   *
+   * Optional for the same reason the embedding key is: without it a recording is recorded as unread and
+   * the reply is held for a person, which is a supported configuration rather than a degraded one. A
+   * missing key must never become a boot failure, and it must never become an invented transcript either.
+   */
+  OPENAI_API_KEY: z.string().min(1).max(512).optional(),
+  /**
+   * `gpt-transcribe` is the current recommended model and the documented replacement for `whisper-1`,
+   * which was notified deprecated on 2026-08-26 and is removed from the API on 2027-02-27. Configurable
+   * because a model name is a provider's decision on a provider's timetable, not ours.
+   *
+   * Note what changes with the model: `whisper-1` is the only one that reports any confidence signal at
+   * all, and it reports it per segment through `verbose_json`. `gpt-transcribe` reports none, so a stored
+   * transcript simply has no confidence — which the schema allows and nothing invents.
+   */
+  AI_TRANSCRIPTION_MODEL: z.string().min(1).max(128).default("gpt-transcribe"),
+  /**
+   * Largest recording this deployment will download, in megabytes.
+   *
+   * On top of the platform's own per-type limits rather than instead of them: WhatsApp allows 16 MB of
+   * audio and the transcriber accepts 25 MB, and an operator may want less than either. The default is
+   * the transcriber's own ceiling, so the binding limit is normally the platform's.
+   */
+  MEDIA_MAX_DOWNLOAD_MB: z.coerce.number().int().positive().max(100).default(25),
+  /**
+   * Whether a recording is deleted at the provider once its words are stored.
+   *
+   * `DELETE_AFTER_READING` is the privacy-preserving choice and is not the default, because deleting a
+   * customer's recording is irreversible and a deployment should opt into it deliberately. `RETAIN` leaves
+   * the provider's own thirty-day expiry to do it.
+   */
+  MEDIA_RETENTION: z.enum(["RETAIN", "DELETE_AFTER_READING"]).default("RETAIN"),
+  /**
+   * Graph API version for the media calls, matching the web app's.
+   *
+   * A deployment default rather than a constant: the provider deprecates a version after two years, and
+   * moving with them must not need a release.
+   */
+  WHATSAPP_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/u).max(16).default("v26.0"),
+
+  /**
    * Reliability controls (Issue #56).
    *
    * All four are tunable because the right values depend on the deployment rather than on the code: a

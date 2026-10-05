@@ -275,6 +275,49 @@ Idempotency is the same decision digest the review path uses.
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P4-04 / Issue #21 — media and voice-note transcription.** Branch
+   `feat/p4-04-whatsapp-media`, based on #89.
+
+   **A reading is stored apart from the recording, and a failed one never carries words.** The database
+   enforces it, because the failure that matters is not an empty transcript but a half-written one reaching
+   a customer's reply as though the recording had been understood. `AUDIO_NOT_TRANSCRIBED` is a reason code
+   of its own rather than `UNSUPPORTED_MEDIA`, which already means the channel cannot carry a reply.
+
+   **No confidence is invented.** There is no whole-response confidence anywhere in the transcription API:
+   per-token logprobs exist only on the `gpt-4o-transcribe` family, per-segment `avg_logprob` only on
+   `whisper-1` through `verbose_json`, and every one of those models is removed on 2027-02-26. The adapter
+   asks for neither, the port's field is optional, and a CHECK refuses a stored number that does not say
+   where it came from.
+
+   **Owner's calls on this task:** the model is `gpt-transcribe` (the documented replacement for
+   `whisper-1`, deprecated 2026-08-26), and there is **no transcoding** — the recording is sent as it
+   arrived and the provider's own answer settles whether it can read an OGG/Opus container. The live guide
+   does not list `ogg` while the official OpenAPI spec still does, so either behaviour is safe by
+   construction: a refusal is a typed failure and a review item, never a transcript.
+
+   **Two defects found by the tests that were written for the acceptance criteria**, both of the class
+   recorded earlier — correct pieces with a gap between them:
+
+   - **The reading was never dispatched inline.** `processEvent` returned only the debounce entry's id, so
+     the transcription entry waited for the 5-second outbox sweeper while the draft job went out at once.
+     The draft that needed the words usually ran before they existed and held the reply for a person on a
+     reading that had worked. `EventProcessingResult` now carries every entry the event wrote, and the two
+     ingestion summary counters are named `outboxDispatched`/`outboxDeferred` because the outbox now
+     carries two kinds of work.
+   - **A disconnected number's media was still fetched.** `send.ts` and `window.ts` both refuse on
+     `connectionState`; `media.ts` never read it. A stored token outlives the authorization it was granted
+     under, so a business that removed the integration kept having its customers' recordings downloaded.
+     All three media calls now refuse with `ACCOUNT_NOT_CONNECTED` before the token is even decrypted.
+
+   Also repaired: `packages/channel-whatsapp` did not typecheck at the previous head — `media.test.ts`
+   passed an unresolved config where a resolved one was required. `vitest` transpiles without typechecking,
+   so the suite was green while `pnpm -r typecheck` was not. The suite now resolves the config the way
+   production does, which is also what made the `connectionState` gap visible.
+
+   **Retention:** `MEDIA_RETENTION=DELETE_AFTER_READING` asks the provider to delete its copy once the
+   words are stored, and the date is recorded only when the provider agreed. A failed reading never
+   deletes anything — the recording is the only remaining record of what the customer said.
+
 1. **P4-03 / Issue #20 — the template catalogue and the outside-window policy.** Branch
    `feat/p4-03-whatsapp-templates`, based on #88.
 

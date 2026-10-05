@@ -35,6 +35,9 @@ import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
+import { createTranscription } from "./transcription";
+import { createTranscriptionHandler } from "./transcription-handler";
+import { createMediaPort } from "./media-port";
 import { createDeliveryEngine } from "./delivery-engine";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
@@ -106,6 +109,18 @@ function main(): void {
       // Stated at boot, not inferred from silence: lexical-only is a supported mode, but an operator has
       // to be able to see which mode a worker is actually in before a customer asks a factual question.
       logger.info("worker.retrieval_mode", { semantic: embeddings !== undefined, lexical: true });
+      // The same shape of decision for recordings: no key means a voice note is recorded as unread and
+      // the reply waits for a person, which is a configuration rather than a fault (Issue #21).
+      const transcription = createTranscription(env, logger);
+      logger.info("worker.transcription_mode", { enabled: transcription !== undefined, model: env.AI_TRANSCRIPTION_MODEL });
+      const transcribeMedia = createTranscriptionHandler({
+        db,
+        media: createMediaPort(env, db, logger),
+        ...(transcription === undefined ? {} : { transcription }),
+        deleteMediaAfterReading: env.MEDIA_RETENTION === "DELETE_AFTER_READING",
+        logger,
+        now: () => new Date(),
+      });
       const producer = createQueueProducer({ connection, logger });
       const generateDraft = createAiDraftHandler({
         engine: {
@@ -200,7 +215,7 @@ function main(): void {
       const workers = createQueueWorkers({
         connection,
         logger,
-        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger }), reconcile),
+        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger }), transcribeMedia, reconcile),
         // Every job failure is folded into an incident here rather than announced where it happened: one
         // provider outage is one thing an operator needs to know, not one per conversation.
         onJobFailure: (failure) => {

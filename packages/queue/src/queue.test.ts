@@ -20,6 +20,7 @@ import {
   reconciliationJobSchema,
   ScheduleRangeError,
   type DeliveryJob,
+  type MediaTranscriptionJob,
 } from "./index";
 import { parsePayload } from "./payloads";
 
@@ -34,6 +35,16 @@ const delivery: DeliveryJob = {
   operationId: "op_1",
   scheduledFor: "2026-09-17T10:01:00.000Z",
   selectedDelayMs: 60_000,
+};
+
+const transcription: MediaTranscriptionJob = {
+  schemaVersion: 1,
+  workspaceId: "ws_1",
+  businessProfileId: "bp_1",
+  correlationId: "corr_1",
+  channelAccountId: "ca_1",
+  conversationId: "conv_1",
+  messageId: "msg_1",
 };
 
 describe("job payload schemas", () => {
@@ -226,6 +237,25 @@ describe("job identity", () => {
     expect(AI_DRAFT_GENERATION.jobId(draft)).not.toBe(AI_DRAFT_GENERATION.jobId({ ...draft, ...bp2 }));
     expect(DELIVERY.jobId(delivery)).not.toBe(DELIVERY.jobId({ ...delivery, ...bp2 }));
     expect(RECONCILIATION.jobId(reconciliation)).not.toBe(RECONCILIATION.jobId({ ...reconciliation, ...bp2 }));
+    expect(MEDIA_TRANSCRIPTION.jobId(transcription)).not.toBe(MEDIA_TRANSCRIPTION.jobId({ ...transcription, ...bp2 }));
+  });
+
+  it("gives one reading job per message, however often the webhook is redelivered", () => {
+    // The provider redelivers for up to seven days, and each redelivery carries a new correlation id.
+    // One job per message is what makes a second delivery a no-op rather than a second reading.
+    expect(MEDIA_TRANSCRIPTION.jobId(transcription)).toBe(MEDIA_TRANSCRIPTION.jobId({ ...transcription, correlationId: "corr_2" }));
+    expect(MEDIA_TRANSCRIPTION.jobId(transcription)).not.toBe(MEDIA_TRANSCRIPTION.jobId({ ...transcription, messageId: "msg_2" }));
+    expect(MEDIA_TRANSCRIPTION.jobId(transcription)).not.toBe(MEDIA_TRANSCRIPTION.jobId({ ...transcription, workspaceId: "ws_2" }));
+  });
+
+  it("backs a reading off far longer than a reply, because nothing is waiting on it", () => {
+    // A customer waits on a reply; the draft that needs a reading holds for a person in the meantime. So
+    // hammering a rate-limited transcriber would cost the next recording and buy nothing.
+    expect(MEDIA_TRANSCRIPTION.jobOptions.attempts).toBe(4);
+    expect(MEDIA_TRANSCRIPTION.jobOptions.backoff).toEqual({ type: "exponential", delay: 15_000 });
+    expect((MEDIA_TRANSCRIPTION.jobOptions.backoff as { delay: number }).delay).toBeGreaterThan(
+      (INBOUND_DEBOUNCE.jobOptions.backoff as { delay: number }).delay,
+    );
   });
 
   it("cannot collide through separator characters inside identifiers", () => {

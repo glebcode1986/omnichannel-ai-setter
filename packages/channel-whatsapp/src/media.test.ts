@@ -23,6 +23,7 @@ import {
   WEBHOOK_MEDIA_ID_TTL_MS,
 } from "./media";
 import { BINDING, config, scriptedHttp } from "./__fixtures__/payloads";
+import { resolveConfig } from "./config";
 import type { WhatsAppHttpResult } from "./http";
 
 const MEDIA_ID = "1037543291543636";
@@ -41,9 +42,12 @@ const location = (overrides: Partial<{ url: string; mimeType: string; sha256: st
   ...overrides,
 });
 
-function harness(results: readonly WhatsAppHttpResult[]) {
+function harness(results: readonly WhatsAppHttpResult[], overrides: Partial<Parameters<typeof config>[0]> = {}) {
   const http = scriptedHttp(results);
-  return { config: config({ http: http.port }), requests: http.requests };
+  // Resolved, as production resolves it: the defaults — the Graph host, the version, and whether the
+  // number is connected — are part of what these calls read, so a test that skipped them would be asking
+  // a different question than the adapter answers.
+  return { config: resolveConfig(config({ http: http.port, ...overrides })), requests: http.requests };
 }
 
 describe("the platform numbers this file is pinned to", () => {
@@ -258,5 +262,66 @@ describe("what never reaches a log or a result", () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("secret-bearing prose");
     expect(serialized).not.toContain("Bearer");
+  });
+});
+
+/**
+ * Whether this number is ours to act for, asked on the media calls too.
+ *
+ * The send path and the window calculation both refuse a number that is not connected, and these are the
+ * third set of calls made on a business's behalf. Leaving it to the provider does not work: a token in our
+ * table outlives the authorization it was granted under, so a business that removed the integration would
+ * keep having its customers' recordings downloaded until the credential happened to expire.
+ */
+describe("a number that is no longer connected", () => {
+  const states = ["DISCONNECTED", "NEEDS_REAUTH"] as const;
+
+  for (const connectionState of states) {
+    it(`refuses to resolve, download or delete media for a ${connectionState} number`, async () => {
+      const resolving = harness([located()], { connectionState });
+      expect(await resolveMediaUrl(resolving.config, MEDIA_ID)).toEqual({ ok: false, reason: "ACCOUNT_NOT_CONNECTED" });
+      expect(resolving.requests).toEqual([]);
+
+      const downloading = harness([bytes(2048)], { connectionState });
+      expect(await downloadMedia(downloading.config, location())).toEqual({ ok: false, reason: "ACCOUNT_NOT_CONNECTED" });
+      expect(downloading.requests).toEqual([]);
+
+      const deleting = harness([ok({ success: true })], { connectionState });
+      expect(await deleteMedia(deleting.config, MEDIA_ID)).toEqual({ ok: false, reason: "ACCOUNT_NOT_CONNECTED" });
+      expect(deleting.requests).toEqual([]);
+    });
+  }
+
+  it("refuses before reading the token, so a revoked connection never touches the credential", async () => {
+    let reads = 0;
+    const http = scriptedHttp([located()]);
+    const resolved = resolveConfig(
+      config({
+        http: http.port,
+        connectionState: "DISCONNECTED",
+        secrets: {
+          appSecret: "",
+          verifyToken: "",
+          accessToken: () => {
+            reads += 1;
+            return Promise.resolve("should-never-be-read");
+          },
+        },
+      }),
+    );
+
+    await resolveMediaUrl(resolved, MEDIA_ID);
+    await downloadMedia(resolved, location());
+    await deleteMedia(resolved, MEDIA_ID);
+
+    // Decrypting a token for a call that is not going to be made is work nobody authorized.
+    expect(reads).toBe(0);
+  });
+
+  it("checks again before the download, because that is the call that moves the recording", async () => {
+    // The two calls are up to five minutes apart in the worst case — the lifetime of the resolved URL —
+    // and the connection can be withdrawn in between.
+    const downloading = harness([bytes(2048)], { connectionState: "DISCONNECTED" });
+    expect(await downloadMedia(downloading.config, location())).toEqual({ ok: false, reason: "ACCOUNT_NOT_CONNECTED" });
   });
 });

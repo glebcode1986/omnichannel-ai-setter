@@ -174,7 +174,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
     for (const result of results) {
       expect(result).toEqual({
         kind: "ACCEPTED",
-        summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, debounceScheduled: 1, debounceDeferred: 0 },
+        summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, outboxDispatched: 1, outboxDeferred: 0 },
       });
     }
 
@@ -231,7 +231,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
 
     const result = await ingest(first, [inbound("ig-user-e2e-forged", { businessProfileId: second.businessProfileId })]);
 
-    expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 0, rejected: 1, debounceScheduled: 0 } });
+    expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 0, rejected: 1, outboxDispatched: 0 } });
     expect(await infra.db.inboundEvent.count()).toBe(eventsBefore);
     expect(await infra.db.queueOutbox.count()).toBe(outboxBefore);
     expect(await infra.db.channelIdentity.count({ where: { externalUserId: "ig-user-e2e-forged" } })).toBe(0);
@@ -256,7 +256,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
       // Redis "down" for this delivery: the message is stored and the debounce waits in the outbox.
       const failing: DebounceScheduler = { scheduleInboundDebounce: () => Promise.reject(new Error("redis unavailable")) };
       const outage = await ingest(second, [inbound("ig-user-e2e-outage")], { correlationId: "corr-e2e-outage", scheduler: failing, windowMs: 0 });
-      expect(outage).toMatchObject({ summary: { processed: 1, debounceScheduled: 0, debounceDeferred: 1 } });
+      expect(outage).toMatchObject({ summary: { processed: 1, outboxDispatched: 0, outboxDeferred: 1 } });
       const pending = await outboxJob("corr-e2e-outage");
       expect(pending.entry).toMatchObject({ businessProfileId: second.businessProfileId, dispatchedAt: null });
       expect(await debounceQueue.getJob(INBOUND_DEBOUNCE.jobId(pending.job))).toBeUndefined();
@@ -270,6 +270,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
             handled.push(job);
             return Promise.resolve();
           },
+          transcribeMedia: () => Promise.resolve(),
           generateAiDraft: () => Promise.resolve(),
           deliver: () => Promise.resolve({ status: "NOT_CLAIMED", retryable: false, reason: "e2e" }),
           reconcile: () => Promise.resolve(),

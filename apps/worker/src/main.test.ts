@@ -57,12 +57,15 @@ const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
 
 /**
- * The four warnings these runs may legitimately produce, and nothing else.
+ * The five warnings these runs may legitimately produce, and nothing else.
  *
  * - `queue.redis_unavailable`: Redis is deliberately unreachable in most of these runs, and surviving it
  *   quietly (without echoing the URL) is the point.
  * - `worker.no_channel_adapter`: no Meta app credentials are configured, so the worker correctly
  *   announces at boot that it cannot deliver, rather than discovering it on the first customer message.
+ * - `worker.no_media_port`: no credential-encryption key is configured, so no stored access token can be
+ *   decrypted and no recording can be fetched. Announced at boot for the same reason as the line above,
+ *   and a voice note then fails with a named reason that becomes a review item (Issue #21).
  * - `worker.lingering_after_stop`: the process outlived its own shutdown deadline because a handle some
  *   library owns stayed open after everything the worker owns had closed. Not a failed shutdown — the
  *   worker reports it and still exits 0 (see `shutdown.ts`). Rare locally, seen on loaded CI runners.
@@ -78,6 +81,7 @@ const PERMITTED_STDERR_EVENTS = new Set([
   "queue.redis_unavailable",
   "queue.client_error",
   "worker.no_channel_adapter",
+  "worker.no_media_port",
   "worker.lingering_after_stop",
 ]);
 
@@ -89,10 +93,10 @@ function expectNoUnexpectedStderr(stderr: string): void {
 /**
  * Everything the worker says on stdout from a clean boot to a clean stop.
  *
- * The retrieval mode is stated before `worker.started`, so an operator reading the log from the top can
- * see which mode it is in without waiting for a customer question.
+ * The retrieval and transcription modes are stated before `worker.started`, so an operator reading the
+ * log from the top can see what this process can do without waiting for a customer question.
  */
-const GRACEFUL_LIFECYCLE = ["worker.retrieval_mode", "worker.started", "worker.stopping", "worker.stopped"] as const;
+const GRACEFUL_LIFECYCLE = ["worker.retrieval_mode", "worker.transcription_mode", "worker.started", "worker.stopping", "worker.stopped"] as const;
 
 /** A graceful stop: exit code 0, nothing unexpected on stderr, and exactly `expected` on stdout. */
 function expectGracefulShutdown(result: ProcessResult, expected: readonly string[] = GRACEFUL_LIFECYCLE): void {

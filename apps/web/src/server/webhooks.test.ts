@@ -22,7 +22,7 @@ function setup(result: WebhookIngestionResult | Error) {
 
 const accepted: WebhookIngestionResult = {
   kind: "ACCEPTED",
-  summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, debounceScheduled: 1, debounceDeferred: 0 },
+  summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, outboxDispatched: 1, outboxDeferred: 0 },
 };
 
 describe("webhook route handlers", () => {

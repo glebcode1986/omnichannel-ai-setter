@@ -45,6 +45,41 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Current work — P4-04 / Issue #21, media and voice-note transcription
+
+**Branch `feat/p4-04-whatsapp-media`**, based on `feat/p4-03-whatsapp-templates`. Fetching a customer's
+recording safely, reading it through an application-owned port, and keeping the reading apart from the
+recording with provenance of its own.
+
+Meta's media rules and OpenAI's transcription API were both re-verified from the live documentation on
+2026-10-04/05 (`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`). The owner chose `gpt-transcribe` —
+`whisper-1` is deprecated and removed from the API on 2027-02-26 — and chose **no transcoding**, so the
+recording is sent as it arrived and the provider's own answer settles whether it can read an OGG/Opus
+container.
+
+**No confidence is invented.** There is no whole-response confidence in that API at all, so the adapter
+asks for none, the port's field is optional, and a CHECK refuses a stored number that does not say where it
+came from. A failed reading never carries words, which the database also enforces.
+
+**Two defects the acceptance tests found**, both the same class as the P5-05 cycle — correct pieces with a
+gap between them:
+
+- **The reading was never dispatched inline.** `processEvent` returned only the debounce entry's id, so a
+  voice note's reading waited for the 5-second sweeper while the draft job went out immediately. The draft
+  that needed the words usually lost the race and held the reply for a person on a reading that had
+  worked. `EventProcessingResult` now carries every entry the event wrote; the ingestion summary's two
+  counters are renamed `outboxDispatched`/`outboxDeferred`, because the outbox now carries two kinds of
+  work and a counter that meant only the debounce would report a voice note's dispatch as a deferral.
+- **A disconnected number's media was still fetched.** The send path and the window calculation both
+  refuse on `connectionState`; the media calls never read it. A stored token outlives the authorization it
+  was granted under, so a business that removed the integration kept having its customers' recordings
+  downloaded. All three media calls now refuse with `ACCOUNT_NOT_CONNECTED` before the token is decrypted.
+
+**Also repaired:** `packages/channel-whatsapp` did not typecheck at the previous head — `media.test.ts`
+passed an unresolved config where a resolved one was required, and `vitest` transpiles without
+typechecking, so the suite was green while `pnpm -r typecheck` was not. Resolving the config the way
+production does is what made the `connectionState` gap visible.
+
 ### Current work — P4-03 / Issue #20, template catalogue and outside-window policy
 
 **Branch `feat/p4-03-whatsapp-templates`**, based on `feat/p4-02-whatsapp-embedded-signup`. ADR-016's three

@@ -57,8 +57,15 @@ export interface IngestionSummary {
   readonly processed: number;
   readonly duplicates: number;
   readonly rejected: number;
-  readonly debounceScheduled: number;
-  readonly debounceDeferred: number;
+  /**
+   * Outbox entries this request handed to the queue before answering, and the ones left for the sweeper.
+   *
+   * Named for the outbox rather than for the debounce since Issue #21: one inbound message can write both
+   * a reply cycle and a reading of its recording, and a counter that meant only the first would report a
+   * voice note's dispatch as a deferral.
+   */
+  readonly outboxDispatched: number;
+  readonly outboxDeferred: number;
 }
 
 export type WebhookIngestionResult =
@@ -167,9 +174,7 @@ export async function ingestWebhook(
       }
       processed += 1;
       log.info("ingestion.event_processed", { index, eventType: event.type, outcome: result.outcome });
-      if (result.outboxEntryId !== undefined) {
-        outboxEntryIds.push(result.outboxEntryId);
-      }
+      outboxEntryIds.push(...(result.outboxEntryIds ?? []));
     }
   } finally {
     // Committed events keep their outbox entries even if a later event failed; dispatch what we have now.
@@ -183,8 +188,8 @@ export async function ingestWebhook(
     processed,
     duplicates,
     rejected,
-    debounceScheduled: dispatched,
-    debounceDeferred: outboxEntryIds.length - dispatched,
+    outboxDispatched: dispatched,
+    outboxDeferred: outboxEntryIds.length - dispatched,
   };
   log.info("ingestion.completed", { ...summary });
   return { kind: "ACCEPTED", summary };

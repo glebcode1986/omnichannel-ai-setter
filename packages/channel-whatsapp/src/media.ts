@@ -75,6 +75,16 @@ const MEDIA_TIMEOUT_MS = 20_000;
 
 /** Why media could not be fetched. Fixed vocabulary; the provider's prose never travels with it. */
 export type MediaFailureReason =
+  /**
+   * The number this media belongs to is not connected.
+   *
+   * Refused here rather than left to the provider, because the provider would often allow it: a token in
+   * the table outlives the authorization it was granted under, so a business that removed the integration
+   * would keep having its customers' recordings downloaded until the credential happened to expire. The
+   * send path and the window calculation refuse on this same value, and this is the third call that acts
+   * on the business's behalf.
+   */
+  | "ACCOUNT_NOT_CONNECTED"
   | "UNSUPPORTED_TYPE"
   | "TOO_LARGE"
   | "MIME_MISMATCH"
@@ -144,6 +154,9 @@ export function mediaIdUsable(receivedAt: Date, now: Date): boolean {
  * reach another business's media through our own credential.
  */
 export async function resolveMediaUrl(config: ResolvedWhatsAppConfig, mediaId: string): Promise<MediaResult<MediaLocation>> {
+  if (config.connectionState !== "CONNECTED") {
+    return { ok: false, reason: "ACCOUNT_NOT_CONNECTED" };
+  }
   const accessToken = await config.secrets.accessToken();
   if (accessToken === undefined || accessToken.length === 0) {
     return { ok: false, reason: "NO_CREDENTIALS" };
@@ -197,6 +210,11 @@ export async function downloadMedia(
   if (limit === undefined) {
     return { ok: false, reason: "UNSUPPORTED_TYPE" };
   }
+  if (config.connectionState !== "CONNECTED") {
+    // Checked again rather than assumed from the resolve step: the two calls are minutes apart in the
+    // worst case, and the second one is the one that moves a customer's recording.
+    return { ok: false, reason: "ACCOUNT_NOT_CONNECTED" };
+  }
   const cap = Math.min(limit, options.maxBytes ?? MAX_MEDIA_BYTES, MAX_MEDIA_BYTES);
   if (location.fileSizeBytes !== undefined && location.fileSizeBytes > cap) {
     // Refused on the provider's own number, so an oversize file costs no transfer at all.
@@ -244,6 +262,9 @@ export async function downloadMedia(
  * rather than only ours.
  */
 export async function deleteMedia(config: ResolvedWhatsAppConfig, mediaId: string): Promise<MediaResult<true>> {
+  if (config.connectionState !== "CONNECTED") {
+    return { ok: false, reason: "ACCOUNT_NOT_CONNECTED" };
+  }
   const accessToken = await config.secrets.accessToken();
   if (accessToken === undefined || accessToken.length === 0) {
     return { ok: false, reason: "NO_CREDENTIALS" };

@@ -315,3 +315,87 @@ platform's, and it would reject sends the provider would have accepted.
   messages are additionally rate-limited per recipient. Both are provider quotas rather than product
   policy, and they surface as send refusals.
 - A template's `expiration` (delivery retry period) is set at creation and is the provider's, not ours.
+
+## Re-verification for P4-04 / Issue #21 — media and voice notes, 2026-10-04/05
+
+Re-read against Meta's live WhatsApp Cloud API reference and OpenAI's live API documentation before
+implementing. Everything below is a platform or provider fact; the design decisions that follow from them
+are in the implementation's own comments.
+
+### Fetching a recording is two requests, and both halves are short-lived
+
+`GET /<MEDIA_ID>` answers with `url`, `mime_type`, `sha256`, `file_size` and `id`; the bytes come from a
+second request to that `url`. Two lifetimes, different and both short:
+
+- the **resolved URL lives five minutes**, which is why it is never persisted;
+- a **media ID from a webhook lives seven days** — not the thirty an *uploaded* one gets.
+
+A 404 on the resolved URL is Meta's own answer for one that expired, and its documented remedy is to
+resolve the media ID again. That is the only media failure worth retrying for that reason.
+
+### `phone_number_id` on the media calls is the provider's tenancy check
+
+Both `GET /<MEDIA_ID>` and the delete accept `phone_number_id`, and it is not a convenience: a media ID
+arrives from an untrusted webhook, and without the parameter one business could resolve another's media.
+It is sent on every call.
+
+### The per-type size limits are the platform's, and they differ by a factor of twenty
+
+Audio 16 MB, image 5 MB, video 16 MB, document 100 MB, sticker 500 KB (static) / 100 KB (animated), with
+100 MB overall. Accepting a 100 MB "voice note" because *documents* may be that large would hand a
+transcriber a file six times what the platform allows for audio. Webhook error 131052 is the download
+failure; 131053 is a MIME type that does not match the file.
+
+`OGG` is accepted for audio **only** with the OPUS codec, and voice notes are mono.
+
+### `DELETE /<MEDIA_ID>` exists, which is what makes a retention hook reach the provider
+
+Meta keeps uploaded media for thirty days unless it is deleted sooner, so this is the one call that makes a
+customer's deletion request reach the provider's storage rather than only ours.
+
+### The transcription provider: `whisper-1` is on the way out
+
+OpenAI's documentation moved to `developers.openai.com`; `platform.openai.com` now answers 403/301 for
+these pages.
+
+- `POST https://api.openai.com/v1/audio/transcriptions`, multipart.
+- **`whisper-1` was notified deprecated on 2026-08-26 and is removed from the API on 2027-02-26.**
+  `gpt-transcribe` is the documented replacement and is this product's default.
+- Documented input formats: `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `wav`, `webm`. **`ogg` is not in the live
+  guide's list**, though the official OpenAPI spec still names it — a list that reads like a Whisper-era
+  leftover. WhatsApp voice notes are `audio/ogg; codecs=opus`, so the two documents disagree about exactly
+  the format this product receives most.
+- 25 MB request cap, with **no documented 413**: the refusal's shape is not published, so a local size
+  check is the only reliable one.
+- `Retry-After` is sent on 429 and 503. The quota codes that must *not* be retried are
+  `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+  `project_spend_limit_exceeded` and `organization_usage_limit_exceeded`.
+- `usage` is a union discriminated on `type` (`tokens` or `duration`), so a duration read from the wrong
+  variant is a token count wearing a seconds label.
+- `gpt-transcribe` additionally accepts `language`/`languages[]` and `keywords[]`, and returns
+  `languages: [{code}]` — an empty array meaning it could not detect one.
+
+### There is no whole-response confidence anywhere in that API
+
+Worth stating plainly, because a confidence figure is exactly the kind of number a later reader assumes
+exists. Per-token logprobs are available only on the `gpt-4o-transcribe` family, and per-segment
+`avg_logprob`/`no_speech_prob` only on `whisper-1` through `verbose_json` — and **every one of those models
+is removed on the same 2027-02-26 date**. `gpt-transcribe` reports neither.
+
+So this implementation asks for neither, the port's confidence field is optional, and a CHECK refuses a
+stored number that does not say where it came from. A figure nobody measured, attached to a reading of a
+customer's own words, is what that prevents.
+
+### Decisions the product owner made on this task
+
+- **Model: `gpt-transcribe`** rather than `whisper-1`.
+- **No transcoding.** The recording is sent as it arrived, with an accurate filename and content type, and
+  the provider's own answer settles whether it can read an OGG/Opus container. Guessing the rule either way
+  would be inventing one; a refusal becomes a typed failure and a review item, never a transcript.
+
+### Sources checked 2026-10-04/05
+
+Meta: WhatsApp Cloud API media reference (retrieve, download, delete, supported types and sizes), webhook
+error codes 131052/131053, and the Cloud API changelog. OpenAI: the live speech-to-text guide, the
+`createTranscription` API reference, the deprecations page, the error-code and rate-limit guides, the
+`gpt-transcribe` and `whisper-1` model pages, and the published OpenAPI specification.

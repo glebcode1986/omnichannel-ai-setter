@@ -19,7 +19,19 @@ export interface EventProcessingContext {
 
 export type EventProcessingResult =
   | { readonly status: "DUPLICATE" }
-  | { readonly status: "PROCESSED"; readonly outcome: IngestionOutcome; readonly outboxEntryId?: string };
+  | {
+      readonly status: "PROCESSED";
+      readonly outcome: IngestionOutcome;
+      /**
+       * Every outbox entry this event wrote, so the caller can dispatch all of them now.
+       *
+       * Plural since Issue #21: one inbound message can owe both a reply cycle and a reading of its
+       * recording. While this named only the debounce entry, the reading was left to the sweeper — up to
+       * five seconds behind a draft job that went out immediately, so the draft that needed the words
+       * usually ran before they existed and held the reply for a person on a reading that had worked.
+       */
+      readonly outboxEntryIds?: readonly string[];
+    };
 
 /**
  * Applies one verified, normalized event inside a transaction. The source-event claim comes first, so a
@@ -46,7 +58,7 @@ export async function processEvent(
     return { status: "DUPLICATE" };
   }
 
-  let result: { outcome: IngestionOutcome; outboxEntryId?: string };
+  let result: { outcome: IngestionOutcome; outboxEntryIds?: readonly string[] };
   switch (event.type) {
     case "INBOUND_MESSAGE":
       result = await applyInboundMessage(tx, event, context);
@@ -92,12 +104,12 @@ async function scheduleTranscription(
   event: InboundMessageEvent,
   context: EventProcessingContext,
   message: { readonly conversationId: string; readonly messageId: string },
-): Promise<void> {
+): Promise<string | undefined> {
   const recordings = event.media.filter(
     (media): media is typeof media & { readonly providerMediaId: string } => media.kind === "AUDIO" && media.providerMediaId !== undefined,
   );
   if (recordings.length === 0) {
-    return;
+    return undefined;
   }
   await tx.recordPendingTranscripts({
     workspaceId: event.workspaceId,
@@ -109,7 +121,7 @@ async function scheduleTranscription(
       ...(media.sizeBytes === undefined ? {} : { sizeBytes: media.sizeBytes }),
     })),
   });
-  await tx.addOutboxEntry({
+  const entry = await tx.addOutboxEntry({
     workspaceId: event.workspaceId,
     businessProfileId: event.businessProfileId,
     kind: "MEDIA_TRANSCRIPTION",
@@ -128,13 +140,14 @@ async function scheduleTranscription(
       messageId: message.messageId,
     },
   });
+  return entry?.id;
 }
 
 async function applyInboundMessage(
   tx: IngestionTransaction,
   event: InboundMessageEvent,
   context: EventProcessingContext,
-): Promise<{ outcome: IngestionOutcome; outboxEntryId?: string }> {
+): Promise<{ outcome: IngestionOutcome; outboxEntryIds?: readonly string[] }> {
   const scope = { workspaceId: event.workspaceId, businessProfileId: event.businessProfileId, channelAccountId: event.channelAccountId };
   const identity = await tx.ensureChannelIdentity({
     ...scope,
@@ -172,10 +185,16 @@ async function applyInboundMessage(
     occurredAt: event.occurredAt,
   });
 
-  await scheduleTranscription(tx, event, context, { conversationId: conversation.conversationId, messageId: message.messageId });
+  const transcription = await scheduleTranscription(tx, event, context, {
+    conversationId: conversation.conversationId,
+    messageId: message.messageId,
+  });
+  // Carried out of here even when no reply cycle follows, so a voice note in a conversation a person has
+  // taken over is read now rather than when the sweeper next runs.
+  const transcriptionIds = transcription === undefined ? [] : [transcription];
 
   if (!isEligibleForInboundDebounce(conversation)) {
-    return { outcome: "INBOUND_STORED" };
+    return { outcome: "INBOUND_STORED", outboxEntryIds: transcriptionIds };
   }
   const entry = await tx.addOutboxEntry({
     workspaceId: event.workspaceId,
@@ -195,7 +214,7 @@ async function applyInboundMessage(
       anchorInboundAt: event.occurredAt.toISOString(),
     },
   });
-  return { outcome: "INBOUND_STORED", ...(entry === undefined ? {} : { outboxEntryId: entry.id }) };
+  return { outcome: "INBOUND_STORED", outboxEntryIds: entry === undefined ? transcriptionIds : [...transcriptionIds, entry.id] };
 }
 
 /**

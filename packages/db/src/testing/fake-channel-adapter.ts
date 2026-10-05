@@ -24,6 +24,21 @@ interface FixtureBase {
 
 export type FakeEventFixture =
   | (FixtureBase & { readonly kind: "text"; readonly from: string; readonly mid?: string; readonly text: string; readonly name?: string })
+  | (FixtureBase & {
+      readonly kind: "voice";
+      readonly from: string;
+      readonly mid?: string;
+      /** Absent on purpose in the case where a provider sent a recording it gave no identifier for. */
+      readonly mediaId?: string;
+      /** A second and further recordings on one message, as a provider that batches them sends. */
+      readonly alsoMediaIds?: readonly string[];
+      readonly mimeType?: string;
+      /** The caption a customer typed, which outranks any reading of the recording. */
+      readonly caption?: string;
+      readonly sizeBytes?: number;
+      /** Anything but AUDIO exercises the filter that leaves images and documents alone. */
+      readonly mediaKind?: "AUDIO" | "IMAGE" | "VIDEO" | "DOCUMENT";
+    })
   | (FixtureBase & { readonly kind: "echo"; readonly to: string; readonly mid: string; readonly text?: string })
   | (FixtureBase & { readonly kind: "delivered" | "failed"; readonly mid: string })
   | (FixtureBase & { readonly kind: "read"; readonly mid: string; readonly reader: string })
@@ -92,6 +107,29 @@ function normalize(account: WebhookAccount, fixture: FakeEventFixture): Normaliz
         messageKind: "TEXT",
         text: fixture.text,
         media: [],
+      };
+    case "voice":
+      return {
+        ...base,
+        type: "INBOUND_MESSAGE",
+        senderExternalId: fixture.from,
+        externalMessageId: fixture.mid,
+        messageKind: fixture.mediaKind ?? "AUDIO",
+        text: fixture.caption,
+        media: [
+          {
+            kind: fixture.mediaKind ?? "AUDIO",
+            ...(fixture.mediaId === undefined ? {} : { providerMediaId: fixture.mediaId }),
+            mimeType: fixture.mimeType ?? "audio/ogg; codecs=opus",
+            ...(fixture.caption === undefined ? {} : { caption: fixture.caption }),
+            ...(fixture.sizeBytes === undefined ? {} : { sizeBytes: fixture.sizeBytes }),
+          },
+          ...(fixture.alsoMediaIds ?? []).map((mediaId) => ({
+            kind: fixture.mediaKind ?? ("AUDIO" as const),
+            providerMediaId: mediaId,
+            mimeType: fixture.mimeType ?? "audio/ogg; codecs=opus",
+          })),
+        ],
       };
     case "echo":
       return {
