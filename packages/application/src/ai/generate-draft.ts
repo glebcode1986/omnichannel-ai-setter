@@ -82,6 +82,15 @@ export interface DraftGenerationCommand {
   readonly inbound: readonly ReplyGenerationRequest["inbound"][number][];
   readonly history: readonly ReplyGenerationRequest["history"][number][];
   /**
+   * Whether the burst carries a recording the product could not read (Issue #21).
+   *
+   * Defaults to false, because a caller that knows nothing about recordings is describing a conversation
+   * that has none. Treated exactly like an unreachable corpus: a model cannot know a download failed, so
+   * only this layer can say so, and the draft is still written — the reply may well be fine — but never
+   * without a person seeing it first.
+   */
+  readonly unreadableAudio?: boolean;
+  /**
    * What retrieval produced: the chunks and examples the model sees, and the record of what was supplied
    * and whether the corpus was reachable. One object rather than separate fields, so the prompt and the
    * stored provenance cannot describe different things. Required rather than optional: a caller that
@@ -320,6 +329,9 @@ function persistDraft(
   // A model cannot know the corpus was unreachable, so it cannot account for it: only this layer can.
   // The draft is still written — not every message needs a business fact — but never without review.
   const retrievalUnavailable = command.retrieval.supplied.status === "UNAVAILABLE";
+  // The same shape of fact as an unreachable corpus, and the same answer: write the draft, hold it for a
+  // person. A reply to a voice note nobody heard is the invented content this prevents.
+  const unreadableAudio = command.unreadableAudio === true;
   // Manual assistance, by definition: the person asked for help writing, and they send it themselves.
   // This is what keeps an "ask AI" click in mode OFF from ever becoming an automatic send.
   const humanRequested = isHumanRequested(command.trigger);
@@ -328,6 +340,7 @@ function persistDraft(
     output.needs_review ||
     fabricatedSources ||
     retrievalUnavailable ||
+    unreadableAudio ||
     humanRequested ||
     reasonCodes.some((code) => (MANDATORY_REVIEW_REASON_CODES as readonly ReasonCode[]).includes(code));
 
@@ -343,6 +356,7 @@ function persistDraft(
         ...reasonCodes,
         ...(fabricatedSources ? (["MISSING_FACT"] as const) : []),
         ...(retrievalUnavailable ? (["RETRIEVAL_UNAVAILABLE"] as const) : []),
+        ...(unreadableAudio ? (["AUDIO_NOT_TRANSCRIBED"] as const) : []),
       ]),
     ],
     ...(output.intent === null ? {} : { intent: output.intent }),

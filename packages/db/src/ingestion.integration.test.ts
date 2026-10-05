@@ -77,6 +77,9 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     };
     return {
       store: createIngestionStore(database.db),
+      // The queue takes a reading job whether or not a transcriber is configured; the handler reports
+      // "not configured". This suite only asserts that the entry is written and dispatched (Issue #21).
+      transcription: { scheduleMediaTranscription: () => Promise.resolve() },
       adapters: {
         adapterFor: (account) => {
           const adapter = createFakeChannelAdapter(account);

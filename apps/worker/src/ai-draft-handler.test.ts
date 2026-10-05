@@ -27,6 +27,7 @@ const context: DraftContext = {
   channelAccountId: "ca_1",
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
   history: [],
+  unreadableAudio: false,
 };
 
 const retrievalDependencies = (overrides: Partial<DraftRetrievalDependencies> = {}): DraftRetrievalDependencies => ({

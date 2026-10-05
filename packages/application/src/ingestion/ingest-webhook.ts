@@ -8,13 +8,15 @@ import {
 } from "@omnichannel/domain";
 
 import { dispatchOutbox } from "./outbox";
-import type { ChannelAdapterProvider, DebounceScheduler, IngestionStore, LogPort, WebhookAccount } from "./ports";
+import type { ChannelAdapterProvider, DebounceScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler, WebhookAccount } from "./ports";
 import { processEvent } from "./process-event";
 
 export interface IngestionDependencies {
   readonly store: IngestionStore;
   readonly adapters: ChannelAdapterProvider;
   readonly scheduler: DebounceScheduler;
+  /** Where a reading job goes (Issue #21). The queue takes it whether or not a transcriber is configured. */
+  readonly transcription: MediaTranscriptionScheduler;
   readonly log: LogPort;
   readonly now: () => Date;
   readonly random: () => number;

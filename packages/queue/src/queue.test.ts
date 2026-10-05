@@ -10,6 +10,7 @@ import {
   deliveryDelayFor,
   deliveryJobSchema,
   INBOUND_DEBOUNCE,
+  MEDIA_TRANSCRIPTION,
   inboundDebounceJobSchema,
   JOB_FAMILIES,
   JobPayloadValidationError,
@@ -235,6 +236,7 @@ describe("job identity", () => {
     expect(new Set(JOB_FAMILIES.map((family) => family.queueName)).size).toBe(JOB_FAMILIES.length);
     expect(JOB_FAMILIES.map((family) => family.jobName)).toEqual([
       INBOUND_DEBOUNCE.jobName,
+      MEDIA_TRANSCRIPTION.jobName,
       AI_DRAFT_GENERATION.jobName,
       DELIVERY.jobName,
       RECONCILIATION.jobName,

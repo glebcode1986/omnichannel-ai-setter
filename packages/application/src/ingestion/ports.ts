@@ -59,6 +59,34 @@ export interface DebounceScheduler {
   scheduleInboundDebounce(job: InboundDebouncePayload, options: { readonly delayMs: number }): Promise<unknown>;
 }
 
+/**
+ * One inbound message whose recordings are owed a reading (Issue #21).
+ *
+ * The message rather than the media, because the pending rows were written in the same transaction as the
+ * message and the worker reads them from there. A payload naming the media would be a second place the
+ * same list lives, and the two would eventually disagree.
+ */
+export interface MediaTranscriptionPayload {
+  readonly schemaVersion: 1;
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  readonly correlationId: string;
+  readonly channelAccountId: string;
+  readonly conversationId: string;
+  readonly messageId: string;
+}
+
+/**
+ * A port of its own rather than a second method on the debounce scheduler.
+ *
+ * The two jobs have nothing in common but the queue they travel through: one waits out a burst, the other
+ * reads a file. Folding them into one interface named for the first would make the name a lie, and a
+ * composition root could then satisfy the type while wiring only half of what it implies.
+ */
+export interface MediaTranscriptionScheduler {
+  scheduleMediaTranscription(job: MediaTranscriptionPayload, options: { readonly delayMs: number }): Promise<unknown>;
+}
+
 /** What happened to one verified, normalized event; stored with the source event for audit. */
 export type IngestionOutcome =
   | "INBOUND_STORED"
@@ -96,19 +124,26 @@ export interface StoredMessageStatus {
   readonly deliveryStatus: MessageDeliveryStatus | null;
 }
 
-export interface OutboxEntry {
+/** What every outbox entry carries, whatever kind of work it describes. */
+interface OutboxEntryBase {
   readonly id: string;
-  readonly kind: "INBOUND_DEBOUNCE";
   readonly workspaceId: string;
   readonly businessProfileId: string;
   readonly correlationId: string;
-  readonly payload: InboundDebouncePayload;
-  /** Selected debounce delay, counted from `createdAt`. */
+  /** Selected delay, counted from `createdAt`. */
   readonly delayMs: number;
   readonly createdAt: Date;
   /** Dispatch attempts so far, including the current claim. */
   readonly attempts: number;
 }
+
+/**
+ * Discriminated on `kind`, so a payload can never be dispatched to the wrong scheduler. A flat shape with
+ * a union payload would type-check while handing a transcription job to the debounce queue.
+ */
+export type OutboxEntry =
+  | (OutboxEntryBase & { readonly kind: "INBOUND_DEBOUNCE"; readonly payload: InboundDebouncePayload })
+  | (OutboxEntryBase & { readonly kind: "MEDIA_TRANSCRIPTION"; readonly payload: MediaTranscriptionPayload });
 
 /** Writes performed for one event; they commit or roll back together. */
 export interface IngestionTransaction {
@@ -197,14 +232,25 @@ export interface IngestionTransaction {
 
   /** Adds an outbox entry unless one with the same dedupe key exists (then returns undefined). */
   addOutboxEntry(
-    input: ProfileScope & {
-    readonly kind: "INBOUND_DEBOUNCE";
-    readonly dedupeKey: string;
-    readonly correlationId: string;
-    readonly payload: InboundDebouncePayload;
-    readonly delayMs: number;
-  },
+    input: ProfileScope & { readonly dedupeKey: string; readonly correlationId: string; readonly delayMs: number } & (
+        | { readonly kind: "INBOUND_DEBOUNCE"; readonly payload: InboundDebouncePayload }
+        | { readonly kind: "MEDIA_TRANSCRIPTION"; readonly payload: MediaTranscriptionPayload }
+      ),
   ): Promise<{ readonly id: string } | undefined>;
+
+  /**
+   * Records that this message's recordings are owed a reading (Issue #21).
+   *
+   * In the same transaction as the message, so a voice note cannot be stored without the product knowing
+   * it has not been read yet — which is what lets the draft path tell "nothing was said" from "we have
+   * not heard it yet" instead of drafting over silence.
+   */
+  recordPendingTranscripts(
+    input: ProfileScope & {
+      readonly messageId: string;
+      readonly media: readonly { readonly providerMediaId: string; readonly mimeType?: string; readonly sizeBytes?: number }[];
+    },
+  ): Promise<{ readonly created: number }>;
 }
 
 export interface IngestionStore {

@@ -210,7 +210,7 @@ function main(): void {
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
-          dispatchOutbox({ store: createIngestionStore(db), scheduler: producer, log: logger, now: () => new Date() }),
+          dispatchOutbox({ store: createIngestionStore(db), scheduler: producer, transcription: producer, log: logger, now: () => new Date() }),
         logger,
       });
       const suspensions = createSuspensionStore(db);

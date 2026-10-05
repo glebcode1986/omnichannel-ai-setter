@@ -72,6 +72,64 @@ export async function processEvent(
   return { status: "PROCESSED", ...result };
 }
 
+/**
+ * Queues a reading for every recording this message carries (Issue #21).
+ *
+ * Runs before the debounce check on purpose, so it happens whatever the conversation's automation state.
+ * A voice note in a conversation a person has taken over still needs reading — more so, because the
+ * person is the one about to answer it, and the Inbox has nothing to show them otherwise.
+ *
+ * Audio only. Images and documents are stored and left alone: reading them is a different capability with
+ * a different provider and different risks, and queueing work nothing performs would be a queue of jobs
+ * that always fail.
+ *
+ * Both writes are in the caller's transaction, so a message is never stored without the record that its
+ * recording is owed a reading, and the dedupe key makes a redelivered webhook a no-op rather than a
+ * second reading of the same words.
+ */
+async function scheduleTranscription(
+  tx: IngestionTransaction,
+  event: InboundMessageEvent,
+  context: EventProcessingContext,
+  message: { readonly conversationId: string; readonly messageId: string },
+): Promise<void> {
+  const recordings = event.media.filter(
+    (media): media is typeof media & { readonly providerMediaId: string } => media.kind === "AUDIO" && media.providerMediaId !== undefined,
+  );
+  if (recordings.length === 0) {
+    return;
+  }
+  await tx.recordPendingTranscripts({
+    workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
+    messageId: message.messageId,
+    media: recordings.map((media) => ({
+      providerMediaId: media.providerMediaId,
+      ...(media.mimeType === undefined ? {} : { mimeType: media.mimeType }),
+      ...(media.sizeBytes === undefined ? {} : { sizeBytes: media.sizeBytes }),
+    })),
+  });
+  await tx.addOutboxEntry({
+    workspaceId: event.workspaceId,
+    businessProfileId: event.businessProfileId,
+    kind: "MEDIA_TRANSCRIPTION",
+    dedupeKey: ["media-transcription", event.workspaceId, event.businessProfileId, message.messageId].join(":"),
+    correlationId: context.correlationId,
+    // No delay: a reading is not a reply, so nothing about human-like timing applies to it, and the
+    // sooner it lands the more likely the draft that needs it finds it already there.
+    delayMs: 0,
+    payload: {
+      schemaVersion: 1,
+      workspaceId: event.workspaceId,
+      businessProfileId: event.businessProfileId,
+      correlationId: context.correlationId,
+      channelAccountId: event.channelAccountId,
+      conversationId: message.conversationId,
+      messageId: message.messageId,
+    },
+  });
+}
+
 async function applyInboundMessage(
   tx: IngestionTransaction,
   event: InboundMessageEvent,
@@ -113,6 +171,8 @@ async function applyInboundMessage(
     direction: "IN",
     occurredAt: event.occurredAt,
   });
+
+  await scheduleTranscription(tx, event, context, { conversationId: conversation.conversationId, messageId: message.messageId });
 
   if (!isEligibleForInboundDebounce(conversation)) {
     return { outcome: "INBOUND_STORED" };

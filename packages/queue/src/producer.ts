@@ -7,6 +7,7 @@ import {
   DEFAULT_QUEUE_PREFIX,
   DELIVERY,
   INBOUND_DEBOUNCE,
+  MEDIA_TRANSCRIPTION,
   RECONCILIATION,
   type JobFamily,
 } from "./families";
@@ -16,6 +17,7 @@ import {
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
+  type MediaTranscriptionJob,
   type ReconciliationJob,
 } from "./payloads";
 import { closeAll } from "./close-all";
@@ -36,6 +38,13 @@ export type DebounceScheduleResult =
 export interface QueueProducer {
   /** Stage A: (re)starts the debounce window for the newest inbound message of a conversation. */
   scheduleInboundDebounce(job: InboundDebounceJob, options: { readonly delayMs: number }): Promise<DebounceScheduleResult>;
+  /**
+   * Queues a reading of the recordings on one inbound message (Issue #21).
+   *
+   * No delay of its own: a reading is not a reply, so nothing about human-like timing applies to it, and
+   * the caller still passes one because the outbox counts every delay from when the entry was written.
+   */
+  scheduleMediaTranscription(job: MediaTranscriptionJob, options: { readonly delayMs: number }): Promise<EnqueuedJob>;
   enqueueAiDraftGeneration(job: AiDraftGenerationJob): Promise<EnqueuedJob>;
   /** Stage B: durable delayed delivery at `job.scheduledFor`; never sleeps in the caller. */
   scheduleDelivery(job: DeliveryJob, options?: RaiseOptions): Promise<EnqueuedJob>;
@@ -165,6 +174,10 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
         return { status: "SCHEDULED", job, supersededJobId };
       }
       return { status: "SCHEDULED", job };
+    },
+
+    async scheduleMediaTranscription(input, { delayMs }) {
+      return add(MEDIA_TRANSCRIPTION, parsePayload(MEDIA_TRANSCRIPTION.schema, MEDIA_TRANSCRIPTION.jobName, input), Math.max(0, delayMs));
     },
 
     async enqueueAiDraftGeneration(input) {

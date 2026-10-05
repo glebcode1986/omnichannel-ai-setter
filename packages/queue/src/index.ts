@@ -14,6 +14,7 @@ export {
   DEFAULT_QUEUE_PREFIX,
   DELIVERY,
   INBOUND_DEBOUNCE,
+  MEDIA_TRANSCRIPTION,
   JOB_FAMILIES,
   RECONCILIATION,
   type JobFamily,
@@ -30,6 +31,7 @@ export {
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
+  type MediaTranscriptionJob,
   type PayloadIssue,
   type ReconciliationJob,
 } from "./payloads";

@@ -131,6 +131,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
     store: createIngestionStore(infra.db),
     adapters: { adapterFor: fakeAdapter },
     scheduler: options.scheduler ?? producer,
+    transcription: producer,
     log: infra.logger,
     now: () => new Date(),
     random: () => 0,
@@ -277,7 +278,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
 
       // Recovery sweep, as the worker's outbox sweeper runs it, with the real producer.
       const sweepAt = new Date(pending.entry.availableAt.getTime() + 1);
-      const swept = await dispatchOutbox({ store: createIngestionStore(infra.db), scheduler: producer, log: infra.logger, now: () => sweepAt });
+      const swept = await dispatchOutbox({ store: createIngestionStore(infra.db), scheduler: producer, transcription: producer, log: infra.logger, now: () => sweepAt });
       expect(swept).toEqual({ dispatched: 1, failed: 0 });
 
       const burstFirst2 = (await outboxJob("corr-e2e-burst-first-2")).job;
