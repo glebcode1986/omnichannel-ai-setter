@@ -474,3 +474,103 @@ Business App coexistence feature table. Unstated, so nothing is promised about t
 Meta: the Cloud API typing-indicators page and its `/documentation/` mirror, mark-message-as-read on both
 paths, the message API reference schema, the error-codes reference, the throughput and messaging-limits
 pages, and the coexistence onboarding page.
+
+## Re-verification for P4-06 / Issue #23 — coexistence, 2026-10-05
+
+The issue says this task waits on current Meta capability being re-verified, so this section is the
+evidence. Doc paths have moved again: the canonical page is
+`/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users/`, and
+`/docs/whatsapp/cloud-api/guides/coexistence` is a 404.
+
+### It exists, and Meta calls it something else
+
+> "You can configure Embedded Signup to allow business customers to onboard using their existing WhatsApp
+> Business app account and phone number." — and "This feature is sometimes referred to as 'Coexistence' in
+> support channels and Partner documentation."
+
+Requirements: Business App 2.24.17+, Solution Partner or Tech Provider status, Embedded Signup with
+session logging, and a webhook endpoint that digests what follows. Introduced 2025-02-11; country coverage
+widened 2025-10-23 (EEA/EU/UK, Australia, Japan, Philippines, Russia, South Korea, Turkey).
+
+### Native sends arrive on their own webhook field
+
+**`smb_message_echoes`** — "notifies you of messages sent via the WhatsApp Business app or a companion
+('linked') device by a business customer who has been onboarded to Cloud API". The field is
+`smb_message_echoes`; the array inside `value` is `message_echoes`. Each entry carries `from` (the
+business's own number), `to` (the customer), `id`, `timestamp`, `type` and the type's contents.
+
+Three fields must be subscribed to for coexistence: `history`, `smb_app_state_sync` and
+`smb_message_echoes`.
+
+**This is what the previous implementation had wrong.** P4-01 detected an echo inside the `messages` field
+by comparing `message.from` to `metadata.display_phone_number` — a comparison of two fields of the same
+payload, formatted differently (`from` is a wa_id, `display_phone_number` is formatted), on a field that
+by Meta's own contract carries customer-to-business traffic only. It never fired on a real native send,
+and when it failed to fire the business's own message became a customer message.
+
+### Authorship cannot be read from a payload
+
+**No field identifies who sent an app-originated message.** No device id, no operator id, no primary-vs-
+companion indicator; `from` is the business's number whoever typed it, on any of up to four linked
+clients. And Meta states nowhere that a Cloud-API-sent message is *excluded* from `smb_message_echoes` —
+the separation is implied by the field's definition and nothing more.
+
+So this product does not attribute authorship from the payload. It **correlates**: an echo whose id
+matches an id one of our own sends returned is ours, and anything else is treated as a person replying
+outside this product. The direction of the remaining doubt is deliberate — a missed native reply means the
+assistant drafts over a colleague, while our own send mistaken for a colleague means a pause a person can
+undo.
+
+### Not supported under coexistence
+
+Group chats ("will not be synchronized"), disappearing messages (turned off for 1:1 chats), view-once,
+live location, business tools, messaging tools, business profile and channels — all "Not supported" on
+Cloud API. Companion clients exclude WhatsApp for Windows and WearOS.
+
+### Numbers
+
+- **Throughput is fixed at 20 mps** for a number in use with both — coexistence numbers do not scale up.
+- Up to **four linked companion devices**.
+- History sync covers **180 days**, with media asset ids only for media sent within **14 days** of
+  onboarding, and must be completed **within 24 hours** of onboarding or the customer must be offboarded.
+- Edit window 15 minutes; revoke window two days.
+
+### How a number is known to be a coexistence number
+
+Two signals: the Embedded Signup finish event `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` (already what
+`onboardingModeOf` reads), and the phone-number fields `is_on_biz_app` / `platform_type`.
+
+### Disconnect and reconnect
+
+The Deregister API is **blocked** for a number in use with both. A client disconnects from inside the app
+(Settings → Account → Business Platform → Disconnect), which triggers `account_update` with
+`PARTNER_REMOVED` and may carry `disconnection_info.reason`. A device change or re-registration offboards
+automatically, reported as `ACCOUNT_OFFBOARDED`, with `ACCOUNT_RECONNECTED` when the client opts back in —
+"typically completes within a few minutes". Meta's instruction to integrators on offboard is explicit:
+**"Pause any pending Cloud API message sends for this client."**
+
+Meta's own naming is inconsistent — the onboarding page calls these `account_offboarded` /
+`account_reconnected` webhooks while the reconnect page documents them as `event` values on
+`account_update`. Reading the field and matching on `value.event` satisfies both spellings.
+
+### What could not be confirmed, and what this implementation does about it
+
+1. **Whether Cloud-API sends are excluded from `smb_message_echoes`.** Unstated. → Correlation by message
+   id, never by a payload field, and an unmatched echo is treated as a person's.
+2. **Any field identifying the human or device.** None exists. → The product states the limitation on the
+   channel card rather than attributing authorship.
+3. **A standalone reference page for `smb_message_echoes`** with per-type payload shapes. The URL returned
+   navigation only; the payload above is from the onboarding page and may be abbreviated.
+4. **Template behaviour under coexistence.** Nothing found; no coexistence-specific statement on template
+   limits or approval.
+5. **The full `platform_type` enum.** Only `CLOUD_API` is attested. → Nothing is coded against other
+   values.
+6. **Whether the finish event carries a `phone_number_id`.** The documented `data` object has only
+   `waba_id`.
+7. **Plain uninstall without re-registration**, and the full list of `disconnection_info.reason` values.
+
+### Sources checked 2026-10-05
+
+The Embedded Signup coexistence onboarding page, the webhooks overview, the reconnect-offboarded-clients
+page, the Embedded Signup implementation page, the business phone numbers reference, the throughput and
+messaging-limits pages, and the WhatsApp changelog.

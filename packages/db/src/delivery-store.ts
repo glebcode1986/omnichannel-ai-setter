@@ -320,8 +320,35 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         if (settlement.kind === "SENT" && conversationId !== null && channelAccountId !== undefined && channelAccountId !== null) {
           // The outbound message and the terminal state are written together: a SENT row without its
           // message would let a later run believe nothing had been sent.
-          await tx.message.create({
-            data: {
+          //
+          // An upsert rather than a create, because the provider can echo a message back before this
+          // transaction commits. The send returns a platform id and this write happens afterwards, in a
+          // separate transaction, so a webhook arriving in that window inserts the same id first — as a
+          // human's message, since nothing yet says it was ours. A plain `create` then violated the
+          // uniqueness of the platform id and aborted the settle, leaving the delivery stuck `SENDING`
+          // with no sent time and the message attributed to a person who never wrote it. The send is the
+          // authoritative record of its own authorship, so it claims the row it finds.
+          await tx.message.upsert({
+            where:
+              settlement.platformMessageId === ""
+                ? { operationId }
+                : {
+                    workspaceId_businessProfileId_channelAccountId_channelMessageId: {
+                      ...scope,
+                      channelAccountId,
+                      channelMessageId: settlement.platformMessageId,
+                    },
+                  },
+            update: {
+              // Only what authorship decides. The echo's own text, kind and timestamps are the provider's
+              // account of the same message and are left alone.
+              source: job.draftId === null ? "HUMAN" : "AI",
+              ...(job.composedByUserId === null ? {} : { sentByUserId: job.composedByUserId }),
+              transportPath: "STANDARD",
+              operationId,
+              ...(job.draftId === null ? {} : { aiDraftId: job.draftId }),
+            },
+            create: {
               ...scope,
               channelAccountId,
               conversationId,

@@ -16,6 +16,7 @@ import type {
 
 import { isMessageDeliveryStatus } from "@omnichannel/domain";
 
+import { channelCapabilitiesOf } from "./channel-capabilities";
 import type { DbClient } from "./client";
 import { createPendingTranscripts } from "./transcript-store";
 import type { Prisma } from "./generated/prisma/client";
@@ -29,7 +30,18 @@ export function createIngestionStore(db: DbClient): IngestionStore {
     async findWebhookAccount(channel, channelAccountId): Promise<WebhookAccount | undefined> {
       const account = await db.channelAccount.findFirst({
         where: { id: channelAccountId, channel },
-        select: { id: true, workspaceId: true, businessProfileId: true, channel: true, status: true, externalAccountId: true },
+        select: {
+          id: true,
+          workspaceId: true,
+          businessProfileId: true,
+          channel: true,
+          status: true,
+          externalAccountId: true,
+          capabilities: true,
+          // The messaging account a WhatsApp number belongs to. Read here because binding an adapter is
+          // synchronous: a value the adapter needs has to arrive with the account (#23).
+          whatsappConnection: { select: { wabaId: true } },
+        },
       });
       return account === null
         ? undefined
@@ -40,6 +52,8 @@ export function createIngestionStore(db: DbClient): IngestionStore {
             channel: account.channel,
             status: account.status,
             externalAccountId: account.externalAccountId,
+            ...(account.whatsappConnection?.wabaId === undefined ? {} : { parentExternalAccountId: account.whatsappConnection.wabaId }),
+            capabilities: channelCapabilitiesOf(account.capabilities),
           };
     },
 
@@ -286,9 +300,21 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
       if (message !== null) {
         return true;
       }
-      // The send result may be recorded on the delivery job before the outbound message row exists.
+      // The delivery row carries the same id, and is checked second because a settle that wrote the
+      // message row always wrote this one too — it is the degenerate case, a delivery whose conversation
+      // could not be resolved, that this catches.
+      //
+      // Both origins, through `deliveryOfConversation`'s rule rather than a second spelling of it: a
+      // reply a person composed in the Inbox has no draft (ADR-018 Option B), so filtering through
+      // `draft.conversation` could never match one. Its echo was therefore read as somebody replying
+      // from the provider's own app, and the conversation was taken over on the strength of our own send.
       const job = await tx.deliveryJobRecord.findFirst({
-        where: { workspaceId, businessProfileId, platformMessageId, draft: { conversation: { channelAccountId } } },
+        where: {
+          workspaceId,
+          businessProfileId,
+          platformMessageId,
+          OR: [{ draft: { conversation: { channelAccountId } } }, { conversation: { channelAccountId } }],
+        },
         select: { id: true },
       });
       return job !== null;

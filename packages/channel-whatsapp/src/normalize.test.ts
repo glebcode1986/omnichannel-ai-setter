@@ -241,30 +241,93 @@ describe("what must never be normalized into this account", () => {
   });
 });
 
-describe("a coexistence echo", () => {
-  it("normalizes a message the business sent from the app as an echo, not as a customer message", () => {
-    // The application correlates it against stored sends to decide whether a human took over (ADR-013).
-    // Deciding that here would be the transport guessing at takeover.
-    const echo = envelope({
-      contacts: [{ wa_id: CUSTOMER_WA_ID }],
-      messages: [
-        {
-          from: BUSINESS_DISPLAY_NUMBER,
-          id: "wamid.nativeSend1",
-          timestamp: seconds(AT),
-          type: "text",
-          text: { body: "Yes, from 10 until 6." },
-        },
-      ],
-    });
+/**
+ * Coexistence: what the business sends from the WhatsApp Business App (#23).
+ *
+ * Meta publishes these on their own webhook field, `smb_message_echoes`, and nowhere else — the `messages`
+ * field carries customer-to-business traffic only. The adapter reports an echo and stops there: whether it
+ * means a person took the conversation over is the application's decision, made by correlating the message
+ * id against this product's own sends (ADR-013), and it has to be, because no field in the payload can
+ * answer it.
+ */
+describe("a message the business sent from its own app", () => {
+  const nativeSend = (overrides: Readonly<Record<string, unknown>> = {}) =>
+    envelope(
+      {
+        message_echoes: [
+          {
+            from: BUSINESS_DISPLAY_NUMBER,
+            to: CUSTOMER_WA_ID,
+            id: "wamid.nativeSend1",
+            timestamp: seconds(AT),
+            type: "text",
+            text: { body: "Yes, from 10 until 6." },
+            ...overrides,
+          },
+        ],
+      },
+      { field: "smb_message_echoes" },
+    );
 
-    const [event] = normalize(echo);
+  it("normalizes it as an echo, naming the customer it went to", () => {
+    const [event] = normalize(nativeSend());
 
     expect(event).toMatchObject({
       type: "OUTBOUND_ECHO",
       platformMessageId: "wamid.nativeSend1",
+      // From the echo itself. The `contacts` array is not populated on this field, and reading the
+      // recipient from there is how the previous implementation produced an event with an empty
+      // recipient that the contract then rejected — a native send silently lost rather than a takeover.
       recipientExternalId: CUSTOMER_WA_ID,
       text: "Yes, from 10 until 6.",
+      occurredAt: AT,
     });
+  });
+
+  it("carries no claim about who sent it", () => {
+    const [event] = normalize(nativeSend());
+
+    // Meta publishes no device, operator or origin field: a send by the owner on the phone and one by
+    // staff on a linked laptop are indistinguishable, and so is one this product made itself. The event
+    // therefore says what happened and not who did it.
+    expect(event).not.toHaveProperty("senderExternalId");
+    expect(Object.keys(event ?? {})).not.toContain("sendingApplicationId");
+  });
+
+  it("drops an echo with no recipient rather than emitting one the contract refuses", () => {
+    // `recipientExternalId` is a non-empty identifier in the shared schema, so an event with `""` is
+    // counted as rejected during ingestion and never reaches the takeover path — while the webhook still
+    // answers 200, so the provider never sends it again.
+    expect(normalize(nativeSend({ to: undefined }))).toEqual([]);
+  });
+
+  it("drops an echo with no id, because there is nothing to correlate against our own sends", () => {
+    expect(normalize(nativeSend({ id: undefined }))).toEqual([]);
+  });
+
+  it("drops an echo with no timestamp, because a takeover is measured from an instant", () => {
+    expect(normalize(nativeSend({ timestamp: undefined }))).toEqual([]);
+  });
+
+  it("refuses a `messages` entry that claims to come from the business itself", () => {
+    // The provider's contract says this cannot happen on that field. It used to be read as an echo, which
+    // never fired on a real native send and, when the two differently formatted numbers failed to match,
+    // turned the business's own message into a customer message and started a reply cycle answering
+    // ourselves. Refusing costs nothing now that the real echo has a field of its own.
+    const impossible = envelope({
+      contacts: [{ wa_id: CUSTOMER_WA_ID }],
+      messages: [{ from: BUSINESS_DISPLAY_NUMBER, id: "wamid.impossible", timestamp: seconds(AT), type: "text", text: { body: "hello" } }],
+    });
+
+    expect(normalize(impossible)).toEqual([]);
+  });
+
+  it("still reads ordinary customer messages on the same payload", () => {
+    const mixed = envelope({
+      contacts: [{ wa_id: CUSTOMER_WA_ID }],
+      messages: [{ from: CUSTOMER_WA_ID, id: "wamid.fromCustomer", timestamp: seconds(AT), type: "text", text: { body: "Are you open?" } }],
+    });
+
+    expect(normalize(mixed)).toMatchObject([{ type: "INBOUND_MESSAGE", senderExternalId: CUSTOMER_WA_ID }]);
   });
 });

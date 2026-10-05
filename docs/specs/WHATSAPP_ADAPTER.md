@@ -182,6 +182,36 @@ The adapter owns the provider calls and nothing about transcripts:
   judges retryability from the reason: `EXPIRED` is worth another attempt because its documented remedy is
   re-resolution; `UNSUPPORTED_TYPE`, `TOO_LARGE`, `MIME_MISMATCH` and `NOT_FOUND` never are.
 
+## Coexistence (implemented, P4-06)
+
+A business on coexistence keeps answering customers from the WhatsApp Business App while this product
+answers from the Cloud API. Three things follow, and all three are about *authorship*.
+
+- **Native sends arrive on `smb_message_echoes`, their own webhook field.** Not on `messages`, which
+  carries customer-to-business traffic only. The adapter emits them as `OUTBOUND_ECHO` and stops there.
+- **The adapter never decides whether an echo means a takeover.** It cannot: Meta publishes no device,
+  operator or origin field, so a send by the owner on the phone, one by staff on a linked laptop and one
+  this product made itself are indistinguishable in the payload. The application correlates the message id
+  against this product's own sends instead (ADR-013).
+- **An echo that cannot be correlated is treated as a person's.** The doubt is resolved towards taking
+  over, because the two errors are not symmetric: a missed native reply means the assistant drafts over a
+  colleague who is already handling the conversation, while our own send mistaken for a colleague means a
+  pause somebody can undo.
+
+An account that is not on coexistence reports `nativeOutboundVisible: false`, and the product says so on
+the channel card rather than behaving as though no native replies happen.
+
+### Account lifecycle
+
+`account_update` carries `ACCOUNT_OFFBOARDED` (device change or re-registration), `PARTNER_REMOVED` (an
+explicit Disconnect inside the app) and `ACCOUNT_RECONNECTED`. An offboard marks the number
+`NEEDS_REAUTH`, which is how "pause any pending Cloud API message sends" — Meta's own instruction — is
+honoured: the policy engine already refuses an unhealthy account and the delivery claim re-asserts it, so
+a reply scheduled earlier is held when it comes due. Not `DISCONNECTED`, because reconnection is
+automatic and usually takes minutes. Reconnection restores only an account that left for this reason.
+
+An event this adapter has not been taught is ignored rather than guessed into one of the two answers.
+
 ## Reliability invariants
 
 - stable provider message IDs are persisted/correlated;

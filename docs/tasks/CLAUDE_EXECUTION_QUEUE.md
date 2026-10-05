@@ -45,6 +45,40 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Current work — P4-06 / Issue #23, coexistence and native-human takeover
+
+**Branch `feat/p4-06-whatsapp-coexistence`**, based on `feat/p4-05-whatsapp-presence`.
+
+**The finding that mattered: the existing echo detection was looking in the wrong place.** Meta
+publishes a business's native sends on their own webhook field, `smb_message_echoes`; P4-01 looked
+inside `messages` and compared `message.from` to `metadata.display_phone_number` — two fields of the
+same payload, formatted differently, on a field that by Meta's contract carries customer-to-business
+traffic only. It never fired on a real native send, and when it failed to fire the business's own
+message became a customer message and started a reply cycle answering ourselves.
+
+**Authorship cannot be read from a payload.** Meta publishes no device, operator or origin field, and
+states nowhere that Cloud-API sends are excluded from the echo field. So authorship is *correlated* by
+message id, never attributed, and an echo that cannot be correlated is treated as a person's — the two
+errors are not symmetric, and the product must never draft over a colleague.
+
+**Two correctness fixes, both mutation-checked:**
+
+- `isAppOriginatedMessage` matched a delivery job only through its draft, so a reply a person composed
+  in the Inbox (no draft, ADR-018 Option B) could never be recognised as ours and its echo took the
+  conversation over on the strength of our own send.
+- A provider echo arriving before `settle` committed inserted the platform id first, as a human's
+  message; `settle`'s plain `create` then violated the unique id and aborted, leaving the delivery
+  `SENDING` with no sent time and the audit trail claiming a person wrote the assistant's reply. The
+  send is the authoritative record of its own authorship, so it now claims the row it finds.
+
+**Webhook ingestion had no WhatsApp adapter at all.** `createWhatsAppAdapterRegistry` had no production
+caller, so every WhatsApp webhook answered `ADAPTER_UNAVAILABLE` — none of this was reachable. It is
+wired now, bound to the messaging account the account row carries rather than one looked up while
+binding.
+
+**The limitation is stated rather than guessed.** An account that cannot see native replies carries a
+`NATIVE_REPLIES_INVISIBLE` caveat on its channel card, in both locales.
+
 ### Current work — P4-05 / Issue #22, read and typing presence timing
 
 **Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of

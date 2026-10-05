@@ -39,6 +39,17 @@ export interface ChannelCapabilities {
   readonly reactions: boolean;
   readonly readReceipts: boolean;
   readonly typingIndicator: boolean;
+  /**
+   * Whether this product is told about replies a person sends outside it.
+   *
+   * A visibility fact, not a feature: when it is false, somebody can answer a customer from the provider's
+   * own app and nothing here will ever know. The assistant would then keep drafting into a conversation a
+   * colleague is already handling, which is the one failure human takeover exists to prevent — so a
+   * channel account that cannot see native replies must say so rather than behave as though none happen.
+   *
+   * Channel-neutral on purpose. Why a given account can or cannot see them is the adapter's business.
+   */
+  readonly nativeOutboundVisible: boolean;
 }
 
 export const CHANNEL_CAPABILITY_KEYS = [
@@ -52,6 +63,7 @@ export const CHANNEL_CAPABILITY_KEYS = [
   "reactions",
   "readReceipts",
   "typingIndicator",
+  "nativeOutboundVisible",
 ] as const satisfies readonly (keyof ChannelCapabilities)[];
 
 export const NO_CAPABILITIES: ChannelCapabilities = {
@@ -65,4 +77,7 @@ export const NO_CAPABILITIES: ChannelCapabilities = {
   reactions: false,
   readReceipts: false,
   typingIndicator: false,
+  // False by default, and that is the safe direction: a product that assumes it can see native replies
+  // when it cannot will draft over a colleague, while one that assumes it cannot will merely say so.
+  nativeOutboundVisible: false,
 };

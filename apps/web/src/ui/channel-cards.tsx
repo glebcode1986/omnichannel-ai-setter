@@ -49,6 +49,16 @@ export function ChannelCards({ t, channels, offered, instagramConnectPath }: Cha
                 </span>
               </p>
               <p className="muted">{t.t(`channelReadinessDetail.${readiness}` as MessageKey)}</p>
+              {/*
+                What this account cannot see, rather than what it cannot do. An account carrying a caveat
+                is working normally, so it keeps its readiness badge and says the limitation separately
+                (#23). An unconfigured channel has no account and therefore no caveats to state.
+              */}
+              {(account?.caveats ?? []).map((caveat) => (
+                <p className="muted" data-caveat={caveat} key={caveat}>
+                  {t.t(`channelCaveat.${caveat}` as MessageKey)}
+                </p>
+              ))}
               {channel === "INSTAGRAM" && instagramConnectPath !== undefined && readiness !== "SENDABLE" ? (
                 // A link rather than a form: the connect route starts an OAuth redirect, and it is the
                 // existing onboarding backend rather than a second one invented here.

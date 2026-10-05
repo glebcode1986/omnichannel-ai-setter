@@ -27,6 +27,8 @@ const mediaObject = z.looseObject({
 const messageObject = z.looseObject({
   id: z.string().min(1).optional(),
   from: z.string().min(1).optional(),
+  /** Present on an echo of a native send: the customer it went to. Absent on an inbound message. */
+  to: z.string().min(1).optional(),
   timestamp: providerTimestamp.optional(),
   type: z.string().min(1).optional(),
   text: z.looseObject({ body: z.string().optional() }).optional(),
@@ -87,6 +89,17 @@ const changeValue = z.looseObject({
   contacts: z.array(z.looseObject({ wa_id: z.string().optional(), profile: z.looseObject({ name: z.string().optional() }).optional() })).optional(),
   messages: z.array(messageObject).optional(),
   statuses: z.array(statusObject).optional(),
+  /**
+   * Messages the business itself sent from the WhatsApp Business App or a linked companion device.
+   *
+   * Arrives on its own webhook field, `smb_message_echoes` — note the field name and the array key differ.
+   * It is the *only* signal Meta publishes for a native send, and it carries no device, operator or
+   * origin field: `from` is the business's own number whoever typed it, on whichever of its up to four
+   * linked clients. Authorship is therefore not something a payload can tell us (re-verified 2026-10-05).
+   */
+  message_echoes: z.array(messageObject).optional(),
+  /** Account lifecycle on the `account_update` field: coexistence offboarding and reconnection. */
+  event: z.string().optional(),
 });
 
 export const whatsAppWebhookSchema = z.looseObject({

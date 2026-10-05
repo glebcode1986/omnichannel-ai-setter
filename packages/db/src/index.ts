@@ -43,6 +43,8 @@ export {
   scheduleAutomatedDelivery,
   type AutomatedDeliveryInput,
 } from "./delivery-store";
+export { channelCapabilitiesOf } from "./channel-capabilities";
+export { applyAccountLifecycle, OFFBOARDED_HEALTH_REASON, type AccountLifecycleUpdate } from "./whatsapp-lifecycle-store";
 export {
   createPresenceStore,
   presenceCapabilitiesOf,

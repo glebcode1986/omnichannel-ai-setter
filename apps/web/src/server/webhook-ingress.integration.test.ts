@@ -47,9 +47,19 @@ interface Env {
   readonly INSTAGRAM_APP_SECRET: string;
   readonly INSTAGRAM_VERIFY_TOKEN?: string;
   readonly INSTAGRAM_HUMAN_AGENT_APPROVAL: "APPROVED" | "NOT_APPROVED" | "UNKNOWN";
+  // WhatsApp is deliberately unconfigured in this suite: it asserts the Instagram path, and an
+  // unconfigured channel must bind no adapter rather than half of one (#23).
+  readonly WHATSAPP_APP_SECRET?: string;
+  readonly WHATSAPP_VERIFY_TOKEN?: string;
+  readonly WHATSAPP_GRAPH_VERSION: string;
 }
 
-const configured: Env = { INSTAGRAM_APP_SECRET: APP_SECRET, INSTAGRAM_VERIFY_TOKEN: VERIFY_TOKEN, INSTAGRAM_HUMAN_AGENT_APPROVAL: "UNKNOWN" };
+const configured: Env = {
+  INSTAGRAM_APP_SECRET: APP_SECRET,
+  INSTAGRAM_VERIFY_TOKEN: VERIFY_TOKEN,
+  INSTAGRAM_HUMAN_AGENT_APPROVAL: "UNKNOWN",
+  WHATSAPP_GRAPH_VERSION: "v26.0",
+};
 
 /** A Meta-shaped inbound text message for one account, as bytes plus the signature Meta would send. */
 function signedRequest(url: string, body: unknown, options: { readonly secret?: string } = {}): Request {

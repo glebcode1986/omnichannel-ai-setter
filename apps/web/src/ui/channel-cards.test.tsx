@@ -25,6 +25,7 @@ const account = (overrides: Partial<ChannelOnboardingFacts> = {}): ChannelOnboar
   canCarryText: true,
   mode: "DRAFT",
   outboundSuspended: false,
+  caveats: [],
   ...overrides,
 });
 
