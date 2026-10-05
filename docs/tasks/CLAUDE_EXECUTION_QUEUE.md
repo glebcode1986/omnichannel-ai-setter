@@ -17,6 +17,11 @@ Nothing is merged to `main`.
 
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 
+**Reviewed head:** `e4e640a8fafc4fbca92ca64e5588551539410f6e`.
+**Repaired at:** `7805abda1bafcbfc83d93e03dc31f4f640985858` — the code fix and its regressions.
+This note is the documentation follow-up the same review asked for, so the branch head is one commit
+later than the SHA above; PR #77 carries the current one.
+
 Astra re-reviewed `e4e640a`, confirmed the four findings of the previous cycle repaired, and returned one
 more in the same R5 stale-UI class.
 
@@ -34,6 +39,9 @@ the store keeps the two apart for the audit. It stays optional for a caller with
 which then gets the version and health checks alone.
 
 ### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
+
+**Reviewed head:** `fcd4983fbfec2364d94b66068a2f6704ae63b614`.
+**Repaired at:** `e4e640a8fafc4fbca92ca64e5588551539410f6e`.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
