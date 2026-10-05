@@ -45,6 +45,37 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Current work — P4-05 / Issue #22, read and typing presence timing
+
+**Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of
+presence: the transport call already existed from P4-01, and what was missing was deciding *when* to make
+it, and when to stay silent.
+
+Meta's presence rules were re-verified from the live documentation on 2026-10-05
+(`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`). One finding shaped the product rather than merely
+being recorded: **the typing indicator cannot be sent without `status: "read"`** — both are required fields
+of the one documented payload, and no typing-only request exists. So the setting is one three-valued mode
+rather than two booleans, because two booleans would offer a combination no channel can perform.
+
+**Presence never touches a reply.** It is scheduled after the delivery is persisted and enqueued, it fits
+inside the delay the delay engine chose, a failure to enqueue it is swallowed, and the job allows exactly
+one attempt — an announcement is worthless once the message has arrived.
+
+**It re-decides with the coordinator's own judgement**, not a copy of it: `policyInputFor` is now shared,
+and presence announces only on the same `SCHEDULE` answer that would let the reply go out.
+
+**Two findings:**
+
+- **A forged `workspaceId` loaded a real delivery.** `operation_id` is globally unique, so a lookup by it
+  alone answers for whichever tenant owns it. The presence store now takes the workspace and refuses a
+  mismatch. Mutation-checked.
+- **Presence must not promise a reply this deployment cannot send.** WhatsApp still has no
+  `DeliverySendPort` (that is P4-07), so `deliverableChannels(env)` comes from the same configuration that
+  builds the sender and gates the scheduling.
+
+Also fixed: the incident reporter never mapped the `media-transcription` queue to a component (left
+unmapped by #21), and `DELAY_ENGINE.md`'s job table was missing that family.
+
 ### Current work — P4-04 / Issue #21, media and voice-note transcription
 
 **Branch `feat/p4-04-whatsapp-media`**, based on `feat/p4-03-whatsapp-templates`. Fetching a customer's

@@ -275,6 +275,43 @@ Idempotency is the same decision digest the review path uses.
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P4-05 / Issue #22 — read and typing presence timing.** Branch
+   `feat/p4-05-whatsapp-presence`, based on #90.
+
+   **The platform constraint that shaped the product decision:** Meta documents one request for the typing
+   indicator and it carries `status: "read"` and `message_id` as required fields. There is no typing-only
+   payload. So read receipts and the typing indicator cannot be offered as two independent switches — the
+   setting is one three-valued `PresenceMode` (`OFF`, `READ_ON_RECEIPT`, `READ_AND_TYPING`), because a pair
+   of booleans would promise a combination no channel can perform.
+
+   **The indicator is raised shortly before the reply, never when the delay starts.** It is dismissed when
+   the reply arrives or after 25 seconds, whichever comes first, while the human-like delay is 30–120 s —
+   so announcing at scheduling time would show it, drop it, and leave the customer watching nothing for a
+   minute. The lead is bounded three ways (the business's setting, the provider's lifetime, the reply's own
+   delay) and the tightest wins.
+
+   **It rests on the send's own judgement rather than a second one.** `presenceVerdict` runs the same
+   `evaluatePolicy` call the delivery coordinator runs, over the same `DeliverySendContext`, and announces
+   only on the same `SCHEDULE` answer. `policyInputFor` was extracted into `delivery/policy-input.ts` so
+   there is literally one construction of that question. A shorter list of conditions in the presence path
+   would be a second definition of "still valid", and the drift would show up as a customer watching
+   somebody type a reply that had already been cancelled.
+
+   **Two findings worth carrying:**
+
+   - **A tenancy gap the acceptance tests found.** `loadForSend` keys on `operation_id`, which is globally
+     unique — so a presence job carrying a foreign `workspaceId` loaded a real delivery and would have
+     announced on another tenant's conversation. `PresenceStore.load` now takes the workspace and treats a
+     mismatch as "no such delivery". Mutation-checked.
+   - **Presence must not promise a reply this deployment cannot send.** There is still no WhatsApp
+     `DeliverySendPort` — delivery is Instagram-only until P4-07 — so `deliverableChannels(env)` is derived
+     from the same configuration that builds the sender and handed to the scheduler. The moment P4-07 wires
+     WhatsApp delivery, presence follows without a second decision being made anywhere.
+
+   Also fixed in passing: `COMPONENT_FOR_QUEUE` in the incident reporter had no entry for
+   `media-transcription` (left unmapped by #21, falling through to `INTEGRATION`), and `DELAY_ENGINE.md`'s
+   job table was missing that family too.
+
 1. **P4-04 / Issue #21 — media and voice-note transcription.** Branch
    `feat/p4-04-whatsapp-media`, based on #89.
 

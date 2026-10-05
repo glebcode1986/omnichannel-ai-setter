@@ -16,6 +16,7 @@ import {
   isConfidencePreset,
   isInstagramAfterWindowPolicy,
   isTimingPreset,
+  isPresenceMode,
   isWhatsAppAfterWindowPolicy,
   policyImpactsOf,
 } from "@omnichannel/domain";
@@ -45,6 +46,8 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
   const instagram = field(formData, "instagramAfterWindowPolicy");
   const whatsapp = field(formData, "whatsappAfterWindowPolicy");
   const takeoverHours = Number.parseInt(field(formData, "takeoverPauseHours"), 10);
+  const presenceMode = field(formData, "presenceMode");
+  const presenceLeadSeconds = Number.parseInt(field(formData, "presenceTypingLeadSeconds"), 10);
   const allowlist = lines(formData, "allowlist");
 
   const edit = {
@@ -57,6 +60,10 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
     ...(isInstagramAfterWindowPolicy(instagram) ? { instagramAfterWindowPolicy: instagram } : {}),
     ...(isWhatsAppAfterWindowPolicy(whatsapp) ? { whatsappAfterWindowPolicy: whatsapp } : {}),
     whatsappTemplateAutomationAllowlist: allowlist,
+    ...(isPresenceMode(presenceMode) ? { presenceMode } : {}),
+    // Seconds on the form, milliseconds in the policy: an owner thinks in seconds, and the ceiling is the
+    // provider's own indicator lifetime, which the domain refuses past.
+    ...(Number.isFinite(presenceLeadSeconds) && presenceLeadSeconds >= 0 ? { presenceTypingLeadMs: presenceLeadSeconds * 1_000 } : {}),
   };
 
   // What this change would widen, computed against what is stored — before anything is written.

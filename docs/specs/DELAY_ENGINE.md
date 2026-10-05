@@ -56,7 +56,9 @@ Workspace/account may configure debounce, delay range, quiet-hours policy and ta
 | Queue | Job name | Deterministic job ID | Retry policy |
 | --- | --- | --- | --- |
 | `inbound-debounce` | `inbound-debounce.v1` | workspace + Business Profile + conversation + anchor message | 3 attempts, exponential from 1 s |
+| `media-transcription` | `media-transcription.v1` | workspace + Business Profile + `messageId` | 4 attempts, exponential from 15 s (terminal failures are recorded, never thrown) |
 | `ai-draft-generation` | `ai-draft-generation.v1` | workspace + Business Profile + conversation + anchor message (+ `requestId` for manual requests) | 3 attempts, exponential from 5 s |
+| `presence` | `presence.v1` | workspace + Business Profile + `operationId` | **1 attempt**: an announcement is worthless once the reply has arrived |
 | `delivery` | `delivery.v1` | workspace + Business Profile + `operationId` | up to 3 attempts, **only** for explicit not-sent outcomes |
 | `delivery-reconciliation` | `delivery-reconciliation.v1` | workspace + Business Profile + `operationId` | 5 attempts, exponential from 30 s (lookups only, never a send) |
 
@@ -102,3 +104,27 @@ Delivery workers run with `maxStalledCount: 0`. A delivery whose worker died or 
 - On `SIGINT`/`SIGTERM` it closes gracefully and waits for running jobs.
 - Redis outages are logged once, without the URL.
 - Until the real handlers exist, jobs fail visibly without retries and delivery returns `NOT_CLAIMED`, so nothing is sent.
+
+## Presence timing (P4-05)
+
+A read receipt and a typing indicator are the one cosmetic thing this product does, and they are scheduled
+*separately from the reply* — presence picks a moment inside the delay the delay engine chose, and can
+never move, shorten or cancel a send.
+
+- **The indicator is raised shortly before the reply, not when the delay starts.** The provider dismisses
+  it when the reply arrives or after 25 seconds, whichever comes first, while this product's human-like
+  delay is 30–120 seconds. Announcing at scheduling time would show it, drop it, and leave the customer
+  watching nothing for a minute.
+- **The lead is bounded three ways and the tightest wins:** the business's own setting, the provider's
+  indicator lifetime, and the reply's own delay. A reply sooner than the lead is announced immediately.
+- **A read receipt waits for nothing**, because it is a statement about a message that already arrived.
+- **It is re-decided when it fires.** The announcement runs the same policy evaluation the delivery
+  coordinator runs, against the same context, and says nothing unless the reply would still go out —
+  cancelled, superseded by a newer customer message, taken over, switched off, suspended or disconnected
+  all produce silence. A shorter list of conditions here would be a second definition of "still valid"
+  that drifts from the real one.
+- **It is never scheduled for a draft held for review**, and never for a channel this deployment cannot
+  actually deliver on. The platform's own guidance is "only display a typing indicator if you are going to
+  respond".
+- **No blocking sleeps anywhere.** The announcement is a delayed queue job, the same durable primitive the
+  reply uses.

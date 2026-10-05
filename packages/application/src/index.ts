@@ -131,6 +131,20 @@ export type {
 } from "./policy/template-route";
 export { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies, type DeliveryOutcome } from "./delivery/coordinate-delivery";
 export { NATURAL_MODE_FRACTION, selectDeliveryDelayMs, type DeliveryDelay, type DeliveryDelayInput } from "./delivery/schedule";
+export {
+  DEFAULT_PRESENCE_SETTINGS,
+  planPresence,
+  presenceLeadMs,
+  presenceVerdict,
+  type PresenceAnnouncer,
+  type PresenceCapabilities,
+  type PresencePlan,
+  type PresencePlanInput,
+  type PresenceSettings,
+  type PresenceSkipReason,
+  type PresenceVerdict,
+  type PresenceVerdictInput,
+} from "./delivery/presence";
 export type {
   CancelledStatus,
   ClaimOutcome,

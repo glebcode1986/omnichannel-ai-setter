@@ -399,3 +399,78 @@ Meta: WhatsApp Cloud API media reference (retrieve, download, delete, supported 
 error codes 131052/131053, and the Cloud API changelog. OpenAI: the live speech-to-text guide, the
 `createTranscription` API reference, the deprecations page, the error-code and rate-limit guides, the
 `gpt-transcribe` and `whisper-1` model pages, and the published OpenAPI specification.
+
+## Re-verification for P4-05 / Issue #22 — read receipts and the typing indicator, 2026-10-05
+
+Re-read against Meta's live documentation before implementing. The pages moved: typing indicators are
+**not** under `/guides/` — `…/cloud-api/guides/typing-indicators` answers 404 — and live at
+`developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators/`, mirrored at
+`…/documentation/business-messaging/whatsapp/typing-indicators`. Mark-as-read exists at both the
+`/guides/` and `/documentation/` paths with identical content.
+
+### The read status is not optional when asking for the indicator
+
+One endpoint and one payload for all of it — `POST /<PHONE_NUMBER_ID>/messages`:
+
+```json
+{ "messaging_product": "whatsapp", "status": "read", "message_id": "<WAMID>", "typing_indicator": { "type": "text" } }
+```
+
+The guide's parameter table marks **both `status: "read"` and `message_id` as required** alongside
+`typing_indicator`, and **no typing-only variant is documented anywhere**. `"text"` is the only documented
+value for `typing_indicator.type`.
+
+Worth recording precisely because it is a constraint on the product: read receipts and the typing
+indicator cannot be offered to an owner as two independent switches, because the platform does not offer
+them that way. Hence one three-valued setting rather than two booleans.
+
+A caveat the implementation does not lean on: the **API reference** schema (`MarkMessageRequestPayload`)
+lists only `message_id`, `messaging_product` and `status` — `typing_indicator` is absent from it
+entirely, and it enumerates no allowed `status` values. The indicator is documented in the guide only.
+
+### The lifetime, verbatim
+
+> "The typing indicator will be dismissed once you respond, or after 25 seconds, whichever comes first."
+
+The same page adds: "To prevent a poor user experience, only display a typing indicator if you are going
+to respond." That sentence is the reason presence is never announced for a draft held for review, nor for
+a channel this deployment cannot actually send on.
+
+### Marking read: a 30-day bound, and it cascades
+
+> "Mark incoming messages as read within 30 days of receipt."
+
+> "When you mark a message as read, the API also marks earlier messages in the conversation as read."
+
+The cascade is useful rather than incidental: this product debounces a burst of customer messages, so
+marking the newest covers the whole burst in one call. The id is the inbound `wamid` from a `messages`
+webhook.
+
+**Not documented:** what happens when an already-read message is marked read again. Nothing here relies
+on it being idempotent — the second call exists to raise the indicator, and the read status is a required
+field of that request rather than an assumption about its behaviour.
+
+### Errors and limits: thinner than they look
+
+- **131009** "Parameter value is not valid" is the *only* code the documentation attributes to these
+  calls, and only for an invalid message id.
+- The error-code reference contains no occurrence of "read", "typing" or "wamid", and attributes no code
+  to either operation. What Meta returns for a well-formed but expired (>30 days) id, for an unregistered
+  number, or for throttling on these specific calls is **unstated**, so the adapter treats any
+  non-2xx as a refusal rather than matching a code list it cannot rely on.
+- **No dedicated rate limit is documented.** The throughput page (80 mps default) never mentions read
+  receipts or typing indicators, so whether they count toward it is not stated either way. The queue
+  family is given its own modest limit rather than assuming an answer.
+- The success response is `{"success": true}` with **no message id** — the HTTP status is the whole
+  verdict.
+
+### Coexistence
+
+Typing indicators and read receipts appear in **neither** the supported nor the unsupported column of the
+Business App coexistence feature table. Unstated, so nothing is promised about them in that mode.
+
+### Sources checked 2026-10-05
+
+Meta: the Cloud API typing-indicators page and its `/documentation/` mirror, mark-message-as-read on both
+paths, the message API reference schema, the error-codes reference, the throughput and messaging-limits
+pages, and the coexistence onboarding page.

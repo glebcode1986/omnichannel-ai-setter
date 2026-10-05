@@ -1,6 +1,6 @@
 import type { QueueHandlers } from "@omnichannel/queue";
 
-import type { DeliveryAttemptResult, DeliveryJob, InboundDebounceJob, MediaTranscriptionJob, ReconciliationJob } from "@omnichannel/queue";
+import type { DeliveryAttemptResult, DeliveryJob, InboundDebounceJob, MediaTranscriptionJob, PresenceJob, ReconciliationJob } from "@omnichannel/queue";
 
 import type { AiDraftJob } from "./ai-draft-handler";
 import { draftJobFromDebounce } from "./ai-draft-handler";
@@ -15,6 +15,7 @@ export function createHandlers(
   deliver: (job: DeliveryJob) => Promise<DeliveryAttemptResult>,
   onInboundDebounceElapsed: (job: InboundDebounceJob) => Promise<void>,
   transcribeMedia: (job: MediaTranscriptionJob) => Promise<void>,
+  announcePresence: (job: PresenceJob) => Promise<void>,
   reconcile: (job: ReconciliationJob) => Promise<void>,
 ): QueueHandlers {
   return {
@@ -37,6 +38,9 @@ export function createHandlers(
     // Reads a recording and records what came of it. Terminal failures never throw, so the family's
     // attempts are spent only on failures that could still succeed (Issue #21).
     transcribeMedia: (job) => transcribeMedia(job),
+    // Says "read" and "typing" if that is still true when it fires. Never throws: the family allows one
+    // attempt, because an announcement is worthless once the reply has arrived (#22).
+    announcePresence: (job) => announcePresence(job),
     // The coordinator owns every decision inside; this only hands it the job.
     deliver: (job) => deliver(job),
     // Never a resend: the reconciler can confirm, resume through the coordinator, or ask a person.

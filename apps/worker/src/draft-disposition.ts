@@ -9,7 +9,14 @@
  * elsewhere — which is the point of the architecture guard in the P2-09 contract: there is one policy
  * engine and one delivery coordinator, and no path around either.
  */
-import { evaluatePolicy, selectDeliveryDelayMs, type PolicyDecision, type PolicyInput } from "@omnichannel/application";
+import {
+  evaluatePolicy,
+  planPresence,
+  selectDeliveryDelayMs,
+  type PolicyDecision,
+  type PolicyInput,
+  type PresenceSettings,
+} from "@omnichannel/application";
 import {
   DEFAULT_HUMAN_AGENT_WINDOW_MS,
   DEFAULT_STANDARD_WINDOW_MS,
@@ -18,7 +25,7 @@ import {
   remainingAutomatedDispatchMs,
   type HumanAgentApproval,
 } from "@omnichannel/channel-instagram";
-import { requestHumanReview, scheduleAutomatedDelivery, type DbClient } from "@omnichannel/db";
+import { presenceCapabilitiesOf, presenceSettingsOf, requestHumanReview, scheduleAutomatedDelivery, type DbClient } from "@omnichannel/db";
 import { isReasonCode, NO_CAPABILITIES, toQuietHours, type ChannelAccountStatus } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import type { QueueProducer } from "@omnichannel/queue";
@@ -39,6 +46,31 @@ export interface DraftDispositionDependencies {
    * Omitted means `UNKNOWN`, which fails closed.
    */
   readonly humanAgentApproval?: HumanAgentApproval;
+  /**
+   * What this deployment can signal to a customer while a reply is being written (#22).
+   *
+   * Absent means no presence is scheduled at all, which is what a deployment with no announcer should do:
+   * a job that always declines is work nobody benefits from. Presence is never scheduled for a draft that
+   * was held or skipped, because those paths return before this is reached.
+   */
+  readonly presence?: PresenceScheduling;
+}
+
+export interface PresenceScheduling {
+  /**
+   * How long a typing indicator survives at the provider. A platform fact, passed in because the
+   * application layer that bounds the lead by it cannot import a channel adapter.
+   */
+  readonly typingTtlMs: number;
+  /**
+   * The channels this deployment can actually deliver a reply on.
+   *
+   * Not a capability of the channel and not a business setting: a deployment with no transport configured
+   * for a channel refuses the send when it comes due, and announcing that someone is typing a reply which
+   * will never be sent is precisely the experience the platform asks implementers to avoid. One value,
+   * read once from the composition that builds the sender, so the two cannot disagree.
+   */
+  readonly deliverableChannels: ReadonlySet<string>;
 }
 
 export interface DraftDispositionInput {
@@ -115,7 +147,7 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
         status: true,
         takeoverState: true,
         modeOverride: true,
-        channelIdentity: { select: { externalUserId: true, channelAccount: { select: { status: true } } } },
+        channelIdentity: { select: { externalUserId: true, channelAccount: { select: { status: true, channel: true, capabilities: true } } } },
       },
     });
     if (draft === null || conversation === null) {
@@ -220,8 +252,88 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
       selectedDelayMs: delay.delayMs,
     });
     dependencies.logger.info("worker.draft_scheduled", { ...fields, operationId: scheduled.operationId, delayMs: delay.delayMs, shortened: delay.shortened });
+
+    // After the reply is scheduled and never before it: presence announces that a reply is coming, so it
+    // may only exist once one actually is. A held or skipped draft returned above and never reaches here.
+    await announcePresenceLater(dependencies, {
+      ...scope,
+      correlationId: input.correlationId,
+      conversationId: input.conversationId,
+      channelAccountId: conversation.channelAccountId,
+      channel: conversation.channelIdentity.channelAccount.channel,
+      capabilities: conversation.channelIdentity.channelAccount.capabilities,
+      settings: presenceSettingsOf(policy),
+      operationId: scheduled.operationId,
+      replyDelayMs: delay.delayMs,
+      fields,
+    });
     return { status: "SCHEDULED", operationId: scheduled.operationId, delayMs: delay.delayMs };
   };
+}
+
+/**
+ * Queues the presence announcement for a reply that was just scheduled.
+ *
+ * Deliberately after the delivery is both persisted and enqueued, and deliberately unable to affect
+ * either: a failure here is logged and swallowed, because a cosmetic signal must never cost a customer
+ * their reply. The delay engine's own choice is read, never changed — presence fits inside the reply's
+ * delay and has no say in it.
+ */
+async function announcePresenceLater(
+  dependencies: DraftDispositionDependencies,
+  input: {
+    readonly workspaceId: string;
+    readonly businessProfileId: string;
+    readonly correlationId: string;
+    readonly conversationId: string;
+    readonly channelAccountId: string;
+    readonly channel: string;
+    readonly capabilities: unknown;
+    readonly settings: PresenceSettings;
+    readonly operationId: string;
+    readonly replyDelayMs: number;
+    readonly fields: Readonly<Record<string, unknown>>;
+  },
+): Promise<void> {
+  const presence = dependencies.presence;
+  if (presence === undefined) {
+    return;
+  }
+  const plan = planPresence({
+    settings: input.settings,
+    capabilities: presenceCapabilitiesOf(input.capabilities),
+    replyDelayMs: input.replyDelayMs,
+    typingTtlMs: presence.typingTtlMs,
+    deliverable: presence.deliverableChannels.has(input.channel),
+  });
+  if (plan.kind === "NONE") {
+    dependencies.logger.debug("worker.presence_not_scheduled", { ...input.fields, reason: plan.reason });
+    return;
+  }
+  try {
+    await dependencies.producer.schedulePresence(
+      {
+        schemaVersion: 1,
+        workspaceId: input.workspaceId,
+        businessProfileId: input.businessProfileId,
+        correlationId: input.correlationId,
+        channelAccountId: input.channelAccountId,
+        conversationId: input.conversationId,
+        operationId: input.operationId,
+        typing: plan.typing,
+      },
+      { delayMs: plan.delayMs },
+    );
+    dependencies.logger.info("worker.presence_scheduled", { ...input.fields, operationId: input.operationId, delayMs: plan.delayMs, typing: plan.typing });
+  } catch (error) {
+    // The reply is already scheduled and durable. Losing a typing indicator to a queue hiccup is the
+    // cheapest possible failure, and it must stay that cheap.
+    dependencies.logger.warn("worker.presence_not_scheduled", {
+      ...input.fields,
+      reason: "ENQUEUE_FAILED",
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+  }
 }
 
 /** The supplied chunk IDs recorded with the draft; an unreadable record supplies nothing. */

@@ -11,7 +11,7 @@
  * this page names no provider, no model and no token limit anywhere.
  */
 import { listPolicyAudits, readPolicies } from "@omnichannel/db";
-import { CONFIDENCE_PRESETS, POLICY_IMPACTS, TIMING_PRESETS } from "@omnichannel/domain";
+import { CONFIDENCE_PRESETS, MAX_PRESENCE_TYPING_LEAD_MS, POLICY_IMPACTS, PRESENCE_MODES, TIMING_PRESETS } from "@omnichannel/domain";
 
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
@@ -122,6 +122,26 @@ export default async function SettingsPage({
             min="1"
             max="168"
             defaultValue={Math.round(policy.takeoverPauseMs / 3_600_000)}
+          />
+
+          <label htmlFor="settings-presence">{t.t("settings.presence")}</label>
+          <select id="settings-presence" name="presenceMode" defaultValue={policy.presenceMode}>
+            {PRESENCE_MODES.map((value) => (
+              <option key={value} value={value}>
+                {t.t(`presenceMode.${value}`)}
+              </option>
+            ))}
+          </select>
+          <p className="muted">{t.t("settings.presenceHint")}</p>
+
+          <label htmlFor="settings-presence-lead">{t.t("settings.presenceLead")}</label>
+          <input
+            id="settings-presence-lead"
+            name="presenceTypingLeadSeconds"
+            type="number"
+            min="0"
+            max={Math.floor(MAX_PRESENCE_TYPING_LEAD_MS / 1_000)}
+            defaultValue={Math.round(policy.presenceTypingLeadMs / 1_000)}
           />
 
           <label htmlFor="settings-instagram">{t.t("settings.instagram")}</label>

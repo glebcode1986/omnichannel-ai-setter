@@ -27,6 +27,7 @@ import {
   type InstagramAfterWindowPolicy,
   type PolicyImpact,
   type TimingPreset,
+  type PresenceMode,
   type WhatsAppAfterWindowPolicy,
 } from "@omnichannel/domain";
 
@@ -52,6 +53,9 @@ export interface PolicyView {
   readonly instagramAfterWindowPolicy: string;
   readonly whatsappAfterWindowPolicy: string;
   readonly whatsappTemplateAutomationAllowlist: readonly string[];
+  /** What the customer is told while a reply is being written (#22). */
+  readonly presenceMode: string;
+  readonly presenceTypingLeadMs: number;
   readonly updatedAt: Date;
 }
 
@@ -71,6 +75,8 @@ const policySelect = {
   instagramAfterWindowPolicy: true,
   whatsappAfterWindowPolicy: true,
   whatsappTemplateAutomationAllowlist: true,
+  presenceMode: true,
+  presenceTypingLeadMs: true,
   updatedAt: true,
 } as const;
 
@@ -90,6 +96,8 @@ type PolicyRow = {
   instagramAfterWindowPolicy: string;
   whatsappAfterWindowPolicy: string;
   whatsappTemplateAutomationAllowlist: string[];
+  presenceMode: string;
+  presenceTypingLeadMs: number;
   updatedAt: Date;
 };
 
@@ -120,6 +128,8 @@ function toView(row: PolicyRow): PolicyView {
     instagramAfterWindowPolicy: row.instagramAfterWindowPolicy,
     whatsappAfterWindowPolicy: row.whatsappAfterWindowPolicy,
     whatsappTemplateAutomationAllowlist: row.whatsappTemplateAutomationAllowlist,
+    presenceMode: row.presenceMode,
+    presenceTypingLeadMs: row.presenceTypingLeadMs,
     updatedAt: row.updatedAt,
   };
 }
@@ -147,6 +157,8 @@ export interface PolicyEdit {
     readonly deliveryDelayMs: { readonly minMs: number; readonly maxMs: number };
   };
   readonly takeoverPauseMs?: number;
+  readonly presenceMode?: PresenceMode;
+  readonly presenceTypingLeadMs?: number;
   readonly instagramAfterWindowPolicy?: InstagramAfterWindowPolicy;
   readonly whatsappAfterWindowPolicy?: WhatsAppAfterWindowPolicy;
   readonly whatsappTemplateAutomationAllowlist?: readonly string[];
@@ -219,6 +231,8 @@ export async function savePolicy(
         instagramAfterWindowPolicy: edit.instagramAfterWindowPolicy ?? (before.instagramAfterWindowPolicy as InstagramAfterWindowPolicy),
         whatsappAfterWindowPolicy: edit.whatsappAfterWindowPolicy ?? (before.whatsappAfterWindowPolicy as WhatsAppAfterWindowPolicy),
         whatsappTemplateAutomationAllowlist: edit.whatsappTemplateAutomationAllowlist ?? before.whatsappTemplateAutomationAllowlist,
+        presenceMode: edit.presenceMode ?? (before.presenceMode as PresenceMode),
+        presenceTypingLeadMs: edit.presenceTypingLeadMs ?? before.presenceTypingLeadMs,
       });
     } catch (error) {
       // The domain's own message, which names the field. Rewriting it here would lose that.
@@ -247,6 +261,8 @@ export async function savePolicy(
       instagramAfterWindowPolicy: validated.instagramAfterWindowPolicy,
       whatsappAfterWindowPolicy: validated.whatsappAfterWindowPolicy,
       whatsappTemplateAutomationAllowlist: [...validated.whatsappTemplateAutomationAllowlist],
+      presenceMode: validated.presenceMode,
+      presenceTypingLeadMs: validated.presenceTypingLeadMs,
     };
 
     if (!changed(existing, after)) {
@@ -348,6 +364,8 @@ function auditable(row: PolicyRow) {
     instagramAfterWindowPolicy: row.instagramAfterWindowPolicy,
     whatsappAfterWindowPolicy: row.whatsappAfterWindowPolicy,
     whatsappTemplateAutomationAllowlist: row.whatsappTemplateAutomationAllowlist,
+    presenceMode: row.presenceMode,
+    presenceTypingLeadMs: row.presenceTypingLeadMs,
   };
 }
 

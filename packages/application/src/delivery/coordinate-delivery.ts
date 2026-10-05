@@ -33,7 +33,8 @@ import { sendDisposition, type SendResult } from "@omnichannel/channel-core";
 import type { ReasonCode } from "@omnichannel/domain";
 
 import { evaluatePolicy } from "../policy/evaluate";
-import type { PolicyInput } from "../policy/inputs";
+
+import { policyInputFor } from "./policy-input";
 import type {
   CancelledStatus,
   DeliveryChannelStatePort,
@@ -273,41 +274,6 @@ function deferralFor(dependencies: DeliveryDependencies, context: DeliverySendCo
   return decision.notBefore.getTime() > dependencies.now().getTime() ? decision.notBefore : undefined;
 }
 
-function policyInputFor(dependencies: DeliveryDependencies, context: DeliverySendContext): PolicyInput {
-  // Both from the read the claim will bind: the limits the store returned with the state, and the channel
-  // facts derived from that same state. Nothing here was read at a different moment from anything else.
-  const channelState = dependencies.channel.stateFor(context);
-  return {
-    mode: context.mode,
-    aiEnabled: context.aiEnabled,
-    takeover: context.takeover,
-    draft: {
-      // The draft is already written and validated; what matters now is whether it may still go out.
-      usable: context.text !== undefined,
-      // Confidence and categories were judged when the draft was approved. Re-judging them here would
-      // re-litigate a decision, not revalidate a state, so this gate carries the approval forward and lets
-      // the *state* gates do the work.
-      confidence: context.draftNeedsReview ? 0 : 1,
-      reasonCodes: [],
-      citedSourceIds: [],
-      contentType: "TEXT",
-    },
-    retrieval: { suppliedSourceIds: [], corpusReachable: true },
-    limits: context.limits,
-    account: context.account,
-    capabilities: { text: true, image: false, video: false, audio: false, document: false, interactive: false, templates: false, reactions: false, readReceipts: false, typingIndicator: false },
-    window: channelState.window,
-    humanAgent: channelState.humanAgent,
-    ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),
-    // From the context, so the switch the decision honours is the one the claim re-asserts. It is still
-    // an operator's decision about the system rather than a fact about this conversation — but a value
-    // read outside the guarded read cannot be bound by the claim, and unbound is how it was bypassable.
-    ...(context.outboundSuspended === undefined ? {} : { outboundSuspended: context.outboundSuspended }),
-    replyCycle: context.replyCycle,
-    authority: context.authority,
-    now: dependencies.now(),
-  };
-}
 
 /** The most specific cause wins, so the audit trail says what actually stopped the send. */
 function cancelledStatusFor(reasons: readonly ReasonCode[]): CancelledStatus {

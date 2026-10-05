@@ -9,11 +9,13 @@ import {
   deliveryJobSchema,
   inboundDebounceJobSchema,
   mediaTranscriptionJobSchema,
+  presenceJobSchema,
   reconciliationJobSchema,
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
   type MediaTranscriptionJob,
+  type PresenceJob,
   type ReconciliationJob,
 } from "./payloads";
 
@@ -117,7 +119,25 @@ export const RECONCILIATION: JobFamily<ReconciliationJob> = {
   jobOptions: { ...RETENTION, attempts: 5, backoff: { type: "exponential", delay: 30_000 } },
 };
 
-export const JOB_FAMILIES = [INBOUND_DEBOUNCE, MEDIA_TRANSCRIPTION, AI_DRAFT_GENERATION, DELIVERY, RECONCILIATION] as const;
+export const PRESENCE: JobFamily<PresenceJob> = {
+  queueName: "presence",
+  jobName: "presence.v1",
+  schema: presenceJobSchema,
+  // One announcement per scheduled reply. A second job for the same operation would be a second typing
+  // indicator for one reply, and the deterministic id makes that impossible rather than merely unlikely.
+  jobId: (job) => buildJobId("presence", 1, job.workspaceId, job.businessProfileId, job.operationId),
+  /**
+   * One attempt, and that is the whole policy.
+   *
+   * Every other family retries because the work still needs doing. This one does not: the announcement is
+   * only meaningful in the seconds before the reply, so a retry a minute later would raise a typing
+   * indicator after the message had already arrived — worse than the silence it was trying to fix. The
+   * handler therefore never throws, and the attempt count says so out loud.
+   */
+  jobOptions: { ...RETENTION, attempts: 1 },
+};
+
+export const JOB_FAMILIES = [INBOUND_DEBOUNCE, MEDIA_TRANSCRIPTION, AI_DRAFT_GENERATION, PRESENCE, DELIVERY, RECONCILIATION] as const;
 
 /**
  * How much work one worker process may have in flight per queue, and how fast it may start it.
@@ -153,6 +173,12 @@ export const DEFAULT_QUEUE_LIMITS: Readonly<Record<string, QueueExecutionLimits>
   [MEDIA_TRANSCRIPTION.queueName]: { concurrency: 2, rateLimit: { max: 60, durationMs: 60_000 } },
   // One provider, charged per token and rate-limited by tier. Concurrency here is the storm risk.
   [AI_DRAFT_GENERATION.queueName]: { concurrency: 2, rateLimit: { max: 30, durationMs: 60_000 } },
+  /**
+   * Cheap, short and time-critical: one small POST that is worthless a few seconds late. Higher
+   * concurrency than delivery on purpose — a presence job that queues behind others misses its moment,
+   * and the provider documents no separate limit for these calls.
+   */
+  [PRESENCE.queueName]: { concurrency: 8, rateLimit: { max: 120, durationMs: 60_000 } },
   // Bounded by the platform's own send limits; exceeding them is charged to the account, not the request.
   [DELIVERY.queueName]: { concurrency: 4, rateLimit: { max: 60, durationMs: 60_000 } },
   // Investigation only, and it never sends. Low, because it is never the urgent work.

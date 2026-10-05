@@ -78,6 +78,20 @@ enum ChannelAccountStatus {
   DISCONNECTED
 }
 
+/// What a business signals back to a customer while a reply is being prepared (#22).
+///
+/// Three values rather than two booleans, because the provider does not offer the two independently: the
+/// documented request that raises a typing indicator carries the read status as a required field. A pair
+/// of booleans would let an owner ask for a combination no channel can perform.
+enum PresenceMode {
+  /// Say nothing. The customer sees neither a read receipt nor a typing indicator.
+  OFF
+  /// Mark the customer's message read as soon as the reply is scheduled, and show no typing indicator.
+  READ_ON_RECEIPT
+  /// Mark read and show the typing indicator shortly before the reply actually goes out.
+  READ_AND_TYPING
+}
+
 enum WhatsAppOnboardingMode {
   NEW_OR_MIGRATED_CLOUD_NUMBER
   COEXISTENCE_EXISTING_BUSINESS_APP
@@ -1496,6 +1510,12 @@ model AutomationPolicy {
   quietHoursStart                     String?                    @map("quiet_hours_start")
   quietHoursEnd                       String?                    @map("quiet_hours_end")
   takeoverPauseMs                     Int                        @default(21600000) @map("takeover_pause_ms")
+  /// Whether the product signals that a customer's message was seen, and that a reply is being written.
+  /// OFF by default: presence is a promise to a customer, and a business opts into making it.
+  presenceMode                        PresenceMode               @default(OFF) @map("presence_mode")
+  /// How long before the reply the typing indicator is raised. Bounded by the provider's own indicator
+  /// lifetime, which is 25 s on WhatsApp — a longer lead would show it and drop it.
+  presenceTypingLeadMs                Int                        @default(8000) @map("presence_typing_lead_ms")
   instagramAfterWindowPolicy          InstagramAfterWindowPolicy @default(STANDARD_ONLY) @map("instagram_after_window_policy")
   whatsappAfterWindowPolicy           WhatsAppAfterWindowPolicy  @default(SERVICE_WINDOW_ONLY) @map("whatsapp_after_window_policy")
   whatsappTemplateAutomationAllowlist String[]                   @default([]) @map("whatsapp_template_automation_allowlist")
