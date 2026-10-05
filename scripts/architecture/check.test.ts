@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   checkWorkspace,
@@ -17,6 +17,39 @@ import {
 } from "./check.ts";
 import { PACKAGE_RULES, WORKSPACE_SCOPE, type PackageRule } from "./rules.ts";
 import { extractModuleReferences, loadWorkspace } from "./workspace.ts";
+
+/**
+ * The real workspace, read once.
+ *
+ * Nine tests check a synthetic violation against the actual repository, and each used to re-read and
+ * re-parse every source file in it. That is the same read nine times over a workspace that keeps growing,
+ * and it is what eventually pushed one of these tests past its timeout on CI while passing locally —
+ * a failure that says nothing about the code under test.
+ *
+ * Read-only: callers build a modified copy with `map` and spreads, so sharing it is safe.
+ */
+const realWorkspace = (() => {
+  let pending: ReturnType<typeof loadWorkspace> | undefined;
+  return () => {
+    pending ??= loadWorkspace(path.resolve(import.meta.dirname, "../.."));
+    return pending;
+  };
+})();
+
+/**
+ * Pays for that read in setup, where it belongs.
+ *
+ * Caching it was not enough on its own: the *first* test to ask for the workspace bore the whole cost of
+ * reading and parsing every source file in the repository, and on a slower runner that one read alone
+ * crossed the five-second test timeout while every other test in the file finished in milliseconds. A
+ * test that fails because it happened to be first says nothing about the code it checks.
+ *
+ * Its own generous timeout, because this is I/O over a workspace that keeps growing and a hook that timed
+ * out would reintroduce the same failure one level up.
+ */
+beforeAll(async () => {
+  await realWorkspace();
+}, 120_000);
 
 const scoped = (name: string) => `${WORKSPACE_SCOPE}${name}`;
 
@@ -726,13 +759,12 @@ describe("checkWorkspace: source imports", () => {
   });
 
   it("rejects the reviewer's constructor-alias fixture in a pure package through the real workspace (R1-01 follow-up 4)", async () => {
-    const rootDir = path.resolve(import.meta.dirname, "../..");
     const source = `
       const compile = (() => {}).constructor as (source: string) => () => boolean;
       const loaded = compile("return typeof process.getBuiltinModule('fs').readFileSync === 'function'")();
       if (!loaded) throw new Error("Synthetic fs capability check failed");
     `;
-    const { packages, root } = await loadWorkspace(rootDir);
+    const { packages, root } = await realWorkspace();
     const modified = packages.map((candidate) =>
       candidate.name === scoped("application")
         ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-constructor-alias.ts", ...extractModuleReferences(source) }] }
@@ -745,7 +777,6 @@ describe("checkWorkspace: source imports", () => {
   });
 
   it("rejects the reviewer's global self-reference fixture in a pure package through the real workspace (R1-01 follow-up 3)", async () => {
-    const rootDir = path.resolve(import.meta.dirname, "../..");
     const source = `
       const builtin = (
         globalThis as unknown as {
@@ -759,7 +790,7 @@ describe("checkWorkspace: source imports", () => {
 
       void builtin;
     `;
-    const { packages, root } = await loadWorkspace(rootDir);
+    const { packages, root } = await realWorkspace();
     const modified = packages.map((candidate) =>
       candidate.name === scoped("application")
         ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-global-self.ts", ...extractModuleReferences(source) }] }
@@ -773,7 +804,6 @@ describe("checkWorkspace: source imports", () => {
   });
 
   it("rejects the reviewer's bracket-access loader fixture through the real workspace (R1-01 follow-up 2)", async () => {
-    const rootDir = path.resolve(import.meta.dirname, "../..");
     const fixtures: Record<string, string> = {
       "src/r1-element-loader.ts": `
         import * as nodeModule from "node:module";
@@ -783,7 +813,7 @@ describe("checkWorkspace: source imports", () => {
       "src/r1-module-require.ts": 'module["require"]("../../channel-whatsapp/src/index.ts");',
       "src/r1-builtin.ts": 'process["getBuiltinModule"](["fs"].join(""));',
     };
-    const { packages, root } = await loadWorkspace(rootDir);
+    const { packages, root } = await realWorkspace();
     const modified = packages.map((candidate) =>
       candidate.name === scoped("ai")
         ? {
@@ -804,14 +834,13 @@ describe("checkWorkspace: source imports", () => {
   });
 
   it("rejects the reviewer's forwarded-loader fixture through the real workspace (R1-01 follow-up)", async () => {
-    const rootDir = path.resolve(import.meta.dirname, "../..");
     const source = `
       import { createRequire } from "node:module";
       const load = createRequire(import.meta.url);
       const forwarded = load;
       forwarded("../../channel-whatsapp/src/index.ts");
     `;
-    const { packages, root } = await loadWorkspace(rootDir);
+    const { packages, root } = await realWorkspace();
     const modified = packages.map((candidate) =>
       candidate.name === scoped("ai")
         ? { ...candidate, sourceFiles: [...candidate.sourceFiles, { path: "src/r1-alias-review.ts", ...extractModuleReferences(source) }] }
@@ -1177,8 +1206,7 @@ describe("loadWorkspace", () => {
 
 describe("repository workspace", () => {
   it("satisfies every architecture boundary rule", async () => {
-    const rootDir = path.resolve(import.meta.dirname, "../..");
-    const { packages, root } = await loadWorkspace(rootDir);
+    const { packages, root } = await realWorkspace();
 
     expect(packages.map((candidate) => candidate.name).sort()).toEqual(Object.keys(PACKAGE_RULES).sort());
     expect(checkWorkspace(packages, { root })).toEqual([]);

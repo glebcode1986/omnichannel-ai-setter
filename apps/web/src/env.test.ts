@@ -21,8 +21,26 @@ describe("loadWebEnv", () => {
       LOG_LEVEL: "info",
       // No API reports Human Agent approval, so it starts closed and an operator opts in.
       INSTAGRAM_HUMAN_AGENT_APPROVAL: "UNKNOWN",
+      // Embeddings for the Knowledge Library's retrieval tester. No key means the tester runs lexical-only
+      // and says so, which is what the worker does with the same setting — the model and width still have
+      // defaults, so the two processes cannot drift apart by one of them omitting a value.
+      AI_EMBEDDING_MODEL: "voyage-3.5",
+      AI_EMBEDDING_DIMENSIONS: 1_024,
+      AI_EMBEDDING_REVISION: "v1",
       ...required,
     });
+  });
+
+  it("takes no embedding key, because lexical-only retrieval is a supported mode", () => {
+    // Requiring one would make an embeddings outage a boot failure for a surface that only reads.
+    expect(loadWebEnv(required).VOYAGE_API_KEY).toBeUndefined();
+  });
+
+  it("reads the embedding settings the retrieval tester needs to match the worker", () => {
+    const env = loadWebEnv({ ...required, VOYAGE_API_KEY: "fake-key", AI_EMBEDDING_DIMENSIONS: "1024" });
+
+    expect(env.VOYAGE_API_KEY).toBe("fake-key");
+    expect(env.AI_EMBEDDING_DIMENSIONS).toBe(1_024);
   });
 
   it("rejects invalid values", () => {

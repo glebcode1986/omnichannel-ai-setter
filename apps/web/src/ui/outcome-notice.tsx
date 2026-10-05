@@ -28,10 +28,31 @@ const OUTCOMES = [
   "COMPOSE_REPLAYED",
   "ALREADY_PENDING",
   "NOT_OPEN",
+  // The Knowledge Library's own family. It was missing, so every save, publish and archive redirected
+  // with an outcome this component then ignored: the operator pressed Save and was told nothing, which
+  // is indistinguishable from pressing Save and nothing happening.
+  "CREATED",
+  "VERSIONED",
+  "UNCHANGED",
+  "PUBLISHED",
+  "ARCHIVED",
+  "RESTORED",
+  "CONFLICT",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
-const REFUSALS = new Set<string>(["TOO_LATE", "STALE", "GONE", "REJECTED", "ALREADY_RESOLVED", "ALREADY_PENDING", "NOT_OPEN"]);
+const REFUSALS = new Set<string>([
+  "TOO_LATE",
+  "STALE",
+  "GONE",
+  "REJECTED",
+  "ALREADY_RESOLVED",
+  "ALREADY_PENDING",
+  "NOT_OPEN",
+  // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
+  // their edit or their publish landed.
+  "CONFLICT",
+]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {
   // An outcome nobody defined is not rendered at all. It can only come from a hand-edited URL, and

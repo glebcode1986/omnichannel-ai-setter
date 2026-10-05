@@ -33,6 +33,21 @@ export const webEnvSchema = runtimeEnvSchema.extend({
    * and defaults to UNKNOWN, which keeps the human-agent send path closed.
    */
   INSTAGRAM_HUMAN_AGENT_APPROVAL: z.enum(["APPROVED", "NOT_APPROVED", "UNKNOWN"]).default("UNKNOWN"),
+
+  /**
+   * Embeddings, for the Knowledge Library's retrieval tester only (ADR-011, Issue #31).
+   *
+   * These must match the worker's. The tester exists to answer "would the assistant find this fact?", and
+   * a tester configured differently from the process that actually retrieves answers a different question
+   * — one an operator would act on. Absent is supported and honest: retrieval runs lexical-only, the
+   * worker does the same with the same setting, and the tester says on screen which mode it is in.
+   *
+   * Nothing here is used to *write* embeddings. Indexing is the worker's, and the web app never chunks.
+   */
+  VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
+  AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
+  AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
+  AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
 });
 
 export type WebEnv = ReturnType<typeof loadWebEnv>;

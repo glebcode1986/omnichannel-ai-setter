@@ -40,6 +40,11 @@ export interface SeedDocumentInput {
   readonly title: string;
   readonly status?: "DRAFT" | "ACTIVE" | "ARCHIVED";
   readonly version?: number;
+  /**
+   * The version retrieval answers with. Defaults to the latest saved one for a live document, which is
+   * the ordinary case; set it lower to seed the state an unpublished edit leaves behind.
+   */
+  readonly publishedVersion?: number | null;
   readonly chunks: readonly SeedChunk[];
   /** Chunks left behind by an earlier version: still present for audit, never retrievable. */
   readonly supersededChunks?: readonly SeedChunk[];
@@ -53,6 +58,10 @@ export interface SeededDocument {
 
 export async function seedKnowledgeDocument(db: DbClient, input: SeedDocumentInput): Promise<SeededDocument> {
   const version = input.version ?? 1;
+  const status = input.status ?? "ACTIVE";
+  // A live document must name a published version — the CHECK says so, and so does retrieval, which joins
+  // the chunks of that version rather than of the latest save.
+  const publishedVersion = input.publishedVersion === undefined ? (status === "ACTIVE" ? version : null) : input.publishedVersion;
   const document = await db.knowledgeDocument.create({
     data: {
       workspaceId: input.workspaceId,
@@ -60,7 +69,8 @@ export async function seedKnowledgeDocument(db: DbClient, input: SeedDocumentInp
       title: input.title,
       sourceType: "MANUAL",
       version,
-      status: input.status ?? "ACTIVE",
+      publishedVersion,
+      status,
     },
     select: { id: true },
   });

@@ -226,28 +226,114 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **The Review queue could not show more than 25 items (#29).** Found while repairing the identical
-   blocker Astra raised on PR #77, by checking every paged store list against the screen that spends its
-   cursor. `listReviewQueue` pages at 25 and returns a `nextCursor`; the route called it with no cursor
-   and rendered no link. The label `review.loadMore` already existed in both catalogues and nothing used
-   it — the sentence was written and the link never was.
+**Reviewer note.** AntiGravity is temporarily unavailable due to reviewer limits, so Astra is the active
+independent reviewer for this cycle.
 
-   It mattered more here than in the library. `approveDraftAction`, `editAndSendAction`,
-   `dismissDraftAction` and `claimDraftAction` are imported by **one** file, the Review queue route. The
-   conversation screen can take over, hand back, cancel a send and compose a reply, but not decide a
-   draft. So the twenty-sixth item waiting for a person could not be approved, edited, dismissed or
-   claimed anywhere in the product; an operator could only take the conversation and type a reply
-   themselves, leaving the draft PENDING for good. In DRAFT mode every inbound message produces one.
+1. **The archive a stale Publish could undo (#31 / PR #77, fifth cycle).** Astra confirmed the four
+   earlier repairs and found one more, in the same R5 stale-UI class.
 
-   Fixed with the shape proved on #77: the cursor through the route's query parameters, the assembly in
-   `review-page.ts` where a test can call it, and `review-screen.integration.test.ts` walking the loop a
-   browser walks. Two details specific to this queue: every *filter* link drops the cursor, because
-   changing what the queue shows means starting from the top of it, and a cursor is not a filter, so page
-   two of the whole queue does not explain itself with "nothing matches that filter".
+   **Archiving leaves the version alone.** That one fact is the whole defect: a tab that rendered Publish
+   still carried a matching expected version after another operator archived the source, and the
+   conditional write named only the version and the indexing state — so the stale click wrote `ACTIVE`
+   over the archive and reported success. A source deliberately withdrawn from retrieval was answering
+   customers again.
 
-   **This moves an accepted head.** #76 was PASSED at `3db5d63`, so its verdict is now stale and the head
-   needs an independent re-review. Propagation to #77–#86 is deliberately **not** done yet: Astra is
-   mid-review of #77 at `b8d0eea`, and merging into it would invalidate the exact head she is reading.
+   The write is now bound to the act the screen offered (`PUBLISH` vs `RESTORE`), refuses a status that
+   act does not expect, and names `status` in its predicate so an archive landing in the gap misses. The
+   answer is a typed `STALE_STATE`; the screen shows the same "reload and look" sentence a conflict gets.
+
+   **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
+   facts than the decision was made from. A version is not the only premise a screen renders.
+1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
+   branch. The previous repair was correct on every path its own tests walked; all four findings were
+   about paths they did not.
+
+   **An edited live source had no way to publish its staged version.** The store deliberately leaves an
+   edited ACTIVE document at `publishedVersion = 1`, the page rendered the "saved v2, customers are
+   answered with v1" warning — and its control branch offered Archive to every ACTIVE document and
+   Publish only to DRAFTs. The store could do it and the operator could not reach it. The rule now lives
+   in `knowledgeLifecycleOf`: a version that is not the published one is publishable whatever the
+   status.
+
+   **A missing version was accepted by the action that claimed to refuse it.** `editKnowledgeAction`
+   parsed `expectedVersion` and, when it could not read one, omitted the property — and the store checks
+   staleness only when it is present. A form that left the field out therefore edited whatever was
+   current and reported `VERSIONED`: the whole stale-tab mechanism, steppable around by sending one fewer
+   field. The decision moved to `knowledge-submission.ts`, where it is refused before the store is
+   reached and can be run against requests no browser built.
+
+   **Publish was not bound to the version the operator saw.** The form submitted no version, the action
+   took no `FormData`, and the store published whatever was current when it started. Two tabs on the same
+   draft was enough: one saves, the other clicks Publish, and content nobody reviewed is live under a
+   success notice. The version now travels page → control → action → store, and a mismatch is a
+   `CONFLICT`.
+
+   **Publishing and recording an indexing failure could race into a raw constraint error.** Both read the
+   row, decided, then wrote conditional on the version alone — so each could write the other's premise
+   away and produce ACTIVE + FAILED + published-at-this-version, the triple the CHECK refuses. Each write
+   now names every column its decision came from: the publish refuses with the sentence the pre-read
+   would have given, and the health write re-decides once against the state that replaced it, archiving
+   the source whose published version the publish just moved.
+
+   **The lesson:** a correct store plus a correct screen is not a correct product. Three of the four were
+   gaps *between* two correct pieces — a control that was never rendered, a field that was never required,
+   a predicate that named one of the two facts it read.
+1. **Three P5-05 concurrency blockers, two of them introduced by the previous repair.** Astra re-reviewed
+   the repaired head and found that separating Save from Publish had not closed the interleavings it
+   created. All three were correct.
+
+   **A publish could report success having published nothing.** `restoreKnowledge` writes conditionally on
+   the version it read — and discarded the row count, so a save landing in the gap meant zero rows changed
+   while the action still mapped the result to `PUBLISHED`. The condition was there and its answer was
+   thrown away, which is the mistake `recordIndexingResult` had been fixed for the day before.
+
+   **A save was not bound to the version the form showed.** Two tabs at v1: A saves and becomes v2, B —
+   still showing v1 — saves over it with wording composed against content it never saw. `expectedVersion`
+   now travels page → form → action → store, the document moves first and conditionally, and the chunks
+   are written only if it did. Two simultaneous submits cannot both become v2; the loser gets a conflict
+   rather than a unique-constraint error from the chunks' position key.
+
+   **A failure in an unpublished version archived the published one.** After publish/index v1 and Save v2,
+   a failure to index v2 — content no customer has ever seen — took the document out of ACTIVE and stopped
+   healthy v1 answering. `knowledge_documents_failed_not_active_check` was written when a document had one
+   version; it is now about the version customers are answered with, and so is the store.
+
+   **Found while fixing it:** the whole knowledge outcome family — CREATED, VERSIONED, UNCHANGED,
+   PUBLISHED, ARCHIVED, RESTORED — was missing from `OutcomeNotice`'s allowlist and from both catalogues,
+   so every save and publish redirected with an outcome the page ignored. The operator pressed Save and was
+   told nothing, which is indistinguishable from pressing Save and nothing happening. A typed conflict
+   nobody can see would have been the same defect in a new place.
+
+   **The lesson:** a conditional write is only half a fix. The other half is reading what it did — and
+   saying so on screen.
+2. **Three P5-05 blockers, all correct (#31 / PR #77).**
+
+   **Save published immediately.** Retrieval joined the document's latest *saved* version, so pressing
+   Save on a live source put the new wording in front of customers at once — while
+   `knowledge-editor.tsx` promised the opposite: "Never a live change... publishing is a separate,
+   deliberate act". An operator half-way through rewording a refund policy was already answering with the
+   half. `knowledge_documents.published_version` is now its own column, retrieval joins it, and only an
+   explicit publish moves it. Editing a live source keeps answering with the wording somebody approved,
+   and the detail page says which version is which, because an invariant the screen does not show is one
+   the operator cannot act on.
+
+   **An indexing result could certify content the worker never read.** `recordIndexingResult` took a
+   document and a result and applied it to whatever version happened to be current. A delayed success for
+   v1 arriving after an edit to v2 marked v2 INDEXED; a delayed failure archived a live source over a
+   problem that no longer existed. The result now carries the version it is about and applies
+   conditionally, in the database; anything else is `STALE` and writes nothing.
+
+   **The library stopped at 25 rows.** The store paged and returned a cursor; the route never read one and
+   the list never rendered a link, so the 26th source was unreachable unless the operator guessed a word
+   from its title. `knowledge-view.ts` carries the cursor through the URL, and the next link is built from
+   the incoming query rather than from re-serialized filters — a filter rebuilt from parsed values drifts
+   the moment a parameter is added and forgotten, and the symptom is a "load more" that silently drops the
+   search.
+
+   **The lesson across all three:** each was a correct piece of code reading a value that had stopped
+   meaning what it used to. `version` stopped meaning "what customers get" the moment publishing became
+   separate; a document id stopped identifying content the moment versions existed; a cursor the store
+   returns means nothing until a route spends it.
 2. **A human-composed reply was invisible in its own conversation (#29 / PR #76).** Astra's blocking
    finding, and it was correct. ADR-018 Option B made `delivery_jobs.draft_id` nullable and gave a
    human-composed delivery a direct `conversation_id`, but two read paths still reached the conversation

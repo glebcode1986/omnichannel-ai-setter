@@ -206,6 +206,47 @@ describe("the boundary the contract draws", () => {
   });
 });
 
+describe("the way out of a missing fact", () => {
+  it("offers to write the fact down, for an item held because one was missing", () => {
+    card({ reasonCodes: ["MISSING_FACT"], intent: "OPENING_HOURS" });
+
+    const link = screen.getByRole("link", { name: text("missingFact.add") });
+    expect(link.getAttribute("href")).toBe(`${BASE}/knowledge?suggest=OPENING_HOURS`);
+  });
+
+  it("carries the model's reading of the question, never the customer's own words", () => {
+    // A customer's message is a question, not a fact about the business. Pre-filling it would invite
+    // somebody to press save on it.
+    card({ reasonCodes: ["MISSING_FACT"], intent: null, text: "I am not sure about that." });
+
+    expect(screen.getByRole("link", { name: text("missingFact.add") }).getAttribute("href")).toBe(`${BASE}/knowledge`);
+    expect(screen.getByText(text("missingFact.notFromCustomer"))).toBeDefined();
+  });
+
+  it("escapes an intent that would otherwise break the URL", () => {
+    card({ reasonCodes: ["MISSING_FACT"], intent: "price & hours" });
+
+    expect(screen.getByRole("link", { name: text("missingFact.add") }).getAttribute("href")).toBe(`${BASE}/knowledge?suggest=price%20%26%20hours`);
+  });
+
+  it("says nothing about knowledge when the item was held for another reason", () => {
+    card({ reasonCodes: ["LOW_CONFIDENCE"] });
+
+    expect(screen.queryByRole("link", { name: text("missingFact.add") })).toBeNull();
+    expect(document.querySelector("[data-missing-fact]")).toBeNull();
+  });
+
+  it("adds nothing by itself: the link goes to a form, not to a save", () => {
+    card({ reasonCodes: ["MISSING_FACT"], intent: "OPENING_HOURS" });
+
+    // A link, not a button in a form. Adding a fact is a considered act with its own draft and publish
+    // steps, and one click from a review queue is not that.
+    const section = document.querySelector("[data-missing-fact]") as HTMLElement;
+    expect(section.querySelector("form")).toBeNull();
+    expect(section.querySelector("button")).toBeNull();
+  });
+});
+
 describe("keyboard operation", () => {
   it("reaches every decision by tabbing, in the order they are offered", async () => {
     const user = userEvent.setup();

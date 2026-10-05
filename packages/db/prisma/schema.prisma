@@ -219,6 +219,14 @@ enum KnowledgeDocumentStatus {
   ARCHIVED
 }
 
+/// Whether a document's content actually reached the index. A failure has to be visible, because a source
+/// that silently never indexed looks exactly like one the business successfully told the assistant about.
+enum KnowledgeIndexingState {
+  PENDING
+  INDEXED
+  FAILED
+}
+
 enum ReconciliationReason {
   AMBIGUOUS_SEND_RESULT
   DELIVERY_HANDLER_FAILED
@@ -842,8 +850,19 @@ model KnowledgeDocument {
   sourceType        KnowledgeSourceType     @map("source_type")
   sourceUri         String?                 @map("source_uri")
   version           Int                     @default(1)
+  /// The version retrieval answers with. Moved only by an explicit publish, never by Save, so editing a
+  /// live source keeps serving the wording somebody approved (CHECK: ACTIVE requires one, and it can
+  /// never name a version the document has not had).
+  publishedVersion  Int?                    @map("published_version")
   status            KnowledgeDocumentStatus @default(DRAFT)
   contentHash       String?                 @map("content_hash")
+  /// Whether the *current* version's content is searchable; every edit resets it to PENDING. A CHECK
+  /// forbids an ACTIVE document whose failure is about the version it publishes — a failure in a saved
+  /// but unpublished version is recorded without taking the published one out of retrieval.
+  indexingState     KnowledgeIndexingState  @default(PENDING) @map("indexing_state")
+  /// Set exactly when `indexingState` is FAILED (CHECK): an error with no failure reads as a current problem.
+  indexingError     String?                 @map("indexing_error")
+  indexedAt         DateTime?               @map("indexed_at")
   createdByUserId   String?                 @map("created_by_user_id")
   createdAt         DateTime                @default(now()) @map("created_at")
   updatedAt         DateTime                @updatedAt @map("updated_at")
@@ -855,6 +874,7 @@ model KnowledgeDocument {
 
   @@unique([workspaceId, id])
   @@index([workspaceId, businessProfileId, status])
+  @@index([workspaceId, businessProfileId, status, updatedAt(sort: Desc)], map: "knowledge_documents_library_idx")
   @@map("knowledge_documents")
 }
 
