@@ -28,6 +28,7 @@ import {
   type HumanAgentApproval,
   type WindowInputs,
 } from "@omnichannel/channel-instagram";
+import { DEFAULT_SERVICE_WINDOW_MS as WHATSAPP_SERVICE_WINDOW_MS, evaluateServiceWindow } from "@omnichannel/channel-whatsapp";
 
 /** Defaults used where an account has not recorded its own; the adapter owns the verified values. */
 const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowMs"> = {
@@ -46,6 +47,9 @@ const DEFAULT_WINDOW: Pick<WindowInputs, "standardWindowMs" | "humanAgentWindowM
 export function createChannelStateResolver(now: () => Date, humanAgentApproval: HumanAgentApproval = "UNKNOWN"): DeliveryChannelStatePort {
   return {
     stateFor(context: DeliverySendContext): DeliveryChannelState {
+      if (context.channel === "WHATSAPP") {
+        return whatsappState(context, now());
+      }
       const windowInputs: WindowInputs = {
         ...DEFAULT_WINDOW,
         connectionState: context.account === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
@@ -74,5 +78,39 @@ export function createChannelStateResolver(now: () => Date, humanAgentApproval: 
           : { dispatchDeadline: new Date(context.lastInboundAt.getTime() + timing.automatedDispatchTargetMs) }),
       };
     },
+  };
+}
+
+/**
+ * WhatsApp's own rules, which differ from Instagram's in two ways that matter (#24).
+ *
+ * **The window has three answers, not two.** Outside the 24-hour customer-service window a conversation is
+ * not closed — an approved template may still reach the customer — so `TEMPLATE_ONLY` is carried through
+ * rather than collapsed into "not eligible". What to do about it is the policy engine's decision, and
+ * ADR-016's three modes are how a business makes it.
+ *
+ * **There is no human-agent exception and no automated dispatch deadline.** Both are Instagram's: the
+ * exception is a Meta approval for that platform, and the deadline comes from its rule that an automated
+ * experience must answer within seconds. Applying either here would be inventing a WhatsApp rule — and the
+ * deadline in particular would do visible damage, shortening or abandoning the human-like delay on every
+ * WhatsApp reply for a constraint that platform does not impose.
+ */
+function whatsappState(context: DeliverySendContext, at: Date): DeliveryChannelState {
+  return {
+    window: evaluateServiceWindow(
+      {
+        workspaceId: context.workspaceId,
+        channelAccountId: context.channelAccountId,
+        conversationId: context.conversationId,
+        participantExternalId: context.recipientExternalId,
+        ...(context.lastInboundAt === undefined ? {} : { lastInboundAt: context.lastInboundAt }),
+        now: at,
+      },
+      {
+        connectionState: context.account === "CONNECTED" ? "CONNECTED" : "DISCONNECTED",
+        serviceWindowMs: WHATSAPP_SERVICE_WINDOW_MS,
+      },
+    ),
+    humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
   };
 }

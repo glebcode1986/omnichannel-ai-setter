@@ -275,6 +275,32 @@ Idempotency is the same decision digest the review path uses.
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P4-07 / Issue #24 — the WhatsApp vertical slice.** Branch
+   `feat/p4-07-whatsapp-slice`, based on #92.
+
+   **WhatsApp had no `DeliverySendPort` at all.** Every WhatsApp reply was refused with `NO_ADAPTER`, so
+   the whole outbound half of the channel was unreachable while each of its parts passed its own tests —
+   the same shape of gap as #23's missing ingestion wiring. `createSender` now resolves the transport from
+   the channel the delivery's account names, rather than being Instagram's by construction.
+
+   **Two channel rules were Instagram's applied to everything:**
+
+   - **The automated-dispatch deadline.** Meta requires an *Instagram* automated experience to answer
+     within seconds, and the disposition applied that budget to every conversation. On WhatsApp it would
+     have shortened or abandoned the human-like delay for a rule that platform does not impose.
+   - **The after-window policy and the window itself.** `afterWindow` was hard-coded to
+     `{ channel: "INSTAGRAM" }`, so ADR-016's three WhatsApp modes could never take effect, and a closed
+     WhatsApp window read as "not eligible" rather than `TEMPLATE_ONLY` — which is the difference between
+     "nothing can reach this customer" and "only an approved template can".
+
+   The human-agent exception stays Instagram's: WhatsApp's route out of a closed window is a template, and
+   the sender carries free-form text only, so a delivery needing a template is refused by the gate above
+   rather than quietly downgraded.
+
+   `docs/specs/WHATSAPP_SLICE_MANUAL_TEST.md` is the sandbox plan the issue asks for — thirteen steps
+   covering onboarding, the window, presence timing, coexistence takeover, disconnect/reconnect, voice
+   notes, rejection versus ambiguity, and duplicates.
+
 1. **P4-06 / Issue #23 — coexistence and native-human takeover.** Branch
    `feat/p4-06-whatsapp-coexistence`, based on #91.
 

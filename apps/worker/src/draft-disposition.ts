@@ -163,8 +163,14 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
       return { status: "SKIPPED", reasons: ["no automation policy"] };
     }
 
+    // Instagram's budget for an automated experience, and only Instagram's: WhatsApp publishes no such
+    // deadline, so applying one would shorten or abandon the human-like delay for a rule that platform
+    // does not impose.
     const timing = instagramTimingPolicy();
-    const remainingMs = conversation.lastInboundAt === null ? undefined : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
+    const remainingMs =
+      conversation.lastInboundAt === null || conversation.channelIdentity.channelAccount.channel !== "INSTAGRAM"
+        ? undefined
+        : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
     const decision: PolicyDecision = evaluatePolicy({
       mode: conversation.modeOverride ?? policy.mode,
       aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
@@ -191,14 +197,17 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
         ...(policy.quietHoursTimeZone === null || policy.quietHoursStart === null || policy.quietHoursEnd === null
           ? {}
           : { quietHours: toQuietHours(policy.quietHoursTimeZone, policy.quietHoursStart, policy.quietHoursEnd) }),
-        afterWindow: { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
+        // The channel's own policy, not Instagram's for everything. Naming one channel here meant a
+        // WhatsApp conversation was judged by Instagram's after-window rules — which have different
+        // values and a different meaning — and ADR-016's three WhatsApp modes could never take effect.
+        afterWindow:
+          conversation.channelIdentity.channelAccount.channel === "WHATSAPP"
+            ? { channel: "WHATSAPP", policy: policy.whatsappAfterWindowPolicy }
+            : { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
       },
       account: conversation.channelIdentity.channelAccount.status,
       capabilities: { ...NO_CAPABILITIES, text: true },
-      window:
-        conversation.lastInboundAt === null
-          ? { state: "NOT_ELIGIBLE", reason: "no user-initiated conversation" }
-          : { state: "OPEN_FREEFORM", expiresAt: new Date(conversation.lastInboundAt.getTime() + 24 * 60 * 60 * 1000) },
+      window: windowFor(conversation.channelIdentity.channelAccount.channel, conversation.lastInboundAt, now),
       // Approval is a live capability, and eligibility is computed from the customer's own last message —
       // the provider's clock — rather than assumed. Without an approved app it stays unavailable.
       humanAgent: humanAgentAvailability(dependencies, { workspaceId: input.workspaceId, conversationId: input.conversationId }, conversation, now),
@@ -269,6 +278,27 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
     });
     return { status: "SCHEDULED", operationId: scheduled.operationId, delayMs: delay.delayMs };
   };
+}
+
+/**
+ * The messaging window as this decision needs it.
+ *
+ * Both channels open a 24-hour window from the customer's own last message. They differ at the end of it:
+ * an Instagram conversation with no inbound has never been eligible, while a WhatsApp one is
+ * `TEMPLATE_ONLY` — an approved template is the documented way to start a conversation there, and calling
+ * it "not eligible" would throw away the only business-initiated route the platform has.
+ */
+function windowFor(channel: string, lastInboundAt: Date | null, now: Date): PolicyInput["window"] {
+  if (channel === "WHATSAPP") {
+    if (lastInboundAt === null) {
+      return { state: "TEMPLATE_ONLY" };
+    }
+    const expiresAt = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+    return expiresAt.getTime() > now.getTime() ? { state: "OPEN_FREEFORM", expiresAt } : { state: "TEMPLATE_ONLY" };
+  }
+  return lastInboundAt === null
+    ? { state: "NOT_ELIGIBLE", reason: "no user-initiated conversation" }
+    : { state: "OPEN_FREEFORM", expiresAt: new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000) };
 }
 
 /**
