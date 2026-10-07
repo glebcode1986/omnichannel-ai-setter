@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { DomainValidationError } from "./errors";
 import {
+  acceptedInOwnLanguage,
   ARRANGEMENT_KINDS,
   arrangementsOf,
   activationSourcesOf,
@@ -19,6 +20,7 @@ import {
   LEGAL_DOCUMENT_KINDS,
   missingAcceptances,
   money,
+  negotiateDocumentLocale,
   periodEndFor,
   quoteVerdict,
   routeAdmits,
@@ -401,9 +403,53 @@ describe("what an event may do to a paid entitlement", () => {
   });
 });
 
+describe("which locale of a document to show", () => {
+  it("prefers the exact tag", () => {
+    expect(negotiateDocumentLocale("ru", ["en", "ru"], "en")).toBe("ru");
+    expect(negotiateDocumentLocale("en-GB", ["en-GB", "en", "ru"], "en")).toBe("en-GB");
+  });
+
+  it("falls back to the same language in another region before changing language", () => {
+    // `ru-RU` reads `ru`. Dropping to English here would hand somebody terms in a language they may not
+    // read while a translation existed.
+    expect(negotiateDocumentLocale("ru-RU", ["en", "ru"], "en")).toBe("ru");
+    expect(negotiateDocumentLocale("pt", ["en", "pt-BR"], "en")).toBe("pt-BR");
+  });
+
+  it("falls back to the published language only when the requested one is absent", () => {
+    expect(negotiateDocumentLocale("ru", ["en"], "en")).toBe("en");
+    expect(negotiateDocumentLocale("de-AT", ["en", "ru"], "en")).toBe("en");
+  });
+
+  it("compares canonical tags, so two spellings of one tag do not miss each other", () => {
+    expect(negotiateDocumentLocale("RU-ru", ["ru-RU"], "en")).toBe("ru-RU");
+    expect(negotiateDocumentLocale("ru", ["RU"], "en")).toBe("RU");
+  });
+
+  it("returns nothing when even the fallback was never published", () => {
+    // Which means nobody published that document at all, and the caller has to say so rather than
+    // render a checkout with no terms on it.
+    expect(negotiateDocumentLocale("ru", [], "en")).toBeUndefined();
+    expect(negotiateDocumentLocale("ru", ["de"], "en")).toBeUndefined();
+  });
+
+  it("ignores a stored tag that is not a tag at all", () => {
+    expect(negotiateDocumentLocale("ru", ["not a tag", "en"], "en")).toBe("en");
+    expect(negotiateDocumentLocale("not a tag", ["en"], "en")).toBe("en");
+  });
+
+  it("says whether the reader got their own language", () => {
+    expect(acceptedInOwnLanguage("ru", "ru")).toBe(true);
+    expect(acceptedInOwnLanguage("ru-RU", "ru")).toBe(true);
+    expect(acceptedInOwnLanguage("ru", "en")).toBe(false);
+    expect(acceptedInOwnLanguage("en-GB", "en-US")).toBe(true);
+  });
+});
+
 describe("legal acceptance", () => {
   it("names the kinds a checkout is still missing", () => {
     expect(missingAcceptances(["TERMS_OF_SERVICE", "PUBLIC_OFFER"], ["PUBLIC_OFFER"])).toEqual(["TERMS_OF_SERVICE"]);
+    expect(missingAcceptances(["TERMS_OF_SERVICE", "REFUND_POLICY"], ["TERMS_OF_SERVICE"])).toEqual(["REFUND_POLICY"]);
     expect(missingAcceptances(["TERMS_OF_SERVICE"], ["TERMS_OF_SERVICE", "PRIVACY_POLICY"])).toEqual([]);
     expect(missingAcceptances([], [])).toEqual([]);
   });

@@ -27,11 +27,15 @@
  * anything that does not come through here.
  */
 import {
+  acceptedInOwnLanguage,
+  canonicalLanguageTag,
   entitlementEffectOf,
   isBillingCapability,
   isChargeInterval,
   isCurrencyCode,
+  LEGAL_DOCUMENT_KINDS,
   missingAcceptances,
+  negotiateDocumentLocale,
   money,
   periodEndFor,
   selectRoute,
@@ -52,7 +56,7 @@ import {
 
 import { recordSystemAuditEvent, recordWorkspaceAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
-import { assertVerifiedBillingEvent, type VerifiedBillingEvent } from "./billing-events";
+import { assertVerifiedBillingEvent, billingProviderRegistered, type VerifiedBillingEvent } from "./billing-events";
 import { DbInputError } from "./errors";
 import { requireRole, scopeOf, type WorkspaceContext } from "./tenancy";
 
@@ -245,7 +249,14 @@ function termsOf(row: {
 export interface LegalDocumentInput {
   readonly kind: LegalDocumentKind;
   readonly locale: string;
-  /** Where the published text lives. Opaque to the product. */
+  /**
+   * Where the published text lives: an absolute `https` URL (#47).
+   *
+   * Opaque in the sense that matters — nothing parses it, nothing branches on it, and the text is not
+   * stored here — but not opaque in form. A checkout renders it as the link somebody reads *before* they
+   * tick the box, so a value that is not a URL is a checkbox asking for consent to something unreadable,
+   * which is precisely what this issue exists to prevent. Checked here and again by a CHECK.
+   */
   readonly contentRef: string;
   /** Set for a document belonging to one selling entity; absent applies to every seller profile. */
   readonly sellerProfileCode?: string;
@@ -267,6 +278,9 @@ export interface LegalDocumentRecord {
  * has to have a number nobody else used.
  */
 export async function publishLegalDocument(db: DbClient, input: LegalDocumentInput): Promise<LegalDocumentRecord> {
+  if (!isReadableDocumentUrl(input.contentRef)) {
+    throw new DbInputError("contentRef", "a legal document is published at an absolute https URL somebody can open");
+  }
   return db.$transaction(async (tx) => {
     const seller =
       input.sellerProfileCode === undefined
@@ -275,7 +289,13 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
     if (input.sellerProfileCode !== undefined && seller === null) {
       throw new DbInputError("sellerProfileCode", `no seller profile with code ${input.sellerProfileCode}`);
     }
-    await serialize(tx, `legal-document:${input.kind}:${input.locale}`);
+    // One lock for the whole catalogue rather than one per kind and locale. It serializes version
+    // assignment, as before, and it also orders a publication against a checkout — which is the race
+    // that matters: a version becoming effective between the store resolving the current documents and
+    // the acceptance rows being written makes the applicability trigger refuse, one layer below where
+    // anything could turn it into a sentence. Both are rare owner-or-operator acts, so serializing them
+    // against each other costs nothing.
+    await serialize(tx, LEGAL_CATALOGUE_LOCK);
     const latest = await tx.legalDocument.findFirst({
       where: { kind: input.kind, locale: input.locale },
       orderBy: { version: "desc" },
@@ -302,6 +322,22 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
 // Checkout
 // ---------------------------------------------------------------------------------------------------------
 
+/**
+ * Whether a published location is one a reader could actually open.
+ *
+ * `https` only, and absolute. A relative path would resolve against whatever page rendered it — the
+ * fixtures in #46 were path fragments, so a link to `terms/en/1` from the checkout route would have
+ * pointed at a page that does not exist — and `http` would hand somebody a contract over a channel that
+ * can be rewritten in transit.
+ */
+export function isReadableDocumentUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export interface CheckoutRequest {
   readonly planVersionId: string;
   readonly interval: ChargeInterval;
@@ -315,7 +351,14 @@ export interface CheckoutRequest {
   readonly currency: string;
   /** ISO 3166-1 alpha-2, where the product knows it. */
   readonly market?: string;
-  /** Which language the legal documents are offered in. */
+  /**
+   * The reader's own interface language, as a BCP-47 tag (#47).
+   *
+   * What the documents are *offered* in is negotiated from it rather than equal to it: a product that has
+   * not translated its offer shows the fallback language, and the acceptance records both facts. Filtering
+   * documents by an exact match — which is what this did before #47 — offered a reader with no translation
+   * no documents at all, and a checkout screen with nothing to tick is not a stricter checkout.
+   */
   readonly locale: string;
   /**
    * Ends the workspace's current charge path and binds the new one to it as its successor.
@@ -328,14 +371,33 @@ export interface CheckoutRequest {
   readonly supersedeCurrent?: boolean;
 }
 
-/** One legal document a checkout has to be accepted against. */
+/** One legal document a checkout is made under: ticked when required, linked when not (#47). */
 export interface LegalDocumentOffer {
   readonly legalDocumentId: string;
   readonly kind: LegalDocumentKind;
   readonly version: number;
+  /** The locale this version is published in, which is not always the one that was asked for. */
   readonly locale: string;
   readonly contentRef: string;
+  /**
+   * Whether a checkout may not proceed without an explicit acceptance of this kind.
+   *
+   * A property of the *kind* rather than of this version, and computed as "the current document of this
+   * kind in any applicable locale requires it". The database's coverage trigger reads it the same way,
+   * and it has to: a rule that differed per locale would offer one reader a checkbox nobody asked for
+   * and refuse another for want of one they were never shown.
+   */
   readonly requiredForCheckout: boolean;
+  /** Whether this version is in the reader's own language, or a fallback they may not read. */
+  readonly inViewerLanguage: boolean;
+  /**
+   * When this version came into force.
+   *
+   * Shown beside the version number because the number alone is ambiguous: the sequence counts
+   * publications of a kind and locale across the whole catalogue, so a selling entity's first offer can
+   * be "version 2". The date is the same for every reader and is what a dispute can actually use.
+   */
+  readonly effectiveFrom: Date;
 }
 
 /**
@@ -361,6 +423,17 @@ export interface CheckoutOffer {
   readonly interval: ChargeInterval;
   readonly base: Money;
   readonly documents: readonly LegalDocumentOffer[];
+  /** The locale the reader asked for, echoed so the screen and the acceptance record agree. */
+  readonly viewerLocale: string;
+  /**
+   * Whether a checkout opened now could actually be settled (#47).
+   *
+   * False when the selected route's provider has no adapter registered in this process, which is the
+   * state of every deployment until #41 chooses one. Reported rather than refused, because the screen
+   * still has a plan, a price, a seller and the terms to show — and "we cannot take your money yet" is a
+   * different sentence from "there is no plan for you".
+   */
+  readonly checkoutReady: boolean;
 }
 
 export const CHECKOUT_REFUSALS = [
@@ -369,6 +442,31 @@ export const CHECKOUT_REFUSALS = [
   "ARRANGEMENT_EXISTS",
   "TERMS_NOT_ACCEPTED",
   "DOCUMENT_NOT_APPLICABLE",
+  /**
+   * A required document the reader cannot be offered in any language (#47).
+   *
+   * Operator misconfiguration, not a customer's circumstance: the fallback locale is the one the product
+   * publishes everything in, so a required kind missing from it is a gap somebody has to fill. Refused
+   * with its own reason rather than folded into `TERMS_NOT_ACCEPTED`, because "you did not tick the box"
+   * and "there is no box to tick" need different people to do different things.
+   */
+  "DOCUMENT_UNAVAILABLE",
+  /**
+   * The terms changed between the page that showed the checkboxes and the submission (#47).
+   *
+   * Named apart from `DOCUMENT_NOT_APPLICABLE` for the reason #77's `STALE_STATE` was: the answer is
+   * "read the new terms and accept them", and a refusal that could not say which kind of wrong it was
+   * would send somebody looking for a fault that is not theirs.
+   */
+  "DOCUMENT_SUPERSEDED",
+  /**
+   * No provider adapter can settle a checkout on the selected route (#47, #41).
+   *
+   * Refused here rather than left to the caller, because a checkout that cannot possibly settle would
+   * still consume the workspace's single live charge path and leave a `PENDING` arrangement for the
+   * sweeper to clean up — a purchase blocked by a purchase nobody could complete.
+   */
+  "PROVIDER_UNAVAILABLE",
 ] as const;
 export type CheckoutRefusalReason = (typeof CHECKOUT_REFUSALS)[number];
 
@@ -387,14 +485,19 @@ export interface CheckoutRefusal {
  * this result as input: a route disabled between the two would otherwise be used because a browser still
  * had the old answer.
  */
-export async function readCheckoutOffer(db: DbClient, context: WorkspaceContext, request: CheckoutRequest): Promise<CheckoutOffer | CheckoutRefusal> {
+export async function readCheckoutOffer(
+  db: DbClient,
+  context: WorkspaceContext,
+  request: CheckoutRequest,
+  at = new Date(),
+): Promise<CheckoutOffer | CheckoutRefusal> {
   requireRole(context, BILLING_ROLES, "open a checkout");
   const workspaceId = scopeOf(context);
   const live = request.supersedeCurrent === true ? null : await liveArrangement(db, workspaceId);
   if (live !== null) {
     return { available: false, reason: "ARRANGEMENT_EXISTS", detail: [live.id] };
   }
-  const resolved = await resolveCheckout(db, request);
+  const resolved = await resolveCheckout(db, request, at);
   return resolved.available ? resolved.offer : resolved.refusal;
 }
 
@@ -409,6 +512,7 @@ interface ResolvedCheckout {
 async function resolveCheckout(
   db: DbExecutor,
   request: CheckoutRequest,
+  at: Date,
 ): Promise<ResolvedCheckout | { readonly available: false; readonly refusal: CheckoutRefusal }> {
   const routes = await readBillingRoutes(db, { enabledOnly: true });
   const selection = selectRoute(routes, {
@@ -437,6 +541,9 @@ async function resolveCheckout(
       where: { id: route.routeId },
       select: {
         sellerProfileId: true,
+        // The provider's name, used here and nowhere a page can see it: it decides whether an adapter
+        // exists, and nothing else in this function reads it.
+        provider: true,
         sellerProfile: { select: { legalName: true, displayName: true, jurisdiction: true, supportEmail: true } },
       },
     }),
@@ -451,7 +558,18 @@ async function resolveCheckout(
       },
     };
   }
-  const documents = await readLegalDocumentOffers(db, row.sellerProfileId, request.locale);
+  const resolvedDocuments = await readLegalDocumentOffers(db, row.sellerProfileId, request.locale, at);
+  if (resolvedDocuments.unofferable.length > 0) {
+    return {
+      available: false,
+      refusal: {
+        available: false,
+        reason: "DOCUMENT_UNAVAILABLE",
+        detail: resolvedDocuments.unofferable.map((kind) => `${kind} is required and published in no language this reader can be offered`),
+      },
+    };
+  }
+  const documents = resolvedDocuments.documents;
   return {
     available: true,
     route,
@@ -466,50 +584,148 @@ async function resolveCheckout(
       interval: request.interval,
       base: money(price.amountCents, price.currency),
       documents,
+      // Echoed in canonical form, so the screen, the form it posts and the stored acceptance all name
+      // the language the same way.
+      viewerLocale: canonicalLanguageTag(request.locale) ?? request.locale,
+      // Whether this deployment could settle what it is about to offer. The registry is process-local, so
+      // this answers for *this* process — which is the one that will hand the customer to the provider.
+      checkoutReady: billingProviderRegistered(row.provider),
     },
   };
 }
 
 /**
- * The effective version of every legal document applicable to a selling entity, in one locale.
+ * The locale a product publishes everything in.
  *
- * "Effective" is the latest version whose `effectiveFrom` has passed, per kind; a version published for
- * next month exists and is not offered. A seller-specific document shadows a global one of the same kind,
- * because an entity that publishes its own offer has superseded the generic one for its own checkouts.
+ * `apps/web` has its own `FALLBACK_LOCALE` and they are the same letters, deliberately not the same
+ * constant: this one is about what the *legal documents* are guaranteed to exist in, and the web app's is
+ * about what its message catalogue falls back to. A deployment that translated its interface into a
+ * language it has no offer in would otherwise look like it had changed this.
  */
-async function readLegalDocumentOffers(db: DbExecutor, sellerProfileId: string, locale: string, at = new Date()): Promise<readonly LegalDocumentOffer[]> {
+export const LEGAL_FALLBACK_LOCALE = "en";
+
+/** Orders publishing a legal document against opening a checkout. See `publishLegalDocument`. */
+const LEGAL_CATALOGUE_LOCK = "legal-document:catalogue";
+
+interface ResolvedDocuments {
+  /** One per kind: the current version, in the best locale available for that kind. */
+  readonly documents: readonly LegalDocumentOffer[];
+  /** Required kinds that exist in no locale this reader could be offered. Operator misconfiguration. */
+  readonly unofferable: readonly LegalDocumentKind[];
+}
+
+/**
+ * The current version of every legal document applicable to a selling entity, in the best locale for one
+ * reader (#46, #47).
+ *
+ * Three rules, and all three are also written in SQL in `current_legal_documents()`. The duplication is
+ * deliberate and the integration suite holds the two against each other, because the store decides what a
+ * person is *shown* while the triggers decide what may be *written*, and a disagreement between them is
+ * either a checkout that cannot commit or an acceptance of something nobody was shown.
+ *
+ * - **Current, not merely effective.** The newest version already in force wins; a version published for
+ *   next month exists and is offered to nobody.
+ * - **A seller-specific document displaces a global one** of the same kind and locale, however new the
+ *   global one is: an entity that published its own offer has superseded the generic text for its own
+ *   checkouts.
+ * - **The requirement belongs to the kind**, not to the version or the locale: a kind is required when the
+ *   current document of that kind in *any* applicable locale requires it. The conservative reading, and
+ *   the only one under which a reader in one language and a reader in another are asked for the same
+ *   consent.
+ */
+async function readLegalDocumentOffers(db: DbExecutor, sellerProfileId: string, viewerLocale: string, at: Date): Promise<ResolvedDocuments> {
   const rows = await db.legalDocument.findMany({
-    where: { locale, effectiveFrom: { lte: at }, OR: [{ sellerProfileId }, { sellerProfileId: null }] },
-    orderBy: [{ kind: "asc" }, { effectiveFrom: "desc" }, { version: "desc" }],
-    select: { id: true, kind: true, version: true, locale: true, contentRef: true, requiredForCheckout: true, sellerProfileId: true },
+    // Every locale, not the reader's: the negotiation below needs to know what exists before it can
+    // choose, and filtering by an exact locale here is precisely the bug #47 exists to fix.
+    where: { effectiveFrom: { lte: at }, OR: [{ sellerProfileId }, { sellerProfileId: null }] },
+    orderBy: [{ kind: "asc" }, { locale: "asc" }, { effectiveFrom: "desc" }, { version: "desc" }],
+    select: { id: true, kind: true, version: true, locale: true, contentRef: true, requiredForCheckout: true, sellerProfileId: true, effectiveFrom: true },
   });
-  const offers = new Map<LegalDocumentKind, { readonly offer: LegalDocumentOffer; readonly specific: boolean }>();
+
+  type Row = (typeof rows)[number];
+  // The current document per (kind, locale), with the seller-specific precedence applied.
+  const current = new Map<string, Row>();
   for (const row of rows) {
-    const candidate = {
-      offer: {
-        legalDocumentId: row.id,
-        kind: row.kind,
-        version: row.version,
-        locale: row.locale,
-        contentRef: row.contentRef,
-        requiredForCheckout: row.requiredForCheckout,
-      },
-      specific: row.sellerProfileId !== null,
-    };
-    const chosen = offers.get(row.kind);
-    // Rows arrive newest first per kind, so the first of a kind wins — except that a seller-specific
-    // document displaces a global one however new the global one is: an entity that published its own
-    // offer has superseded the generic text for its own checkouts.
-    if (chosen === undefined || (candidate.specific && !chosen.specific)) {
-      offers.set(row.kind, candidate);
+    const key = `${row.kind}\u0000${row.locale}`;
+    const chosen = current.get(key);
+    // Rows arrive newest first within a (kind, locale), so the first wins — unless a seller-specific one
+    // turns up later, which displaces a global one whatever its date.
+    if (chosen === undefined || (row.sellerProfileId !== null && chosen.sellerProfileId === null)) {
+      current.set(key, row);
     }
   }
-  return [...offers.values()].map((entry) => entry.offer);
+
+  const byKind = new Map<LegalDocumentKind, Row[]>();
+  for (const row of current.values()) {
+    const existing = byKind.get(row.kind);
+    if (existing === undefined) {
+      byKind.set(row.kind, [row]);
+    } else {
+      existing.push(row);
+    }
+  }
+
+  const documents: LegalDocumentOffer[] = [];
+  const unofferable: LegalDocumentKind[] = [];
+  for (const kind of LEGAL_DOCUMENT_KINDS) {
+    const all = byKind.get(kind);
+    if (all === undefined || all.length === 0) {
+      continue;
+    }
+    // Specificity dominates locale, and the order matters. Choosing the locale first would hand a
+    // Russian reader the platform's generic offer whenever the selling entity had published its own only
+    // in English — so the entity's own text would lose on language before it could win on being its own,
+    // for a checkout whose contract names that entity's legal name and jurisdiction.
+    const specific = all.filter((row) => row.sellerProfileId !== null);
+    const candidates = specific.length > 0 ? specific : all;
+    // Required is a property of the kind, computed across every locale of the documents actually in play.
+    // `current_legal_documents` in SQL applies the same specificity filter and is read the same way by
+    // the coverage trigger, so the two cannot ask a reader for different consents.
+    const requiredForCheckout = candidates.some((row) => row.requiredForCheckout);
+    const locale = negotiateDocumentLocale(
+      viewerLocale,
+      candidates.map((row) => row.locale),
+      LEGAL_FALLBACK_LOCALE,
+    );
+    const chosen = locale === undefined ? undefined : candidates.find((row) => row.locale === locale);
+    if (chosen === undefined) {
+      // Published only in a language neither the reader nor the fallback covers. Required is a refusal
+      // somebody has to fix; optional is simply not linked, because a link nobody can read is noise.
+      if (requiredForCheckout) {
+        unofferable.push(kind);
+      }
+      continue;
+    }
+    documents.push({
+      legalDocumentId: chosen.id,
+      kind: chosen.kind,
+      version: chosen.version,
+      locale: chosen.locale,
+      contentRef: chosen.contentRef,
+      requiredForCheckout,
+      inViewerLanguage: acceptedInOwnLanguage(viewerLocale, chosen.locale),
+      effectiveFrom: chosen.effectiveFrom,
+    });
+  }
+  return { documents, unofferable };
 }
 
 export interface OpenCheckoutInput extends CheckoutRequest {
   /** The document versions the person ticked. Every required kind has to be among them. */
   readonly acceptedDocumentIds: readonly string[];
+  /**
+   * The document versions the page actually rendered a tick for (#47).
+   *
+   * Without it, a requirement that appeared *after* the page was drawn — a first refund policy, or a
+   * version that starts requiring acceptance — comes back as `TERMS_NOT_ACCEPTED`: "you did not tick the
+   * box" about a box that did not exist. With it, the store can tell "you left one unticked" from "the
+   * terms changed while you were reading", which are different sentences with different next steps.
+   *
+   * Optional, because a caller with no page behind it (a script, a future API) has nothing to declare.
+   * Omitting it only loses the distinction; it never weakens the enforcement, which is always computed
+   * from what the store itself would offer now.
+   */
+  readonly offeredDocumentIds?: readonly string[];
   /**
    * A time-bounded charge in another currency or asset, from an adapter that quoted one.
    *
@@ -548,31 +764,114 @@ export async function openCheckoutContract(db: DbClient, context: WorkspaceConte
   requireRole(context, BILLING_ROLES, "open a checkout");
   const workspaceId = scopeOf(context);
   const at = input.at ?? new Date();
+  // Canonicalized once, here, at the boundary. `RU-ru`, `ru_RU` and `ru-RU` are one language, and the
+  // column exists to be grouped by in a dispute — several spellings of one language in it would make
+  // that query quietly wrong. An untaggable value is refused rather than stored.
+  const locale = canonicalLanguageTag(input.locale);
+  if (locale === null || locale === undefined) {
+    throw new DbInputError("locale", `not a language tag: ${input.locale}`);
+  }
 
+  try {
+    return await write(db, context, { ...input, locale }, workspaceId, at);
+  } catch (error) {
+    // The triggers are the backstop, and a backstop whose message reaches a page is not one. The lock
+    // below makes the race they catch very unlikely rather than impossible — `effective_from` is
+    // caller-supplied and may be backdated — so a raised exception is translated into the same refusal
+    // the store would have produced itself, instead of a Postgres sentence in the middle of a checkout.
+    const message = error instanceof Error ? error.message : "";
+    if (/is superseded/u.test(message)) {
+      return { available: false, reason: "DOCUMENT_SUPERSEDED", detail: [] };
+    }
+    if (/has no accepted/u.test(message)) {
+      return { available: false, reason: "TERMS_NOT_ACCEPTED", detail: [] };
+    }
+    throw error;
+  }
+}
+
+async function write(
+  db: DbClient,
+  context: WorkspaceContext,
+  input: OpenCheckoutInput,
+  workspaceId: string,
+  at: Date,
+): Promise<OpenedCheckout | CheckoutRefusal> {
   return db.$transaction(async (tx) => {
+    // Two locks, both before anything is read. The workspace key orders two submissions against each
+    // other, so a double click or a second tab is refused with `ARRANGEMENT_EXISTS` rather than losing a
+    // race on the single-live index and escaping as a unique-violation. The catalogue key orders this
+    // against `publishLegalDocument`, so the documents resolved below are still the current ones when
+    // the acceptances are written.
+    await serialize(tx, `checkout:workspace:${workspaceId}`);
+    await serialize(tx, LEGAL_CATALOGUE_LOCK);
     const live = await liveArrangement(tx, workspaceId);
     if (live !== null && input.supersedeCurrent !== true) {
       return { available: false, reason: "ARRANGEMENT_EXISTS", detail: [live.id] } satisfies CheckoutRefusal;
     }
-    const resolved = await resolveCheckout(tx, input);
+    // Resolved again inside the transaction rather than taken from the page: a route disabled, a price
+    // withdrawn or a new version of the terms becoming effective between the GET that drew the checkboxes
+    // and this POST would otherwise be invisible, because the browser still holds the old answer.
+    const resolved = await resolveCheckout(tx, input, at);
     if (!resolved.available) {
       return resolved.refusal;
     }
-
     const accepted = resolved.documents.filter((document) => input.acceptedDocumentIds.includes(document.legalDocumentId));
-    const forged = input.acceptedDocumentIds.filter((id) => !resolved.documents.some((document) => document.legalDocumentId === id));
-    if (forged.length > 0) {
-      // A document that is not applicable to this seller profile, not effective yet, or not in this
-      // locale. Refused rather than ignored: recording it would be recording consent to something the
-      // customer was never shown.
-      return { available: false, reason: "DOCUMENT_NOT_APPLICABLE", detail: forged } satisfies CheckoutRefusal;
+    const unknown = input.acceptedDocumentIds.filter((id) => !resolved.documents.some((document) => document.legalDocumentId === id));
+    if (unknown.length > 0) {
+      // Two different wrongs, and they need different people to do different things. A document that was
+      // current when the page was drawn and is not current now is a stale tab: the answer is "the terms
+      // changed, read them again". Anything else was never offered to this workspace at all.
+      const named = await tx.legalDocument.findMany({
+        where: { id: { in: unknown } },
+        select: { id: true, kind: true, locale: true, version: true, sellerProfileId: true, effectiveFrom: true },
+      });
+      // Stale means "a version of something this checkout *is* offered under, which has since been
+      // replaced". A document belonging to another selling entity is not a stale version of mine, and
+      // telling somebody to re-read terms that were never theirs would send them to the wrong page.
+      const stale = named.filter(
+        (document) =>
+          (document.sellerProfileId === null || document.sellerProfileId === resolved.sellerProfileId) &&
+          document.effectiveFrom.getTime() <= at.getTime() &&
+          resolved.documents.some((offered) => offered.kind === document.kind),
+      );
+      if (stale.length > 0) {
+        return {
+          available: false,
+          reason: "DOCUMENT_SUPERSEDED",
+          detail: stale.map((document) => `${document.kind} v${String(document.version)} (${document.locale})`),
+        } satisfies CheckoutRefusal;
+      }
+      // Not applicable to this seller profile, not effective yet, or not a document at all. Refused
+      // rather than ignored: recording it would be recording consent to something nobody was shown.
+      return { available: false, reason: "DOCUMENT_NOT_APPLICABLE", detail: unknown } satisfies CheckoutRefusal;
     }
-    const missing = missingAcceptances(
-      resolved.documents.filter((document) => document.requiredForCheckout).map((document) => document.kind),
-      accepted.map((document) => document.kind),
-    );
+    const required = resolved.documents.filter((document) => document.requiredForCheckout);
+    const missing = missingAcceptances(required.map((document) => document.kind), accepted.map((document) => document.kind));
     if (missing.length > 0) {
+      // A box left unticked, or a box that was never there? The page says which ticks it rendered, and a
+      // requirement outside that set appeared after it was drawn — so the person is told the terms
+      // changed rather than blamed for a control they never saw.
+      const offered = input.offeredDocumentIds;
+      const appeared =
+        offered === undefined ? [] : required.filter((document) => missing.includes(document.kind) && !offered.includes(document.legalDocumentId));
+      if (appeared.length > 0) {
+        return {
+          available: false,
+          reason: "DOCUMENT_SUPERSEDED",
+          detail: appeared.map((document) => `${document.kind} v${String(document.version)} (${document.locale})`),
+        } satisfies CheckoutRefusal;
+      }
       return { available: false, reason: "TERMS_NOT_ACCEPTED", detail: [...missing] } satisfies CheckoutRefusal;
+    }
+
+    // Last of the refusals, and last on purpose. A person who left a box unticked is told that; being
+    // told instead that this deployment has no payment provider would send them looking for a fault that
+    // is not theirs, and would also make every test of the terms enforcement green for the wrong reason.
+    // Still before anything is written: a checkout nobody could settle would take the workspace's one
+    // live charge path and leave a `PENDING` arrangement for the sweeper.
+    if (!resolved.offer.checkoutReady) {
+      return { available: false, reason: "PROVIDER_UNAVAILABLE", detail: [resolved.route.code] } satisfies CheckoutRefusal;
     }
 
     const charge = input.quote?.charge ?? resolved.offer.base;
@@ -614,6 +913,10 @@ export async function openCheckoutContract(db: DbClient, context: WorkspaceConte
         actorUserId: context.userId,
         legalDocumentId: document.legalDocumentId,
         checkoutContractId: contract.id,
+        // The reader's own language, not the document's, and canonicalized at the entry point above.
+        // The two differ exactly when the product has no translation, and that is the fact a dispute
+        // asks about.
+        locale: input.locale,
         acceptedAt: at,
       })),
     });
@@ -656,6 +959,10 @@ export async function openCheckoutContract(db: DbClient, context: WorkspaceConte
         chargeAmountMinor: charge.amountMinor,
         chargeCurrency: charge.currency,
         acceptedDocuments: accepted.map((document) => `${document.kind} v${String(document.version)} (${document.locale})`),
+        viewerLocale: input.locale,
+        // Whether every document the person accepted was in their own language. False is a legitimate
+        // state of the world — it means the product has no translation — and is worth recording as such.
+        acceptedInOwnLanguage: accepted.every((document) => document.inViewerLanguage),
         ...(live === null ? {} : { supersededArrangementId: live.id }),
       },
     });

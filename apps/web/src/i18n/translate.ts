@@ -26,6 +26,15 @@ export interface Translator {
   date: (value: Date, options?: Intl.DateTimeFormatOptions) => string;
   number: (value: number, options?: Intl.NumberFormatOptions) => string;
   money: (value: number, currency: string) => string;
+  /**
+   * A country, from its ISO 3166-1 alpha-2 code (#47).
+   *
+   * Through `Intl.DisplayNames` rather than catalogue keys, because the set of codes is open: a selling
+   * entity can be registered anywhere, and a checkout that said "RO" would be showing a Russian reader a
+   * code instead of a country. The code itself is returned when the platform has no name for it, which
+   * is still readable and is what a reader would recognise from a form.
+   */
+  region: (code: string) => string;
 }
 
 /** Where a missing key is a bug to be thrown rather than a gap to be papered over. */
@@ -88,6 +97,16 @@ export function createTranslator(locale: UiLocale, options: TranslatorOptions = 
     date: (value, dateOptions) => new Intl.DateTimeFormat(locale, dateOptions).format(value),
     number: (value, numberOptions) => new Intl.NumberFormat(locale, numberOptions).format(value),
     money: (value, currency) => new Intl.NumberFormat(locale, { style: "currency", currency }).format(value),
+    region: (code) => {
+      try {
+        return new Intl.DisplayNames([locale], { type: "region" }).of(code) ?? code;
+      } catch {
+        // `of` throws on anything that is not a well-formed region subtag. A CHECK refuses those on the
+        // way in, so reaching this means a row older than the constraint — show the code rather than
+        // taking a screen down over it.
+        return code;
+      }
+    },
   };
 }
 

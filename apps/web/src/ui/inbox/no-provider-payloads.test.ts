@@ -30,6 +30,10 @@ const paneDirs = [
   // subscription references, but it drops them in one function — and this is what notices if a later
   // change hands a component the raw catalogue row instead.
   path.resolve(inboxDir, "../billing"),
+  // Checkout (#47). The one place a seller's legal identity, a price and a provider's settlement model
+  // meet on a page, so the most tempting place to reach for the route itself — which carries the
+  // provider's name and its account reference.
+  path.resolve(inboxDir, "../checkout"),
 ];
 
 /**
@@ -156,5 +160,8 @@ describe("the Inbox components", () => {
     expect(files).toContain("billing/allowance-meter.tsx");
     expect(files).toContain("billing/plan-offers.tsx");
     expect(files).toContain("billing/capacity-list.tsx");
+    expect(files).toContain("checkout/terms-acceptance.tsx");
+    expect(files).toContain("checkout/checkout-summary.tsx");
+    expect(files).toContain("checkout/checkout-actions-pane.tsx");
   });
 });

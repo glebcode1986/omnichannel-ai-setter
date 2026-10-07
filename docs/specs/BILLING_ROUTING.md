@@ -118,26 +118,93 @@ plan's meaning" amounts to in the schema.
 
 `legal_documents` is versioned and immutable; a correction is a new version, and the old one stays readable
 because somebody accepted it. The text is not stored — `contentRef` points at wherever it is published,
-because copying it in would create a second authority on what it says.
+because copying it in would create a second authority on what it says. It must be an absolute `https` URL
+(`legal_documents_content_ref_check`), because the checkout renders it as the link somebody reads *before*
+they tick the box: a path fragment resolves against the checkout route and 404s, which is a checkbox asking
+for consent to something unreadable.
 
-`legal_acceptances` is append-only. A seller-specific document shadows a global one of the same kind, since
-an entity that publishes its own offer has superseded the generic text for its own checkouts.
+`legal_acceptances` is append-only and carries `locale` — the language of the *page* somebody accepted on,
+canonicalised at the entry point. Not the document's locale, which is on the document and may differ: a
+product that has not translated its offer shows an English one to a Russian reader, and the question a
+dispute asks is whether this person was shown terms in a language they read. That is not derivable from the
+document row, which only knows what language it is in.
 
-A checkout cannot commit without an acceptance of every required document kind. That is a **deferred**
-constraint trigger and it has to be: the acceptances carry a foreign key to the contract, so the contract
-is written first and a plain `AFTER INSERT` trigger would fire before any acceptance could exist. Which
-kinds are required is read from `required_for_checkout` on the documents rather than from the route,
-because which documents a market requires is a legal decision the owner has not made yet — a jurisdiction
-that needs a privacy acceptance at checkout gets one by marking the document, not by changing the trigger.
+### Which document each reader is offered
+
+One per kind, chosen in this order, and the order is the point:
+
+1. **Already in force.** A version published for next month exists and is offered to nobody.
+2. **Specificity before language.** If the selling entity has published this kind at all, the choice is
+   made among *its* versions only. Choosing the language first would hand a Russian reader the platform's
+   generic offer whenever the entity had published its own in English alone — for a checkout whose contract
+   names that entity's legal name and jurisdiction.
+3. **Then the language**, by `negotiateDocumentLocale`: the exact tag, then the same language in another
+   region, then the fallback the product publishes everything in. Nothing at all is `DOCUMENT_UNAVAILABLE`
+   — operator misconfiguration, refused with its own reason.
+4. **The newest in force**, then the highest version.
+
+The requirement is a property of the **kind**, not of a version or a locale: a kind is required when the
+current document of that kind in any applicable locale requires it. `readLegalDocumentOffers` and
+`current_legal_documents()` compute all of this twice, in TypeScript and in SQL, and the integration suite
+holds the two derivations against each other — because the store decides what a person is *shown* while the
+triggers decide what may be *written*, and a disagreement is either a checkout that cannot commit or an
+acceptance of something nobody saw.
+
+### What the triggers enforce
+
+- `legal_acceptances_applicable` refuses an acceptance that names another workspace's checkout, another
+  selling entity's document, a version not yet in force, or a version that is **no longer current**. The
+  last clause is what makes "the current required versions are accepted" a database fact.
+- `checkout_contracts_acceptance_present` is a **deferred** constraint trigger — it has to be, because the
+  acceptances carry a foreign key to the contract, so the contract is written first and a plain
+  `AFTER INSERT` would fire before any acceptance could exist.
+
+Both read requirement from the current version, so a withdrawn requirement actually stops being required.
+
+`openCheckoutContract` takes the same advisory lock `publishLegalDocument` takes, so a publication cannot
+commit between the documents being resolved and the acceptances being written; and it translates either
+trigger's exception into the refusal it would have produced itself, so no Postgres sentence can reach a
+page.
+
+### Refusals, and whose fault each one is
+
+`TERMS_NOT_ACCEPTED` means a box was left unticked. `DOCUMENT_SUPERSEDED` means the terms changed while the
+page was open — including the case where a requirement **appeared** after the page was drawn, which the
+form distinguishes by declaring the ticks it rendered in a hidden `offered` field. Without that field the
+store cannot tell the two apart and says the conservative thing; with it, nobody is blamed for a control
+they never saw. `PROVIDER_UNAVAILABLE` is checked **last**, after the acceptance checks, so a person who
+left a box unticked is told that rather than being told about this deployment's missing adapter.
+
+A refused attempt writes nothing — no contract, no acceptance, no audit row. The contract id *is* the
+checkout attempt reference the acceptance points at, and an attempt that was refused offered nothing to
+consent to. Recording "they did not tick a box at 14:02" would be surveillance rather than evidence.
 
 `checkout_contracts` copies the seller's registered name and jurisdiction in rather than reading them
 through the foreign key. Changing a selling entity must not rewrite what a customer was told last March.
 
+## The acceptance surface
+
+`apps/web/.../settings/billing/checkout` is the explicit acceptance step: the seller's legal identity, the
+price, who remits the tax, whether anything renews, and one unticked checkbox per required document version
+with a link to read it. A Merchant-of-Record route additionally says that the provider is the seller of
+record and its own terms apply at its payment page.
+
+The submit control is **absent**, not disabled, when `checkoutReady` is false — there is nothing on the far
+side of it until a provider adapter exists. It is *not* disabled when boxes are unticked: the server's
+refusal names the missing document, and a disabled button is a refusal nobody can read.
+
+The route is reachable exactly when `checkoutAvailable` is true — at least one enabled route whose provider
+has an adapter registered in this process. That is derived, not a constant: a hard-coded `false` (which is
+what #42 shipped) made the whole surface unreachable however a deployment was configured, and left somebody
+to remember to edit a file on the day an adapter landed. Until #41 chooses a provider nothing is
+registered, so the billing page says so and renders no link — deliberately, and asserted in both
+directions by `billing-panes.test.tsx`.
+
 ## What is not here
 
 - No provider adapter. The registry takes one; none is registered outside tests (`#41`).
-- No checkout UI. The acceptance control and the offer screen are `#47`; `CHECKOUT_AVAILABLE` in
-  `apps/web/src/server/billing-screen.ts` is still `false`.
+- No payment redirect. The acceptance step records the contract and stops; where the customer goes next
+  is the adapter's, which is `#41`.
 - No in-provider plan change. An upgrade on a live recurring arrangement is proration, which is a
   capability a route declares and an adapter performs.
 - No final legal wording, governing law or jurisdiction-specific requirement. ADR-019 reserves all of it.
