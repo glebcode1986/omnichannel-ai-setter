@@ -37,6 +37,13 @@ export function VoiceEditor({ t, layer, action }: VoiceEditorProps) {
       )}
       {layer.scope === "BUSINESS_PROFILE" ? <p className="muted">{t.t("style.inherits")}</p> : undefined}
       <input type="hidden" name="scope" value={layer.scope} />
+      {/*
+        What this form was rendered against. Two tabs open on one business's voice is ordinary, and each
+        of them carries a *complete* profile — so a save that did not say which version it started from
+        would replace every field a colleague had just changed with an old copy of itself. Empty when no
+        layer existed yet, which is a claim the store checks too.
+      */}
+      <input type="hidden" name="expectedUpdatedAt" value={layer.updatedAt?.toISOString() ?? ""} />
 
       <label htmlFor={id("persona")}>{t.t("style.persona")}</label>
       <input id={id("persona")} name="persona" type="text" defaultValue={layer.persona ?? ""} />

@@ -40,6 +40,7 @@ const example = (overrides: Partial<StyleExampleView> = {}): StyleExampleView =>
   sourceDraftId: null,
   sourceMessageId: null,
   createdAt: new Date("2026-09-30T10:00:00.000Z"),
+  decisions: [],
   ...overrides,
 });
 
@@ -176,5 +177,55 @@ describe("in Russian", () => {
     expect(screen.getByText(catalogues.ru["styleStatus.SUGGESTED"])).toBeDefined();
     expect(screen.getByText(catalogues.ru["style.notApproved"])).toBeDefined();
     expect(screen.getByText("Yes — 10 till 6 on Saturdays!")).toBeDefined();
+  });
+
+  it("shows what has happened to an example, in the order it happened", () => {
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[
+          example({
+            status: "ARCHIVED",
+            decisions: [
+              { decision: "APPROVED", decidedByName: "Marina", decidedAt: new Date("2026-09-30T10:00:00.000Z") },
+              { decision: "ARCHIVED", decidedByName: "Pavel", decidedAt: new Date("2026-10-01T10:00:00.000Z") },
+            ],
+          }),
+        ]}
+        target={TARGET}
+        kind="RETIRED"
+        actions={actions()}
+      />,
+    );
+
+    const history = document.querySelector('[data-history="se_1"]');
+    // The status says "not in use" and nothing more. Who withdrew it, and whether anybody had approved it
+    // first, are two different questions and only the history answers them.
+    expect(history?.querySelectorAll("li")).toHaveLength(2);
+    expect(history?.querySelectorAll("li")[0]?.getAttribute("data-decision")).toBe("APPROVED");
+    expect(history?.querySelectorAll("li")[1]?.getAttribute("data-decision")).toBe("ARCHIVED");
+    expect(history?.textContent).toContain("Marina");
+    expect(history?.textContent).toContain("Pavel");
+  });
+
+  it("names nobody rather than implying a decision was nobody's", () => {
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[example({ decisions: [{ decision: "APPROVED", decidedByName: null, decidedAt: new Date("2026-09-30T10:00:00.000Z") }] })]}
+        target={TARGET}
+        kind="VERIFIED"
+        actions={actions()}
+      />,
+    );
+
+    // A member who has left still made the decision. The entry stays, with the gap stated.
+    expect(document.querySelector('[data-history="se_1"]')?.textContent).toContain(text("style.historyUnknownActor"));
+  });
+
+  it("renders no history block for an example nobody has decided anything about", () => {
+    render(<StyleExampleList t={t} examples={[example({ status: "SUGGESTED", approvedByName: null })]} target={TARGET} kind="SUGGESTED" actions={actions()} />);
+
+    expect(document.querySelector('[data-history="se_1"]')).toBeNull();
   });
 });
