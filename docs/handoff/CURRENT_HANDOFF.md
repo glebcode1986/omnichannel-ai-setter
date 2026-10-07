@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #83**, each branch stacked on its predecessor and each CI-green with evidence
-posted. PRs #73–#82 are completed by Claude and awaiting review; **#83 / P5-08 is the current task**,
-which the owner's directive on PR #81 placed after P3-02 and not before. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #99 plus the P6-08 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#99 are completed by Claude and awaiting review; **P6-08 / Issue
+#46 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -54,6 +54,13 @@ Everything is one stacked chain of unmerged PRs, each branch based on its parent
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
+` -> #85 -> #86 -> #87 -> #88 -> #89 -> #90 -> #91 -> #92 -> #93 -> #94 -> #95 -> #96 -> #97 -> #98 -> #99`
+
+Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
+#43), #99 (P6-05, #42) and the P6-08 branch above (#46). **#41 / P6-04 is blocked** on the owner's choice
+of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
+implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, and #47
+(P6-09, terms/offer UX) is the next unblocked one.
 
 **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer — *after*
 #77 had been cut from it, so #77 through #81 were all missing the human-composed send path. It was merged
@@ -245,6 +252,97 @@ guard, so an edit between the judgement and the claim refuses rather than sendin
 Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
+
+1. **P6-08 / Issue #46 — seller profiles, payment routing and legal acceptance.** Branch
+   `feat/p6-08-billing-routing-seller-profiles`, based on #99. `docs/adr/ADR-019` is brought into the
+   chain from `origin/docs/phase6-commercial-billing`; `docs/specs/BILLING_ROUTING.md` records how each of
+   its rules is enforced.
+
+   **A browser redirect cannot activate a paid entitlement, structurally.**
+   `recordVerifiedBillingEvent` takes a `VerifiedBillingEvent`, and the only values of that type are the
+   frozen objects `packages/db/src/billing-events.ts` mints into a module-private `WeakSet` — the
+   `tenancy.ts` pattern. Minting happens in two functions and both go through a registered provider
+   adapter: one authenticates a raw signed delivery, the other asks the provider what it says is true.
+   Casting does not help. The shape of this mistake is a `/billing/success` handler that looks correct and
+   is only missing authority nobody noticed it did not have, so a rule in prose would not have held.
+
+   **The client has no parameter in which to name a route, a provider account or a seller entity.** A
+   checkout asks for a plan version, an interval, an arrangement kind and a currency; the route is read
+   from operator configuration. That is a stronger statement than validating an identifier would be, and
+   the suite asserts it by passing forged fields and checking where the contract landed.
+
+   **One live charge path per workspace, as a partial unique index.** `PENDING` counts as live, because a
+   second checkout completing while the first is open is exactly how a customer ends up on two providers.
+   A provider switch is `supersedeCurrent: true` — it ends the old arrangement, records `supersededById`
+   and keeps its `providerReference` for reconciliation, in one transaction. Without the flag a second
+   checkout is refused: the default *is* the rule.
+
+   Two things fell out of the database rather than from the issue:
+
+   - **The index predicate had to be spelled as two inequalities.** PostgreSQL rewrites
+     `state IN ('PENDING','ACTIVE')` into `= ANY (ARRAY[...])` with casts, and `db:check-drift` then
+     reports a changed index on every run. So the predicate is "not ended and not superseded", a state
+     added later counts as live until somebody says otherwise, and the suite asserts which states collide.
+   - **`ALTER TYPE ... ADD VALUE` needs its own migration** when a later statement in the same file
+     *uses* the new value. The two audit kinds are added in `20261007205000_billing_routing_audit_kinds`
+     because the next migration rewrites `audit_events_scope_check` to name them, and one file would fail
+     with 55P04 on an empty database.
+
+   **The catalogue's price book stays ISO 4217.** `plan_prices_currency_check` refused a `USDT` fixture,
+   and the constraint was right: a crypto charge is a *quote* in an asset against a EUR-priced plan, not a
+   second price book. A route's `currencies` are therefore the **base** currencies it can take a charge
+   for, and the asset lives on the quote — which is what "the quote does not rewrite the plan's meaning"
+   amounts to in the schema.
+
+   **Acceptance is a deferred constraint trigger.** The acceptances carry a foreign key to the contract,
+   so the contract is written first and a plain `AFTER INSERT` trigger would fire before any acceptance
+   could exist. Which kinds are required is read from `required_for_checkout` on the documents, not from
+   the route, because which documents a market requires is a legal decision the owner has not made.
+
+   **`apps/worker/src/billing-sweeper.ts` releases the slot an abandoned checkout holds.** Without it the
+   one-live index becomes a trap: one unfinished attempt would refuse every later purchase until somebody
+   read the table. `loops` in `worker.started` gained `checkout_expiry`.
+
+   **Not in this issue:** no provider adapter is registered outside tests (#41, blocked on the owner's
+   provider and jurisdiction choice), and the checkout UI with its acceptance control is #47 —
+   `CHECKOUT_AVAILABLE` is still `false`.
+
+1. **P6-05 / Issue #42 — the billing screen.** Branch `feat/p6-05-billing-settings-ui`, based on #98.
+   `readBillingOverview` drops `providerPriceId` and the opaque customer/subscription references by
+   construction, in one function, and `no-provider-payloads.test.ts` now covers `ui/billing` and fails on
+   those three field names. `requestCancellation` and `resumeSubscription` are narrow and OWNER-only and
+   never move the plan: a general setter reached from a browser action would let a customer cancelling
+   change tier. `CHECKOUT_AVAILABLE = false` until a provider exists.
+
+1. **P6-06 / Issue #43 — the accepted catalogue as data.** Branch `feat/p6-06-commercial-catalog`, based
+   on #97. Prices moved off `plan_versions` into `plan_prices`, which meant **rewriting
+   `plan_versions_immutable()`**: it named the three dropped columns, so every update to a plan version
+   would have failed with a missing-field error. Add-on versions and all catalogue prices are immutable by
+   trigger; `workspace_addons` takes the entitlement key, because `readEntitlement` reads it.
+
+1. **P6-03 / Issue #40 — enforcing entitlements where the money is spent.** Branch
+   `feat/p6-03-entitlement-enforcement`, based on #96. Three reason codes (`BILLING_INACTIVE`,
+   `BILLING_FEATURE_OFF`, `BILLING_LIMIT`), and the delivery claim re-resolves the entitlement inside its
+   own transaction under `entitlementLockKeyFor(workspaceId)` — a trial's last day can end while a reply
+   waits out its delay, and no row moves.
+
+   **`subscribed` had to be separate from `paidWorkAllowed`.** A capacity check that folded in payment
+   would make the first Business Profile impossible, and creating it is what starts the trial. So
+   `capacityVerdict` and `featureWithheld` ignore payment and a workspace with no plan withholds nothing.
+
+   **Every seeded workspace is now subscribed.** Without that, suites about credentials or onboarding were
+   silently testing the billing gate instead of their own subject.
+
+1. **P6-02 / Issue #39 — the usage ledger.** Branch `feat/p6-02-usage-ledger`, based on #95. Counting is
+   keyed on a logical operation identity fixed *before* the work starts, so a provider retry, a schema
+   repair and a requeued job are one cycle. `AI_GENERATION_CYCLES` is internal, not a quota: core replies
+   are included and unmetered, and there is no path by which an exhausted allowance could hold a reply.
+
+   **Three PostgreSQL facts that cost a cycle each, and are now written down:** `INSERT ... ON CONFLICT DO
+   UPDATE` validates CHECK constraints against the *proposed* tuple even when the conflict path runs; a
+   failed statement aborts the whole transaction, so "insert and catch the duplicate" leaves everything
+   after it failing with `25P02`; and `pg_advisory_xact_lock` returns `void`, so it has to be called as
+   `SELECT true AS locked FROM pg_advisory_xact_lock(...)`.
 
 1. **Style Training could not show more than 25 of either list (#32).** The third instance of one defect,
    found by checking every paged store list against the screen that spends its cursor after Astra raised

@@ -34,6 +34,10 @@ export const AUDIT_EVENT_KINDS = [
   /// What the workspace is paying for, and any deliberate departure from it (#38).
   "SUBSCRIPTION_CHANGED",
   "ENTITLEMENT_OVERRIDDEN",
+  /// A checkout was opened: which plan, which seller entity, and what terms were accepted (#46).
+  "CHECKOUT_OPENED",
+  /// A charge path started, ended or was migrated to another provider or selling entity (#46).
+  "BILLING_ARRANGEMENT_CHANGED",
 ] as const;
 export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
 export const isAuditEventKind = literalGuard(AUDIT_EVENT_KINDS);
@@ -69,6 +73,10 @@ export const ADMIN_ONLY_AUDIT_KINDS: readonly AuditEventKind[] = [
   // either, and an override visible to everybody is an invitation to ask why somebody else got one.
   "SUBSCRIPTION_CHANGED",
   "ENTITLEMENT_OVERRIDDEN",
+  // A checkout and a charge path name the selling entity, the amount and the person who accepted the
+  // terms. Same reasoning, and the acceptance names an individual by role as well as by name (#46).
+  "CHECKOUT_OPENED",
+  "BILLING_ARRANGEMENT_CHANGED",
 ];
 
 /**
@@ -84,6 +92,9 @@ export const WORKSPACE_SCOPED_AUDIT_KINDS: readonly AuditEventKind[] = [
   "ENTITLEMENT_OVERRIDDEN",
   "DELETION_REQUESTED",
   "DELETION_COMPLETED",
+  // A workspace pays for a plan, not a profile, and a seller entity sells to the workspace (#46).
+  "CHECKOUT_OPENED",
+  "BILLING_ARRANGEMENT_CHANGED",
 ];
 
 /** Whether this kind belongs to the workspace rather than to one Business Profile. */

@@ -11,6 +11,7 @@ import {
   createStyleProfileStore,
   createPresenceStore,
   deleteExpiredChannelConnectStates,
+  expireStaleCheckouts,
   expireStaleReservations,
   createStyleRetriever,
   createSuspensionStore,
@@ -38,6 +39,7 @@ import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handl
 import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 import { startRetentionSweeper } from "./retention-sweeper";
+import { startBillingSweeper } from "./billing-sweeper";
 import { startUsageSweeper } from "./usage-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
@@ -87,6 +89,13 @@ const RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
  * cost them the thing they paid for.
  */
 const USAGE_SWEEP_INTERVAL_MS = 5 * 60_000;
+/**
+ * How often an abandoned checkout's charge path is released (#46).
+ *
+ * A quote's own expiry is usually minutes, so a quarter of an hour is soon enough that a customer who
+ * came back to buy is not refused for long, and rare enough that the sweep is not a poll.
+ */
+const CHECKOUT_SWEEP_INTERVAL_MS = 15 * 60_000;
 /**
  * One Ctrl+C reaches the worker several times (terminal process group plus relays by pnpm/tsx), so
  * repeats within this window are the same request. A later signal while still stopping forces exit.
@@ -273,6 +282,12 @@ function main(): void {
         logger,
         now: () => new Date(),
       });
+      const billing = startBillingSweeper({
+        intervalMs: CHECKOUT_SWEEP_INTERVAL_MS,
+        expireStaleCheckouts: (at) => expireStaleCheckouts(db, at),
+        logger,
+        now: () => new Date(),
+      });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
@@ -338,6 +353,7 @@ function main(): void {
           "reconciliation",
           "retention",
           "usage_reservations",
+          "checkout_expiry",
           ...(tokenRefresh.running ? ["instagram_tokens"] : []),
           "backlog_guard",
           "health",
@@ -352,6 +368,7 @@ function main(): void {
             reconciliationSweeper.close(),
             retention.close(),
             usage.close(),
+            billing.close(),
             tokenRefresh.close(),
             backlogGuard.close(),
             health.close(),
