@@ -27,6 +27,26 @@ export function scopeFrom(formData: FormData): StyleScope {
   return field(formData, "scope") === "WORKSPACE" ? "WORKSPACE" : "BUSINESS_PROFILE";
 }
 
+/**
+ * What the screen believed it was editing.
+ *
+ * The form carries the layer's own `updatedAt`, so the save can be refused when somebody else has written
+ * the layer since the page was rendered. An empty field is a claim too — "there was no layer here" — and
+ * it is checked the same way, so a stale tab cannot create a layer over a colleague's new one.
+ *
+ * Unparseable is treated as absent rather than as a refusal: the value is not something a person types,
+ * and the only ways to get a bad one are a hand-edited form or a bug. Both are then answered by the
+ * store's own conflict check against the row, which is where the decision belongs.
+ */
+export function expectedVoiceVersion(formData: FormData): { readonly updatedAt?: Date } {
+  const raw = field(formData, "expectedUpdatedAt").trim();
+  if (raw === "") {
+    return {};
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? {} : { updatedAt: parsed };
+}
+
 export function voiceDraftFrom(formData: FormData): StyleProfileDraft {
   const replyLength = field(formData, "replyLength");
   const emoji = field(formData, "emoji");
