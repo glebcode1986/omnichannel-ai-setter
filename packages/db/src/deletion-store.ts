@@ -92,6 +92,15 @@ export async function requestDeletion(
   db: DbClient,
   context: WorkspaceContext,
   input: RequestDeletionInput,
+  /**
+   * When it was asked for.
+   *
+   * Taken from the caller rather than from the column default, so that one run's whole timeline comes from
+   * one clock. The lifecycle CHECK requires `started_at >= requested_at`, and a request stamped by the
+   * database while the execution is stamped by an injected clock is two clocks that can disagree — which
+   * made a suite pass or fail depending on the hour it ran at.
+   */
+  at = new Date(),
 ): Promise<DeletionRequestRecord> {
   requireRole(context, WORKSPACE_ADMIN_ROLES, "request a deletion");
   const workspaceId = scopeOf(context);
@@ -102,6 +111,7 @@ export async function requestDeletion(
       ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
       ...(input.reason === undefined || input.reason.trim() === "" ? {} : { reason: input.reason.trim() }),
       requestedByUserId: context.userId,
+      requestedAt: at,
     },
   });
   await auditRequest(db, row, context.userId);
@@ -119,6 +129,8 @@ export async function requestProfileDeletion(
   db: DbClient,
   context: BusinessProfileContext,
   input: { readonly scope: Extract<DeletionScopeValue, "CONTACT" | "CONVERSATION" | "BUSINESS_PROFILE">; readonly targetId?: string; readonly reason?: string },
+  /** As above: one run, one clock. */
+  at = new Date(),
 ): Promise<DeletionRequestRecord> {
   requireRole(context, WORKSPACE_ADMIN_ROLES, "request a deletion");
   const scope = profileScopeOf(context);
@@ -129,6 +141,7 @@ export async function requestProfileDeletion(
       ...(input.targetId === undefined ? {} : { targetId: input.targetId }),
       ...(input.reason === undefined || input.reason.trim() === "" ? {} : { reason: input.reason.trim() }),
       requestedByUserId: context.userId,
+      requestedAt: at,
     },
   });
   await auditRequest(db, row, context.userId);
