@@ -237,6 +237,31 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     expect(await database.db.knowledgeDocument.count({ where: { workspaceId: scope().workspaceId } })).toBe(0);
   }, 120_000);
 
+  it("keeps a correction nobody ticked as a suggestion, with no approver against it", async () => {
+    const draftId = await pendingDraft();
+
+    await resolveReview(dependencies(database.db), command(draftId, { kind: "EDIT", text: "We're open 10 till 6 on Saturdays.", saveAsStyleExample: false }));
+
+    const example = await database.db.styleExample.findFirstOrThrow({
+      where: { ...scope(), sourceDraftId: draftId },
+      select: { status: true, provenance: true, outboundText: true, inboundContext: true, approvedByUserId: true, sourceDraftId: true },
+    });
+    // The correction is kept — before this it was discarded, so nothing in production ever produced a
+    // suggestion and the approve/reject workflow had an empty list to work on. And it is kept as
+    // SUGGESTED with nobody's name against it: the person rewrote one reply, which is not the same as
+    // saying "sound like this from now on". The CHECK insists on the missing approver too.
+    expect(example).toMatchObject({
+      status: "SUGGESTED",
+      provenance: "HUMAN_EDITED_DRAFT",
+      outboundText: "We're open 10 till 6 on Saturdays.",
+      inboundContext: "Are you open Saturday?",
+      approvedByUserId: null,
+      sourceDraftId: draftId,
+    });
+    // It is not in use until somebody approves it: the retriever only ever looks at ACTIVE rows.
+    expect(await database.db.styleExample.count({ where: { ...scope(), status: "ACTIVE", sourceDraftId: draftId } })).toBe(0);
+  }, 120_000);
+
   it("takes ownership when something goes out and returns it when the draft is dismissed", async () => {
     const approved = await pendingDraft();
     await resolveReview(dependencies(database.db), command(approved, { kind: "APPROVE" }));
