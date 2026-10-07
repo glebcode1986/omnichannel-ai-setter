@@ -17,9 +17,16 @@ import type { StyleExampleCursor } from "@omnichannel/db";
 import type { RawSearchParams } from "./inbox-view";
 
 /** Which list a cursor belongs to. The parameter name is part of the contract, so it lives here. */
-export type StyleList = "verified" | "suggested";
+/**
+ * The three lists the screen renders, and therefore the three cursors it may carry.
+ *
+ * `retired` is the archived-and-rejected list. It needs its own parameter for the reason the other two
+ * do: one shared cursor would make "show more retired" also advance the verified library, so an operator
+ * paging one would lose their place in the other — a bug that reads as data disappearing.
+ */
+export type StyleList = "verified" | "suggested" | "retired";
 
-const PARAM: Readonly<Record<StyleList, string>> = { verified: "verifiedCursor", suggested: "suggestedCursor" };
+const PARAM: Readonly<Record<StyleList, string>> = { verified: "verifiedCursor", suggested: "suggestedCursor", retired: "retiredCursor" };
 
 export function one(value: string | string[] | undefined): string | undefined {
   const first = Array.isArray(value) ? value[0] : value;

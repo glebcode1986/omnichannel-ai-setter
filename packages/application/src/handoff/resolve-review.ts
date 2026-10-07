@@ -129,13 +129,26 @@ export interface ReviewStore {
  * is structural rather than a matter of care: there is no call here that could write knowledge.
  */
 export interface StyleLearningStore {
-  recordEditedDraft(input: {
-    readonly workspaceId: string;
-    readonly businessProfileId: string;
-    readonly inboundContext: string;
-    readonly outboundText: string;
-    readonly sourceDraftId: string;
-  }): Promise<void>;
+  /** The person asked for this wording to be learned from, so it is in use from the moment they said so. */
+  recordEditedDraft(input: StyleLearningInput): Promise<void>;
+  /**
+   * The person corrected the assistant and did *not* ask for the wording to be learned from.
+   *
+   * Recorded as a suggestion, not as nothing and not as verified. A correction is the strongest evidence
+   * there is of how this business actually wants to sound, so dropping it throws away the only signal the
+   * assistant gets from being wrong; and treating it as approved would make an operator's one-off
+   * rewording start shaping every later reply without anyone agreeing to it. Someone judges it on the
+   * Style screen, which is where the suggestion list exists for.
+   */
+  suggestEditedDraft(input: StyleLearningInput): Promise<void>;
+}
+
+export interface StyleLearningInput {
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  readonly inboundContext: string;
+  readonly outboundText: string;
+  readonly sourceDraftId: string;
 }
 
 export interface ReviewLogPort {
@@ -208,8 +221,13 @@ export async function resolveReview(dependencies: ReviewDependencies, command: R
   //
   // And only for the call that committed it. A replay is the same wording arriving twice; learning from it
   // twice would weight one sentence double in every later answer.
-  if (command.action.kind === "EDIT" && command.action.saveAsStyleExample && !decision.replayed) {
-    await learnFromEdit(dependencies, command, command.action.text);
+  //
+  // An edit is recorded either way, and the difference is whether anybody has vouched for it: ticked, the
+  // person vouched for it themselves and it is in use; unticked, it waits on the Style screen for someone
+  // to say "sound like this". Before this branch existed, an unticked correction was simply discarded —
+  // the suggestion list had no producer at all, so the approve/reject workflow had nothing to work on.
+  if (command.action.kind === "EDIT" && !decision.replayed) {
+    await learnFromEdit(dependencies, command, command.action.text, command.action.saveAsStyleExample);
   }
   dependencies.log.info("review.scheduled", { ...fields, operationId: decision.operationId, edited, reviewMode: command.reviewMode });
   return { status: "SCHEDULED", operationId: decision.operationId, edited };
@@ -248,21 +266,25 @@ function outcomeOf(dependencies: ReviewDependencies, fields: Readonly<Record<str
 /**
  * Human wording becomes a style example and nothing else. Failing to learn from an edit must never stop the
  * reply the person actually asked for, so a failure here is logged rather than raised.
+ *
+ * `verified` is the person's own answer to "sound like this?", and nothing else may answer it: an edit they
+ * did not tick becomes a suggestion, never an active example.
  */
-async function learnFromEdit(dependencies: ReviewDependencies, command: ReviewCommand, text: string): Promise<void> {
+async function learnFromEdit(dependencies: ReviewDependencies, command: ReviewCommand, text: string, verified: boolean): Promise<void> {
   try {
     const inboundContext = await dependencies.inboundContextFor(command.draftId);
     if (inboundContext === undefined) {
       dependencies.log.warn("review.style_context_missing", { draftId: command.draftId });
       return;
     }
-    await dependencies.style.recordEditedDraft({
+    const input = {
       workspaceId: command.scope.workspaceId,
       businessProfileId: command.scope.businessProfileId,
       inboundContext,
       outboundText: text,
       sourceDraftId: command.draftId,
-    });
+    };
+    await (verified ? dependencies.style.recordEditedDraft(input) : dependencies.style.suggestEditedDraft(input));
   } catch (error) {
     // Everything, including looking up the context. This runs after the decision has committed, so a
     // failure that escaped here would report an error for a reply that is already on its way out.
