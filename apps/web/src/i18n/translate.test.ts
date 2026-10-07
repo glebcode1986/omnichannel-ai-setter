@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { WORKSPACE_ROLES } from "@omnichannel/domain";
+import { RELEASE_REFUSALS, REVIEWER_STATUSES, ROLLOUT_STAGES, WORKSPACE_ROLES } from "@omnichannel/domain";
 
 import { catalogues, pluralCatalogues, type MessageKey } from "./catalogue";
 import { FALLBACK_LOCALE, resolveUiLocale, UI_LOCALES } from "./locales";
@@ -73,11 +73,16 @@ describe("the catalogues", () => {
     // {state}` and `{channel} — {status} ({external})` are assemblies of values a reader needs in a
     // stable order. They stay in the catalogue so a locale can change the punctuation or the order, and
     // they are identical today because neither language wants anything different.
+    //
+    // `admin.releaseBlocker` is the same category once more (#60): a gate id, which is an identifier and
+    // is not translated, followed by a refusal, which is. Both halves are already localized where they
+    // are localizable, and the line that joins them has nothing left to differ about.
     expect(identical.toSorted()).toEqual(
       [
         "admin.auditActor",
         "admin.channelLine",
         "admin.planLine",
+        "admin.releaseBlocker",
         "billing.addOnQuantity",
         "channel.INSTAGRAM",
         "channel.WHATSAPP",
@@ -87,6 +92,25 @@ describe("the catalogues", () => {
         "leads.stageColumn",
       ].toSorted(),
     );
+  });
+
+  it("names every rollout stage, reviewer status and release refusal in every locale", () => {
+    // Driven off the domain's own lists rather than a copy, for the reason the roles are (#60): the
+    // console interpolates these into localized sentences, and an enum added later would otherwise reach
+    // a Russian reader as `LIMITED_AUTOPILOT`. That is the exact failure the localization guard was
+    // written for, and a guard that only checks literals in TSX cannot see a value interpolated at
+    // runtime — only a parity test over the catalogue can.
+    for (const locale of UI_LOCALES) {
+      for (const stage of ROLLOUT_STAGES) {
+        expect(catalogues[locale][`admin.rolloutStage.${stage}`], `${locale} is missing admin.rolloutStage.${stage}`).toBeTruthy();
+      }
+      for (const status of REVIEWER_STATUSES) {
+        expect(catalogues[locale][`admin.reviewerStatus.${status}`], `${locale} is missing admin.reviewerStatus.${status}`).toBeTruthy();
+      }
+      for (const refusal of RELEASE_REFUSALS) {
+        expect(catalogues[locale][`admin.releaseRefusal.${refusal}`], `${locale} is missing admin.releaseRefusal.${refusal}`).toBeTruthy();
+      }
+    }
   });
 
   it("names every workspace role in every locale", () => {

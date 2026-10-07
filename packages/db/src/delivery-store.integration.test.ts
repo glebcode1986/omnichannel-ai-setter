@@ -1269,12 +1269,44 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const immutableCatalog = reads.filter(
         (read) => read.includes('"plan_versions"') || read.includes('"plan_definitions"') || read.includes('"addon_versions"'),
       );
-      expect(advisory).toHaveLength(2);
+      // The release catalogue, re-read under its own advisory key (#60). Three statements, because the
+      // stage in force is the stage of the newest candidate whose gates permit a release and whose own SHA
+      // a reviewer passed — so the gate results and the verdicts are part of the question, not decoration
+      // on the answer. Covered by a key rather than a row lock for the reason the suspensions and the
+      // override are: the candidate that would change the answer may not exist yet when the claim starts,
+      // and no lock can be taken on a row nobody has inserted. Here that is the normal case rather than the
+      // edge one, since what moves the stage is an INSERT.
+      //
+      // The rollout's *other* half — whether this Business Profile is one of the explicitly selected ones —
+      // is deliberately absent from this list: it is a column on the `business_profiles` row this
+      // transaction already holds `FOR UPDATE`, and it is selected from that locked read rather than from a
+      // second unlocked one.
+      const releaseCatalogue = reads.filter(
+        (read) =>
+          read.includes('"release_records"') || read.includes('"release_gate_results"') || read.includes('"release_reviews"'),
+      );
+      expect(advisory).toHaveLength(3);
       expect(suspensions).toHaveLength(1);
       expect(entitlement).toHaveLength(3);
       expect(immutableCatalog).toHaveLength(3);
+      // Two rather than three, and the number is this fixture's rather than the design's: no release is
+      // recorded here, so `readReleaseInForce` returns early instead of asking for verdicts about
+      // candidates that do not exist. The assertion that actually holds the invariant is the one at the
+      // end — a release read that stopped being accounted for here would land in `rowReads` and fail
+      // there, whatever this count said.
+      expect(releaseCatalogue).toHaveLength(2);
+      // Asserted rather than assumed: if the flag were ever read in its own statement this would still be
+      // the locked read, and the unlocked one would land in `rowReads` below and fail there.
+      expect(reads.filter((read) => read.includes('"rollout_autopilot"'))).toEqual([
+        reads.find((read) => read.includes('"business_profiles"') && read.includes("FOR UPDATE")),
+      ]);
       const rowReads = reads.filter(
-        (read) => !advisory.includes(read) && !suspensions.includes(read) && !entitlement.includes(read) && !immutableCatalog.includes(read),
+        (read) =>
+          !advisory.includes(read) &&
+          !suspensions.includes(read) &&
+          !entitlement.includes(read) &&
+          !immutableCatalog.includes(read) &&
+          !releaseCatalogue.includes(read),
       );
       expect(rowReads.length).toBeGreaterThan(0);
       expect(rowReads.filter((read) => !/FOR (UPDATE|SHARE)$/.test(read))).toEqual([]);

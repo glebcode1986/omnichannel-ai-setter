@@ -55,11 +55,14 @@ import {
   type SuspensionReason,
   type SuspensionScope,
   type TakeoverReason,
+  type RolloutAccess,
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
 import { entitlementLockKeyFor } from "./entitlement-lock";
 import { readEntitlement } from "./entitlement-store";
+import { releaseCatalogueLockKey } from "./release-lock";
+import { readReleaseInForce, readRolloutAccess, rolloutAccessFrom } from "./release-store";
 import { suspensionLockKeysFor } from "./suspension-lock";
 import type {
   ActorKind,
@@ -138,6 +141,15 @@ interface SendStateGuard {
    * The claim therefore re-resolves it and compares these three booleans.
    */
   readonly commercial: CommercialAccess;
+  /**
+   * What the staged rollout permitted when the decision was made (#60, LAUNCH_READINESS.md §18).
+   *
+   * The resolved answer rather than a row's `updatedAt`, for the same reason the commercial state is: a
+   * release recorded during a two-minute delay moves no row this guard could name, and a rollout pulled
+   * back to a DRAFT-first stage while a reply waited has to stop that reply rather than be discovered
+   * after it went out.
+   */
+  readonly rollout: RolloutAccess;
 }
 
 const sealGuard = (guard: SendStateGuard): DeliveryStateGuard => guard as unknown as DeliveryStateGuard;
@@ -244,6 +256,10 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
       // bypassable — and resolved after it the decision and the guard would describe two different
       // commercial states.
       const commercial = commercialAccessOf(await readEntitlement(db, job.workspaceId, at));
+      // And the staged rollout, at the same instant and for the same reason — `at`, not the wall clock,
+      // so the guard describes one moment rather than two. A narrow query over the few most recent
+      // release candidates; see `readReleaseInForce`.
+      const rollout = await readRolloutAccess(db, { workspaceId: job.workspaceId, businessProfileId: job.businessProfileId }, at);
 
       const context: DeliverySendContext = {
         deliveryJobId: job.id,
@@ -265,6 +281,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         authority: authorityOf(job),
         ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
         commercial,
+        rollout,
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
         account: conversation.channelIdentity.channelAccount.status,
         // A person's own wording was never held for review; the review it needed was them writing it.
@@ -293,6 +310,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           approvedAt: job.approvedAt,
           approvedReviewMode: job.approvedReviewMode,
           commercial,
+          rollout,
         }),
       };
       return context;
@@ -500,8 +518,13 @@ async function claimInside(
     //
     // The cost is that claims within one Business Profile serialize. They are a handful of short
     // statements, and a reply that cannot be taken back is worth more than that concurrency.
-    await tx.$queryRaw`
-      SELECT "id" FROM "business_profiles"
+    //
+    // `rollout_autopilot` is selected here rather than read again below, and that is the point rather than
+    // a saving: the staged rollout's per-profile half is a column on this row, and reading it in a second
+    // statement would be an unlocked read of a fact the claim depends on — the one thing this transaction
+    // is not allowed to do. Taken off the locked row it is covered by the lock already held.
+    const profileRows = await tx.$queryRaw<{ id: string; rollout_autopilot: boolean }[]>`
+      SELECT "id", "rollout_autopilot" FROM "business_profiles"
       WHERE "workspace_id" = ${guard.workspaceId} AND "id" = ${guard.businessProfileId}
       FOR UPDATE`;
 
@@ -569,6 +592,27 @@ async function claimInside(
       commercialNow.aiDrafts !== guard.commercial.aiDrafts ||
       commercialNow.autopilot !== guard.commercial.autopilot
     ) {
+      return { kind: "STATE_CHANGED" };
+    }
+    // The staged rollout, re-resolved for the same reason: recording a release moves no row this claim
+    // could bind with a predicate, so a rollout pulled back while this reply waited out its delay is
+    // invisible unless it is asked again.
+    //
+    // What is compared is the resolved answer, not the posture behind it. Advancing from
+    // `LIMITED_AUTOPILOT` to `COMMERCIAL_BETA` leaves an allowlisted profile at `true` either way and
+    // passes undetected — which is accurate rather than a gap, because the question this claim is asking
+    // is whether unattended sending is still permitted here, and it is. Either direction of a *change*
+    // counts, including a widening, for the reason the commercial comparison above gives.
+    //
+    // The key the release catalogue is written under, taken shared before the read for the reason the
+    // entitlement key is taken: the candidate that would change the answer may not exist yet when this
+    // claim starts, so no row lock can cover it. The other side is a trigger on all three release tables,
+    // so a release recorded by a script participates too.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${releaseCatalogueLockKey()}, 0))`;
+    // The stage from the catalogue under that key; the profile's own enablement off the row this
+    // transaction already holds `FOR UPDATE`, rather than read again unlocked.
+    const rolloutNow = rolloutAccessFrom(await readReleaseInForce(tx, claimedAt), profileRows[0]?.rollout_autopilot ?? false);
+    if (rolloutNow.autopilot !== guard.rollout.autopilot) {
       return { kind: "STATE_CHANGED" };
     }
 

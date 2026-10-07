@@ -84,6 +84,19 @@ export const REASON_CODES = [
    * them (USAGE_METERING.md).
    */
   "BILLING_LIMIT",
+  /**
+   * The staged rollout has not released unattended sending for this Business Profile yet (#60, §18).
+   *
+   * Answered by the rollout reaching the next stage, or by somebody adding this profile to the explicit
+   * list the limited stage runs on — not by the business doing anything, which is why it is its own code
+   * rather than a billing or a mode reason. A business reading `MODE_NOT_AUTOPILOT` would go and check a
+   * setting that is already correct.
+   *
+   * Holds the reply for a person rather than ending it, and is answered by an approval. That is not a
+   * softening: stages one to three of the rollout *are* human-approved sending, so a gate that a person
+   * could not answer would make the limited rollout unusable rather than careful.
+   */
+  "ROLLOUT_AUTOPILOT_NOT_RELEASED",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const isReasonCode = literalGuard(REASON_CODES);

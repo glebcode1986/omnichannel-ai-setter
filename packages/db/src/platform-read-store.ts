@@ -101,6 +101,14 @@ export interface ProfileDiagnostic {
   readonly name: string;
   readonly status: string;
   readonly channelAccounts: number;
+  /**
+   * Whether this profile is on the limited-rollout autopilot allowlist (#60, §18 stage three).
+   *
+   * Here because an operator who can change the list has to be able to see it. Without it the flag was a
+   * column nothing displayed, so "which profiles send unattended during the limited rollout" was a
+   * question only a SQL prompt could answer — which is the thing this console exists to end.
+   */
+  readonly rolloutAutopilot: boolean;
 }
 
 /**
@@ -158,7 +166,7 @@ export async function readSupportSnapshot(
     db.businessProfile.findMany({
       where: { workspaceId },
       orderBy: [{ createdAt: "asc" }],
-      select: { id: true, name: true, status: true, _count: { select: { channelAccounts: true } } },
+      select: { id: true, name: true, status: true, rolloutAutopilot: true, _count: { select: { channelAccounts: true } } },
     }),
     db.channelAccount.findMany({
       where: { workspaceId },
@@ -187,6 +195,7 @@ export async function readSupportSnapshot(
       name: profile.name,
       status: profile.status,
       channelAccounts: profile._count.channelAccounts,
+      rolloutAutopilot: profile.rolloutAutopilot,
     })),
     channels: channels.map((account) => ({
       channelAccountId: account.id,

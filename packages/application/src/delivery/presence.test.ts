@@ -9,6 +9,7 @@
  * delivery coordinator runs. These tests therefore move the *state* and assert the answer, rather than
  * asserting that a particular branch was taken.
  */
+import { NO_STAGED_ROLLOUT } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
 
 import { planPresence, presenceLeadMs, presenceVerdict, type PresenceSettings } from "./presence";
@@ -33,6 +34,9 @@ function context(overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
     operationId: "op_1",
     workspaceId: "ws_1",
     commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+    // No staged release is in force in a unit fixture, which is what a development
+    // checkout and a test database both are (#60).
+    rollout: NO_STAGED_ROLLOUT,
     draftId: "draft_1",
     conversationId: "conv_1",
     channel: "WHATSAPP",

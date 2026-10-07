@@ -1,4 +1,4 @@
-import { toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
+import { NO_STAGED_ROLLOUT, toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
 import type { SendResult } from "@omnichannel/channel-core";
 import { describe, expect, it } from "vitest";
 
@@ -30,6 +30,9 @@ const context = (overrides: Partial<DeliverySendContext> = {}): DeliverySendCont
   operationId: "op_1",
   workspaceId: "ws_1",
   commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+  // No staged release is in force in a unit fixture, which is what a development
+  // checkout and a test database both are (#60).
+  rollout: NO_STAGED_ROLLOUT,
   draftId: "draft_1",
   conversationId: "conv_1",
   channel: "INSTAGRAM",

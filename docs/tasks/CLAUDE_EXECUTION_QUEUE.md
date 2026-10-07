@@ -11,9 +11,34 @@ Everything implemented so far is one stacked chain of unmerged PRs, each branch 
 each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> ... -> #102`
 
-Nothing is merged to `main`.
+The chain has grown to #102; `docs/handoff/CURRENT_HANDOFF.md` carries the current list. Nothing is
+merged to `main`.
+
+### Current work — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
+
+**Branch `feat/p7-02-launch-readiness`**, based on `feat/p7-01-admin-operations`. See
+`docs/specs/RELEASE_PROCESS.md` for the operational companion to `LAUNCH_READINESS.md`.
+
+Two things a supervisor should know without reading the diff.
+
+**A release can now be recorded, and could not before.** `pnpm release:record` and `pnpm release:review`
+are the producers §20 asks for; both need the new `OPERATE_RELEASE` platform permission and both write a
+platform audit row with the fact they record. The record is read back at `/admin/releases`, and the
+limited-rollout allowlist §18 stage three needs is on the workspace screen. Until this slice every one of
+those tables was reachable only from a test, so the stage in force was always "none" — and "none" is the
+one state in which the §18 gate permits every profile on the platform.
+
+**One action is outstanding and needs a credential this session does not have.** CI runs neither
+`pnpm evals` step, so §5's AI regression gate is settled by a person rather than by a run. The one-line
+fix is staged at `docs/handoff/ci-evals-step.patch` and is **not applied**, because the push credential
+here cannot write `.github/workflows`. Somebody with that scope should apply it; until then the gate
+carries that admission in its own recorded evidence.
+
+Three further limitations are stated in `RELEASE_PROCESS.md` rather than left to be discovered: there is
+no per-feature rollout, reviewer independence is a process property rather than a constraint the schema
+enforces, and `AUTOPILOT` is the only capability a `HIGH` can actually switch off on the send path.
 
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 

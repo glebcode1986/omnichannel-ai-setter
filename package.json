@@ -28,7 +28,9 @@
     "test:redis": "REQUIRE_REDIS_TESTS=1 vitest run --project @omnichannel/queue",
     "evals": "pnpm --filter @omnichannel/evals evals",
     "test:e2e": "REQUIRE_DB_TESTS=1 REQUIRE_REDIS_TESTS=1 vitest run --project @omnichannel/worker --project @omnichannel/web",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "release:record": "tsx scripts/release/record.ts",
+    "release:review": "tsx scripts/release/review.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
