@@ -346,10 +346,14 @@ async function purge(tx: DbExecutor, row: { workspaceId: string; businessProfile
   await count("preferences", tx.customerPreference.deleteMany({ where: memoryFilter }));
   // By source *and* by the contact's own conversations: a hand-written example carries no source id, so
   // the foreign key alone would leave a customer's words, and their embedding, on disk.
-  await count(
-    "styleExamples",
-    tx.styleExample.deleteMany({ where: { OR: [{ sourceMessageId: { in: messageIds } }, { sourceDraftId: { in: draftIds } }] } }),
-  );
+  const styleFilter = { OR: [{ sourceMessageId: { in: messageIds } }, { sourceDraftId: { in: draftIds } }] };
+  // Its lifecycle first. The decision rows reference the example with ON DELETE RESTRICT, so without this
+  // the delete below is refused outright — and the trail would in any case be pointing at an example
+  // nobody can see. What the rows record is operator activity rather than customer data, but they only
+  // exist to explain one example, and that example is going.
+  const styleExampleIds = (await tx.styleExample.findMany({ where: styleFilter, select: { id: true } })).map((example) => example.id);
+  await count("styleDecisions", tx.styleExampleDecision.deleteMany({ where: { styleExampleId: { in: styleExampleIds } } }));
+  await count("styleExamples", tx.styleExample.deleteMany({ where: styleFilter }));
   await count("qualificationAnswers", tx.leadQualificationAnswer.deleteMany({ where: { conversationId: { in: conversationIds } } }));
   await count("stageTransitions", tx.leadStageTransition.deleteMany({ where: { conversationId: { in: conversationIds } } }));
   await count("deliveries", tx.deliveryJobRecord.deleteMany({ where: { operationId: { in: operationIds } } }));

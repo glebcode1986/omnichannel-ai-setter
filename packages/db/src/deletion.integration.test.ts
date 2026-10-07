@@ -112,7 +112,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
     await db().contactPoint.create({
       data: { ...scope(), contactId: identity.contactId, kind: "PHONE", normalizedValue: `+1555000${String(sequence).padStart(4, "0")}`, rawValue: "+1 555 000" },
     });
-    await db().styleExample.create({
+    const styleExample = await db().styleExample.create({
       data: {
         workspaceId: scope().workspaceId,
         businessProfileId: scope().businessProfileId,
@@ -123,6 +123,18 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
         // An active example is a verified one, which the CHECK insists on.
         approvedByUserId: profile.context.userId,
         sourceMessageId: message.id,
+      },
+    });
+    // And its lifecycle, because that is what a real one has. The decision rows point at the example with
+    // ON DELETE RESTRICT, so a purge that did not clear them first would be refused by the database — and
+    // refused *late*, after the media calls, with a run reporting failure and nothing removed.
+    await db().styleExampleDecision.create({
+      data: {
+        workspaceId: scope().workspaceId,
+        styleExampleId: styleExample.id,
+        decision: "APPROVED",
+        decidedByUserId: profile.context.userId,
+        decidedAt: NOW,
       },
     });
     return { contactId: identity.contactId, conversationId: conversation.id, messageId: message.id, providerMediaId };
@@ -136,6 +148,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
     preferences: await db().customerPreference.count({ where: { contactId: seeded.contactId } }),
     contactPoints: await db().contactPoint.count({ where: { contactId: seeded.contactId } }),
     styleExamples: await db().styleExample.count({ where: { sourceMessage: { conversationId: seeded.conversationId } } }),
+    styleDecisions: await db().styleExampleDecision.count({ where: { styleExample: { sourceMessage: { conversationId: seeded.conversationId } } } }),
     contacts: await db().contact.count({ where: { id: seeded.contactId } }),
   });
 
@@ -225,6 +238,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
       expect(before.summaries).toBeGreaterThan(0);
       expect(before.facts).toBeGreaterThan(0);
       expect(before.styleExamples).toBeGreaterThan(0);
+      expect(before.styleDecisions).toBeGreaterThan(0);
       const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
       const media = acceptingMedia();
 
@@ -240,6 +254,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
         preferences: 0,
         contactPoints: 0,
         styleExamples: 0,
+        styleDecisions: 0,
         contacts: 0,
       });
       expect(done.removed["transcripts"]).toBeGreaterThan(0);
