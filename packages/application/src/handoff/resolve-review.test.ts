@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ReviewMode } from "@omnichannel/domain";
 
-import { resolveReview, type ReviewCommand, type ReviewDecision, type ReviewDependencies } from "./resolve-review";
+import { resolveReview, type ReviewCommand, type ReviewDecision, type ReviewDependencies, type StyleLearningInput } from "./resolve-review";
 
 const NOW = new Date("2026-09-19T12:00:00.000Z");
 
@@ -18,7 +18,7 @@ function harness(
   options: { decision?: ReviewDecision; replayed?: boolean; styleFails?: boolean; contextFails?: boolean; inboundContext?: string | undefined } = {},
 ) {
   const calls: string[] = [];
-  const styled: { outboundText: string; sourceDraftId: string }[] = [];
+  const styled: { outboundText: string; sourceDraftId: string; kind: "verified" | "suggested" }[] = [];
   const scheduled: { reviewMode: ReviewMode; saveAsStyleExample: boolean; editedText?: string }[] = [];
   const logs: string[] = [];
   let decisions = 0;
@@ -33,6 +33,15 @@ function harness(
       return { kind: "ALREADY_RESOLVED" };
     }
     return kind === "SCHEDULED" ? { kind: "SCHEDULED", operationId, replayed: options.replayed ?? false } : { kind };
+  };
+
+  const learn = (kind: "verified" | "suggested", input: StyleLearningInput) => {
+    calls.push(`style:${kind}`);
+    if (options.styleFails === true) {
+      return Promise.reject(new Error("style store is down"));
+    }
+    styled.push({ outboundText: input.outboundText, sourceDraftId: input.sourceDraftId, kind });
+    return Promise.resolve();
   };
 
   const dependencies: ReviewDependencies = {
@@ -52,16 +61,11 @@ function harness(
       },
     },
     style: {
-      recordEditedDraft: (input) => {
-        // Recorded in the same list as the decision, so the *order* of the two is assertable: nothing is
-        // learned from a reply until the reply itself is committed.
-        calls.push("style");
-        if (options.styleFails === true) {
-          return Promise.reject(new Error("style store is down"));
-        }
-        styled.push({ outboundText: input.outboundText, sourceDraftId: input.sourceDraftId });
-        return Promise.resolve();
-      },
+      // Recorded in the same list as the decision, so the *order* of the two is assertable: nothing is
+      // learned from a reply until the reply itself is committed. The two writes are told apart, because
+      // which one an edit reaches is the difference between a voice in use and one awaiting judgement.
+      recordEditedDraft: (input) => learn("verified", input),
+      suggestEditedDraft: (input) => learn("suggested", input),
     },
     log: { info: (event) => logs.push(event), warn: (event) => logs.push(event) },
     now: () => NOW,
@@ -92,7 +96,9 @@ describe("nothing here sends anything", () => {
     // Not two calls: the wording and the send it authorizes commit together, or a crash between them
     // leaves a reply nobody agreed to next to a claim nobody can retry.
     expect(outcome).toMatchObject({ status: "SCHEDULED", edited: true });
-    expect(calls).toEqual(["edit:We're open 10-6!"]);
+    // The suggestion that follows is a separate write, after the commit, and it is why there are two
+    // entries rather than one: the correction is kept, and it is kept as something nobody has approved.
+    expect(calls).toEqual(["edit:We're open 10-6!", "style:suggested"]);
   });
 });
 
@@ -131,18 +137,23 @@ describe("an edited reply teaches style, never facts", () => {
     await resolveReview(dependencies, command({ action: { kind: "EDIT", text: "Saturdays we're open 10 till 6 😊", saveAsStyleExample: true } }));
 
     expect(styled).toEqual([
-      { outboundText: "Saturdays we're open 10 till 6 😊", sourceDraftId: "draft_1" },
+      { outboundText: "Saturdays we're open 10 till 6 😊", sourceDraftId: "draft_1", kind: "verified" },
     ]);
     // The port it is written through has no way to reach the factual corpus; the separation is structural.
-    expect(Object.keys(dependencies.style)).toEqual(["recordEditedDraft"]);
+    // Both of its calls write style examples and neither can write anything else.
+    expect(Object.keys(dependencies.style)).toEqual(["recordEditedDraft", "suggestEditedDraft"]);
   });
 
-  it("does not record one unless the person asked", async () => {
+  it("keeps a correction nobody vouched for as a suggestion, not as a verified example", async () => {
     const { dependencies, styled } = harness();
 
     await resolveReview(dependencies, command({ action: { kind: "EDIT", text: "Sure thing.", saveAsStyleExample: false } }));
 
-    expect(styled).toEqual([]);
+    // Both halves matter. Discarding it — which is what used to happen — threw away the only evidence the
+    // assistant gets from having been corrected, and left the suggestion list with no producer at all.
+    // Recording it as verified would let one operator's rewording shape every later reply with nobody
+    // having agreed to it.
+    expect(styled).toEqual([{ outboundText: "Sure thing.", sourceDraftId: "draft_1", kind: "suggested" }]);
   });
 
   it("learns from the wording only after the send it belongs to is committed", async () => {
@@ -152,7 +163,7 @@ describe("an edited reply teaches style, never facts", () => {
 
     // The decision first, the learning after. Attempted first, a slow or failing style store would stand
     // between a person's click and the reply they asked for.
-    expect(calls).toEqual(["edit:We're open 10-6!", "style"]);
+    expect(calls).toEqual(["edit:We're open 10-6!", "style:verified"]);
   });
 
   it("does not learn the same wording twice when a decision is replayed", async () => {
@@ -185,7 +196,7 @@ describe("an edited reply teaches style, never facts", () => {
     // Failing to learn must never cost the person the reply they actually asked for — and by now it
     // cannot, because the send was committed before the style store was ever called.
     expect(outcome.status).toBe("SCHEDULED");
-    expect(calls).toEqual(["edit:Sure thing.", "style"]);
+    expect(calls).toEqual(["edit:Sure thing.", "style:verified"]);
     expect(logs).toContain("review.style_not_recorded");
   });
 
@@ -227,7 +238,7 @@ describe("one decision, one write", () => {
 
     await resolveReview(dependencies, command({ action: { kind: "EDIT", text: "We're open 10-6!", saveAsStyleExample: false } }));
 
-    expect(calls).toEqual(["edit:We're open 10-6!"]);
+    expect(calls).toEqual(["edit:We're open 10-6!", "style:suggested"]);
     expect(scheduled[0]?.editedText).toBe("We're open 10-6!");
   });
 

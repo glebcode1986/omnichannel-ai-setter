@@ -169,6 +169,7 @@ export {
   type ReviewLogPort,
   type ReviewOutcome,
   type ReviewStore,
+  type StyleLearningInput,
   type StyleLearningStore,
 } from "./handoff/resolve-review";
 export {
