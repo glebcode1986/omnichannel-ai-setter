@@ -126,4 +126,22 @@ describe("the vocabularies it offers", () => {
     expect(screen.getByText(catalogues.ru["style.layerProfile"])).toBeDefined();
     expect(screen.getByLabelText(catalogues.ru["style.persona"])).toBeDefined();
   });
+
+  it("carries the version it was rendered against, so a stale save is refused rather than silent", () => {
+    editor();
+
+    // Each tab holds a *complete* profile, so a save with no version to check would replace every field a
+    // colleague had just changed with an old copy of itself. The store has always been able to refuse
+    // that; before this field the form never gave it anything to refuse against.
+    const version = document.querySelector('input[name="expectedUpdatedAt"]');
+    expect(version?.getAttribute("value")).toBe("2026-09-30T10:00:00.000Z");
+  });
+
+  it("claims no version for a layer nobody has written", () => {
+    editor({ exists: false, updatedAt: null });
+
+    // Empty is a claim too — "there was nothing here" — and the store checks it: a layer created in the
+    // meantime makes this save a conflict rather than an overwrite.
+    expect(document.querySelector('input[name="expectedUpdatedAt"]')?.getAttribute("value")).toBe("");
+  });
 });

@@ -12,20 +12,25 @@
  * place in one list by moving through the other — a bug that looks like data disappearing.
  */
 import {
+  archiveStyleExample,
   authorizeBusinessProfileAccess,
   authorizeWorkspaceAccess,
   createBusinessProfile,
   createStyleExample,
   createWorkspaceWithOwner,
   listStyleExamples,
+  rejectStyleExample,
   suggestStyleExample,
   type BusinessProfileContext,
 } from "@omnichannel/db";
+import { PLATFORM_STYLE_FALLBACK } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import type { RawSearchParams } from "./inbox-view";
-import { styleCursorOf, styleNextHref, type StyleList } from "./style-view";
+import { assembleStyleScreen } from "./style-screen";
+import { encodeStyleCursor } from "./style-view";
+import type { StyleTestResult } from "./style-test";
 
 const BASE = "/workspaces/ws/profiles/bp/style";
 
@@ -65,20 +70,46 @@ describe.skipIf(!databaseTestsEnabled())("the Style Training screen's queries", 
     await database?.dispose();
   });
 
-  /** One request, as the screen handles it: a query in, two pages and up to two links out. */
+  /**
+   * The style test, stood in for.
+   *
+   * This file is about which rows the screen shows. Running the real test here would make every assertion
+   * about paging depend on a provider key and an embedding key, and would prove nothing extra: what the
+   * test produces is covered by `style-test.test.ts` and `style-test-panel.test.tsx`.
+   */
+  const NO_TEST: StyleTestResult = {
+    effective: { ...PLATFORM_STYLE_FALLBACK },
+    trial: { mode: "LEXICAL_ONLY", hits: [], unavailable: false },
+    candidate: { status: "NO_PROMPT" },
+  };
+
+  /**
+   * One request, as the screen handles it.
+   *
+   * The screen's *own* assembly, not a copy of it. A helper that reissued the queries by hand would pass
+   * against a loader that had stopped reading one of the lists — which is exactly the bug this screen
+   * shipped with twice.
+   */
   const screen = async (query: RawSearchParams) => {
-    const [verified, suggestions] = await Promise.all([
-      listStyleExamples(database.db, context, { status: "ACTIVE" }, { cursor: styleCursorOf(query, "verified") }),
-      listStyleExamples(database.db, context, { status: "SUGGESTED" }, { cursor: styleCursorOf(query, "suggested") }),
-    ]);
-    const href = (list: StyleList, cursor: Parameters<typeof styleNextHref>[3] | undefined) =>
-      cursor === undefined ? undefined : styleNextHref(BASE, query, list, cursor);
+    const data = await assembleStyleScreen(database.db, context, query, BASE, NO_TEST);
     return {
-      verified: verified.examples.map((example) => example.outboundText),
-      suggestions: suggestions.examples.map((example) => example.outboundText),
-      verifiedNextHref: href("verified", verified.nextCursor),
-      suggestionsNextHref: href("suggested", suggestions.nextCursor),
+      verified: data.verified.examples.map((example) => example.outboundText),
+      suggestions: data.suggestions.examples.map((example) => example.outboundText),
+      retired: data.retired.examples.map((example) => example.outboundText),
+      verifiedNextHref: data.verifiedNextHref,
+      suggestionsNextHref: data.suggestionsNextHref,
+      retiredNextHref: data.retiredNextHref,
     };
+  };
+
+  /** The id of a row the screen would show, found through the same store the screen reads it with. */
+  const idOf = async (status: "ACTIVE" | "SUGGESTED" | "ARCHIVED" | "REJECTED", outboundText: string) => {
+    const page = await listStyleExamples(database.db, context, { status }, { limit: 100 });
+    const row = page.examples.find((example) => example.outboundText === outboundText);
+    if (row === undefined) {
+      throw new Error(`the fixture expected a ${status} example reading "${outboundText}"`);
+    }
+    return row.id;
   };
 
   /** What the browser does with a link: take its query parameters into the next request. */
@@ -145,5 +176,73 @@ describe.skipIf(!databaseTestsEnabled())("the Style Training screen's queries", 
 
     expect(page.verified).toHaveLength(25);
     expect(page.suggestions).toHaveLength(25);
+  }, 300_000);
+
+  /**
+   * The acceptance path the screen used to break (R5 finding).
+   *
+   * The store could archive, reject and restore; the component could draw a restore button; and the loader
+   * read only ACTIVE and SUGGESTED rows. So the moment somebody withdrew an example or declined a
+   * suggestion it left both lists, nothing passed it to the component that knows how to bring it back, and
+   * no user could reach the restore control at all. Nothing failed — a capability simply did not exist.
+   */
+  it("still shows an example after it is withdrawn, so it can be brought back", async () => {
+    const live = await createStyleExample(database.db, context, {
+      inboundContext: "do you take walk-ins?",
+      outboundText: "Walk-ins welcome before noon.",
+    });
+    if (live.status !== "SAVED") {
+      throw new Error(`the fixture expected SAVED, got ${live.status}`);
+    }
+    const id = await idOf("ACTIVE", "Walk-ins welcome before noon.");
+
+    expect(await archiveStyleExample(database.db, context, id)).toEqual({ status: "ARCHIVED" });
+    const after = await screen({});
+
+    expect(after.verified).not.toContain("Walk-ins welcome before noon.");
+    expect(after.retired).toContain("Walk-ins welcome before noon.");
+  }, 300_000);
+
+  it("shows a declined suggestion in the same place, because it is the same question", async () => {
+    const suggestion = await suggestStyleExample(database.db, context, {
+      inboundContext: "any chance of a late slot?",
+      outboundText: "Late slots on Thursdays only.",
+    });
+    if (suggestion.status !== "SAVED") {
+      throw new Error(`the fixture expected SAVED, got ${suggestion.status}`);
+    }
+    const id = await idOf("SUGGESTED", "Late slots on Thursdays only.");
+
+    expect(await rejectStyleExample(database.db, context, id)).toEqual({ status: "REJECTED_EXAMPLE" });
+    const after = await screen({});
+
+    // Withdrawn and declined are one list on screen: to the person looking, both are an example that is
+    // not in use and could be.
+    expect(after.suggestions).not.toContain("Late slots on Thursdays only.");
+    expect(after.retired).toContain("Late slots on Thursdays only.");
+  }, 300_000);
+
+  it("pages the retired list on a cursor of its own", async () => {
+    // Two retired rows is enough to show the property: advancing past the first must move *this* list and
+    // leave the other two exactly where they were. A single shared cursor would have advanced all three,
+    // which reads to an operator as the other lists losing rows.
+    for (const wording of ["Closed on bank holidays.", "We can text you a reminder."]) {
+      const created = await createStyleExample(database.db, context, { inboundContext: `about ${wording}`, outboundText: wording });
+      if (created.status !== "SAVED") {
+        throw new Error(`the fixture expected SAVED, got ${created.status}`);
+      }
+      await archiveStyleExample(database.db, context, await idOf("ACTIVE", wording));
+    }
+    const first = await screen({});
+    const retiredPage = await listStyleExamples(database.db, context, { status: "ARCHIVED" }, { limit: 1 });
+    if (retiredPage.nextCursor === undefined) {
+      throw new Error("the fixture expected more than one retired example");
+    }
+
+    const advanced = await screen({ retiredCursor: encodeStyleCursor(retiredPage.nextCursor) });
+
+    expect(advanced.retired).not.toEqual(first.retired);
+    expect(advanced.verified).toEqual(first.verified);
+    expect(advanced.suggestions).toEqual(first.suggestions);
   }, 300_000);
 });
