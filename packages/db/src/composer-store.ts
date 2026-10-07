@@ -109,6 +109,14 @@ export async function composeHumanReply(db: DbClient, context: BusinessProfileCo
         decisionKey,
       },
     });
+    // What a person writes themselves is how this business actually sounds, so it is offered to the
+    // Style library — as a *suggestion*, because nobody has yet said "sound like that", and one hurried
+    // reply should not start shaping every later one. Judging it is the Style screen's job.
+    //
+    // Inside the same transaction as the reply it came from: a suggestion that survived a reply which
+    // did not would be the library learning from something the customer never received.
+    await suggestFromReply(tx, scope, input.conversationId, text);
+
     // Replying is taking the conversation: the person who just spoke for the business owns it.
     await tx.conversation.update({
       where: { workspaceId_businessProfileId_id: { ...scope, id: input.conversationId } },
@@ -161,4 +169,47 @@ export async function pendingHumanReply(
     select: { operationId: true, humanText: true },
   });
   return pending === null || pending.humanText === null ? undefined : { operationId: pending.operationId, text: pending.humanText };
+}
+
+/**
+ * Offers a person's own reply to the Style library.
+ *
+ * The customer's last message is the context the reply answers, and without one there is nothing to
+ * learn from: an example is a *pair*, and half of one would teach the assistant to produce that sentence
+ * in answer to anything.
+ *
+ * It runs inside the caller's transaction on purpose, so a suggestion cannot survive a reply that did
+ * not: the library would otherwise learn from something the customer never received. The one thing it
+ * may legitimately do is write nothing, which is what a reply with no question to answer produces.
+ */
+async function suggestFromReply(
+  tx: DbExecutor,
+  scope: { readonly workspaceId: string; readonly businessProfileId: string },
+  conversationId: string,
+  outboundText: string,
+): Promise<void> {
+  const inbound = await tx.message.findFirst({
+    where: { ...scope, conversationId, direction: "IN" },
+    orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+    select: { id: true, text: true },
+  });
+  const inboundContext = inbound?.text?.trim() ?? "";
+  if (inboundContext === "") {
+    return;
+  }
+  await tx.styleExample.create({
+    data: {
+      workspaceId: scope.workspaceId,
+      businessProfileId: scope.businessProfileId,
+      inboundContext,
+      outboundText,
+      // Typed by a person rather than corrected from a draft: the two mean different things to whoever
+      // judges the suggestion later.
+      provenance: "HUMAN_TYPED",
+      status: "SUGGESTED",
+      sourceMessageId: inbound?.id ?? null,
+      // No approver, and the CHECK insists on that for anything that is not ACTIVE: a suggestion with a
+      // name against it would read as verified before anybody looked at it.
+    },
+  });
 }
