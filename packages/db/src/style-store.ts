@@ -16,8 +16,16 @@ import type { EmojiUsage, ReplyLength } from "@omnichannel/domain";
 import type { DbClient, DbExecutor } from "./client";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
+/** The stored vocabulary, named here so the lifecycle helpers below are not typed on string literals. */
+type StyleExampleStatusValue = "ACTIVE" | "SUGGESTED" | "REJECTED" | "ARCHIVED";
+type StyleExampleProvenanceValue = "HUMAN_TYPED" | "HUMAN_EDITED_DRAFT";
+export type StyleDecisionValue = "APPROVED" | "REJECTED" | "ARCHIVED" | "RESTORED";
+
 const DEFAULT_PAGE = 25;
 const MAX_PAGE = 100;
+
+/** How much of one example's lifecycle a page carries. Twenty decisions is a long argument. */
+const MAX_DECISIONS = 20;
 
 export type StyleScope = "WORKSPACE" | "BUSINESS_PROFILE";
 
@@ -101,6 +109,14 @@ export async function readStyleProfiles(db: DbExecutor, context: BusinessProfile
 
 export type StyleWriteOutcome =
   | { readonly status: "SAVED" }
+  /**
+   * Somebody else wrote this layer since the screen was rendered.
+   *
+   * A typed answer rather than a lost update or a raw constraint error: two tabs open on one business's
+   * voice is ordinary, and the one that saves second must be told so instead of quietly replacing a
+   * colleague's complete profile with a stale copy of it.
+   */
+  | { readonly status: "CONFLICT" }
   | { readonly status: "ACTIVATED" }
   | { readonly status: "REJECTED_EXAMPLE" }
   | { readonly status: "ARCHIVED" }
@@ -120,6 +136,14 @@ export async function saveStyleProfile(
   context: BusinessProfileContext,
   scopeLevel: StyleScope,
   draft: StyleProfileDraft,
+  /**
+   * What the screen believed it was editing, as the layer's own `updatedAt`.
+   *
+   * Absent means "there was no layer when this form was rendered", which is a claim like any other and
+   * is checked the same way. Omitting the parameter entirely is the system-caller path, which has no
+   * screen behind it and nothing stale to carry.
+   */
+  expected?: { readonly updatedAt?: Date },
 ): Promise<StyleWriteOutcome> {
   const scope = profileScopeOf(context);
   const businessProfileId = scopeLevel === "WORKSPACE" ? null : scope.businessProfileId;
@@ -137,14 +161,46 @@ export async function saveStyleProfile(
 
   const existing = await db.styleProfile.findFirst({
     where: { workspaceId: scope.workspaceId, businessProfileId },
-    select: { id: true },
+    select: { id: true, updatedAt: true },
   });
+
   if (existing === null) {
-    await db.styleProfile.create({ data: { workspaceId: scope.workspaceId, businessProfileId, ...data } });
-  } else {
-    await db.styleProfile.update({ where: { id: existing.id }, data });
+    if (expected?.updatedAt !== undefined) {
+      // The form was rendered against a layer that has since been deleted. Nothing to overwrite, and
+      // writing a fresh one would silently discard whatever the other operator did.
+      return { status: "CONFLICT" };
+    }
+    try {
+      await db.styleProfile.create({ data: { workspaceId: scope.workspaceId, businessProfileId, ...data } });
+    } catch (error) {
+      // Two first saves can both see no row. The partial unique index decides which one wins, and the
+      // loser is told it conflicted rather than handed a raw constraint error.
+      if (isUniqueViolation(error)) {
+        return { status: "CONFLICT" };
+      }
+      throw error;
+    }
+    return { status: "SAVED" };
   }
-  return { status: "SAVED" };
+
+  if (expected !== undefined && expected.updatedAt?.getTime() !== existing.updatedAt.getTime()) {
+    // A stale tab. Overwriting here is the lost update this check exists to prevent: the screen is
+    // carrying a complete profile, so every field a colleague just changed would be replaced by an old
+    // copy of itself.
+    return { status: "CONFLICT" };
+  }
+  // Conditional on the same instant the decision was made from, so a save committed between the read
+  // above and this write loses rather than being overwritten.
+  const changed = await db.styleProfile.updateMany({
+    where: { id: existing.id, ...(expected === undefined ? {} : { updatedAt: existing.updatedAt }) },
+    data,
+  });
+  return changed.count === 0 ? { status: "CONFLICT" } : { status: "SAVED" };
+}
+
+/** Prisma's unique-violation code, named once rather than compared inline at each call site. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002";
 }
 
 /**
@@ -170,6 +226,20 @@ export interface StyleExampleView {
   readonly sourceDraftId: string | null;
   readonly sourceMessageId: string | null;
   readonly createdAt: Date;
+  /**
+   * Everything anybody decided about this example, oldest first.
+   *
+   * Read with the example rather than on demand, because it is the answer to the question the retired
+   * list exists to ask — "who withdrew this, and had anyone approved it before?" — and a history nothing
+   * renders is a history nobody can consult.
+   */
+  readonly decisions: readonly StyleDecisionView[];
+}
+
+export interface StyleDecisionView {
+  readonly decision: StyleDecisionValue;
+  readonly decidedByName: string | null;
+  readonly decidedAt: Date;
 }
 
 export interface StyleExampleFilter {
@@ -221,6 +291,13 @@ export async function listStyleExamples(
       sourceMessageId: true,
       createdAt: true,
       approvedByUser: { select: { name: true } },
+      decisions: {
+        orderBy: [{ decidedAt: "asc" }, { id: "asc" }],
+        // Bounded, like every other read in this file. A lifecycle longer than this is one somebody is
+        // fighting over, and the first decisions are the ones that explain how it got here.
+        take: MAX_DECISIONS,
+        select: { decision: true, decidedAt: true, decidedBy: { select: { name: true } } },
+      },
     },
   });
 
@@ -239,6 +316,11 @@ export async function listStyleExamples(
       sourceDraftId: row.sourceDraftId,
       sourceMessageId: row.sourceMessageId,
       createdAt: row.createdAt,
+      decisions: row.decisions.map((decision) => ({
+        decision: decision.decision,
+        decidedByName: decision.decidedBy.name,
+        decidedAt: decision.decidedAt,
+      })),
     })),
     ...(rows.length > limit && last !== undefined ? { nextCursor: { createdAt: last.createdAt, id: last.id } } : {}),
   };
@@ -307,35 +389,18 @@ export async function createStyleExample(
  * activating a rejected example would quietly overturn a decision without recording that it was
  * overturned — reject then re-suggest is the honest route, and it leaves a trail.
  */
-export async function approveStyleExample(db: DbExecutor, context: BusinessProfileContext, exampleId: string): Promise<StyleWriteOutcome> {
-  const scope = profileScopeOf(context);
-  const changed = await db.styleExample.updateMany({
-    where: { workspaceId: scope.workspaceId, id: exampleId, status: "SUGGESTED", ...exampleScopeFilter(undefined, scope.businessProfileId) },
-    // The approver is written in the same statement that activates it, which is what the CHECK requires
-    // and also what makes the audit trail impossible to forget.
-    data: { status: "ACTIVE", approvedByUserId: context.userId },
-  });
-  return changed.count === 0 ? { status: "GONE" } : { status: "ACTIVATED" };
+export async function approveStyleExample(db: DbClient, context: BusinessProfileContext, exampleId: string, at = new Date()): Promise<StyleWriteOutcome> {
+  return decide(db, context, exampleId, { from: ["SUGGESTED"], to: "ACTIVE", outcome: { status: "ACTIVATED" }, decision: "APPROVED", approve: true }, at);
 }
 
 /** Declines a suggestion. Kept rather than deleted, so the decision is auditable. */
-export async function rejectStyleExample(db: DbExecutor, context: BusinessProfileContext, exampleId: string): Promise<StyleWriteOutcome> {
-  const scope = profileScopeOf(context);
-  const changed = await db.styleExample.updateMany({
-    where: { workspaceId: scope.workspaceId, id: exampleId, status: "SUGGESTED", ...exampleScopeFilter(undefined, scope.businessProfileId) },
-    data: { status: "REJECTED" },
-  });
-  return changed.count === 0 ? { status: "GONE" } : { status: "REJECTED_EXAMPLE" };
+export async function rejectStyleExample(db: DbClient, context: BusinessProfileContext, exampleId: string, at = new Date()): Promise<StyleWriteOutcome> {
+  return decide(db, context, exampleId, { from: ["SUGGESTED"], to: "REJECTED", outcome: { status: "REJECTED_EXAMPLE" }, decision: "REJECTED" }, at);
 }
 
 /** Out of style retrieval immediately, because the query filters on ACTIVE. */
-export async function archiveStyleExample(db: DbExecutor, context: BusinessProfileContext, exampleId: string): Promise<StyleWriteOutcome> {
-  const scope = profileScopeOf(context);
-  const changed = await db.styleExample.updateMany({
-    where: { workspaceId: scope.workspaceId, id: exampleId, status: "ACTIVE", ...exampleScopeFilter(undefined, scope.businessProfileId) },
-    data: { status: "ARCHIVED" },
-  });
-  return changed.count === 0 ? { status: "GONE" } : { status: "ARCHIVED" };
+export async function archiveStyleExample(db: DbClient, context: BusinessProfileContext, exampleId: string, at = new Date()): Promise<StyleWriteOutcome> {
+  return decide(db, context, exampleId, { from: ["ACTIVE"], to: "ARCHIVED", outcome: { status: "ARCHIVED" }, decision: "ARCHIVED" }, at);
 }
 
 /**
@@ -344,19 +409,87 @@ export async function archiveStyleExample(db: DbExecutor, context: BusinessProfi
  * The approver is re-stamped rather than left as it was: the person restoring an example is the one
  * standing behind it now, and the CHECK would accept the old name — which would make the audit trail say
  * a colleague approved something they never saw again.
+ *
+ * Re-stamping used to be the end of it, and that lost the previous approver for good. It does not now:
+ * every decision writes an audit row naming the actor and the transition, so "who approved this first,
+ * who archived it, who brought it back" is a question the history answers even though the row itself
+ * only ever holds the current answer.
  */
-export async function restoreStyleExample(db: DbExecutor, context: BusinessProfileContext, exampleId: string): Promise<StyleWriteOutcome> {
+export async function restoreStyleExample(db: DbClient, context: BusinessProfileContext, exampleId: string, at = new Date()): Promise<StyleWriteOutcome> {
+  return decide(db, context, exampleId, { from: ["ARCHIVED", "REJECTED"], to: "ACTIVE", outcome: { status: "RESTORED" }, decision: "RESTORED", approve: true }, at);
+}
+
+/**
+ * One lifecycle decision, with the record of who made it.
+ *
+ * The status alone cannot answer the questions somebody actually asks of this screen. "Archived" does
+ * not say who withdrew it, and an example that was rejected, restored and archived again looks exactly
+ * like one archived on the first day. So each transition stamps the decision, its actor and its instant
+ * — and leaves the *first* approver alone, because re-stamping that on every restore is what destroyed
+ * the identity of whoever originally vouched for the example.
+ *
+ * Read and write in one transaction, conditional on the status the decision was made from: two people
+ * judging the same suggestion at once produce one decision rather than two, and the loser is told it is
+ * gone rather than silently overwriting the winner.
+ */
+async function decide(
+  db: DbClient,
+  context: BusinessProfileContext,
+  exampleId: string,
+  transition: {
+    readonly from: readonly StyleExampleStatusValue[];
+    readonly to: StyleExampleStatusValue;
+    readonly outcome: StyleWriteOutcome;
+    readonly decision: StyleDecisionValue;
+    readonly approve?: boolean;
+  },
+  at: Date,
+): Promise<StyleWriteOutcome> {
   const scope = profileScopeOf(context);
-  const changed = await db.styleExample.updateMany({
-    where: {
+  return db.$transaction(async (tx) => {
+    const where = {
       workspaceId: scope.workspaceId,
       id: exampleId,
-      status: { in: ["ARCHIVED", "REJECTED"] },
+      status: { in: [...transition.from] },
       ...exampleScopeFilter(undefined, scope.businessProfileId),
-    },
-    data: { status: "ACTIVE", approvedByUserId: context.userId },
+    };
+    const before = await tx.styleExample.findFirst({ where, select: { status: true, approvedByUserId: true } });
+    if (before === null) {
+      return { status: "GONE" } as const;
+    }
+    const changed = await tx.styleExample.updateMany({
+      where,
+      data: {
+        status: transition.to,
+        // Who decided, and when. Every transition writes it, including the ones that do not change the
+        // approver, so "who archived this?" has an answer rather than being inferred from a status.
+        decidedByUserId: context.userId,
+        decidedAt: at,
+        decision: transition.decision,
+        // The first person to vouch for it, set once and never replaced. Re-stamping it on every
+        // restore is what destroyed the identity of the original approver.
+        ...(transition.approve === true && before.approvedByUserId === null ? { approvedByUserId: context.userId } : {}),
+      },
+    });
+    if (changed.count === 0) {
+      // Somebody decided it between the read and the write. Theirs stands.
+      return { status: "GONE" } as const;
+    }
+    // The decision itself, kept rather than overwritten. The columns above answer "who withdrew this?";
+    // only these rows answer "what happened to it?", and an example rejected, restored and archived again
+    // is a different thing from one archived on the first day. In the same transaction as the transition
+    // it records, so a history cannot claim a decision that did not take effect, or miss one that did.
+    await tx.styleExampleDecision.create({
+      data: {
+        workspaceId: scope.workspaceId,
+        styleExampleId: exampleId,
+        decision: transition.decision,
+        decidedByUserId: context.userId,
+        decidedAt: at,
+      },
+    });
+    return transition.outcome;
   });
-  return changed.count === 0 ? { status: "GONE" } : { status: "RESTORED" };
 }
 
 /**
@@ -369,7 +502,25 @@ export async function restoreStyleExample(db: DbExecutor, context: BusinessProfi
 export async function suggestStyleExample(
   db: DbClient,
   context: BusinessProfileContext,
-  input: { readonly inboundContext: string; readonly outboundText: string; readonly sourceMessageId?: string; readonly language?: string },
+  input: {
+    readonly inboundContext: string;
+    readonly outboundText: string;
+    readonly sourceMessageId?: string;
+    /**
+     * The draft a person rewrote, when that is where this came from.
+     *
+     * Present exactly when `provenance` is `HUMAN_EDITED_DRAFT`: the edit is the signal, and without the
+     * draft it points at there is no way to show an operator what the assistant had written instead.
+     */
+    readonly sourceDraftId?: string;
+    /**
+     * How this reply came to exist. Defaulted rather than hard-coded, because the two sources mean
+     * different things to somebody judging the suggestion: a reply typed from a phone is how this
+     * colleague writes, while an edited draft is a correction of how the assistant writes.
+     */
+    readonly provenance?: StyleExampleProvenanceValue;
+    readonly language?: string;
+  },
 ): Promise<StyleWriteOutcome> {
   const scope = profileScopeOf(context);
   if (input.inboundContext.trim() === "" || input.outboundText.trim() === "") {
@@ -381,9 +532,10 @@ export async function suggestStyleExample(
       businessProfileId: scope.businessProfileId,
       inboundContext: input.inboundContext.trim(),
       outboundText: input.outboundText.trim(),
-      provenance: "HUMAN_TYPED",
+      provenance: input.provenance ?? "HUMAN_TYPED",
       status: "SUGGESTED",
       ...(input.sourceMessageId === undefined ? {} : { sourceMessageId: input.sourceMessageId }),
+      ...(input.sourceDraftId === undefined ? {} : { sourceDraftId: input.sourceDraftId }),
       ...(input.language === undefined ? {} : { language: input.language }),
     },
   });

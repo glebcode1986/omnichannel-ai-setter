@@ -24,14 +24,14 @@ import { revalidatePath } from "next/cache";
 
 import { getDb } from "./db";
 import { requireBusinessProfileContext } from "./request-context";
-import { field, scopeFrom, voiceDraftFrom } from "./style-form";
+import { expectedVoiceVersion, field, scopeFrom, voiceDraftFrom } from "./style-form";
 
 export interface StyleTarget {
   readonly workspaceId: string;
   readonly businessProfileId: string;
 }
 
-export type StyleOutcome = "SAVED" | "ACTIVATED" | "REJECTED_EXAMPLE" | "ARCHIVED" | "RESTORED" | "GONE" | "REFUSED";
+export type StyleOutcome = "SAVED" | "ACTIVATED" | "REJECTED_EXAMPLE" | "ARCHIVED" | "RESTORED" | "GONE" | "REFUSED" | "CONFLICT";
 
 const stylePath = (target: StyleTarget) => `/workspaces/${target.workspaceId}/profiles/${target.businessProfileId}/style`;
 
@@ -47,8 +47,11 @@ export async function saveVoiceAction(target: StyleTarget, formData: FormData): 
   const context = await requireBusinessProfileContext(target.workspaceId, target.businessProfileId);
   // Parsed and validated in `style-form.ts`, tested there: an enum member nobody defined must not be able
   // to reach the column through a hand-edited form.
-  const outcome = await saveStyleProfile(getDb(), context, scopeFrom(formData), voiceDraftFrom(formData));
-  finish(target, outcome.status === "SAVED" ? "SAVED" : "REFUSED");
+  // What the screen believed it was editing travels with the save, so a second tab holding an older copy
+  // of the whole profile is told it conflicted rather than silently replacing a colleague's work. Without
+  // this the store's conflict check had nothing to check against and every save looked like the first one.
+  const outcome = await saveStyleProfile(getDb(), context, scopeFrom(formData), voiceDraftFrom(formData), expectedVoiceVersion(formData));
+  finish(target, outcome.status === "SAVED" ? "SAVED" : outcome.status === "CONFLICT" ? "CONFLICT" : "REFUSED");
 }
 
 export async function addStyleExampleAction(target: StyleTarget, formData: FormData): Promise<void> {

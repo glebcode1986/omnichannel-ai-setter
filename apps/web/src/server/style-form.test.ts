@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { lines, scopeFrom, voiceDraftFrom } from "./style-form";
+import { expectedVoiceVersion, lines, scopeFrom, voiceDraftFrom } from "./style-form";
 
 const form = (entries: Readonly<Record<string, string>>): FormData => {
   const data = new FormData();
@@ -88,5 +88,26 @@ describe("which layer a save lands on", () => {
     expect(scopeFrom(form({ scope: "" }))).toBe("BUSINESS_PROFILE");
     expect(scopeFrom(form({ scope: "workspace" }))).toBe("BUSINESS_PROFILE");
     expect(scopeFrom(new FormData())).toBe("BUSINESS_PROFILE");
+  });
+});
+
+describe("the version a save claims to have started from", () => {
+  it("carries the instant the form was rendered against", () => {
+    expect(expectedVoiceVersion(form({ expectedUpdatedAt: "2026-10-04T12:00:00.000Z" }))).toEqual({
+      updatedAt: new Date("2026-10-04T12:00:00.000Z"),
+    });
+  });
+
+  it("reads an empty field as the claim that no layer existed yet", () => {
+    // Not the same as "do not check": the store refuses a create when a layer has appeared since, so a
+    // stale tab cannot write over a colleague's new base voice either.
+    expect(expectedVoiceVersion(form({ expectedUpdatedAt: "" }))).toEqual({});
+    expect(expectedVoiceVersion(new FormData())).toEqual({});
+  });
+
+  it("treats an unparseable value as no claim rather than as a refusal", () => {
+    // Nobody types this field, so a bad value is a hand-edited form or a bug. Either way the store's own
+    // check against the row is what decides, which is where that decision belongs.
+    expect(expectedVoiceVersion(form({ expectedUpdatedAt: "last tuesday" }))).toEqual({});
   });
 });
