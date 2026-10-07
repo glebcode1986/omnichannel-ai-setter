@@ -27,16 +27,25 @@ describe("loadWebEnv", () => {
       AI_EMBEDDING_MODEL: "voyage-3.5",
       AI_EMBEDDING_DIMENSIONS: 1_024,
       AI_EMBEDDING_REVISION: "v1",
-      // The reply model, for the simulation playground. Optional like the embedding key, and for the
-      // same reason: a deployment that never opens the playground should not fail to boot over it.
+      // The reply model, for the simulation playground and the Style screen's test. The key is optional —
+      // a deployment that wants no provider call from the web app leaves it unset and both screens say so
+      // — but the model, the token bound and the fallback persona all default to the worker's values, so
+      // the Style test previews the voice the worker actually drafts with.
       AI_REPLY_MODEL: "claude-opus-5",
       AI_REPLY_MAX_OUTPUT_TOKENS: 4_096,
+      AI_PERSONA: "You are the business's own assistant. Be warm, brief and concrete, and never invent facts.",
       // WhatsApp onboarding (Issue #19). The app credentials are optional — a deployment that does not
       // offer WhatsApp refuses the connect endpoints rather than failing to boot — but the Graph version
       // has a default, so the onboarding calls cannot be made against an unset one.
       WHATSAPP_GRAPH_VERSION: "v26.0",
       ...required,
     });
+  });
+
+  it("defaults the fallback persona to the worker's, so the Style test previews the real voice", () => {
+    // The two are compared by value rather than imported from one place on purpose: the worker's env and
+    // the web app's are separate contracts, and this is the assertion that notices them drifting.
+    expect(loadWebEnv(required).AI_PERSONA).toBe("You are the business's own assistant. Be warm, brief and concrete, and never invent facts.");
   });
 
   it("boots without a WhatsApp app, because not every deployment offers WhatsApp", () => {
@@ -69,7 +78,9 @@ describe("loadWebEnv", () => {
     expect(env.AI_EMBEDDING_DIMENSIONS).toBe(1_024);
   });
 
-  it("takes no reply-model key, because the playground is not required to work", () => {
+  it("takes no reply-model key, because neither the playground nor the Style test is required to work", () => {
+    // Requiring one would make two read-only screens a boot condition. Each says it is not configured
+    // instead, and loses only the part that needs a provider.
     expect(loadWebEnv(required).ANTHROPIC_API_KEY).toBeUndefined();
   });
 
