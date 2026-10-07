@@ -301,6 +301,154 @@ model BillingAccount {
   @@map("billing_accounts")
 }
 
+/// What a usage ledger row is a record of (#39, USAGE_METERING.md).
+enum UsageEventKind {
+  /// Consumption with nothing held first: telemetry, and metrics that cannot refuse work.
+  RECORD
+  RESERVE
+  COMMIT
+  RELEASE
+}
+
+enum UsageReservationState {
+  /// The only state that still holds allowance.
+  RESERVED
+  COMMITTED
+  RELEASED
+}
+
+/// Everything the ledger counts, sold or not.
+///
+/// `AI_GENERATION_CYCLES` and `SIMULATION_GENERATION_CYCLES` are internal: unit economics, fair use and
+/// capacity planning. They are not allowances, and `usage_reservations` refuses them by CHECK — core AI
+/// replies are included and unmetered in the public plans, so there must be no path by which an exhausted
+/// allowance could hold one.
+enum UsageMetricKind {
+  VOICE_TRANSCRIPTION_SECONDS
+  AI_GENERATION_CYCLES
+  SIMULATION_GENERATION_CYCLES
+}
+
+/// A metering period with authoritative boundaries (#39).
+///
+/// A row rather than arithmetic at read time, so a counter can never belong to two periods and so that
+/// changing the anchor later cannot re-attribute consumption that has already happened. Half-open
+/// `[startsAt, endsAt)`: consecutive cycles tile the timeline exactly.
+///
+/// Per workspace rather than per metric, because the period is the subscription's — two metrics resetting
+/// on different days would make "this month's usage" a question with two answers.
+model UsageCycle {
+  id          String   @id @default(uuid(7))
+  workspaceId String   @map("workspace_id")
+  /// The subscription's day of month, remembered rather than clamped: a 31st anchor is the 28th in
+  /// February and the 31st again in March.
+  anchorDay   Int      @map("anchor_day")
+  startsAt    DateTime @map("starts_at")
+  endsAt      DateTime @map("ends_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  entries      UsageLedgerEntry[]
+  counters     UsageCounter[]
+  reservations UsageReservation[]
+
+  @@unique([workspaceId, startsAt])
+  /// What the children's composite foreign key points at, so a ledger row cannot count one workspace's
+  /// consumption into a neighbour's period. Tenancy as structure rather than as a convention every caller
+  /// has to remember.
+  @@unique([workspaceId, id], map: "usage_cycles_workspace_id_key")
+  @@index([workspaceId, endsAt])
+  @@map("usage_cycles")
+}
+
+/// One thing that happened to a workspace's usage (#39).
+///
+/// Append-only: nothing in this package updates or deletes a row here, and a correction is another row.
+/// Both deltas are carried on every row, so the materialized counters are exactly two column sums — no
+/// replay of a per-operation state machine, and therefore no second copy of the rules in the reconciler.
+model UsageLedgerEntry {
+  id          String          @id @default(uuid(7))
+  workspaceId String          @map("workspace_id")
+  cycleId     String          @map("cycle_id")
+  metric      UsageMetricKind
+  kind        UsageEventKind
+  /// The logical operation this is part of, derived from facts fixed before the work started. The unique
+  /// index below is what makes counting idempotent — not a check in application code, which a second
+  /// worker can lose a race against.
+  usageOperationId String     @map("usage_operation_id")
+  /// Signed effect on the committed total.
+  committedDelta Int          @map("committed_delta")
+  /// Signed effect on the held total. Negative exactly when a reservation is settled.
+  reservedDelta  Int          @map("reserved_delta")
+  /// What the operation was about, for reconciliation and for explaining a line to a customer.
+  subjectType String?         @map("subject_type")
+  subjectId   String?         @map("subject_id")
+  detail      Json            @default("{}")
+  recordedAt  DateTime        @default(now()) @map("recorded_at")
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cycle     UsageCycle @relation(fields: [workspaceId, cycleId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One of each kind per logical operation: a duplicate worker's second RECORD, or a retried COMMIT, is
+  /// refused by the database rather than counted.
+  @@unique([workspaceId, metric, usageOperationId, kind], map: "usage_ledger_operation_key")
+  @@index([workspaceId, cycleId, metric])
+  @@index([workspaceId, recordedAt])
+  @@map("usage_ledger_entries")
+}
+
+/// Materialized totals for one metric in one cycle (#39).
+///
+/// A convenience, never the record of truth: `reconcileUsageCounters` recomputes these from the ledger and
+/// reports every difference rather than silently repairing one, because a counter that healed itself would
+/// hide the bug that broke it. The row is also the lock a reservation takes, which is what stops the last
+/// unit of an allowance being sold twice.
+model UsageCounter {
+  id          String          @id @default(uuid(7))
+  workspaceId String          @map("workspace_id")
+  cycleId     String          @map("cycle_id")
+  metric      UsageMetricKind
+  committed   Int             @default(0)
+  reserved    Int             @default(0)
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cycle     UsageCycle @relation(fields: [workspaceId, cycleId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, cycleId, metric], map: "usage_counters_metric_key")
+  @@map("usage_counters")
+}
+
+/// Allowance held for work that has not finished (#39).
+///
+/// Only for metrics a plan actually sells, which a CHECK enforces: reserving against an internal metric is
+/// refused rather than quietly succeeding, because a reservation that did nothing would leave its caller
+/// believing it had checked something.
+model UsageReservation {
+  id          String                @id @default(uuid(7))
+  workspaceId String                @map("workspace_id")
+  cycleId     String                @map("cycle_id")
+  metric      UsageMetricKind
+  usageOperationId String           @map("usage_operation_id")
+  /// What was held. Settling returns exactly this, whatever the work turned out to consume.
+  amount      Int
+  state       UsageReservationState @default(RESERVED)
+  /// What the work actually used. Set only by a commit, and may exceed `amount`.
+  committedAmount Int?              @map("committed_amount")
+  /// When an unsettled hold is given back, so a crashed worker cannot keep an allowance until the cycle
+  /// ends.
+  expiresAt   DateTime              @map("expires_at")
+  settledAt   DateTime?             @map("settled_at")
+  createdAt   DateTime              @default(now()) @map("created_at")
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  cycle     UsageCycle @relation(fields: [workspaceId, cycleId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, metric, usageOperationId], map: "usage_reservations_operation_key")
+  @@index([state, expiresAt])
+  @@map("usage_reservations")
+}
+
 enum WhatsAppOnboardingMode {
   NEW_OR_MIGRATED_CLOUD_NUMBER
   COEXISTENCE_EXISTING_BUSINESS_APP
@@ -801,6 +949,10 @@ model Workspace {
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
   styleProfiles      StyleProfile[]
+  usageCycles        UsageCycle[]
+  usageLedgerEntries UsageLedgerEntry[]
+  usageCounters      UsageCounter[]
+  usageReservations  UsageReservation[]
   policyChangeAudits PolicyChangeAudit[]
   styleExampleDecisions StyleExampleDecision[]
   leadStageDisplays  LeadStageDisplay[]

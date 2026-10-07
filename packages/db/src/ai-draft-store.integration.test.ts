@@ -162,4 +162,54 @@ describe.skipIf(!databaseTestsEnabled())("ai draft store (PostgreSQL)", () => {
     expect(statusOf(outage.aiDraftId)).toBe("UNAVAILABLE");
     expect(statusOf(empty.aiDraftId)).toBe("OK");
   });
+
+  describe("the generation cycle it counts", () => {
+    it("counts one logical generation once, however many times it is retried", async () => {
+      const generationKey = `gen-metered-${randomUUID()}`;
+
+      const first = await store().saveDraft(input({ generationKey }));
+      // A provider retry, a schema repair and a requeued job all arrive with this same key, because it is
+      // derived from facts fixed before the work started.
+      await store().saveDraft(input({ generationKey, text: "A second attempt." }));
+      await store().saveDraft(input({ generationKey, text: "A third attempt." }));
+
+      const rows = await db().usageLedgerEntry.findMany({
+        where: { workspaceId: profile.context.workspaceId, metric: "AI_GENERATION_CYCLES", usageOperationId: generationKey },
+        select: { kind: true, committedDelta: true, subjectId: true },
+      });
+      expect(rows).toEqual([{ kind: "RECORD", committedDelta: 1, subjectId: first.aiDraftId }]);
+    });
+
+    it("counts it in the transaction that writes the draft, so neither can exist without the other", async () => {
+      const generationKey = `gen-atomic-${randomUUID()}`;
+      const before = await db().usageLedgerEntry.count({ where: { workspaceId: profile.context.workspaceId, metric: "AI_GENERATION_CYCLES" } });
+
+      // A draft the database refuses: `ai_drafts_usage_check` rejects a negative token count, and a
+      // PENDING draft with no text would look actionable while holding nothing to act on.
+      await expect(
+        store().saveDraft(input({ generationKey, usage: { inputTokens: -1 } })),
+      ).rejects.toThrow(/ai_drafts_usage_check/u);
+
+      // No draft, and therefore no generation cycle. A measurement that outlived the work it measured
+      // would be charging ourselves for something that did not happen.
+      expect(await db().aiDraft.count({ where: { generationKey } })).toBe(0);
+      expect(await db().usageLedgerEntry.count({ where: { workspaceId: profile.context.workspaceId, metric: "AI_GENERATION_CYCLES" } })).toBe(before);
+    });
+
+    it("counts against the workspace, not the business profile, and says which profile it was", async () => {
+      const generationKey = `gen-scope-${randomUUID()}`;
+      await store().saveDraft(input({ generationKey }));
+
+      const row = await db().usageLedgerEntry.findFirstOrThrow({
+        where: { workspaceId: profile.context.workspaceId, usageOperationId: generationKey },
+        select: { subjectType: true, detail: true, cycle: { select: { workspaceId: true } } },
+      });
+
+      // A cycle is the subscription's period and a subscription is the workspace's, so the count belongs
+      // to the workspace. Which profile spent it is recorded as detail rather than as scope.
+      expect(row.cycle.workspaceId).toBe(profile.context.workspaceId);
+      expect(row.subjectType).toBe("ai_drafts");
+      expect((row.detail as { businessProfileId?: string }).businessProfileId).toBe(profile.businessProfileId);
+    });
+  });
 });

@@ -7,12 +7,18 @@
  * The write is idempotent by `generationKey`. A queue retry after a partial failure must not leave a
  * conversation with two drafts for the same message, so a repeated key returns the draft that already
  * exists instead of creating another one.
+ *
+ * That same key identifies the logical generation for metering (#39). The usage row is written in the
+ * transaction that writes the draft, so the two are exactly consistent: a rolled-back draft leaves no
+ * generation cycle behind, and a retry is refused by the draft's unique index before it can be counted
+ * twice. `AI_GENERATION_CYCLES` is an internal metric, so this records cost and can refuse nothing.
  */
 import type { AiDraftStore, PersistedDraft, SaveDraftInput } from "@omnichannel/application";
 import { isLeadStage } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
 import { isUniqueViolation } from "./errors";
+import { recordUsageWithin } from "./usage-store";
 
 export function createAiDraftStore(db: DbClient): AiDraftStore {
   return {
@@ -55,8 +61,21 @@ export function createAiDraftStore(db: DbClient): AiDraftStore {
       };
 
       try {
-        const created = await db.aiDraft.create({ data, select: { id: true } });
-        return { aiDraftId: created.id };
+        return await db.$transaction(async (tx) => {
+          const created = await tx.aiDraft.create({ data, select: { id: true } });
+          // One logical generation, counted once. A provider retry, a schema repair and a requeued job all
+          // produce this same `generationKey`, and both unique indexes refuse the second write.
+          await recordUsageWithin(tx, {
+            workspaceId: scope.workspaceId,
+            metric: "AI_GENERATION_CYCLES",
+            usageOperationId: input.generationKey,
+            amount: 1,
+            subjectType: "ai_drafts",
+            subjectId: created.id,
+            detail: { businessProfileId: scope.businessProfileId, trigger: input.trigger, provider: input.provider, model: input.model },
+          });
+          return { aiDraftId: created.id };
+        });
       } catch (error) {
         if (!isUniqueViolation(error)) {
           throw error;

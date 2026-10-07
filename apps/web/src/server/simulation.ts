@@ -33,6 +33,7 @@ import {
   createStyleRetriever,
   readPolicies,
   readStyleProfiles,
+  recordUsage,
   type BusinessProfileContext,
   type PolicyView,
 } from "@omnichannel/db";
@@ -106,7 +107,9 @@ export async function runSimulation(context: BusinessProfileContext, message: st
 
   const saved: SaveDraftInput[] = [];
   const drafts: AiDraftStore = {
-    // Collected, never written. A simulated reply must not reach the review queue or any metric.
+    // Collected, never written: no draft row, no review queue, no delivery, and nothing a customer-facing
+    // allowance could be charged against. The provider call it makes is real, though, and is counted as
+    // internal cost below — a scripted loop through this screen spends the same money as production.
     saveDraft: (input) => {
       saved.push(input);
       return Promise.resolve({ aiDraftId: "simulated" });
@@ -172,6 +175,22 @@ export async function runSimulation(context: BusinessProfileContext, message: st
     // settings produce nothing, which is a claim about their configuration rather than about the provider.
     getLogger().warn("simulation.generation_failed", { message: error instanceof Error ? error.message : "unknown" });
     return { ...base, reasonCodes: [], citedSourceIds: [], failure: "GENERATION_FAILED" };
+  }
+
+  // Counted after the run, best effort. `SIMULATION_GENERATION_CYCLES` is an internal metric, so it can
+  // refuse nothing; and this is a read-only screen, so a metering outage must not cost an owner their
+  // simulation. The operation identity is the run's own, so a double submit is counted once.
+  try {
+    await recordUsage(getDb(), {
+      workspaceId: scope.workspaceId,
+      metric: "SIMULATION_GENERATION_CYCLES",
+      usageOperationId: `simulation:${context.userId}:${String(now.getTime())}`,
+      amount: 1,
+      subjectType: "simulations",
+      detail: { businessProfileId: scope.businessProfileId },
+    });
+  } catch (error) {
+    getLogger().warn("simulation.usage_not_recorded", { errorName: error instanceof Error ? error.name : typeof error });
   }
 
   const draft = saved[0];

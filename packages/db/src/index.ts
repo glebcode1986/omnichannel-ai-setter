@@ -54,6 +54,31 @@ export {
   type PlanVersionRecord,
   type SubscribeInput,
 } from "./entitlement-store";
+export {
+  commitReservation,
+  expireStaleReservations,
+  openUsageCycle,
+  openUsageCycleWithin,
+  readUsage,
+  readUsageAnchorDay,
+  recordUsage,
+  recordUsageWithin,
+  reconcileUsageCounters,
+  releaseReservation,
+  reserveUsage,
+  RESERVATION_SWEEP_LIMIT,
+  RESERVATION_TTL_MS,
+  type CounterDifference,
+  type RecordUsageInput,
+  type RecordUsageOutcome,
+  type ReserveUsageInput,
+  type ReserveUsageOutcome,
+  type SettleReservationInput,
+  type SettleReservationOutcome,
+  type UsageCycleRecord,
+  type UsageDetail,
+  type UsageSnapshot,
+} from "./usage-store";
 export { exportContact, EXPORT_MESSAGE_LIMIT, type ContactExport } from "./export-store";
 export {
   executeDeletion,

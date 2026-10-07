@@ -11,6 +11,7 @@ import {
   createStyleProfileStore,
   createPresenceStore,
   deleteExpiredChannelConnectStates,
+  expireStaleReservations,
   createStyleRetriever,
   createSuspensionStore,
   countUnusableGenerations,
@@ -37,6 +38,7 @@ import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handl
 import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 import { startRetentionSweeper } from "./retention-sweeper";
+import { startUsageSweeper } from "./usage-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
 import { createTranscription } from "./transcription";
@@ -77,6 +79,14 @@ const OUTBOX_SWEEP_INTERVAL_MS = 5_000;
  * the sweep is about not keeping it, not about enforcing the expiry (#57).
  */
 const RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
+/**
+ * Minutes rather than hours, unlike the retention sweep.
+ *
+ * What this gives back is a customer's own allowance, held by a reservation whose worker died. An expired
+ * OAuth nonce costs nothing by waiting; transcription minutes a business cannot use because of our crash
+ * cost them the thing they paid for.
+ */
+const USAGE_SWEEP_INTERVAL_MS = 5 * 60_000;
 /**
  * One Ctrl+C reaches the worker several times (terminal process group plus relays by pnpm/tsx), so
  * repeats within this window are the same request. A later signal while still stopping forces exit.
@@ -257,6 +267,12 @@ function main(): void {
         logger,
         now: () => new Date(),
       });
+      const usage = startUsageSweeper({
+        intervalMs: USAGE_SWEEP_INTERVAL_MS,
+        releaseStaleReservations: (at) => expireStaleReservations(db, at),
+        logger,
+        now: () => new Date(),
+      });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
@@ -317,16 +333,25 @@ function main(): void {
         // Built from what actually started, not from a list written by hand: a loop that is wired to
         // nothing has to be visible as an absence here. The Instagram token refresh was written, tested
         // and never called, and this is where that would have shown.
-        loops: ["outbox", "reconciliation", "retention", ...(tokenRefresh.running ? ["instagram_tokens"] : []), "backlog_guard", "health"],
+        loops: [
+          "outbox",
+          "reconciliation",
+          "retention",
+          "usage_reservations",
+          ...(tokenRefresh.running ? ["instagram_tokens"] : []),
+          "backlog_guard",
+          "health",
+        ],
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: six independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: seven independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
           const stopped = await Promise.allSettled([
             sweeper.close(),
             reconciliationSweeper.close(),
             retention.close(),
+            usage.close(),
             tokenRefresh.close(),
             backlogGuard.close(),
             health.close(),
