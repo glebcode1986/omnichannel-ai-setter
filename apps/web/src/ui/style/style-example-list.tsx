@@ -8,6 +8,10 @@
  *
  * Every example says who stood behind it. A verified example with nobody's name on it cannot exist — a
  * CHECK refuses it — so the absence of a name is itself information: this one is waiting.
+ *
+ * And every example carries its lifecycle, because the status is the end of a story rather than the story.
+ * "Archived" does not say who withdrew it, and an example rejected, restored and archived again looks
+ * identical to one archived on the first day unless the decisions themselves are shown.
  */
 import Link from "next/link";
 import type { StyleExampleView } from "@omnichannel/db";
@@ -21,7 +25,7 @@ export interface StyleExampleListProps {
   readonly examples: readonly StyleExampleView[];
   readonly target: StyleTarget;
   /** Which library this is: the verified one, or the queue of suggestions. */
-  readonly kind: "VERIFIED" | "SUGGESTED";
+  readonly kind: "VERIFIED" | "SUGGESTED" | "RETIRED";
   /**
    * Where the rest of this list is. Absent when this is all of it.
    *
@@ -38,13 +42,14 @@ export interface StyleExampleListProps {
 }
 
 const KNOWN_STATUSES = new Set(["ACTIVE", "SUGGESTED", "REJECTED", "ARCHIVED"]);
+const KNOWN_DECISIONS = new Set(["APPROVED", "REJECTED", "ARCHIVED", "RESTORED"]);
 const KNOWN_PROVENANCE = new Set(["HUMAN_TYPED", "HUMAN_EDITED_DRAFT"]);
 
 export function StyleExampleList({ t, examples, target, kind, actions, nextHref }: StyleExampleListProps) {
   if (examples.length === 0) {
     return (
       <p className="muted" data-empty={kind}>
-        {kind === "SUGGESTED" ? t.t("style.noSuggestions") : t.t("style.noExamples")}
+        {kind === "SUGGESTED" ? t.t("style.noSuggestions") : kind === "RETIRED" ? t.t("style.noRetired") : t.t("style.noExamples")}
       </p>
     );
   }
@@ -78,6 +83,27 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
           <p className="muted" data-approved-by={example.approvedByName ?? ""}>
             {example.approvedByName === null ? t.t("style.notApproved") : t.t("style.approvedBy", { name: example.approvedByName })}
           </p>
+
+          {example.decisions.length === 0 ? undefined : (
+            <>
+              <p className="muted">{t.t("style.historyTitle")}</p>
+              <ol className="style-history" data-history={example.id}>
+                {example.decisions.map((entry) => (
+                  <li key={`${entry.decision}-${entry.decidedAt.toISOString()}`} data-decision={entry.decision}>
+                    <time className="muted" dateTime={entry.decidedAt.toISOString()}>
+                      {t.t("style.historyEntry", {
+                        decision: decisionLabel(t, entry.decision),
+                        // A decision whose author is gone still happened. Naming nobody is better than
+                        // implying it was nobody's.
+                        name: entry.decidedByName ?? t.t("style.historyUnknownActor"),
+                        when: t.date(entry.decidedAt, { dateStyle: "medium", timeStyle: "short" }),
+                      })}
+                    </time>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
 
           {example.status === "SUGGESTED" ? (
             <>
@@ -123,6 +149,10 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
 
 function statusLabel(t: Translator, status: string): string {
   return KNOWN_STATUSES.has(status) ? t.t(`styleStatus.${status}` as MessageKey) : status;
+}
+
+function decisionLabel(t: Translator, decision: string): string {
+  return KNOWN_DECISIONS.has(decision) ? t.t(`styleDecision.${decision}` as MessageKey) : decision;
 }
 
 function provenanceLabel(t: Translator, provenance: string): string {

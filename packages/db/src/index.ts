@@ -115,6 +115,8 @@ export {
   saveStyleProfile,
   suggestStyleExample,
   type NewStyleExample,
+  type StyleDecisionValue,
+  type StyleDecisionView,
   type StyleExampleCursor,
   type StyleExampleFilter,
   type StyleExamplePage,
