@@ -173,7 +173,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     });
 
     expectGracefulShutdown(result);
-    expect(startedFields(result.stdout).loops).toEqual(["outbox", "reconciliation", "instagram_tokens", "backlog_guard", "health"]);
+    expect(startedFields(result.stdout).loops).toEqual(["outbox", "reconciliation", "retention", "instagram_tokens", "backlog_guard", "health"]);
   }, 30_000);
 
   it("leaves the token refresh out of that list when it cannot read the stored tokens", async () => {

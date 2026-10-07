@@ -15,7 +15,7 @@ import type { EmojiUsage, ReplyLength } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
 const MAX_PAGE = 100;
@@ -285,6 +285,12 @@ export async function createStyleExample(
   context: BusinessProfileContext,
   input: NewStyleExample,
 ): Promise<StyleWriteOutcome> {
+  if (input.scope === "WORKSPACE") {
+    // Read by every Business Profile, so making one from a single profile's screen is a cross-profile
+    // write. Role only here: a profile context carries no Business Profile scope (#57).
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "writing Workspace-wide style examples");
+  }
+
   const scope = profileScopeOf(context);
   const inbound = input.inboundContext.trim();
   const outbound = input.outboundText.trim();

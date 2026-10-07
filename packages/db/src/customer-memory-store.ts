@@ -21,7 +21,7 @@
  * without a context cannot ask, and a caller with one cannot ask about anybody else.
  */
 import type { DbClient, DbExecutor } from "./client";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 export type FactCategory = "CONTACT_PREFERENCE" | "SERVICE_HISTORY" | "STATED_REQUIREMENT" | "LOGISTICS" | "CONSENT";
 export type MemorySource = "CUSTOMER_STATED" | "HUMAN_RECORDED" | "AI_SUGGESTED";
@@ -616,6 +616,10 @@ export async function forgetCustomer(
   context: BusinessProfileContext,
   contactId: string,
 ): Promise<{ readonly status: "FORGOTTEN" | "GONE"; readonly removed: Readonly<Record<string, number>> }> {
+  // Admin or owner, like every other irreversible act on a customer's data (#57). Everything else in
+  // this file is a read or a proposal an agent may legitimately make; this one destroys what a business
+  // remembers about somebody, and it was the only destructive function in the package with no role gate.
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "forget a customer");
   const scope = profileScopeOf(context);
 
   return db.$transaction(async (tx) => {

@@ -644,6 +644,9 @@ const en = {
   "audit.kind.TEMPLATE_POLICY_CHANGED": "Template autopilot changed",
   "audit.kind.AMBIGUOUS_SEND_RESOLVED": "Unclear send resolved",
   "audit.kind.MEMBER_CHANGED": "Member access changed",
+  "audit.kind.DATA_EXPORTED": "Customer data exported",
+  "audit.kind.DELETION_REQUESTED": "Deletion requested",
+  "audit.kind.DELETION_COMPLETED": "Deletion finished",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -1270,6 +1273,9 @@ const ru: Catalogue = {
   "audit.kind.TEMPLATE_POLICY_CHANGED": "Автопилот шаблонов изменён",
   "audit.kind.AMBIGUOUS_SEND_RESOLVED": "Неясная отправка выяснена",
   "audit.kind.MEMBER_CHANGED": "Доступ участника изменён",
+  "audit.kind.DATA_EXPORTED": "Данные клиента выгружены",
+  "audit.kind.DELETION_REQUESTED": "Запрошено удаление",
+  "audit.kind.DELETION_COMPLETED": "Удаление завершено",
 };
 
 export const catalogues: Readonly<Record<UiLocale, Catalogue>> = { en, ru };

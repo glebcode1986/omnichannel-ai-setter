@@ -7,6 +7,7 @@
  */
 export * from "./ai-draft";
 export * from "./automation-policy";
+export * from "./deletion";
 export * from "./presence-mode";
 export {
   CONFIDENCE_PRESETS,

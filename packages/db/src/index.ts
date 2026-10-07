@@ -44,6 +44,19 @@ export {
   type AutomatedDeliveryInput,
 } from "./delivery-store";
 export { channelCapabilitiesOf } from "./channel-capabilities";
+export { exportContact, EXPORT_MESSAGE_LIMIT, type ContactExport } from "./export-store";
+export {
+  executeDeletion,
+  listDeletionRequests,
+  requestDeletion,
+  requestProfileDeletion,
+  type DeletionFailure,
+  type DeletionRequestRecord,
+  type ExecuteDeletionOptions,
+  type ProviderMediaPort,
+  type RemovalCounts,
+  type RequestDeletionInput,
+} from "./deletion-store";
 export { applyAccountLifecycle, OFFBOARDED_HEALTH_REASON, type AccountLifecycleUpdate } from "./whatsapp-lifecycle-store";
 export {
   createPresenceStore,
@@ -242,6 +255,7 @@ export {
   auditPageLimit,
   readableAuditKinds,
   recordAuditEvent,
+  recordSystemAuditEvent,
   recordWorkspaceAuditEvent,
   searchAuditEvents,
   type AuditEventInput,

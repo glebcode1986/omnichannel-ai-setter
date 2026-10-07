@@ -275,6 +275,43 @@ Idempotency is the same decision digest the review path uses.
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P3-04 / Issue #57 — privacy, retention and deletion.** Branch
+   `feat/p3-04-privacy-deletion`, based on #93.
+
+   **The contract the issue referenced did not exist**, so it is written now:
+   `docs/specs/PRIVACY_RETENTION_DELETION.md`, from what the code actually does, with the deliberate gaps
+   named.
+
+   **Deletion is a durable request, not a function call.** `DeletionRequest` carries the scope, the state
+   machine (`REQUESTED → PROCESSING → COMPLETED | PARTIAL_FAILURE`) and per-table counts written as the
+   work proceeds, so a crash leaves evidence of how far it got. CHECKs tie the clock to the state and
+   refuse to call a run with failures complete.
+
+   **Derived data is the point.** Ninety-six of the schema's ninety-nine foreign keys are `RESTRICT`, so
+   the purge names every table in an order the database accepts — including breaking the
+   `messages ⇄ ai_drafts` cycle with an update first. Transcripts, summaries, facts, preferences and
+   style examples go with the correspondence; a reply engine that still held them would not have
+   forgotten anybody.
+
+   **Two rules that fell out of the data rather than from the issue:**
+
+   - **You cannot both forget somebody and remember never to message them.** `followup_suppressions` has
+     a non-null contact reference, so an opt-out cannot be stripped of its person. A contact with a
+     standing one is anonymised instead: names, numbers, correspondence and derived data go, the contact
+     row and the provider's id for them stay, and so does the opt-out.
+   - **A fact belongs to the person, not the thread.** A conversation-scoped deletion removes only what
+     was derived *from that conversation*; a contact-scoped one removes everything.
+
+   **Least privilege, where there was none.** `requireRole` existed and was called from nowhere outside
+   `packages/db`. Export, deletion and `forgetCustomer` are now admin-or-owner, and so is writing a
+   Workspace-scoped knowledge source or style example — those are read by every Business Profile, so an
+   agent granted one profile could change what the others read.
+
+   **The export is audited in the same transaction as the read**, with counts and never content.
+
+   Also fixed: `deleteExpiredChannelConnectStates` had existed since onboarding with no caller — exported,
+   tested, never run, the same shape as Issue #9. It is a worker loop now.
+
 1. **P4-07 / Issue #24 — the WhatsApp vertical slice.** Branch
    `feat/p4-07-whatsapp-slice`, based on #92.
 
