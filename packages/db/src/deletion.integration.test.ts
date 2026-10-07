@@ -161,8 +161,8 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
     it("is admin or owner work, never an agent's", async () => {
       // A deletion is irreversible, and its consequences are workspace-wide even when its scope is one
       // person. Somebody handling conversations should not be able to trigger one.
-      await expect(requestDeletion(db(), agent, { scope: "WORKSPACE" })).rejects.toThrow();
-      await expect(requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: profile.contactId })).resolves.toMatchObject({
+      await expect(requestDeletion(db(), agent, { scope: "WORKSPACE" }, NOW)).rejects.toThrow();
+      await expect(requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: profile.contactId }, NOW)).resolves.toMatchObject({
         state: "REQUESTED",
       });
     });
@@ -172,7 +172,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
         scope: "CONTACT",
         targetId: profile.contactId,
         reason: "customer asked",
-      });
+      }, NOW);
 
       expect(request).toMatchObject({ scope: "CONTACT", targetId: profile.contactId, state: "REQUESTED", removed: {}, failures: [] });
       expect(request.completedAt).toBeUndefined();
@@ -206,6 +206,10 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
             scope: "WORKSPACE",
             requestedByUserId: profile.context.userId,
             state: "PROCESSING",
+            // Stamped from the suite's clock like the rest of the row: without it the column default is
+            // the wall clock, and `deletion_requests_clock_check` fires before the constraint under test —
+            // so this passed or failed depending on the hour the suite ran at.
+            requestedAt: NOW,
             startedAt: NOW,
             completedAt: NOW,
           },
@@ -221,6 +225,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
             scope: "WORKSPACE",
             requestedByUserId: profile.context.userId,
             state: "COMPLETED",
+            requestedAt: NOW,
             startedAt: NOW,
             completedAt: NOW,
             failures: [{ step: "PROVIDER_MEDIA", reason: "PROVIDER_REFUSED" }],
@@ -239,7 +244,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
       expect(before.facts).toBeGreaterThan(0);
       expect(before.styleExamples).toBeGreaterThan(0);
       expect(before.styleDecisions).toBeGreaterThan(0);
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
       const media = acceptingMedia();
 
       const done = await executeDeletion(db(), request.id, { media: media.port, now: () => NOW });
@@ -263,7 +268,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
 
     it("asks the provider to forget its own copy before the row that names it", async () => {
       const seeded = await customerWithEverything();
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
       const media = acceptingMedia();
 
       await executeDeletion(db(), request.id, { media: media.port, now: () => NOW });
@@ -274,7 +279,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
 
     it("reports a partial failure when the provider refuses, rather than claiming success", async () => {
       const seeded = await customerWithEverything();
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
 
       const done = await executeDeletion(db(), request.id, { media: acceptingMedia(false).port, now: () => NOW });
 
@@ -285,7 +290,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
 
     it("reports a partial failure when the deployment has no way to reach the provider", async () => {
       const seeded = await customerWithEverything();
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
 
       const done = await executeDeletion(db(), request.id, { now: () => NOW });
 
@@ -298,7 +303,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
       await db().followUpSuppression.create({
         data: { ...scope(), contactId: seeded.contactId, reason: "CUSTOMER_REQUEST", sourceMessageId: seeded.messageId, recordedByUserId: profile.context.userId },
       });
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
 
       await executeDeletion(db(), request.id, { media: acceptingMedia().port, now: () => NOW });
 
@@ -319,7 +324,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
 
     it("is claimed once, so two runners cannot both delete and disagree", async () => {
       const seeded = await customerWithEverything();
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONTACT", targetId: seeded.contactId }, NOW);
 
       const first = await executeDeletion(db(), request.id, { media: acceptingMedia().port, now: () => NOW });
       const second = await executeDeletion(db(), request.id, { media: acceptingMedia().port, now: () => NOW });
@@ -335,7 +340,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
     it("leaves the customer and everything learned from their other threads", async () => {
       const seeded = await customerWithEverything();
       const factsBefore = await db().customerFact.count({ where: { contactId: seeded.contactId } });
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONVERSATION", targetId: seeded.conversationId });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "CONVERSATION", targetId: seeded.conversationId }, NOW);
 
       await executeDeletion(db(), request.id, { media: acceptingMedia().port, now: () => NOW });
 
@@ -349,7 +354,7 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
   describe("another Business Profile's customer", () => {
     it("is untouched by a request scoped to this one", async () => {
       const before = await db().contact.count({ where: { businessProfileId: other.businessProfileId } });
-      const request = await requestProfileDeletion(db(), profile.context, { scope: "BUSINESS_PROFILE" });
+      const request = await requestProfileDeletion(db(), profile.context, { scope: "BUSINESS_PROFILE" }, NOW);
 
       await executeDeletion(db(), request.id, { media: acceptingMedia().port, now: () => NOW });
 
