@@ -226,7 +226,79 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **P5-06 / Issue #32 — the six findings on PR #78, repaired and awaiting independent review.**
+1. **P5-06 / Issue #32 — the lifecycle-history blocker on PR #78, repaired and awaiting independent
+   re-review.**
+
+   **Reviewed head:** `d9d1108d7bf974002b686afd32a4c3327d761558`, the docs-only handoff commit, which
+   Astra re-reviewed and returned `CHANGES_REQUESTED` on.
+
+   Five of the six earlier blocker areas are accepted and this repair changes the behaviour of none of
+   them: the retired-example UI, the production suggestion/provenance flow, workspace-scoped example
+   creation, the Style Test's candidate and context disclosure, and conflict-safe voice-profile writes.
+   Four of the five are not touched at all. The fifth is: the retired list's own component, assembler and
+   route all carry the history, so `style-example-list.tsx`, `style-screen.ts` and the route gain props and
+   a derivation — additively, with the restore branch, the badges and the approver line byte-identical, and
+   every one of that file's existing tests passing on its original assertions. The accepted P5-05 parent
+   behaviour and the tenant boundaries are untouched.
+
+   The one remaining finding was that the decision history was neither database-enforced append-only nor
+   fully retrievable. Both halves are now fixed, and both were the same shape — a guarantee that existed
+   as a property of the current source rather than of the system.
+
+   **Immutability is now the table's, not the package's.** `style_example_decisions` was described as
+   "append-only by use": nothing in `style-store.ts` updates or deletes one of these rows, and the
+   foreign key stops the *example* being deleted while they point at it. Neither is a statement about the
+   rows themselves, and the case that matters is precisely the one where this package's source is not what
+   is running — a support script, a later migration, a hand-typed `UPDATE` during an incident. Migration
+   `20261008100000_style_decisions_append_only` refuses `UPDATE` and `DELETE` with a row trigger and
+   `TRUNCATE` with a statement-level one; a row trigger never fires for a truncate, so without the second
+   the guarantee would have ended at the one statement that destroys everything rather than editing one
+   thing.
+
+   **The lifecycle is complete and reachable.** `MAX_DECISIONS` is still twenty, but it is now the twenty
+   *most recent* rather than the twenty oldest, still rendered oldest-first within the window. That is the
+   whole defect inverted: the cut used to fall at the newest end, so the events it hid were the ones that
+   explained an example's current state. The window reports how many earlier events it left behind and
+   carries a `(decidedAt, id)` cursor; `readStyleExampleLifecycle` returns the page before any cursor, with
+   the cursor for the one before that, so every decision of a reachable example is reachable by following
+   links the screen renders. The qualification is deliberate and pre-existing: the rejected half of the
+   retired list is still read with no cursor of its own, so a profile with more than twenty-five rejected
+   suggestions cannot reach the twenty-sixth — nor, therefore, its history. That is the accepted
+   retired-list repair's own limit and is left alone here rather than widened into this change.
+
+   Both halves of the cursor travel because `decided_at` is not unique — two decisions can share a
+   millisecond, and a cursor on an instant alone silently repeats or skips rows.
+
+   Two things an adversarial pass over the first attempt found, both now fixed and both worth remembering.
+   **A page read backwards hides the newer half**, so the first version reproduced the blocked defect one
+   click later: a history ending in `RESTORED` under a badge reading "Archived", with the number that would
+   have said so computed and discarded. The window now reports both of its edges and the lifecycle's whole
+   length. And **a plain `CREATE TRIGGER` is origin-only**: `SET session_replication_role = 'replica'` is
+   an ordinary statement on this connection and an origin-only trigger is silent under it, so one `SET`
+   would have switched the whole guarantee off with no DDL and nothing recorded. Both triggers are
+   `ENABLE ALWAYS`, and a regression proves the refusal holds inside replica mode rather than only
+   checking the flag. What remains open is DDL on the table by its owner, which no trigger can close; the
+   claim is therefore "unrewritable by anything short of DDL", not "unrewritable".
+
+   `StyleDecisionView` now carries the row's `id`, and the rendered history is keyed by it. It was keyed by
+   decision-and-instant, which collides for exactly the pair the lifecycle can now contain: a history that
+   cannot be *shown* completely is not retrievable completely, whatever the query returned.
+
+   **Regressions added:** direct SQL `UPDATE`, `DELETE` and `TRUNCATE` against `style_example_decisions`
+   are each proven rejected, with a control asserting the stored row is unchanged afterwards; a
+   twenty-five-decision lifecycle is reassembled page by page through the cursors and compared with the
+   whole expected sequence; a lifecycle whose decisions share one instant is paged two at a time and every
+   row is seen exactly once; and the screen's own assembly is driven through the links it renders, with a
+   forged `historyExample` proving a cursor carries no authority.
+
+   Both repairs were mutation-checked: removing the trigger fails the immutability regression, and
+   returning the window to the oldest twenty fails the long-lifecycle regression.
+
+   **Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is **not**
+   propagated: the branches below #78 still carry the earlier head. No rebase, no force-push, no merge to
+   `main`.
+
+2. **The six original findings on PR #78, repaired at `a3d27e3` and still the basis of the above.**
    
       **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
    **Repaired at:** `a3d27e39d479a5c00ea5ebea2e6af9216e869e17`, exact-head GitHub Actions run
@@ -266,8 +338,10 @@ Idempotency is the same decision digest the review path uses.
       `CONFLICT`, and has deterministic concurrent-create and stale-update regressions.
    6. **The decision history was not persisted.** Reject, archive and restore only replaced `status`, and
       restore overwrote `approvedByUserId`, destroying the identity of the prior approver. `decide()` writes
-      append-only `style_example_decisions` rows (migration `20261004160000_style_example_decisions`) and
-      never re-stamps the first approver, so the lifecycle is reconstructable.
+      `style_example_decisions` rows (migration `20261004160000_style_example_decisions`) and never
+      re-stamps the first approver, so the lifecycle is reconstructable. That first repair called the
+      table append-only when nothing but this package's own source made it so, and bounded the history at
+      twenty rows from the wrong end; both are what item 1 above fixes.
    
    **Exact-head verification reported for the repair SHA**, in addition to the successful Actions run:
    clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL and Redis infrastructure

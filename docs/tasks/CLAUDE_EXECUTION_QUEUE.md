@@ -62,6 +62,42 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
+### Current work — P5-06 / Issue #32, the lifecycle-history blocker on PR #78
+
+**Reviewed head:** `d9d1108d7bf974002b686afd32a4c3327d761558` — the docs-only handoff commit, which Astra
+re-reviewed and returned `CHANGES_REQUESTED` on. Five of the six earlier blocker areas are accepted and
+this repair changes the behaviour of none of them. Four are untouched; the fifth — the retired-example UI —
+shares the component, the assembler and the route that carry the history, so those three files gain props
+and a derivation additively, with the restore control and the badges byte-identical.
+
+One finding remained: the decision history was neither database-enforced append-only nor fully
+retrievable. Both halves were the same shape — a guarantee that held because of what this package's source
+currently does, rather than because the system makes it hold.
+
+**Immutability belongs to the table now.** The history was "append-only by use": nothing in the store
+edits one of these rows, and the foreign key protects the *example* rather than its history. The case that
+matters is the one where this package is not what is running — a support script, a later migration, a
+hand-typed `UPDATE` during an incident. A row trigger refuses `UPDATE` and `DELETE`, and a statement-level
+one refuses `TRUNCATE`, because a row trigger never fires for a truncate and the guarantee would otherwise
+have ended at the one statement that destroys everything rather than editing one thing. Both are
+`ENABLE ALWAYS`: a plain `CREATE TRIGGER` is origin-only, so `SET session_replication_role = 'replica'` —
+an ordinary statement on this connection — would have switched both off in one line, with no DDL and
+nothing recorded. DDL on the table by its owner remains open and no trigger can close it, so the claim is
+"unrewritable by anything short of DDL" rather than "unrewritable".
+
+**The lifecycle is reachable end to end.** The window is still twenty decisions, but the twenty *most
+recent* instead of the twenty oldest — the defect exactly inverted, because the cut used to fall at the
+newest end and hide the events that explained an example's current state. The window says how many earlier
+events it left behind and carries a `(decidedAt, id)` cursor, and `readStyleExampleLifecycle` returns the
+page before any cursor with the cursor for the one before that. The window reports **both** of its edges:
+a page read backwards hides the newer half, and the first version of this repair therefore reproduced the
+blocked defect one click later — a history ending in `RESTORED` under a badge reading "Archived". Both
+halves of the cursor travel: `decided_at` is not unique, and a cursor on an instant alone silently repeats
+or skips rows.
+
+**Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is not
+propagated downstream. No rebase, no force-push, no merge to `main`.
+
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 
 **Reviewed head:** `e4e640a8fafc4fbca92ca64e5588551539410f6e`.

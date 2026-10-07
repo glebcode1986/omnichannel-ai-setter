@@ -12,16 +12,19 @@
  */
 import {
   listStyleExamples,
+  readStyleExampleLifecycle,
   readStyleProfiles,
   type BusinessProfileContext,
   type DbClient,
   type StyleExamplePage,
+  type StyleExampleView,
+  type StyleLifecyclePage,
   type StyleProfileLayerView,
 } from "@omnichannel/db";
 
 import type { RawSearchParams } from "@/server/inbox-view";
 import type { StyleTestResult } from "@/server/style-test";
-import { one, styleCursorOf, styleNextHref } from "@/server/style-view";
+import { one, styleCursorOf, styleHistoryHref, styleHistoryRequest, styleNextHref } from "@/server/style-view";
 
 export interface StyleScreenLists {
   readonly layers: readonly StyleProfileLayerView[];
@@ -44,6 +47,24 @@ export interface StyleScreenLists {
   readonly verifiedNextHref?: string;
   readonly suggestionsNextHref?: string;
   readonly retiredNextHref?: string;
+  /**
+   * One example's lifecycle, opened at a point in the past (R5 re-review).
+   *
+   * Present only when the URL names an example. Everything else on the screen is unaffected, which is
+   * the point of giving the history its own two parameters: reading back through one example's argument
+   * must not move anybody's place in the three lists.
+   */
+  readonly lifecycle?: StyleLifecyclePage;
+  /**
+   * Where the events before what is currently shown are, per example.
+   *
+   * Keyed by example id and present only for the examples that actually have earlier events, so a
+   * component cannot render a link to nothing. For the example whose lifecycle is open this points one
+   * page further back than the open page, so following it repeatedly walks the whole history.
+   */
+  readonly earlierHistoryHrefs: Readonly<Record<string, string>>;
+  /** Back to the most recent events, when a lifecycle is open. */
+  readonly latestHistoryHref?: string;
 }
 
 /**
@@ -60,6 +81,7 @@ export async function assembleStyleScreen(
   test: StyleTestResult,
 ): Promise<StyleScreenLists> {
   const ask = one(searchParams["ask"]);
+  const history = styleHistoryRequest(searchParams);
   const [layers, verified, suggestions, archived, rejected] = await Promise.all([
     readStyleProfiles(db, context),
     listStyleExamples(db, context, { status: "ACTIVE" }, { cursor: styleCursorOf(searchParams, "verified") }),
@@ -74,6 +96,33 @@ export async function assembleStyleScreen(
     examples: [...archived.examples, ...rejected.examples],
   };
 
+  const onScreen: readonly StyleExampleView[] = [...verified.examples, ...suggestions.examples, ...retired.examples];
+
+  // Loaded only when asked for, only for an example this context can see, and only for one that is
+  // actually on this page of one of the three lists.
+  //
+  // The last condition is not an optimization. Nothing but a list renders a lifecycle, so opening one for
+  // an example that has scrolled off would run three queries whose result is discarded *and* take the way
+  // back with it — the "most recent events" link lives on the example's own row, so when no row renders,
+  // the reader is left on a URL with no rendered route out of it. Refusing to open it leaves the same
+  // screen they would get from a forged id, which is a state they can see and leave.
+  const openable = history.styleExampleId !== undefined && onScreen.some((example) => example.id === history.styleExampleId);
+  const lifecycle =
+    history.styleExampleId === undefined || !openable
+      ? null
+      : await readStyleExampleLifecycle(db, context, history.styleExampleId, { ...(history.before === undefined ? {} : { before: history.before }) });
+
+  const earlierHistoryHrefs: Record<string, string> = {};
+  for (const example of onScreen) {
+    // The open example's link comes from the open page rather than from the preview, so "earlier" means
+    // earlier than what the reader is looking at and following it repeatedly walks backwards instead of
+    // returning to the same page.
+    const cursor = lifecycle !== null && lifecycle.styleExampleId === example.id ? lifecycle.earlierCursor : example.earlierCursor;
+    if (cursor !== undefined) {
+      earlierHistoryHrefs[example.id] = styleHistoryHref(basePath, searchParams, example.id, cursor);
+    }
+  }
+
   return {
     layers,
     verified,
@@ -85,5 +134,8 @@ export async function assembleStyleScreen(
     ...(verified.nextCursor === undefined ? {} : { verifiedNextHref: styleNextHref(basePath, searchParams, "verified", verified.nextCursor) }),
     ...(suggestions.nextCursor === undefined ? {} : { suggestionsNextHref: styleNextHref(basePath, searchParams, "suggested", suggestions.nextCursor) }),
     ...(retired.nextCursor === undefined ? {} : { retiredNextHref: styleNextHref(basePath, searchParams, "retired", retired.nextCursor) }),
+    ...(lifecycle === null ? {} : { lifecycle }),
+    earlierHistoryHrefs,
+    ...(lifecycle === null ? {} : { latestHistoryHref: styleHistoryHref(basePath, searchParams, undefined, undefined) }),
   };
 }

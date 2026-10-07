@@ -20,6 +20,7 @@ import {
   createWorkspaceWithOwner,
   listStyleExamples,
   rejectStyleExample,
+  restoreStyleExample,
   suggestStyleExample,
   type BusinessProfileContext,
 } from "@omnichannel/db";
@@ -220,6 +221,122 @@ describe.skipIf(!databaseTestsEnabled())("the Style Training screen's queries", 
     // not in use and could be.
     expect(after.suggestions).not.toContain("Late slots on Thursdays only.");
     expect(after.retired).toContain("Late slots on Thursdays only.");
+  }, 300_000);
+
+  it("reaches every event of a long lifecycle through the links it renders", async () => {
+    // The R5 re-review's blocking finding, driven through the screen rather than the store: the window
+    // used to hold the twenty *oldest* decisions, so from the twenty-first onwards the events that
+    // explained an example's current state were gone, with no cursor, no count and no link.
+    // Its own row, not one of the twenty-six seeded ACTIVE examples. Archiving one of those would drop
+    // that list to twenty-five and quietly break the paging assertions above — which pass today only
+    // because Vitest runs these in declaration order.
+    const created = await createStyleExample(database.db, context, {
+      inboundContext: "how long is this argument?",
+      outboundText: "A long argument indeed.",
+    });
+    if (created.status !== "SAVED") {
+      throw new Error(`the fixture expected SAVED, got ${created.status}`);
+    }
+    const id = await idOf("ACTIVE", "A long argument indeed.");
+    await archiveStyleExample(database.db, context, id);
+    const expected: string[] = ["ARCHIVED"];
+    for (let round = 0; round < 12; round += 1) {
+      await restoreStyleExample(database.db, context, id);
+      await archiveStyleExample(database.db, context, id);
+      expected.push("RESTORED", "ARCHIVED");
+    }
+    expect(expected).toHaveLength(25);
+
+    let query: RawSearchParams = {};
+    const collected: string[] = [];
+    let pages = 0;
+    for (;;) {
+      const data = await assembleStyleScreen(database.db, context, query, BASE, NO_TEST);
+      const shown =
+        data.lifecycle?.styleExampleId === id
+          ? data.lifecycle
+          : data.retired.examples.find((example) => example.id === id);
+      expect(shown, "the example must be on the screen that offers its history").toBeDefined();
+      collected.unshift(...(shown?.decisions.map((entry) => entry.decision) ?? []));
+      const href = data.earlierHistoryHrefs[id];
+      if (href === undefined) {
+        expect(shown?.earlierDecisions, "no link must mean nothing earlier").toBe(0);
+        break;
+      }
+      // Every page the screen offers is reachable with nothing but the link it rendered.
+      query = follow(href);
+      pages += 1;
+      expect(pages, "paging must terminate").toBeLessThan(8);
+    }
+
+    expect(collected).toEqual(expected);
+    // The first screen held the most recent twenty and said how many it had left behind.
+    const first = await assembleStyleScreen(database.db, context, {}, BASE, NO_TEST);
+    const preview = first.retired.examples.find((example) => example.id === id);
+    expect(preview?.decisions).toHaveLength(20);
+    expect(preview?.earlierDecisions).toBe(5);
+    expect(preview?.decisions.at(-1)?.decision).toBe("ARCHIVED");
+  }, 300_000);
+
+  it("offers the way back to the most recent events, and leaves the other lists where they were", async () => {
+    const id = await idOf("ARCHIVED", "A long argument indeed.");
+    const opened = await assembleStyleScreen(database.db, context, follow(
+      (await assembleStyleScreen(database.db, context, {}, BASE, NO_TEST)).earlierHistoryHrefs[id] ?? "",
+    ), BASE, NO_TEST);
+
+    expect(opened.lifecycle?.styleExampleId).toBe(id);
+    expect(opened.latestHistoryHref).toBeDefined();
+    // Following it drops the history and nothing else, which is why the history has parameters of its own.
+    const back = await assembleStyleScreen(database.db, context, follow(opened.latestHistoryHref ?? ""), BASE, NO_TEST);
+    expect(back.lifecycle).toBeUndefined();
+    expect(back.retired.examples.map((example) => example.outboundText)).toEqual(
+      (await assembleStyleScreen(database.db, context, {}, BASE, NO_TEST)).retired.examples.map((example) => example.outboundText),
+    );
+  }, 300_000);
+
+  it("says how many later events a page into the past is hiding", async () => {
+    // The half a backwards page necessarily hides, and the one that explains the current state. Without
+    // it the screen would show a history ending in RESTORED under a status reading ARCHIVED.
+    const id = await idOf("ARCHIVED", "A long argument indeed.");
+    const first = await assembleStyleScreen(database.db, context, {}, BASE, NO_TEST);
+    const opened = await assembleStyleScreen(database.db, context, follow(first.earlierHistoryHrefs[id] ?? ""), BASE, NO_TEST);
+
+    expect(opened.lifecycle?.laterDecisions).toBe(20);
+    expect(opened.lifecycle?.totalDecisions).toBe(25);
+    // And the newest window hides nothing later, which is what makes the common case silent.
+    expect(first.retired.examples.find((example) => example.id === id)?.laterDecisions).toBe(0);
+  }, 300_000);
+
+  it("closes an open history when a list pages, rather than loading one nothing renders", async () => {
+    // The state this prevents: the history parameters ride along on a list's "show more" link, the
+    // example leaves the screen, and the page loads a lifecycle no component renders — taking the link
+    // back to the newest events with it, because that link lives on the example's own row.
+    const id = await idOf("ARCHIVED", "A long argument indeed.");
+    const first = await assembleStyleScreen(database.db, context, { historyExample: id }, BASE, NO_TEST);
+    expect(first.lifecycle?.styleExampleId).toBe(id);
+
+    const paged = follow(first.suggestionsNextHref ?? "");
+    expect(paged["historyExample"], "paging a list must not carry an open history forward").toBeUndefined();
+
+    // And if a hand-written URL does carry one for an example that is not on screen, the screen declines
+    // to open it rather than loading a history it cannot show.
+    const offScreen = await assembleStyleScreen(database.db, context, { ...paged, historyExample: id, suggestedCursor: paged["suggestedCursor"] ?? "" }, BASE, NO_TEST);
+    const onScreen = [...offScreen.verified.examples, ...offScreen.suggestions.examples, ...offScreen.retired.examples].map((example) => example.id);
+    if (!onScreen.includes(id)) {
+      expect(offScreen.lifecycle).toBeUndefined();
+      expect(offScreen.latestHistoryHref).toBeUndefined();
+    }
+  }, 300_000);
+
+  it("opens no history for an example this profile cannot see, or for one nobody wrote", async () => {
+    // A cursor and an example id carry no authority: the store scopes every read to the profile in the
+    // route, so a forged parameter is a forged parameter rather than a read of another tenant's history.
+    const forged = await assembleStyleScreen(database.db, context, { historyExample: "se_not_here" }, BASE, NO_TEST);
+
+    expect(forged.lifecycle).toBeUndefined();
+    expect(forged.latestHistoryHref).toBeUndefined();
+    // And the rest of the screen is unaffected: a bad parameter must not empty the page.
+    expect(forged.verified.examples.length).toBeGreaterThan(0);
   }, 300_000);
 
   it("pages the retired list on a cursor of its own", async () => {
