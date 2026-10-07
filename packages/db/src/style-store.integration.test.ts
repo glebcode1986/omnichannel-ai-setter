@@ -128,6 +128,78 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(await db().styleProfile.count({ where: { workspaceId: profile.context.workspaceId, businessProfileId: null } })).toBe(1);
     }, 180_000);
 
+    /**
+     * Two tabs on one business's voice (R5).
+     *
+     * Each editor carries a *complete* profile, so the stake is not one field: a save that does not say
+     * which version it started from replaces every field a colleague changed with an old copy of itself.
+     * Deterministic rather than timing-dependent — the second save is given the first's instant on
+     * purpose, which is precisely what a stale tab holds.
+     */
+    it("refuses a save made against a version somebody has already replaced", async () => {
+      const bp = sibling.context;
+      await saveStyleProfile(db(), bp, "BUSINESS_PROFILE", { ...blank(), tone: "as rendered" });
+      const asRendered = (await readStyleProfiles(db(), bp)).find((layer) => layer.scope === "BUSINESS_PROFILE");
+      const stale = asRendered?.updatedAt ?? undefined;
+
+      // A colleague saves, which moves the layer on.
+      await saveStyleProfile(db(), bp, "BUSINESS_PROFILE", { ...blank(), tone: "colleague's" }, { ...(stale === undefined ? {} : { updatedAt: stale }) });
+      const afterColleague = (await readStyleProfiles(db(), bp)).find((layer) => layer.scope === "BUSINESS_PROFILE");
+
+      const late = await saveStyleProfile(
+        db(),
+        bp,
+        "BUSINESS_PROFILE",
+        { ...blank(), tone: "stale tab's" },
+        { ...(stale === undefined ? {} : { updatedAt: stale }) },
+      );
+
+      expect(late).toEqual({ status: "CONFLICT" });
+      // And nothing was lost: the colleague's wording is still there, which is the whole point of
+      // refusing rather than writing.
+      expect(afterColleague?.tone).toBe("colleague's");
+      expect((await readStyleProfiles(db(), bp)).find((layer) => layer.scope === "BUSINESS_PROFILE")?.tone).toBe("colleague's");
+    }, 180_000);
+
+    it("lets exactly one of two first saves create the layer", async () => {
+      const fresh = await seedWorkspace(db(), "style-concurrent");
+      const [only] = fresh.profiles as [SeededProfile];
+
+      // Both believe there is no layer, because when they rendered there was none. The partial unique
+      // index decides, and the loser is told it conflicted instead of being handed a raw constraint error
+      // — or worse, of both appearing to succeed.
+      const [first, second] = await Promise.all([
+        saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "first" }, {}),
+        saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "second" }, {}),
+      ]);
+
+      expect([first.status, second.status].sort()).toEqual(["CONFLICT", "SAVED"]);
+      expect(await db().styleProfile.count({ where: { workspaceId: only.context.workspaceId, businessProfileId: null } })).toBe(1);
+    }, 180_000);
+
+    it("refuses a first save when the layer has appeared in the meantime", async () => {
+      const fresh = await seedWorkspace(db(), "style-appeared");
+      const [only] = fresh.profiles as [SeededProfile];
+      await saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "somebody else's" }, {});
+
+      // The screen was rendered before any layer existed, so it claims none. Writing a fresh one here
+      // would discard whatever the other operator wrote, which is the same lost update by another route.
+      expect(await saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "stale creator's" }, {})).toEqual({ status: "CONFLICT" });
+      expect((await readStyleProfiles(db(), only.context)).find((layer) => layer.scope === "WORKSPACE")?.tone).toBe("somebody else's");
+    }, 180_000);
+
+    it("still lets a caller with no screen behind it write unconditionally", async () => {
+      const fresh = await seedWorkspace(db(), "style-system-caller");
+      const [only] = fresh.profiles as [SeededProfile];
+      await saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "seeded" });
+
+      // Omitting the parameter is the system path — a seed, a migration helper — which has no stale copy
+      // to carry and nothing to conflict with. Distinguished from `{}`, which is a screen's claim that
+      // there was no layer, so the two cannot be confused by accident.
+      expect(await saveStyleProfile(db(), only.context, "WORKSPACE", { ...blank(), tone: "seeded again" })).toEqual({ status: "SAVED" });
+      expect((await readStyleProfiles(db(), only.context)).find((layer) => layer.scope === "WORKSPACE")?.tone).toBe("seeded again");
+    }, 180_000);
+
     it("never reads another Workspace's voice", async () => {
       const [theirProfile] = neighbour.profiles as [SeededProfile];
       await saveStyleProfile(db(), theirProfile.context, "WORKSPACE", { ...blank(), tone: "theirs" });
@@ -307,6 +379,46 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(await rejectStyleExample(db(), profile.context, id)).toEqual({ status: "GONE" });
       const example = (await listStyleExamples(db(), profile.context, { status: "ACTIVE" })).examples.find((candidate) => candidate.id === id);
       expect(example?.status).toBe("ACTIVE");
+    }, 180_000);
+
+    it("keeps the whole lifecycle, not only the last decision", async () => {
+      const id = await suggested("reconsidered twice?", "Reconsidered twice.");
+
+      await rejectStyleExample(db(), profile.context, id);
+      await restoreStyleExample(db(), profile.context, id);
+      await archiveStyleExample(db(), profile.context, id);
+
+      const example = (await listStyleExamples(db(), profile.context, { status: "ARCHIVED" })).examples.find((candidate) => candidate.id === id);
+      // The point of the history, stated as the thing it makes possible: an example rejected, restored and
+      // archived again is a different thing from one archived on the first day, and the row's own
+      // `decision` column — which each transition overwrites — cannot tell them apart.
+      expect(example?.decisions.map((entry) => entry.decision)).toEqual(["REJECTED", "RESTORED", "ARCHIVED"]);
+      expect(example?.decisions.map((entry) => entry.decidedByName)).toEqual(["Test style-owner", "Test style-owner", "Test style-owner"]);
+      // Oldest first, and strictly ordered: a lifecycle out of order is not a lifecycle.
+      const times = example?.decisions.map((entry) => entry.decidedAt.getTime()) ?? [];
+      expect(times).toEqual([...times].sort((left, right) => left - right));
+      // Restoring it named the person who had stood behind it; archiving it again did not erase them.
+      expect(example?.approvedByName).toBe("Test style-owner");
+    }, 180_000);
+
+    it("writes no history for a decision that did not take effect", async () => {
+      const id = await suggested("history of a refusal?", "Refused.");
+
+      // Archiving a suggestion is refused — it was never in use. A history row for it would record a
+      // decision nobody made, which is worse than no history at all.
+      expect(await archiveStyleExample(db(), profile.context, id)).toEqual({ status: "GONE" });
+      expect(await db().styleExampleDecision.count({ where: { styleExampleId: id } })).toBe(0);
+    }, 180_000);
+
+    it("records a decision that cannot be unmade, even by this package", async () => {
+      const id = await suggested("append only?", "Append only.");
+      await rejectStyleExample(db(), profile.context, id);
+
+      // The trail is append-only by use: nothing in this store updates or deletes one of these rows, and
+      // the example itself cannot be deleted while its history points at it.
+      await expect(db().$executeRaw`DELETE FROM "style_examples" WHERE "id" = ${id}`).rejects.toThrow(
+        /style_example_decisions_style_example_id_fkey/u,
+      );
     }, 180_000);
 
     it("cannot archive one that is not in use", async () => {

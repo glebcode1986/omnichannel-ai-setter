@@ -272,6 +272,14 @@ enum StyleExampleProvenance {
   HUMAN_EDITED_DRAFT
 }
 
+/// What somebody decided about a style example, as distinct from where it ended up (#32).
+enum StyleDecision {
+  APPROVED
+  REJECTED
+  ARCHIVED
+  RESTORED
+}
+
 enum StyleExampleStatus {
   /// In use for tone. A CHECK requires an approver, because "verified" with nobody's name on it is not.
   ACTIVE
@@ -324,6 +332,9 @@ model User {
   composedDeliveries        DeliveryJobRecord[]   @relation("ComposedDeliveries")
   onboardingSkips           OnboardingSkip[]
   policyChangeAudits        PolicyChangeAudit[]
+
+  styleExampleDecisions     StyleExample[]         @relation("StyleExampleDecider")
+  styleDecisionsMade        StyleExampleDecision[]
 
   @@map("users")
 }
@@ -382,6 +393,7 @@ model Workspace {
   styleExamples      StyleExample[]
   styleProfiles      StyleProfile[]
   policyChangeAudits PolicyChangeAudit[]
+  styleExampleDecisions StyleExampleDecision[]
 
   @@map("workspaces")
 }
@@ -1021,8 +1033,15 @@ model StyleExample {
   provenance        StyleExampleProvenance
   sourceMessageId   String?                @map("source_message_id")
   sourceDraftId     String?                @map("source_draft_id")
+  /// The first person to vouch for this example. Set once and never replaced: re-stamping it on every
+  /// restore destroyed the identity of whoever originally approved it.
   approvedByUserId  String?                @map("approved_by_user_id")
   status            StyleExampleStatus     @default(ACTIVE)
+  /// The most recent lifecycle decision, and who made it. The status alone cannot say who withdrew an
+  /// example, and one rejected, restored and archived again looks identical to one archived on day one.
+  decision          StyleDecision?
+  decidedByUserId   String?                @map("decided_by_user_id")
+  decidedAt         DateTime?              @map("decided_at")
   /// BCP-47 tag of the example's language. NULL means language-agnostic: such an example is a fallback
   /// that matches any language rather than a wrong-language match (product-owner decision on PR #66).
   language          String?
@@ -1038,11 +1057,38 @@ model StyleExample {
   sourceMessage   Message?         @relation(fields: [workspaceId, businessProfileId, sourceMessageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   sourceDraft     AiDraft?         @relation(fields: [workspaceId, businessProfileId, sourceDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   approvedByUser  User?            @relation(fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy       User?            @relation("StyleExampleDecider", fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "style_examples_decider_fkey")
+  decisions       StyleExampleDecision[]
 
   @@index([workspaceId, businessProfileId, status])
   @@index([workspaceId, businessProfileId, language], map: "style_examples_language_idx")
   @@index([workspaceId, businessProfileId, status, createdAt(sort: Desc)], map: "style_examples_suggested_idx")
+  @@index([workspaceId, businessProfileId, decidedAt(sort: Desc)], map: "style_examples_decided_idx")
   @@map("style_examples")
+}
+
+/// Every decision anybody ever made about a style example (#32).
+///
+/// The columns on the example itself answer "who withdrew this?"; they cannot answer "what happened to
+/// it?", because each decision overwrites the last. An example rejected, restored and archived again is a
+/// different thing from one archived on the first day, and the Style screen is asked to tell them apart.
+///
+/// Append-only by use rather than by trigger: nothing in this package updates or deletes a row here.
+model StyleExampleDecision {
+  id             String        @id @default(uuid(7))
+  workspaceId    String        @map("workspace_id")
+  styleExampleId String        @map("style_example_id")
+  decision       StyleDecision
+  /// Never null, unlike the example's own column: a decision nobody made is not a decision.
+  decidedByUserId String       @map("decided_by_user_id")
+  decidedAt      DateTime      @default(now()) @map("decided_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  styleExample StyleExample @relation(fields: [styleExampleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  decidedBy    User         @relation(fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([workspaceId, styleExampleId, decidedAt])
+  @@map("style_example_decisions")
 }
 
 // ---------------------------------------------------------------------------------------------------------
