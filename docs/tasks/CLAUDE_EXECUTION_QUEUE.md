@@ -14,6 +14,54 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
+
+**Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
+**Repaired at:** `a3d27e39d479a5c00ea5ebea2e6af9216e869e17`, exact-head GitHub Actions run
+[37608987350](https://github.com/glebcode1986/omnichannel-ai-setter/actions/runs/37608987350) succeeded.
+This note is the canonical handoff the same directive asked for, so the branch head is one commit later
+than the repair SHA; PR #78 carries the current one.
+
+**Independent Astra re-review of the new live head is the only active gate.** Every branch below #78 in
+the chain already contains this repair by ordinary merge, and that propagation happened *before* an
+independent PASS. It is therefore held rather than advanced: nothing from #79 onwards is ready, no review
+is requested on any of them, and the propagated branches are left in place and unrewritten — no rebase,
+no force-push, no merge to `main`, no rollback.
+
+The six findings and what each repair actually was:
+
+1. **Archive and restore were unreachable through the UI.** `loadStyleScreen` loaded only `ACTIVE` and
+   `SUGGESTED` rows, so an archived example or a rejected suggestion vanished from both lists while
+   `StyleExampleList` carried a restore branch nothing could ever reach. The screen now loads and renders
+   the withdrawn rows, which is what makes the acceptance path exist at all.
+2. **The suggestion flow had no production producer.** `suggestStyleExample` was called only by its own
+   tests, and it hard-coded `HUMAN_TYPED` with no `sourceDraftId`, so a `HUMAN_EDITED_DRAFT` suggestion
+   was unconstructible. `resolve-review.ts` now suggests the edited draft through a
+   `StyleLearningStore.suggestEditedDraft` port, so an unticked edit becomes a `SUGGESTED` example with
+   its real provenance and its source draft.
+3. **A workspace-scoped example could not be created from the screen.** The add-example form posted no
+   `scope`, and `scopeFrom` defaults a missing value to `BUSINESS_PROFILE`, so the store's `WORKSPACE`
+   support was unreachable. The form carries the control, and the cross-profile write goes through the
+   same admin-or-owner check `createBusinessProfile` applies.
+4. **The Style test was a retrieval browser, not the contracted test.** `KNOWLEDGE_STYLE_UX` asks for a
+   neutral prompt with a *candidate output* plus the instructions and examples that influenced it;
+   `runStyleTrial` returned a retrieval mode and hits. `style-test.ts` now resolves the effective voice
+   through the worker's own `createStyleProfileStore` path and produces a candidate, with
+   `knowledge: []` by contract so a style test cannot borrow factual retrieval.
+5. **Voice-profile saves were unsafe under the R5 multi-tab contract.** `findFirst` then an
+   unconditional `create`/`update` let two first saves both see no row, and let a stale tab overwrite a
+   newer operator's profile. The write is conditional on an expected `updatedAt`, returns a typed
+   `CONFLICT`, and has deterministic concurrent-create and stale-update regressions.
+6. **The decision history was not persisted.** Reject, archive and restore only replaced `status`, and
+   restore overwrote `approvedByUserId`, destroying the identity of the prior approver. `decide()` writes
+   append-only `style_example_decisions` rows (migration `20261004160000_style_example_decisions`) and
+   never re-stamps the first approver, so the lifecycle is reconstructable.
+
+**Exact-head verification reported for the repair SHA**, in addition to the successful Actions run:
+clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL and Redis infrastructure
+suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
+`db:check-drift` reporting `No difference detected.`
+
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 
 **Reviewed head:** `e4e640a8fafc4fbca92ca64e5588551539410f6e`.
