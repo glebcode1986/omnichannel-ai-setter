@@ -9,6 +9,7 @@ export * from "./ai-draft";
 export * from "./automation-policy";
 export * from "./deletion";
 export * from "./entitlements";
+export * from "./plan-change";
 export * from "./usage";
 export * from "./presence-mode";
 export {

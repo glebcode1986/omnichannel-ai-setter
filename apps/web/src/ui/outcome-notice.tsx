@@ -44,6 +44,10 @@ const OUTCOMES = [
   "RESTORED",
   "CONFLICT",
   "REFUSED",
+  // Billing (#42). A cancellation that takes effect later is not a refusal — nothing was denied — so it
+  // keeps the ordinary tone and says when it bites.
+  "CANCELING",
+  "RESUMED",
   "MOVED",
   "STALE_STAGE",
   "UNCHANGED_STAGE",
