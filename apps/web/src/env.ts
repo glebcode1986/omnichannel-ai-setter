@@ -69,13 +69,16 @@ export const webEnvSchema = runtimeEnvSchema.extend({
    */
   VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
   /**
-   * The reply model, for the simulation playground only (Issue #30).
+   * The reply model, for the simulation playground and the Style screen's test (Issues #30, #32).
    *
-   * Optional, unlike the worker's, because a deployment that never opens the playground should not fail
-   * to boot over it — and the playground degrades honestly without it: retrieval and the deterministic
-   * policy still run, and the screen says no model is configured rather than showing an empty reply.
+   * Optional, unlike the worker's, where a missing key means no draft can ever be produced and booting
+   * without one would be booting broken. Here a missing key costs part of two read-only screens, and both
+   * of them say so: the playground still runs retrieval and the deterministic policy, and the Style test
+   * still shows the effective voice and the examples retrieval would pick. A deployment that never wants
+   * the web app talking to a provider gets that by leaving this unset, which is a supported configuration
+   * rather than a degraded one.
    *
-   * The simulation cannot send whether this is set or not. The `ReplyModel` port has no transport, no
+   * Neither surface can send, whether this is set or not. The `ReplyModel` port has no transport, no
    * recipient and no tools, so a live run against a real provider still cannot reach a customer.
    */
   ANTHROPIC_API_KEY: z.string().min(1).max(512).optional(),
@@ -84,6 +87,20 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
   AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
   AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
+
+  /**
+   * The platform's voice of last resort, used by the Style test only where a business has configured no
+   * StyleProfile of its own.
+   *
+   * It must carry the same value as the worker's, for the same reason the embedding settings must: the
+   * test exists to answer "how will the assistant sound?", and a fallback persona that differs from the
+   * one the worker drafts with answers a different question.
+   */
+  AI_PERSONA: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .default("You are the business's own assistant. Be warm, brief and concrete, and never invent facts."),
 });
 
 export type WebEnv = ReturnType<typeof loadWebEnv>;
