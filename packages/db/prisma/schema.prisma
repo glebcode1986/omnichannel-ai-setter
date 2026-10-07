@@ -159,6 +159,148 @@ model DeletionRequest {
   @@map("deletion_requests")
 }
 
+/// A workspace's normalized subscription state (#38, ADR-017).
+///
+/// Six values the product reasons about. A payment provider has its own, and providers disagree with
+/// each other, so a provider status is mapped into one of these inside the billing adapter and no
+/// feature check ever sees the original string.
+enum SubscriptionState {
+  TRIALING
+  ACTIVE
+  /// A renewal payment failed and is being chased. Paid work continues: a failure on Tuesday must not
+  /// stop a business answering its customers on Wednesday.
+  PAST_DUE
+  /// The accepted three-day window after `PAST_DUE` before paid work stops.
+  GRACE
+  /// Cancelled, with the already-paid period still running.
+  CANCELED_PENDING_END
+  INACTIVE
+}
+
+/// A commercial package, named once and versioned for ever after (#38).
+///
+/// The definition carries only identity. Everything a subscription actually depends on lives on a
+/// `PlanVersion`, because pricing and capacity change and a workspace must be able to stay on the terms
+/// it bought.
+model PlanDefinition {
+  id          String   @id @default(uuid(7))
+  /// Stable product code (`starter`, `growth`, `scale`). Never a provider's price identifier.
+  code        String   @unique
+  name        String
+  /// Order on a pricing page. Presentation only; nothing decides anything from it.
+  displayOrder Int     @default(0)
+  /// Withdrawn plans stay, because workspaces are grandfathered onto their versions.
+  retiredAt   DateTime? @map("retired_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  versions PlanVersion[]
+
+  @@map("plan_definitions")
+}
+
+/// An immutable snapshot of what one version of a plan grants (#38).
+///
+/// Immutable is the whole point. A workspace subscribes to a *version*, so editing one would silently
+/// change the terms of every workspace on it — which is exactly what grandfathering exists to prevent.
+/// A price or capacity change is a new version; the old one stays, retired and still honoured.
+model PlanVersion {
+  id         String   @id @default(uuid(7))
+  planId     String   @map("plan_id")
+  /// Monotonic per plan. `(plan, version)` is how a subscription names its terms.
+  version    Int
+  /// Features this version switches on, as the product's own names.
+  features   String[] @default([])
+  /// Ceilings on things that exist at once, keyed by the domain's `PlanLimit`.
+  limits     Json     @default("{}")
+  /// Period allowances, keyed by the domain's `UsageMetric`.
+  quotas     Json     @default("{}")
+  /// Minor units of `currency`, so no money is ever a float. Null for a version that is not sold.
+  monthlyPriceCents Int?    @map("monthly_price_cents")
+  annualPriceCents  Int?    @map("annual_price_cents")
+  /// ISO 4217. A price book is per currency, and nothing assumes EUR for ever.
+  currency   String?
+  /// When this version stopped being offered to new subscriptions. Existing ones keep it.
+  retiredAt  DateTime? @map("retired_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  plan          PlanDefinition         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  subscriptions WorkspaceSubscription[]
+
+  @@unique([planId, version])
+  @@map("plan_versions")
+}
+
+/// What one workspace is subscribed to, in the product's own terms (#38).
+model WorkspaceSubscription {
+  id            String            @id @default(uuid(7))
+  workspaceId   String            @unique @map("workspace_id")
+  planVersionId String            @map("plan_version_id")
+  state         SubscriptionState @default(TRIALING)
+  /// When the current paid or trial period ends. This is when a cancellation or a trial actually bites.
+  periodEndsAt  DateTime?         @map("period_ends_at")
+  trialEndsAt   DateTime?         @map("trial_ends_at")
+  /// When grace began, so its three days can be measured from something durable.
+  graceStartedAt DateTime?        @map("grace_started_at")
+  canceledAt    DateTime?         @map("canceled_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([state, periodEndsAt])
+  @@map("workspace_subscriptions")
+}
+
+/// A deliberate departure from the plan, for one workspace (#38).
+///
+/// Support grants one, a sales agreement needs one, an incident is apologised for with one. Separate
+/// from the plan version because folding it in would mean editing a version — and a version is immutable
+/// precisely so the thousand workspaces on it do not move when one of them is helped.
+model EntitlementOverride {
+  id          String    @id @default(uuid(7))
+  workspaceId String    @unique @map("workspace_id")
+  features    Json      @default("{}")
+  limits      Json      @default("{}")
+  quotas      Json      @default("{}")
+  /// Why, in the granter's words. An override nobody can explain is one nobody dares remove.
+  reason      String
+  grantedByUserId String @map("granted_by_user_id")
+  /// Absent means it stands until somebody removes it; a lapsed one is kept and stops applying.
+  expiresAt   DateTime? @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  grantedBy User      @relation(fields: [grantedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("entitlement_overrides")
+}
+
+/// A workspace's billing identity, and the opaque references a provider needs (#38, ADR-017).
+///
+/// The provider's own identifiers live here and nowhere else. They are strings with no meaning to the
+/// product: nothing branches on them, nothing displays them, and replacing the provider changes the rows
+/// rather than the plan semantics. `provider` is deliberately free text rather than an enum — an enum of
+/// provider names in the domain is precisely the leak ADR-017 forbids.
+model BillingAccount {
+  id          String   @id @default(uuid(7))
+  workspaceId String   @unique @map("workspace_id")
+  /// Which adapter owns the references below. Absent until a provider is actually integrated.
+  provider    String?
+  /// Opaque. The product never parses, compares or displays these.
+  providerCustomerId     String? @map("provider_customer_id")
+  providerSubscriptionId String? @map("provider_subscription_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([provider, providerCustomerId])
+  @@map("billing_accounts")
+}
+
 enum WhatsAppOnboardingMode {
   NEW_OR_MIGRATED_CLOUD_NUMBER
   COEXISTENCE_EXISTING_BUSINESS_APP
@@ -288,6 +430,9 @@ enum AuditEventKind {
   /// Somebody asked for data to be deleted, and what the deletion actually removed.
   DELETION_REQUESTED
   DELETION_COMPLETED
+  /// What the workspace is paying for, and any deliberate departure from it (#38).
+  SUBSCRIPTION_CHANGED
+  ENTITLEMENT_OVERRIDDEN
 }
 
 /// Who acted. Reconciliation and the scheduler act without anybody asking, and recording those as a
@@ -589,6 +734,7 @@ model User {
   suppressionsLifted   FollowUpSuppression[] @relation("SuppressionLifter")
   @@map("users")
   deletionRequests DeletionRequest[]
+  entitlementOverrides EntitlementOverride[]
 }
 
 model Account {
@@ -655,6 +801,9 @@ model Workspace {
   humanTasks           HumanTask[]
   followUpSuppressions FollowUpSuppression[]
   deletionRequests     DeletionRequest[]
+  subscription         WorkspaceSubscription?
+  entitlementOverride  EntitlementOverride?
+  billingAccount       BillingAccount?
   @@map("workspaces")
 }
 

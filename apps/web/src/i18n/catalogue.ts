@@ -647,6 +647,8 @@ const en = {
   "audit.kind.DATA_EXPORTED": "Customer data exported",
   "audit.kind.DELETION_REQUESTED": "Deletion requested",
   "audit.kind.DELETION_COMPLETED": "Deletion finished",
+  "audit.kind.SUBSCRIPTION_CHANGED": "Subscription changed",
+  "audit.kind.ENTITLEMENT_OVERRIDDEN": "Entitlement override changed",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -1276,6 +1278,8 @@ const ru: Catalogue = {
   "audit.kind.DATA_EXPORTED": "Данные клиента выгружены",
   "audit.kind.DELETION_REQUESTED": "Запрошено удаление",
   "audit.kind.DELETION_COMPLETED": "Удаление завершено",
+  "audit.kind.SUBSCRIPTION_CHANGED": "Подписка изменена",
+  "audit.kind.ENTITLEMENT_OVERRIDDEN": "Изменено исключение по лимитам",
 };
 
 export const catalogues: Readonly<Record<UiLocale, Catalogue>> = { en, ru };
