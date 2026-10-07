@@ -33,7 +33,6 @@ import {
   createDeliveryStore,
   createReviewStore,
   createStyleLearningStore,
-  createWorkspaceWithOwner,
   type BusinessProfileContext,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES, toUserId, type Actor } from "@omnichannel/domain";
@@ -41,6 +40,7 @@ import type { DeliveryJob } from "@omnichannel/queue";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
@@ -68,7 +68,7 @@ describe.skipIf(!endToEndTestsEnabled())("a reviewed reply reaching the adapter 
     colleague = { kind: "USER", userId: toUserId(other.id) };
     colleagueId = other.id;
 
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Review Workspace", ownerUserId: owner.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Review Workspace", ownerUserId: owner.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: owner.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Review Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: owner.id, workspaceId, businessProfileId });

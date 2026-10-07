@@ -23,7 +23,16 @@ const job: AiDraftJob = {
 };
 
 const context: DraftContext = {
-  snapshot: { conversationId: "conv_1", status: "OPEN", aiEnabled: true, takeoverState: "NONE", mode: "DRAFT", stateVersion: 3, anchorSuperseded: false },
+  snapshot: {
+    conversationId: "conv_1",
+    status: "OPEN",
+    aiEnabled: true,
+    takeoverState: "NONE",
+    mode: "DRAFT",
+    stateVersion: 3,
+    anchorSuperseded: false,
+    commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+  },
   channelAccountId: "ca_1",
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
   history: [],

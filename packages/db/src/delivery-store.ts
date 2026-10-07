@@ -41,6 +41,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   activeSuspension,
+  commercialAccessOf,
   isReasonCode,
   toBusinessProfileId,
   toChannelAccountId,
@@ -49,6 +50,7 @@ import {
   toWorkspaceId,
   type Actor,
   type AutomationSuspension,
+  type CommercialAccess,
   type DeliveryJobStatus,
   type SuspensionReason,
   type SuspensionScope,
@@ -56,6 +58,8 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { entitlementLockKeyFor } from "./entitlement-lock";
+import { readEntitlement } from "./entitlement-store";
 import { suspensionLockKeysFor } from "./suspension-lock";
 import type {
   ActorKind,
@@ -124,6 +128,16 @@ interface SendStateGuard {
   readonly approvedByUserId: string | null;
   readonly approvedAt: Date | null;
   readonly approvedReviewMode: ReviewMode | null;
+  /**
+   * What the commercial state permitted when the decision was made (#40).
+   *
+   * The resolved answer rather than the rows' `updatedAt`, unlike every other version marker here, and the
+   * difference matters: entitlement changes with the clock as well as with writes. A trial whose last day
+   * ends during a two-minute delay, or an override that simply lapses, moves no row at all — so a
+   * timestamp predicate would bind nothing and the send would go out on an entitlement that had expired.
+   * The claim therefore re-resolves it and compares these three booleans.
+   */
+  readonly commercial: CommercialAccess;
 }
 
 const sealGuard = (guard: SendStateGuard): DeliveryStateGuard => guard as unknown as DeliveryStateGuard;
@@ -225,6 +239,11 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
       const policies = await automationPolicies(db, scope, conversation.channelAccountId);
       const effective = policies.account ?? policies.default;
       const suspended = await coveringSuspension(db, { ...scope, channelAccountId: conversation.channelAccountId }, at);
+      // Resolved here, with everything else and at the same instant. Read before the coordinator's own
+      // read it could not be bound by the claim — which is exactly how the kill switch was once
+      // bypassable — and resolved after it the decision and the guard would describe two different
+      // commercial states.
+      const commercial = commercialAccessOf(await readEntitlement(db, job.workspaceId, at));
 
       const context: DeliverySendContext = {
         deliveryJobId: job.id,
@@ -245,6 +264,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         takeover: takeoverStateOf(conversation),
         authority: authorityOf(job),
         ...(suspended === undefined ? {} : { outboundSuspended: suspended }),
+        commercial,
         replyCycle: newerInbound === null ? "OWNED" : "SUPERSEDED",
         account: conversation.channelIdentity.channelAccount.status,
         // A person's own wording was never held for review; the review it needed was them writing it.
@@ -272,6 +292,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
           approvedByUserId: job.approvedByUserId,
           approvedAt: job.approvedAt,
           approvedReviewMode: job.approvedReviewMode,
+          commercial,
         }),
       };
       return context;
@@ -522,6 +543,32 @@ async function claimInside(
     // re-judges, and the policy engine is what turns it into a held delivery with a named reason. This
     // path deliberately produces no send and no attempt.
     if ((await coveringSuspension(tx, target, claimedAt)) !== undefined) {
+      return { kind: "STATE_CHANGED" };
+    }
+
+    // The commercial state, re-resolved rather than re-asserted as a row version (#40).
+    //
+    // Every other fact here is bound by a predicate on the row it came from, because a row has to be
+    // written to change. An entitlement does not: a trial's last day can end while a reply waits out its
+    // delay, and an override can lapse, both without anybody touching a row. A version predicate would
+    // bind nothing in either case, and the send would go out on an entitlement that had already expired —
+    // which is precisely the final-send invalidation the spec names.
+    //
+    // Resolved at `claimedAt` and compared with what the decision was made under. Any narrowing is a state
+    // change like any other: the coordinator re-reads and re-judges, and the policy engine turns it into a
+    // held delivery with a named reason. Widening is a change too, and is reported the same way rather
+    // than quietly accepted — the decision this claim is taking was made against different facts, and
+    // re-judging costs one read.
+    // The key this workspace's commercial state is written under, taken shared before the resolution so
+    // that no plan change can commit between the read below and this transaction's commit. The other side
+    // is a trigger on both tables, so a support script changing a plan by hand participates too.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${entitlementLockKeyFor(guard.workspaceId)}, 0))`;
+    const commercialNow = commercialAccessOf(await readEntitlement(tx as unknown as DbClient, guard.workspaceId, claimedAt));
+    if (
+      commercialNow.paidWorkAllowed !== guard.commercial.paidWorkAllowed ||
+      commercialNow.aiDrafts !== guard.commercial.aiDrafts ||
+      commercialNow.autopilot !== guard.commercial.autopilot
+    ) {
       return { kind: "STATE_CHANGED" };
     }
 

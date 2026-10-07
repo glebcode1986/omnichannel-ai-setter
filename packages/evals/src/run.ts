@@ -92,6 +92,7 @@ export async function runCase(kase: GoldenCase, options: RunOptions = {}): Promi
       mode: kase.mode,
       stateVersion: 1,
       anchorSuperseded: false,
+      commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
     },
     styleProfile: resolveStyleProfile([kase.styleProfile ?? {}]),
     channel: kase.channel,
@@ -233,6 +234,11 @@ function policyInputFor(kase: GoldenCase, draft: SaveDraftInput | undefined, now
       contentType: "TEXT",
     },
     retrieval: { suppliedSourceIds: (kase.knowledge ?? []).map((chunk) => chunk.chunkId), corpusReachable: true },
+    // A golden case is about how the assistant behaves, not about what the business pays for. Fixed
+    // permissive so a commercial gate cannot silently turn every case into a review item — if a case ever
+    // needs to assert a billing refusal it will say so, and the policy engine's own suite is where that
+    // gate is pinned (#40).
+    commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
     limits: {
       confidenceThreshold: 0.8,
       mandatoryReviewReasons: ["MISSING_FACT", "PAYMENT_DISPUTE", "LEGAL_INTERPRETATION", "MEDICAL_OR_HIGH_RISK", "CREDENTIAL_OR_SECURITY", "REPUTATIONAL_COMPLAINT", "HIGH_VALUE_COMMITMENT", "UNSUPPORTED_PROMISE", "UNSUPPORTED_MEDIA"],

@@ -51,6 +51,10 @@ export function policyInputFor(
     // an operator's decision about the system rather than a fact about this conversation — but a value
     // read outside the guarded read cannot be bound by the claim, and unbound is how it was bypassable.
     ...(context.outboundSuspended === undefined ? {} : { outboundSuspended: context.outboundSuspended }),
+    // From the context for the same reason, and with one more: a trial can expire while a reply waits out
+    // its delay, so this is the commercial state as of the read the claim binds rather than as of
+    // scheduling.
+    commercial: context.commercial,
     replyCycle: context.replyCycle,
     authority: context.authority,
     now: dependencies.now(),

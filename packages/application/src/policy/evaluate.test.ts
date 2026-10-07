@@ -17,6 +17,9 @@ const passing = (): PolicyInput => ({
   takeover: { state: "NONE" },
   draft: { usable: true, confidence: 0.9, reasonCodes: [], citedSourceIds: ["chunk_1"], contentType: "TEXT" },
   retrieval: { suppliedSourceIds: ["chunk_1", "chunk_2"], corpusReachable: true },
+  // A paid-up workspace on a plan that sells what it is using. Each case below that touches commerce
+  // narrows exactly one of these.
+  commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
   limits: {
     confidenceThreshold: 0.8,
     mandatoryReviewReasons: ["MISSING_FACT", "PAYMENT_DISPUTE", "LEGAL_INTERPRETATION", "HIGH_VALUE_COMMITMENT"],
@@ -589,6 +592,109 @@ describe("a reply a person approved", () => {
   it("treats a caller that says nothing as automation, which is the strict reading", () => {
     expect(decide({ mode: "DRAFT", authority: undefined })).toMatchObject({ action: "HOLD_REVIEW" });
     expect(decide({ mode: "DRAFT", authority: { kind: "AUTOMATED" } })).toMatchObject({ action: "HOLD_REVIEW" });
+  });
+});
+
+/**
+ * Commercial access (#40, BILLING_ENTITLEMENTS.md).
+ *
+ * Three facts and three different conversations with the business, which is why they are three reason
+ * codes rather than one "billing" flag. The case worth pinning hardest is the last in each group: these
+ * gates *are* authority-aware, unlike the kill switch, and the reasoning is not interchangeable with it.
+ * What the spec stops is paid AI generation, automation and transcription; a colleague answering their own
+ * customer is none of those, and the same spec insists the workspace stays usable and its conversations
+ * answerable while payment is sorted out. A gate that silenced a business's own staff over a failed card
+ * would be this layer deciding something the spec decided the other way.
+ */
+describe("commercial access", () => {
+  const approval = (): SendAuthority => ({
+    kind: "HUMAN_APPROVED",
+    approvedByUserId: toUserId("11111111-1111-4111-8111-111111111111"),
+    approvedAt: NOW,
+    reviewMode: "NORMAL",
+  });
+  const byTheApprover = (): PolicyInput["takeover"] => ({
+    state: "HUMAN_ACTIVE",
+    reason: "HUMAN_SENT_FROM_INBOX",
+    since: NOW,
+    actor: { kind: "USER", userId: toUserId("11111111-1111-4111-8111-111111111111") },
+  });
+
+  describe("a workspace that may not do paid work", () => {
+    const unpaid = { paidWorkAllowed: false, aiDrafts: true, autopilot: true };
+
+    it("holds the reply rather than cancelling it", () => {
+      const decision = decide({ commercial: unpaid });
+
+      // Held: the spec says a workspace resumes from retained state once it pays, and a cancelled reply
+      // would have nothing to resume.
+      expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+      expect(decision.reasons).toContain("BILLING_INACTIVE");
+    });
+
+    it("does not also claim the plan is missing the feature", () => {
+      // Two different answers: pay, or change plan. A workspace on the best plan in the catalogue carries
+      // this one the day after its card fails, and telling it to upgrade would be wrong.
+      expect(decide({ commercial: unpaid }).reasons).not.toContain("BILLING_FEATURE_OFF");
+    });
+
+    it("lets a person send their own reply, because that is not the automation the spec stops", () => {
+      const decision = decide({ commercial: unpaid, authority: approval(), takeover: byTheApprover() });
+
+      expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+    });
+  });
+
+  describe("a plan that does not include the feature", () => {
+    it("holds a reply drafted before a downgrade", () => {
+      const decision = decide({ commercial: { paidWorkAllowed: true, aiDrafts: false, autopilot: true } });
+
+      // Generation is refused earlier, where it costs a provider call. This is the draft that already
+      // existed when the plan changed under it.
+      expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+      expect(decision.reasons).toContain("BILLING_FEATURE_OFF");
+    });
+
+    it("holds an AUTOPILOT send on a plan that does not sell autopilot", () => {
+      const decision = decide({ mode: "AUTOPILOT", commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: false } });
+
+      expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+      expect(decision.reasons).toContain("BILLING_FEATURE_OFF");
+      // And not the mode gate, which would be false here: the mode *is* autopilot. A reason that lied
+      // about which setting was the obstacle would send an operator to change the one thing that is right.
+      expect(decision.reasons).not.toContain("MODE_NOT_AUTOPILOT");
+    });
+
+    it("says nothing about autopilot when the conversation is not in it", () => {
+      // A DRAFT-mode conversation on a plan without autopilot is not trying to use it.
+      const decision = decide({ mode: "DRAFT", commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: false } });
+
+      expect(decision.reasons).toEqual(["MODE_NOT_AUTOPILOT"]);
+    });
+
+    it("lets a person send a reply the plan would not have automated", () => {
+      const decision = decide({
+        mode: "AUTOPILOT",
+        commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: false },
+        authority: approval(),
+        takeover: byTheApprover(),
+      });
+
+      expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+    });
+  });
+
+  it("changes nothing for a paid-up workspace on a plan that sells what it uses", () => {
+    expect(decide({ commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true } })).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("reports every commercial obstacle at once rather than the first", () => {
+    // The engine's own rule, applied here: an operator who fixes the payment and retries must not then
+    // discover the plan was also wrong.
+    const decision = decide({ mode: "AUTOPILOT", commercial: { paidWorkAllowed: false, aiDrafts: false, autopilot: false } });
+
+    expect(decision.reasons).toContain("BILLING_INACTIVE");
+    expect(decision.reasons).toContain("BILLING_FEATURE_OFF");
   });
 });
 

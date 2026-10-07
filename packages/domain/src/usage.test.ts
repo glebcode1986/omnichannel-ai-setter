@@ -23,6 +23,7 @@ const snapshot = (overrides: Partial<EntitlementSnapshot> = {}): EntitlementSnap
   state: "ACTIVE",
   planCode: "growth",
   planVersion: 1,
+  subscribed: true,
   paidWorkAllowed: true,
   features: {
     AI_DRAFTS: true,

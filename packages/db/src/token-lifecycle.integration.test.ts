@@ -19,10 +19,10 @@ import { createCredentialCipher } from "./credentials";
 import { createInstagramOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
 import { findInstagramTokensDueForRefresh, markChannelAccountNeedsReauthorization } from "./repositories/channel-accounts";
 import { rotateChannelCredential } from "./repositories/channel-credentials";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { createTestUser } from "./testing/fixtures";
+import { createTestUser, createPaidWorkspace } from "./testing/fixtures";
 
 const PURPOSE = "INSTAGRAM_ACCESS_TOKEN" as const;
 const DAY = 24 * 60 * 60 * 1000;
@@ -44,7 +44,7 @@ describe.skipIf(!databaseTestsEnabled())("instagram token lifecycle queries (Pos
 
   const bareProfile = async (label: string): Promise<BusinessProfileContext> => {
     const ownerUserId = await createTestUser(database.db, label);
-    const { workspaceId } = await createWorkspaceWithOwner(database.db, { name: `Workspace ${label}`, ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(database.db, { name: `Workspace ${label}`, ownerUserId });
     const workspace = await authorizeWorkspaceAccess(database.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(database.db, workspace, { name: `Profile ${label}` });
     return authorizeBusinessProfileAccess(database.db, { userId: ownerUserId, workspaceId, businessProfileId });

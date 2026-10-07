@@ -1249,11 +1249,27 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const reads = trimmed.filter((statement) => statement.startsWith("SELECT"));
       const advisory = reads.filter((read) => read.includes("pg_advisory_xact_lock_shared"));
       const suspensions = reads.filter((read) => read.includes('"automation_suspensions"'));
-      expect(advisory).toHaveLength(1);
+      // The entitlement, re-resolved under its own advisory key (#40). The subscription and the override
+      // are covered by that key rather than by a row lock: an override may not exist yet when the claim
+      // starts, and no lock can be taken on a row nobody has inserted — the same reason the suspensions
+      // read is covered by a key. It is taken shared here and exclusively by a trigger on both tables, so
+      // a plan changed by a support script participates too.
+      //
+      // The plan version and its definition are read unlocked, and that is earned rather than excused: a
+      // published version is immutable, enforced by `plan_versions_immutable()` and asserted in
+      // `entitlements.integration.test.ts`. A row that cannot be updated cannot be invalidated between
+      // the read and the claim, which is the only thing a lock here would be protecting against.
+      const entitlement = reads.filter((read) => read.includes('"workspace_subscriptions"') || read.includes('"entitlement_overrides"'));
+      const immutablePlan = reads.filter((read) => read.includes('"plan_versions"') || read.includes('"plan_definitions"'));
+      expect(advisory).toHaveLength(2);
       expect(suspensions).toHaveLength(1);
-      const rowReads = reads.filter((read) => !advisory.includes(read) && !suspensions.includes(read));
+      expect(entitlement).toHaveLength(2);
+      expect(immutablePlan).toHaveLength(2);
+      const rowReads = reads.filter(
+        (read) => !advisory.includes(read) && !suspensions.includes(read) && !entitlement.includes(read) && !immutablePlan.includes(read),
+      );
       expect(rowReads.length).toBeGreaterThan(0);
-      expect(rowReads.every((read) => /FOR (UPDATE|SHARE)$/.test(read))).toBe(true);
+      expect(rowReads.filter((read) => !/FOR (UPDATE|SHARE)$/.test(read))).toEqual([]);
       // The key is taken before any row lock, so every claim and every switch writer agree on one order,
       // and the suspensions are read after it rather than before.
       expect(reads[0]).toBe(advisory[0]);

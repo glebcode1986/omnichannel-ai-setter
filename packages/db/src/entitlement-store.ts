@@ -206,6 +206,9 @@ export async function readEntitlement(db: DbClient, workspaceId: string, now: Da
       select: {
         state: true,
         periodEndsAt: true,
+        // Read with the period end, because a trial that has expired stops paid work exactly as a
+        // cancelled period that has ended does, and the state says neither (#40).
+        trialEndsAt: true,
         planVersion: { select: { version: true, features: true, limits: true, quotas: true, plan: { select: { code: true } } } },
       },
     }),
@@ -218,6 +221,10 @@ export async function readEntitlement(db: DbClient, workspaceId: string, now: Da
       state: "INACTIVE",
       planCode: "none",
       planVersion: 0,
+      // No plan has been chosen, which a capacity check has to be able to tell from a plan that chose
+      // zero (#40): the first is a workspace that has not started its trial, the second is one that has
+      // reached a ceiling somebody agreed to.
+      subscribed: false,
       grants: { features: [], limits: {}, quotas: {} },
       now,
     });
@@ -244,6 +251,7 @@ export async function readEntitlement(db: DbClient, workspaceId: string, now: Da
           },
         }),
     ...(subscription.periodEndsAt === null ? {} : { periodEndsAt: subscription.periodEndsAt }),
+    ...(subscription.trialEndsAt === null ? {} : { trialEndsAt: subscription.trialEndsAt }),
     now,
   });
 }

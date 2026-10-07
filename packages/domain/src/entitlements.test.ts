@@ -10,7 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   allowsPaidWork,
+  capacityVerdict,
   featureAllowed,
+  featureWithheld,
+  paidWorkPermitted,
   resolveEntitlement,
   withinLimit,
   type PlanGrants,
@@ -144,3 +147,134 @@ describe("the vocabulary itself", () => {
     }
   });
 });
+
+/**
+ * Paid work and the clock (#40).
+ *
+ * Two of the permitting states carry their own deadline, and until this existed `paidWorkAllowed` read
+ * only the state — so a cancelled workspace kept sending until a provider webhook happened to move it,
+ * and a trial kept working after it had expired. Nothing writes a row when a date passes, which is also
+ * why the delivery claim re-resolves the entitlement instead of comparing row versions.
+ */
+describe("when a permitting state has run out", () => {
+  it("stops paid work once a cancelled subscription's paid period has ended", () => {
+    const ended = { state: "CANCELED_PENDING_END" as const, periodEndsAt: new Date(NOW.getTime() - 1), now: NOW };
+
+    expect(paidWorkPermitted(ended)).toBe(false);
+    // And the state on its own still says yes, which is the gap this closes.
+    expect(allowsPaidWork("CANCELED_PENDING_END")).toBe(true);
+  });
+
+  it("keeps the period the customer paid for", () => {
+    expect(paidWorkPermitted({ state: "CANCELED_PENDING_END", periodEndsAt: new Date(NOW.getTime() + 1), now: NOW })).toBe(true);
+  });
+
+  it("stops paid work once a trial has expired", () => {
+    expect(paidWorkPermitted({ state: "TRIALING", trialEndsAt: new Date(NOW.getTime() - 1), now: NOW })).toBe(false);
+    expect(paidWorkPermitted({ state: "TRIALING", trialEndsAt: new Date(NOW.getTime() + 1), now: NOW })).toBe(true);
+  });
+
+  it("treats the deadline itself as past, because a period that ends at noon does not include noon", () => {
+    expect(paidWorkPermitted({ state: "TRIALING", trialEndsAt: NOW, now: NOW })).toBe(false);
+  });
+
+  it("leaves grace to its state, because its duration is configuration rather than a stored instant", () => {
+    // `graceStartedAt` is when it began; how long it lasts is product policy and provider retry
+    // schedules, so the transition out of it belongs to the adapter that can see them.
+    expect(paidWorkPermitted({ state: "GRACE", now: NOW })).toBe(true);
+  });
+
+  it("reaches the resolved snapshot, not only the helper", () => {
+    const snapshot = resolve({ state: "TRIALING", trialEndsAt: new Date(NOW.getTime() - 1) });
+
+    expect(snapshot.paidWorkAllowed).toBe(false);
+    // The plan still says what it says: "your trial ended" and "your plan excludes this" are different
+    // sentences, and a lapsed trial must not be made to read like the second.
+    expect(snapshot.features.AI_DRAFTS).toBe(true);
+  });
+});
+
+/**
+ * Configuration, which is a different question from paid work (#40).
+ *
+ * `featureAllowed` folds payment in and is right for a provider call. Capacity and configuration must not:
+ * a business whose card failed may still reconnect a channel, and a workspace that has chosen no plan at
+ * all has to be able to connect its first — that act is what starts its trial, so a gate that refused it
+ * would shut the product's own front door.
+ */
+describe("what a plan withholds from configuration", () => {
+  it("withholds nothing when no plan has been chosen", () => {
+    const pretrial = resolve({ state: "INACTIVE", subscribed: false, grants: { features: [], limits: {}, quotas: {} } });
+
+    expect(featureWithheld(pretrial, "INSTAGRAM")).toBe(false);
+    expect(capacityVerdict({ snapshot: pretrial, limit: "BUSINESS_PROFILES", current: 0 })).toEqual({ kind: "ALLOWED" });
+    // And paid work is still refused, which is the half that must not move.
+    expect(pretrial.paidWorkAllowed).toBe(false);
+  });
+
+  it("withholds what a chosen plan leaves out, whether or not the bill is paid", () => {
+    const withoutWhatsApp = { features: ["INSTAGRAM"] as const, limits: {}, quotas: {} };
+
+    expect(featureWithheld(resolve({ grants: { ...withoutWhatsApp, features: [...withoutWhatsApp.features] } }), "WHATSAPP")).toBe(true);
+    expect(
+      featureWithheld(resolve({ state: "INACTIVE", grants: { ...withoutWhatsApp, features: [...withoutWhatsApp.features] } }), "WHATSAPP"),
+    ).toBe(true);
+  });
+
+  it("does not withhold what the plan includes from a workspace that has stopped paying", () => {
+    // The spec keeps the workspace usable while a payment is sorted out; what stops is sending.
+    const lapsed = resolve({ state: "INACTIVE" });
+
+    expect(featureWithheld(lapsed, "INSTAGRAM")).toBe(false);
+    expect(featureAllowed(lapsed, "INSTAGRAM")).toBe(false);
+  });
+});
+
+describe("whether one more of something may be created", () => {
+  it("allows up to the ceiling and refuses at it", () => {
+    expect(capacityVerdict({ snapshot: resolve(), limit: "BUSINESS_PROFILES", current: 2 })).toEqual({ kind: "ALLOWED" });
+    expect(capacityVerdict({ snapshot: resolve(), limit: "BUSINESS_PROFILES", current: 3 })).toEqual({
+      kind: "AT_LIMIT",
+      limit: "BUSINESS_PROFILES",
+      ceiling: 3,
+      current: 3,
+    });
+  });
+
+  it("treats an absent ceiling as genuinely uncapped", () => {
+    const uncapped = resolve({ grants: { features: [...grants.features], limits: {}, quotas: {} } });
+
+    expect(capacityVerdict({ snapshot: uncapped, limit: "SEATS", current: 99 })).toEqual({ kind: "ALLOWED" });
+  });
+
+  it("ignores payment, because reorganizing a workspace is not paid work", () => {
+    // `withinLimit` answers the combined question and refuses outright; this one must not, or a business
+    // whose card failed could not rename or rearrange anything it already owns.
+    const lapsed = resolve({ state: "INACTIVE" });
+
+    expect(withinLimit(lapsed, "BUSINESS_PROFILES", 0)).toBe(false);
+    expect(capacityVerdict({ snapshot: lapsed, limit: "BUSINESS_PROFILES", current: 0 })).toEqual({ kind: "ALLOWED" });
+  });
+
+  it("refuses a withheld feature before it looks at the ceiling", () => {
+    // A plan that does not sell a team must not admit a second member merely because it states no seat
+    // ceiling — and the refusal has to say which of the two it is.
+    const soloPlan = resolve({ grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} } });
+
+    expect(capacityVerdict({ snapshot: soloPlan, limit: "SEATS", current: 1, requires: { feature: "MULTI_MEMBER", from: 1 } })).toEqual({
+      kind: "FEATURE_OFF",
+      feature: "MULTI_MEMBER",
+    });
+  });
+
+  it("does not consult that feature below the count it starts at", () => {
+    // Every workspace has an owner. A plan that does not sell a *team* has not forbidden the person who
+    // owns the workspace.
+    const soloPlan = resolve({ grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} } });
+
+    expect(capacityVerdict({ snapshot: soloPlan, limit: "SEATS", current: 0, requires: { feature: "MULTI_MEMBER", from: 1 } })).toEqual({
+      kind: "ALLOWED",
+    });
+  });
+});
+

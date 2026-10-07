@@ -47,6 +47,7 @@ const snapshot = (overrides: Partial<DraftGenerationCommand["snapshot"]> = {}): 
   mode: "DRAFT",
   stateVersion: 4,
   anchorSuperseded: false,
+  commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
   ...overrides,
 });
 
@@ -147,6 +148,54 @@ describe("eligibility", () => {
     expect(draftGenerationBlockers(snapshot({ aiEnabled: false }), HUMAN)).toEqual(["AI_DISABLED"]);
     expect(draftGenerationBlockers(snapshot({ status: "CLOSED" }), HUMAN)).toEqual(["AI_DISABLED"]);
     expect(draftGenerationBlockers(snapshot({ anchorSuperseded: true }), HUMAN)).toEqual(["SUPERSEDED_BY_NEWER_INBOUND"]);
+  });
+
+  /**
+   * Commercial access, which is the one blocker a person cannot answer (#40).
+   *
+   * Every other blocker here asks "should automation act?", and somebody clicking "ask AI" has answered
+   * it. This one asks "may we spend money on a provider call?" — which a button press does not answer and
+   * cannot. `BILLING_ENTITLEMENTS.md` stops paid AI generation past trial and past grace, and generation
+   * is paid for whoever asked.
+   */
+  it("refuses generation for a workspace that may not do paid work, whoever asked", () => {
+    const unpaid = { paidWorkAllowed: false, aiDrafts: true, autopilot: true };
+
+    expect(draftGenerationBlockers(snapshot({ commercial: unpaid }), AUTOMATIC)).toEqual(["BILLING_INACTIVE"]);
+    // The asymmetry with OFF mode and takeover above, stated where somebody will look for it.
+    expect(draftGenerationBlockers(snapshot({ commercial: unpaid }), HUMAN)).toEqual(["BILLING_INACTIVE"]);
+  });
+
+  it("refuses generation on a plan that does not include AI drafts", () => {
+    const withoutDrafts = { paidWorkAllowed: true, aiDrafts: false, autopilot: true };
+
+    expect(draftGenerationBlockers(snapshot({ commercial: withoutDrafts }), AUTOMATIC)).toEqual(["BILLING_FEATURE_OFF"]);
+    expect(draftGenerationBlockers(snapshot({ commercial: withoutDrafts }), HUMAN)).toEqual(["BILLING_FEATURE_OFF"]);
+  });
+
+  it("says both when both are true, rather than the first it met", () => {
+    expect(draftGenerationBlockers(snapshot({ commercial: { paidWorkAllowed: false, aiDrafts: false, autopilot: false } }), AUTOMATIC)).toEqual([
+      "BILLING_INACTIVE",
+      "BILLING_FEATURE_OFF",
+    ]);
+  });
+
+  it("does not consult autopilot, because generating is not sending", () => {
+    // A plan without autopilot still buys drafts for a person to review. Refusing to generate here would
+    // take away the feature it does sell.
+    expect(draftGenerationBlockers(snapshot({ commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: false } }), AUTOMATIC)).toEqual([]);
+  });
+
+  it("persists nothing and calls no provider when it refuses", async () => {
+    const { dependencies, saved, requests } = harness([modelResult({ output: validOutput({}) })]);
+
+    const outcome = await generateDraft(dependencies, command({ snapshot: snapshot({ commercial: { paidWorkAllowed: false, aiDrafts: true, autopilot: true } }) }));
+
+    // The whole point of refusing here rather than after the call: a generation that never happened is
+    // not a draft, and the money is the thing a later refusal cannot get back.
+    expect(outcome).toEqual({ status: "DECLINED", reasonCodes: ["BILLING_INACTIVE"] });
+    expect(saved).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it("a human-requested draft is manual assistance and never auto-sends", async () => {

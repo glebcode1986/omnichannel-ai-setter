@@ -20,9 +20,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createCredentialCipher } from "./credentials";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { addTestMember, createTestUser } from "./testing/fixtures";
+import { addTestMember, createTestUser, createPaidWorkspace } from "./testing/fixtures";
 import { createWhatsAppOnboardingStore, type ConnectWhatsAppInput, type WhatsAppOnboardingStore } from "./whatsapp-onboarding-store";
 
 const TOKEN = "EAAtest-business-token-not-a-real-one";
@@ -45,7 +45,7 @@ describe.skipIf(!databaseTestsEnabled())("whatsapp onboarding store (PostgreSQL)
 
   const bareProfile = async (label: string): Promise<BusinessProfileContext> => {
     const ownerUserId = await createTestUser(database.db, label);
-    const { workspaceId } = await createWorkspaceWithOwner(database.db, { name: `Workspace ${label}`, ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(database.db, { name: `Workspace ${label}`, ownerUserId });
     const workspace = await authorizeWorkspaceAccess(database.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(database.db, workspace, { name: `Profile ${label}` });
     return authorizeBusinessProfileAccess(database.db, { userId: ownerUserId, workspaceId, businessProfileId });

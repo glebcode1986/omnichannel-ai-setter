@@ -6,7 +6,16 @@
  * make the dangerous move harder to express than the safe one.
  */
 import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/channel-core";
-import type { AiMode, DeliveryJobStatus, HumanTakeoverState, ReasonCode, SendAuthority, SuspensionReason, SuspensionScope } from "@omnichannel/domain";
+import type {
+  AiMode,
+  CommercialAccess,
+  DeliveryJobStatus,
+  HumanTakeoverState,
+  ReasonCode,
+  SendAuthority,
+  SuspensionReason,
+  SuspensionScope,
+} from "@omnichannel/domain";
 
 import type { AccountHealth, HumanAgentAvailability, PolicyLimits, ReplyCycleState } from "../policy/inputs";
 
@@ -90,6 +99,16 @@ export interface DeliverySendContext {
    * simply invisible: the guard had no predicate for it and the send went out behind the operator's back.
    */
   readonly outboundSuspended?: { readonly scope: SuspensionScope; readonly reason: SuspensionReason };
+  /**
+   * What this workspace's commercial state permits, resolved in the same read as everything else (#40).
+   *
+   * Here for the reason the kill switch is here, learned the same way: a value resolved before the
+   * coordinator's own read cannot be bound by the claim, so a change committed in between would be
+   * invisible. And this one changes with the clock as well as with writes — a trial can expire during a
+   * two-minute delay without anybody writing a row — so the claim re-resolves it rather than comparing
+   * row versions.
+   */
+  readonly commercial: CommercialAccess;
   /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
   readonly guard: DeliveryStateGuard;
 }

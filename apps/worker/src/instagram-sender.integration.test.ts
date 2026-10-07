@@ -21,7 +21,6 @@ import {
   createConversation,
   createCredentialCipher,
   createAiDraftStore,
-  createWorkspaceWithOwner,
   appendInboundMessage,
   rotateChannelCredential,
   writeChannelCredential,
@@ -33,6 +32,7 @@ import type { InstagramHttpPort } from "@omnichannel/channel-instagram";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryEngine } from "./delivery-engine";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createInstagramDeliverySender } from "./instagram-sender";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
@@ -84,7 +84,7 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
     infra = await createEndToEndInfrastructure();
     const owner = await infra.db.user.create({ data: { name: "Transport Owner", email: "transport-owner@example.test" } });
     approverId = owner.id;
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Transport Workspace", ownerUserId: owner.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Transport Workspace", ownerUserId: owner.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: owner.id, workspaceId });
     workspaceContext = workspace;
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Transport Profile" });

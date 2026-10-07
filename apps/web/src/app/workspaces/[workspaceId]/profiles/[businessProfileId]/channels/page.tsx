@@ -15,8 +15,28 @@ import type { MessageKey } from "@/i18n/catalogue";
 import { getDb } from "@/server/db";
 import { requireBusinessProfileContext } from "@/server/request-context";
 
-/** What the callback can report. Each has its own message, because "it failed" is not actionable. */
-const CONNECT_OUTCOMES = ["connected", "denied", "expired", "invalid", "failed"] as const;
+/**
+ * What the callback can report. Each has its own message, because "it failed" is not actionable.
+ *
+ * This must list *every* token `failureStatus` can emit. Five of them were missing — `missing_scope`,
+ * `already_connected`, `different_account`, `unavailable` and `error` — so the route redirected with a
+ * reason and the page rendered nothing at all: the operator was returned to a screen that said their
+ * connection attempt had simply not happened. Adding `not_entitled` beside them without fixing them would
+ * have repeated it a sixth time.
+ */
+const CONNECT_OUTCOMES = [
+  "connected",
+  "denied",
+  "expired",
+  "invalid",
+  "failed",
+  "missing_scope",
+  "already_connected",
+  "different_account",
+  "unavailable",
+  "error",
+  "not_entitled",
+] as const;
 
 export default async function ChannelsPage({
   params,

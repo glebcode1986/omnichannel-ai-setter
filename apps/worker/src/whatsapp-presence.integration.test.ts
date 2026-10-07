@@ -12,7 +12,6 @@ import {
   createBusinessProfile,
   createChannelAccount,
   createCredentialCipher,
-  createWorkspaceWithOwner,
   writeChannelCredential,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
@@ -20,6 +19,7 @@ import type { WhatsAppHttpPort, WhatsAppHttpResult } from "@omnichannel/channel-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createWhatsAppPresenceAnnouncer } from "./whatsapp-presence";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-10-05T12:00:00.000Z");
@@ -41,7 +41,7 @@ describe.skipIf(!endToEndTestsEnabled())("the worker's WhatsApp presence announc
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Wire Owner", email: "presence-wire@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Wire Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Wire Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Wire Profile" });
     const context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });

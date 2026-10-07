@@ -25,8 +25,15 @@ import {
   remainingAutomatedDispatchMs,
   type HumanAgentApproval,
 } from "@omnichannel/channel-instagram";
-import { presenceCapabilitiesOf, presenceSettingsOf, requestHumanReview, scheduleAutomatedDelivery, type DbClient } from "@omnichannel/db";
-import { isReasonCode, NO_CAPABILITIES, toQuietHours, type ChannelAccountStatus } from "@omnichannel/domain";
+import {
+  presenceCapabilitiesOf,
+  presenceSettingsOf,
+  readEntitlement,
+  requestHumanReview,
+  scheduleAutomatedDelivery,
+  type DbClient,
+} from "@omnichannel/db";
+import { commercialAccessOf, isReasonCode, NO_CAPABILITIES, toQuietHours, type ChannelAccountStatus } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import type { QueueProducer } from "@omnichannel/queue";
 
@@ -171,7 +178,12 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
       conversation.lastInboundAt === null || conversation.channelIdentity.channelAccount.channel !== "INSTAGRAM"
         ? undefined
         : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
+    // The commercial state at the moment this draft is judged (#40). Read here rather than carried from
+    // generation, because a plan can change between the two — and read with `now`, so the gate and the
+    // snapshot answer the question about the same instant.
+    const commercial = commercialAccessOf(await readEntitlement(dependencies.db, input.workspaceId, now));
     const decision: PolicyDecision = evaluatePolicy({
+      commercial,
       mode: conversation.modeOverride ?? policy.mode,
       aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
       takeover:

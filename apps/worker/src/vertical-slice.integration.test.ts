@@ -15,11 +15,12 @@ import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDraftDisposition } from "./draft-disposition";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 import { createChannelAccount } from "@omnichannel/db";
-import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, createBusinessProfile, createWorkspaceWithOwner } from "@omnichannel/db";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, createBusinessProfile } from "@omnichannel/db";
 import { createContactWithChannelIdentity, createConversation, appendInboundMessage } from "@omnichannel/db";
 import type { SendResult } from "@omnichannel/channel-core";
 
@@ -51,7 +52,7 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Slice Owner", email: "slice-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Slice Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Slice Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Slice Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });
