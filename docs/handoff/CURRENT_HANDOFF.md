@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #100 plus the P6-09 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#100 are completed by Claude and awaiting review; **P6-09 / Issue
-#47 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #101 plus the P7-01 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#101 are completed by Claude and awaiting review; **P7-01 / Issue
+#59 is the current task**, and it stays open after this slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -55,10 +55,11 @@ Everything is one stacked chain of unmerged PRs, each branch based on its parent
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
 ` -> #85 -> #86 -> #87 -> #88 -> #89 -> #90 -> #91 -> #92 -> #93 -> #94 -> #95 -> #96 -> #97 -> #98 -> #99`
-` -> #100`
+` -> #100 -> #101`
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
-#43), #99 (P6-05, #42), #100 (P6-08, #46) and the P6-09 branch above (#47). **#41 / P6-04 is blocked** on the owner's choice
+#43), #99 (P6-05, #42), #100 (P6-08, #46) and #101 (P6-09, #47). Phase 7 continues the same chain with
+the P7-01 branch above (#59). **#41 / P6-04 is blocked** on the owner's choice
 of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
 implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
 the only Phase 6 work left needs the owner's provider decision.
@@ -253,6 +254,71 @@ guard, so an edit between the judgement and the claim refuses rather than sendin
 Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
+
+1. **P7-01 / Issue #59 — the internal control plane, first slice.** Branch
+   `feat/p7-01-admin-operations`, based on #101. `docs/specs/ADMIN_OPERATIONS.md` and
+   `MVP_RELEASE_SCOPE.md` are brought into the chain from `origin/docs/phase6-commercial-billing` — Phase
+   7 could not cite its own specs before.
+
+   **The whole design turns on one refusal.** The obvious way to build an internal console is to mint a
+   `BusinessProfileContext` for a support engineer so every existing customer read works unchanged. That
+   would hand the operator customer `OWNER` authority across every `requireRole` site in `packages/db`,
+   because the context carries `role: WorkspaceRole` and nothing downstream can tell a minted one from a
+   real member's — the deletion path, `addWorkspaceMember`, `setEntitlementOverride` and the data export
+   would all accept it, and each writes `actorUserId` into the **customer's** audit log, readable by that
+   customer's own owner. Widening the membership lookup is worse: a staff row in `workspace_members`
+   appears in that user's workspace list and consumes a seat the customer pays for.
+
+   So `PlatformContext` has its own brand and its own `WeakSet`, and `scopeOf`, `profileScopeOf` and
+   `requireRole` **reject it**. That rejection is the feature, and `platform-boundary.test.ts` parses the
+   platform modules' ASTs to assert no exported signature takes a customer context and none imports a
+   credential reader.
+
+   **The slice has two typed actions, and it needed them.** A first slice of authorization and evidence
+   alone would have satisfied none of #59's acceptance criterion — "routine commercial troubleshooting
+   without direct DB mutation" — and the repo documents the two paths that are direct SQL today, in
+   `suspension-store.ts`'s and `suspension-lock.ts`'s own comments. So the console pulls and lifts the
+   kill switch at the four existing scopes, and asks for an ambiguous operation to be re-examined by
+   enqueueing the job the sweeper raises. It never decides: `reconcileOperation` does, in the worker,
+   where the provider-evidence port exists.
+
+   **Three defects found before a line was written**, by a three-agent survey-and-critique pass:
+
+   - `readBillingOverview` → `readUsage` → `openUsageCycleWithin` **creates** a `usage_cycles` row, so an
+     operator opening a "read-only" usage panel would have written into the customer's tenant with no
+     actor and no audit row — failing "every operator action is attributable" on the first page load, in
+     the one direction nobody looks. `readUsageSnapshot` is genuinely read-only and a test asserts the
+     cycle count is unchanged afterwards.
+   - A `SupportScope` with no content-bearing read would have been `requireWorkspaceWideWrite` again:
+     exported, documented, never called. So the slice includes exactly one screen that shows a customer's
+     words, gated on the scope, and the same page renders the reason when it does not.
+   - An `/admin` tree is a sibling of the whole product shell and this app has **no middleware**, so a
+     forgotten resolver call in one page file would be an unauthenticated internal page.
+     `route-authorization.test.ts` walks every `page.tsx` and `route.ts`, follows ancestor layouts and
+     imports two levels, and fails the build — with an allowlist of seven deliberate exceptions, each
+     carrying its reason. It is worth more than the console.
+
+   **`automation_suspensions_operator_check` is load-bearing.** `activeSystemSuspension` identifies the
+   system's own switch precisely by `by_user_id IS NULL`, so an operator pause with no actor is one the
+   backlog guard is free to close. Adding the CHECK broke four existing fixtures that created actorless
+   operator pauses, which is the finding rather than a cost.
+
+   **Audit kept separate, for a reason worth quoting rather than re-deriving.**
+   `audit_events.workspace_id` is `NOT NULL`, so a platform-level act has no row shape, and
+   `audit_events_scope_check`'s second disjunct forces `business_profile_id IS NOT NULL` for any kind
+   outside its allowlist. Severity is derived from the kind in the domain *and* paired with it by a CHECK.
+
+   **Decisions that are the owner's, stated in the PR rather than invented quietly:** the role-to-permission
+   matrix (`PLATFORM_PERMISSION_MATRIX` is one editable literal with the reasoning beside each row);
+   whether break-glass may be renewed and under what cap — nothing stops a chain of fifteen-minute grants,
+   so the audit counts the chain instead; "customer approval when required by policy", deferred; and how
+   staff authenticate, which is unanswerable today because `apps/web/src/auth.ts` has `providers: []` and
+   nobody can sign in at all.
+
+   **Deferred, and named:** the two suspension scopes that do not exist (channel/provider class,
+   high-risk feature), the queue/operation inspector and correlation tracing — the survey found three
+   breaks in correlation propagation, which is its own change — feature flags, and the remaining typed
+   actions. **#59 stays open.**
 
 1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
    `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:

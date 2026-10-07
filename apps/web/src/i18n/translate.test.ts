@@ -69,8 +69,15 @@ describe("the catalogues", () => {
     // The platform names appear twice over, as channels and as the plan features that sell them. They are
     // deliberately not shared: a component that mapped a feature onto a channel key would be branching on
     // a channel name, which `no-provider-payloads.test.ts` forbids in a pane for good reasons of its own.
+    // The console's three are the same category again (#59): `{actor} ({role})`, `{plan} v{version} —
+    // {state}` and `{channel} — {status} ({external})` are assemblies of values a reader needs in a
+    // stable order. They stay in the catalogue so a locale can change the punctuation or the order, and
+    // they are identical today because neither language wants anything different.
     expect(identical.toSorted()).toEqual(
       [
+        "admin.auditActor",
+        "admin.channelLine",
+        "admin.planLine",
         "billing.addOnQuantity",
         "channel.INSTAGRAM",
         "channel.WHATSAPP",

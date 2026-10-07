@@ -394,6 +394,9 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
           businessProfileId: profile.businessProfileId,
           reason: "OPERATOR",
           since: NOW,
+          // Required for an operator pause since #59: the system's own switch is identified by the actor
+          // being absent, so a pause with no actor is one the backlog guard could close.
+          byUserId: profile.context.userId,
         },
       });
 
