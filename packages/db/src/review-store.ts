@@ -31,6 +31,8 @@ import type { Actor, SendAuthority } from "@omnichannel/domain";
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { DbInputError } from "./errors";
+import { suggestStyleExample } from "./style-store";
 
 export function createReviewStore(db: DbClient, context: BusinessProfileContext): ReviewStore {
   const scope = profileScopeOf(context);
@@ -311,6 +313,29 @@ export function createStyleLearningStore(db: DbClient, context: BusinessProfileC
           approvedByUserId: context.userId,
         },
       });
+    },
+
+    /**
+     * The same correction, recorded as a suggestion.
+     *
+     * Written through `suggestStyleExample` rather than with a second `create` here, so that there is one
+     * writer of suggestions and one place where "a suggestion has no approver" is true. The CHECK insists
+     * on it as well, which is the point: an unvouched-for example that named somebody would read as
+     * verified before anybody had looked at it.
+     */
+    async suggestEditedDraft(input) {
+      const outcome = await suggestStyleExample(db, context, {
+        inboundContext: input.inboundContext,
+        outboundText: input.outboundText,
+        sourceDraftId: input.sourceDraftId,
+        // Present exactly because the draft it came from is: a CHECK pairs the two.
+        provenance: "HUMAN_EDITED_DRAFT",
+      });
+      if (outcome.status !== "SAVED") {
+        // The caller logs and carries on — the reply is already on its way, and a suggestion is worth less
+        // than it. Raising names what went wrong instead of letting it pass as recorded.
+        throw new DbInputError("styleExample", outcome.status === "REFUSED" ? outcome.reason : outcome.status);
+      }
     },
   };
 }
