@@ -54,8 +54,8 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
     otherOwner = second.context;
     otherWorkspaceId = second.workspaceId;
 
-    starterV1 = (await publishPlanVersion(database.db, { code: "starter-test", name: "Starter", grants: starter, monthlyPriceCents: 4_900, currency: "EUR" })).planVersionId;
-    growthV1 = (await publishPlanVersion(database.db, { code: "growth-test", name: "Growth", grants: growth, monthlyPriceCents: 9_900, currency: "EUR" })).planVersionId;
+    starterV1 = (await publishPlanVersion(database.db, { code: "starter-test", name: "Starter", grants: starter, prices: [{ currency: "EUR", interval: "MONTH", amountCents: 4_900 }] })).planVersionId;
+    growthV1 = (await publishPlanVersion(database.db, { code: "growth-test", name: "Growth", grants: growth, prices: [{ currency: "EUR", interval: "MONTH", amountCents: 9_900 }] })).planVersionId;
   }, 120_000);
 
   afterAll(async () => {
@@ -68,7 +68,9 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       // would walk around a check that lived only in TypeScript, and the workspaces on this version
       // would silently find themselves on different terms.
       await expect(db().planVersion.update({ where: { id: starterV1 }, data: { limits: { BUSINESS_PROFILES: 99 } } })).rejects.toThrow(/immutable/u);
-      await expect(db().planVersion.update({ where: { id: starterV1 }, data: { monthlyPriceCents: 1 } })).rejects.toThrow(/immutable/u);
+      // The price book is immutable too, and by its own trigger: a price a customer was charged must stay
+      // readable exactly as it was charged.
+      await expect(db().planPrice.updateMany({ where: { planVersionId: starterV1 }, data: { amountCents: 1 } })).rejects.toThrow(/immutable/u);
       await expect(db().planVersion.update({ where: { id: starterV1 }, data: { features: ["AUTOPILOT"] } })).rejects.toThrow(/immutable/u);
     });
 
@@ -79,6 +81,11 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
     it("may still be withdrawn from sale, which is the one permitted change", async () => {
       await expect(db().planVersion.update({ where: { id: starterV1 }, data: { retiredAt: NOW } })).resolves.toBeDefined();
       await db().planVersion.update({ where: { id: starterV1 }, data: { retiredAt: null } });
+      // `availability` says the same thing in more detail (#43) and is exempt for the same reason: a
+      // catalogue that could only withdraw a plan by publishing a new version would have to publish one
+      // nobody can buy.
+      await expect(db().planVersion.update({ where: { id: starterV1 }, data: { availability: "LEGACY" } })).resolves.toBeDefined();
+      await db().planVersion.update({ where: { id: starterV1 }, data: { availability: "PUBLIC" } });
     });
 
     it("gets the next number rather than replacing the one before it", async () => {
@@ -92,11 +99,20 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
     });
 
     it("refuses a price with no currency to spend it in", async () => {
-      const plan = await db().planDefinition.findFirstOrThrow({ where: { code: "starter-test" }, select: { id: true } });
-
-      await expect(db().planVersion.create({ data: { planId: plan.id, version: 99, monthlyPriceCents: 100 } })).rejects.toThrow(
-        /plan_versions_shape_check/u,
-      );
+      // The money invariants moved to `plan_prices` with the money itself (#43). A currency column that
+      // accepted anything would quietly create a second price book for the same currency, so the shape is
+      // a CHECK rather than a convention.
+      await expect(
+        db().planPrice.create({ data: { planVersionId: starterV1, currency: "eur", interval: "MONTH", amountCents: 100 } }),
+      ).rejects.toThrow(/plan_prices_currency_check/u);
+      await expect(
+        db().planPrice.create({ data: { planVersionId: starterV1, currency: "EUR", interval: "YEAR", amountCents: -1 } }),
+      ).rejects.toThrow(/plan_prices_amount_check/u);
+      // And a subscription cannot be priced as a one-off, which would be a plan nobody could be
+      // subscribed to.
+      await expect(
+        db().planPrice.create({ data: { planVersionId: starterV1, currency: "USD", interval: "ONE_TIME", amountCents: 100 } }),
+      ).rejects.toThrow(/plan_prices_interval_check/u);
     });
   });
 

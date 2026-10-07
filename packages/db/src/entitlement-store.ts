@@ -37,10 +37,36 @@ export interface PlanVersionInput {
   readonly name: string;
   readonly displayOrder?: number;
   readonly grants: PlanGrants;
-  readonly monthlyPriceCents?: number;
-  readonly annualPriceCents?: number;
-  readonly currency?: string;
+  /**
+   * Who may subscribe to this version (#43). Defaults to `PRIVATE`: a version is published before anybody
+   * decides to advertise it, and a catalogue that appeared on the pricing page the moment it was written
+   * would make "publish" and "launch" the same act.
+   */
+  readonly availability?: CatalogAvailability;
+  /**
+   * The price book for this version, one entry per currency and interval.
+   *
+   * A list rather than two amounts and a currency, because that pair could only ever describe one price
+   * book. The annual amount is given outright rather than derived: the accepted rule is "pay ten months,
+   * receive twelve", and a product that recomputed it would be free to disagree with an invoice a customer
+   * already holds.
+   */
+  readonly prices?: readonly CatalogPriceInput[];
 }
+
+/** One price, in one currency, at one interval. */
+export interface CatalogPriceInput {
+  /** ISO 4217, upper case; a CHECK refuses anything else. */
+  readonly currency: string;
+  readonly interval: BillingIntervalValue;
+  /** Minor units, so no money is ever a float. */
+  readonly amountCents: number;
+  /** The provider's own price object, opaque: nothing here parses, compares or branches on it. */
+  readonly providerPriceId?: string;
+}
+
+export type CatalogAvailability = "PUBLIC" | "PRIVATE" | "LEGACY";
+export type BillingIntervalValue = "MONTH" | "YEAR" | "ONE_TIME";
 
 export interface PlanVersionRecord {
   readonly planVersionId: string;
@@ -73,12 +99,23 @@ export async function publishPlanVersion(db: DbClient, input: PlanVersionInput):
         features: [...input.grants.features],
         limits: input.grants.limits,
         quotas: input.grants.quotas,
-        ...(input.monthlyPriceCents === undefined ? {} : { monthlyPriceCents: input.monthlyPriceCents }),
-        ...(input.annualPriceCents === undefined ? {} : { annualPriceCents: input.annualPriceCents }),
-        ...(input.currency === undefined ? {} : { currency: input.currency }),
+        ...(input.availability === undefined ? {} : { availability: input.availability }),
       },
       select: { id: true },
     });
+    if (input.prices !== undefined && input.prices.length > 0) {
+      // Written with the version, in its own transaction: a version whose prices landed separately could
+      // be read between the two writes as a plan nobody can be charged for.
+      await tx.planPrice.createMany({
+        data: input.prices.map((price) => ({
+          planVersionId: row.id,
+          currency: price.currency,
+          interval: price.interval,
+          amountCents: price.amountCents,
+          ...(price.providerPriceId === undefined ? {} : { providerPriceId: price.providerPriceId }),
+        })),
+      });
+    }
     return { planVersionId: row.id, code: plan.code, version, grants: input.grants };
   });
 }
@@ -200,7 +237,7 @@ export async function setEntitlementOverride(
  * check answers no.
  */
 export async function readEntitlement(db: DbClient, workspaceId: string, now: Date): Promise<EntitlementSnapshot> {
-  const [subscription, override] = await Promise.all([
+  const [subscription, override, addOns] = await Promise.all([
     db.workspaceSubscription.findUnique({
       where: { workspaceId },
       select: {
@@ -213,7 +250,17 @@ export async function readEntitlement(db: DbClient, workspaceId: string, now: Da
       },
     }),
     db.entitlementOverride.findUnique({ where: { workspaceId }, select: { features: true, limits: true, quotas: true, expiresAt: true } }),
+    // Recurring capacity the workspace is paying for *at this instant* (#43). A removal takes effect at
+    // the end of the paid period, so the row is dated rather than deleted and the window is read rather
+    // than assumed.
+    db.workspaceAddOn.findMany({
+      where: { workspaceId, activeFrom: { lte: now }, OR: [{ activeUntil: null }, { activeUntil: { gt: now } }] },
+      select: { quantity: true, addOnVersion: { select: { limits: true, kind: true } } },
+    }),
   ]);
+  const purchasedCapacity = addOns
+    .filter((row) => row.addOnVersion.kind === "RECURRING_CAPACITY")
+    .map((row) => ({ limits: numbersOf(row.addOnVersion.limits, isPlanLimit), quantity: row.quantity }));
 
   if (subscription === null) {
     return resolveEntitlement({
@@ -250,6 +297,7 @@ export async function readEntitlement(db: DbClient, workspaceId: string, now: Da
             ...(override.expiresAt === null ? {} : { expiresAt: override.expiresAt }),
           },
         }),
+    ...(purchasedCapacity.length === 0 ? {} : { addOns: purchasedCapacity }),
     ...(subscription.periodEndsAt === null ? {} : { periodEndsAt: subscription.periodEndsAt }),
     ...(subscription.trialEndsAt === null ? {} : { trialEndsAt: subscription.trialEndsAt }),
     now,

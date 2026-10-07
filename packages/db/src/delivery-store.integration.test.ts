@@ -1259,14 +1259,22 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       // published version is immutable, enforced by `plan_versions_immutable()` and asserted in
       // `entitlements.integration.test.ts`. A row that cannot be updated cannot be invalidated between
       // the read and the claim, which is the only thing a lock here would be protecting against.
-      const entitlement = reads.filter((read) => read.includes('"workspace_subscriptions"') || read.includes('"entitlement_overrides"'));
-      const immutablePlan = reads.filter((read) => read.includes('"plan_versions"') || read.includes('"plan_definitions"'));
+      const entitlement = reads.filter(
+        (read) =>
+          read.includes('"workspace_subscriptions"') || read.includes('"entitlement_overrides"') || read.includes('"workspace_addons"'),
+      );
+      // Immutable catalogue rows. `plan_versions` and `addon_versions` cannot be updated — triggers refuse
+      // it — and a row that cannot change cannot be invalidated between the read and the claim, which is
+      // the only thing a lock here would protect against.
+      const immutableCatalog = reads.filter(
+        (read) => read.includes('"plan_versions"') || read.includes('"plan_definitions"') || read.includes('"addon_versions"'),
+      );
       expect(advisory).toHaveLength(2);
       expect(suspensions).toHaveLength(1);
-      expect(entitlement).toHaveLength(2);
-      expect(immutablePlan).toHaveLength(2);
+      expect(entitlement).toHaveLength(3);
+      expect(immutableCatalog).toHaveLength(3);
       const rowReads = reads.filter(
-        (read) => !advisory.includes(read) && !suspensions.includes(read) && !entitlement.includes(read) && !immutablePlan.includes(read),
+        (read) => !advisory.includes(read) && !suspensions.includes(read) && !entitlement.includes(read) && !immutableCatalog.includes(read),
       );
       expect(rowReads.length).toBeGreaterThan(0);
       expect(rowReads.filter((read) => !/FOR (UPDATE|SHARE)$/.test(read))).toEqual([]);
