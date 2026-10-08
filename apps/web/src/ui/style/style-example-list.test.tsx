@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StyleExampleView } from "@omnichannel/db";
 
 import { StyleExampleList } from "./style-example-list";
-import { catalogues, type MessageKey } from "@/i18n/catalogue";
+import { catalogues, pluralCatalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
 
 const t = createTranslator("en");
@@ -41,6 +41,10 @@ const example = (overrides: Partial<StyleExampleView> = {}): StyleExampleView =>
   sourceMessageId: null,
   createdAt: new Date("2026-09-30T10:00:00.000Z"),
   decisions: [],
+  // The default is a complete lifecycle: a fixture that silently claimed events were hidden would make
+  // every assertion below about the truncated case rather than the ordinary one.
+  earlierDecisions: 0,
+  laterDecisions: 0,
   ...overrides,
 });
 
@@ -187,8 +191,8 @@ describe("in Russian", () => {
           example({
             status: "ARCHIVED",
             decisions: [
-              { decision: "APPROVED", decidedByName: "Marina", decidedAt: new Date("2026-09-30T10:00:00.000Z") },
-              { decision: "ARCHIVED", decidedByName: "Pavel", decidedAt: new Date("2026-10-01T10:00:00.000Z") },
+              { id: "sed_1", decision: "APPROVED", decidedByName: "Marina", decidedAt: new Date("2026-09-30T10:00:00.000Z") },
+              { id: "sed_2", decision: "ARCHIVED", decidedByName: "Pavel", decidedAt: new Date("2026-10-01T10:00:00.000Z") },
             ],
           }),
         ]}
@@ -212,7 +216,7 @@ describe("in Russian", () => {
     render(
       <StyleExampleList
         t={t}
-        examples={[example({ decisions: [{ decision: "APPROVED", decidedByName: null, decidedAt: new Date("2026-09-30T10:00:00.000Z") }] })]}
+        examples={[example({ decisions: [{ id: "sed_3", decision: "APPROVED", decidedByName: null, decidedAt: new Date("2026-09-30T10:00:00.000Z") }] })]}
         target={TARGET}
         kind="VERIFIED"
         actions={actions()}
@@ -227,5 +231,135 @@ describe("in Russian", () => {
     render(<StyleExampleList t={t} examples={[example({ status: "SUGGESTED", approvedByName: null })]} target={TARGET} kind="SUGGESTED" actions={actions()} />);
 
     expect(document.querySelector('[data-history="se_1"]')).toBeNull();
+  });
+
+  it("says a history is a window, and offers the rest, rather than ending quietly", () => {
+    // The R5 re-review's finding, at the only place a reader meets it. A window that cannot say it is a
+    // window reads as a complete history — and that is a worse failure than an obvious gap, because
+    // nobody goes looking.
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[
+          example({
+            status: "ARCHIVED",
+            decisions: [{ id: "sed_4", decision: "ARCHIVED", decidedByName: "Pavel", decidedAt: new Date("2026-10-01T10:00:00.000Z") }],
+            earlierDecisions: 5,
+          }),
+        ]}
+        target={TARGET}
+        kind="RETIRED"
+        actions={actions()}
+        earlierHistoryHrefs={{ se_1: "/style?historyExample=se_1&historyCursor=abc" }}
+      />,
+    );
+
+    expect(document.querySelector('[data-history="se_1"]')?.getAttribute("data-earlier")).toBe("5");
+    expect(document.querySelector('[data-earlier-count="se_1"]')?.textContent).toBe(
+      pluralCatalogues.en["style.historyEarlier"]?.other?.replace("{count}", "5"),
+    );
+    expect(document.querySelector('[data-example-history="se_1"]')?.getAttribute("href")).toBe("/style?historyExample=se_1&historyCursor=abc");
+  });
+
+  it("offers neither the count nor the link when the window is the whole lifecycle", () => {
+    // The common case, and the one that would be noise. A link to nothing is a control that teaches a
+    // reader to ignore controls.
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[example({ decisions: [{ id: "sed_5", decision: "APPROVED", decidedByName: "Marina", decidedAt: new Date("2026-09-30T10:00:00.000Z") }] })]}
+        target={TARGET}
+        kind="VERIFIED"
+        actions={actions()}
+        earlierHistoryHrefs={{}}
+      />,
+    );
+
+    expect(document.querySelector('[data-history="se_1"]')?.getAttribute("data-earlier")).toBe("0");
+    expect(document.querySelector('[data-earlier-count="se_1"]')).toBeNull();
+    expect(document.querySelector('[data-example-history="se_1"]')).toBeNull();
+  });
+
+  it("says what a page into the past hides, which is the half that explains the current state", () => {
+    // The blocking finding one click later: a page read backwards necessarily hides what came after it,
+    // and a history ending in "Restored" under a badge reading "Archived" is the same silent truncation
+    // that was refused. The number for it was computed and thrown away before this.
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[example({ id: "se_1", status: "ARCHIVED" })]}
+        target={TARGET}
+        kind="RETIRED"
+        actions={actions()}
+        lifecycle={{
+          styleExampleId: "se_1",
+          decisions: [{ id: "sed_old", decision: "RESTORED", decidedByName: "Olga", decidedAt: new Date("2026-09-01T10:00:00.000Z") }],
+          earlierDecisions: 0,
+          laterDecisions: 20,
+          totalDecisions: 25,
+        }}
+        earlierHistoryHrefs={{}}
+        latestHistoryHref="/style"
+      />,
+    );
+
+    expect(document.querySelector('[data-history="se_1"]')?.getAttribute("data-later")).toBe("20");
+    expect(document.querySelector('[data-later-count="se_1"]')?.textContent).toBe(
+      pluralCatalogues.en["style.historyLater"]?.other?.replace("{count}", "20"),
+    );
+    // And where the reader is in the whole argument, which is the other thing a middle page owes them.
+    expect(document.querySelector('[data-history-total="se_1"]')?.textContent).toBe(text("style.historyTotal").replace("{count}", "25"));
+  });
+
+  it("keeps the way back when a cursor lands on an empty page, rather than stranding the reader", () => {
+    // A hand-edited or stale cursor can point past the oldest decision. The rows vanish; the escape must
+    // not vanish with them, which it did while it lived inside the "are there any decisions" gate.
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[example({ id: "se_1" })]}
+        target={TARGET}
+        kind="VERIFIED"
+        actions={actions()}
+        lifecycle={{ styleExampleId: "se_1", decisions: [], earlierDecisions: 0, laterDecisions: 4, totalDecisions: 4 }}
+        earlierHistoryHrefs={{}}
+        latestHistoryHref="/style"
+      />,
+    );
+
+    expect(document.querySelector('[data-history="se_1"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="history-latest"]')?.getAttribute("href")).toBe("/style");
+    expect(document.querySelector('[data-later-count="se_1"]')?.textContent).toContain("4");
+  });
+
+  it("shows the open page for the example whose history is open, and leaves the others alone", () => {
+    render(
+      <StyleExampleList
+        t={t}
+        examples={[
+          example({ id: "se_1", decisions: [{ id: "sed_6", decision: "APPROVED", decidedByName: "Marina", decidedAt: new Date("2026-10-02T10:00:00.000Z") }] }),
+          example({ id: "se_2", decisions: [{ id: "sed_7", decision: "ARCHIVED", decidedByName: "Pavel", decidedAt: new Date("2026-10-02T11:00:00.000Z") }] }),
+        ]}
+        target={TARGET}
+        kind="VERIFIED"
+        actions={actions()}
+        lifecycle={{
+          styleExampleId: "se_1",
+          decisions: [{ id: "sed_8", decision: "RESTORED", decidedByName: "Olga", decidedAt: new Date("2026-09-01T10:00:00.000Z") }],
+          earlierDecisions: 0,
+          laterDecisions: 0,
+          totalDecisions: 9,
+        }}
+        earlierHistoryHrefs={{}}
+        latestHistoryHref="/style"
+      />,
+    );
+
+    // The open example shows the page that was asked for.
+    expect(document.querySelector('[data-history="se_1"] li')?.getAttribute("data-decision")).toBe("RESTORED");
+    // And the other example is untouched, which is why the history has parameters of its own.
+    expect(document.querySelector('[data-history="se_2"] li')?.getAttribute("data-decision")).toBe("ARCHIVED");
+    // The way back is offered once, on the example it belongs to.
+    expect(document.querySelectorAll('[data-action="history-latest"]')).toHaveLength(1);
   });
 });
