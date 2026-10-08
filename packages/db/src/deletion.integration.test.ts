@@ -373,4 +373,90 @@ describe.skipIf(!databaseTestsEnabled())("deleting a customer's data (PostgreSQL
       expect(requests[0]?.requestedAt.getTime()).toBeGreaterThanOrEqual(requests[requests.length - 1]?.requestedAt.getTime() ?? 0);
     });
   });
+
+  describe("the one thing an erasure is allowed to remove that nothing else may", () => {
+    /**
+     * `style_example_decisions` is append-only, and a customer's erasure has to empty it.
+     *
+     * Two accepted requirements built on different branches: the lifecycle of a style example is evidence
+     * about who approved and who withdrew it, and a style example quotes the customer's own words, so a
+     * deletion request must remove it. The foreign key is `RESTRICT`, so the decisions go first — and the
+     * append-only trigger refused that `DELETE`, which aborted the whole purge and made every deletion
+     * request end `PARTIAL_FAILURE`. A privacy deletion that silently removes nothing is the worse
+     * failure by a distance.
+     *
+     * The permission is therefore narrow, and these three cases are the whole of it.
+     */
+    it("refuses an ordinary delete, permits one inside an erasure, and refuses an update either way", async () => {
+      const example = await db().styleExample.create({
+        data: {
+          workspaceId: owner.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          inboundContext: "are you open on sunday?",
+          outboundText: "Sundays we are closed.",
+          provenance: "HUMAN_TYPED",
+          status: "ACTIVE",
+          approvedByUserId: owner.userId,
+        },
+        select: { id: true },
+      });
+      const decision = await db().styleExampleDecision.create({
+        data: {
+          workspaceId: owner.workspaceId,
+          styleExampleId: example.id,
+          decision: "APPROVED",
+          decidedByUserId: owner.userId,
+        },
+        select: { id: true },
+      });
+
+      // Ordinary delete: refused, as it is for anybody who is not carrying out an erasure.
+      await expect(db().$executeRaw`DELETE FROM "style_example_decisions" WHERE "id" = ${decision.id}`).rejects.toThrow(/append-only/u);
+
+      // An update is refused even while an erasure is declared. That is the half the trigger exists for:
+      // an erasure removes rows, it never rewrites a verdict.
+      await expect(
+        db().$transaction(async (tx) => {
+          await tx.$executeRaw`SET LOCAL "omnichannel.erasing_customer_data" = 'on'`;
+          await tx.$executeRaw`UPDATE "style_example_decisions" SET "decision" = 'REJECTED' WHERE "id" = ${decision.id}`;
+        }),
+      ).rejects.toThrow(/append-only/u);
+      expect((await db().styleExampleDecision.findUniqueOrThrow({ where: { id: decision.id } })).decision).toBe("APPROVED");
+
+      // Declared, the delete goes through.
+      await db().$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL "omnichannel.erasing_customer_data" = 'on'`;
+        await tx.$executeRaw`DELETE FROM "style_example_decisions" WHERE "id" = ${decision.id}`;
+      });
+      expect(await db().styleExampleDecision.findUnique({ where: { id: decision.id } })).toBeNull();
+    }, 180_000);
+
+    it("does not leave the permission switched on after the transaction that declared it", async () => {
+      // `SET LOCAL` is what makes this narrow rather than a mode the application can be left in. If it
+      // leaked, every later statement on the same pooled connection could delete a lifecycle.
+      const example = await db().styleExample.create({
+        data: {
+          workspaceId: owner.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          inboundContext: "do you deliver?",
+          outboundText: "We deliver within the city.",
+          provenance: "HUMAN_TYPED",
+          status: "ACTIVE",
+          approvedByUserId: owner.userId,
+        },
+        select: { id: true },
+      });
+      const decision = await db().styleExampleDecision.create({
+        data: { workspaceId: owner.workspaceId, styleExampleId: example.id, decision: "APPROVED", decidedByUserId: owner.userId },
+        select: { id: true },
+      });
+
+      await db().$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL "omnichannel.erasing_customer_data" = 'on'`;
+      });
+
+      await expect(db().$executeRaw`DELETE FROM "style_example_decisions" WHERE "id" = ${decision.id}`).rejects.toThrow(/append-only/u);
+    }, 180_000);
+  });
+
 });
