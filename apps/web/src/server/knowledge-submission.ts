@@ -9,8 +9,12 @@
  * The decision that matters here is the expected version. A submission that does not carry a usable one
  * is refused rather than completed against whatever is current — which is the difference between telling
  * an operator their colleague got there first and silently overwriting their colleague's wording with
- * text composed against content this submission never saw.
+ * text composed against content this submission never saw. That rule lives in `form-fields.ts`, because
+ * the Style and AI-settings forms ask it too and it must have one answer.
  */
+import { expectedVersionOf, field } from "./form-fields";
+
+export { expectedVersionOf, field };
 export interface KnowledgeTarget {
   readonly workspaceId: string;
   readonly businessProfileId: string;
@@ -34,10 +38,6 @@ export interface KnowledgeEdit {
   readonly expectedVersion: number;
 }
 
-export function field(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === "string" ? value : "";
-}
 
 /**
  * One fact per line.
@@ -53,23 +53,6 @@ export function factsOf(formData: FormData): readonly string[] {
     .filter((line) => line !== "");
 }
 
-/**
- * The version the form was rendered against, or `undefined` when the submission did not carry a usable
- * one.
- *
- * Deliberately strict. `Number.parseInt` is happy to read "2" out of "2; DROP", and a guard that accepts
- * that is a guard whose refusals depend on the shape of the attacker's string, so the whole field has to
- * be the number. Zero, a negative, a fraction and an absent field are all the same answer: this
- * submission does not say which version it was composed against, and nothing here is allowed to guess.
- */
-export function expectedVersionOf(formData: FormData): number | undefined {
-  const raw = field(formData, "expectedVersion").trim();
-  if (!/^[1-9][0-9]*$/u.test(raw)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
 
 /** An edit, or `undefined` when it cannot be accepted without guessing at a version. */
 export function knowledgeEditOf(formData: FormData): KnowledgeEdit | undefined {

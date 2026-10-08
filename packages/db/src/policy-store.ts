@@ -14,6 +14,16 @@
  * **Mandatory-review topics have a floor.** `createAutomationPolicy` re-adds every
  * `MANDATORY_REVIEW_REASON_CODES` entry whatever the caller asked for, so this store cannot write a
  * policy that lets a payment dispute answer itself, and neither can anything built on top of it.
+ *
+ * **Only an owner or an admin may change them.** `ONBOARDING_UX.md` says workspace roles constrain policy
+ * changes, and a Business Profile context proves membership and profile visibility — not permission to
+ * edit. The check belongs here rather than in the screen that calls it, because every other caller would
+ * otherwise inherit the screen's omission.
+ *
+ * **A save names the version it was composed against.** Two tabs read the same settings, and the second
+ * save posts every field from a snapshot that predates the first; without the version it would succeed and
+ * revert changes its author never saw. `expectedVersion` is required rather than optional for the usual
+ * reason: an optional guard is a guard the next caller forgets.
  */
 import {
   confidencePresetOf,
@@ -31,7 +41,7 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 export interface PolicyView {
   readonly id: string;
@@ -51,6 +61,8 @@ export interface PolicyView {
   readonly instagramAfterWindowPolicy: string;
   readonly whatsappAfterWindowPolicy: string;
   readonly whatsappTemplateAutomationAllowlist: readonly string[];
+  /** The number this policy has been written; a save must name the one it was composed against. */
+  readonly version: number;
   readonly updatedAt: Date;
 }
 
@@ -70,6 +82,7 @@ const policySelect = {
   instagramAfterWindowPolicy: true,
   whatsappAfterWindowPolicy: true,
   whatsappTemplateAutomationAllowlist: true,
+  version: true,
   updatedAt: true,
 } as const;
 
@@ -89,6 +102,7 @@ type PolicyRow = {
   instagramAfterWindowPolicy: string;
   whatsappAfterWindowPolicy: string;
   whatsappTemplateAutomationAllowlist: string[];
+  version: number;
   updatedAt: Date;
 };
 
@@ -119,6 +133,7 @@ function toView(row: PolicyRow): PolicyView {
     instagramAfterWindowPolicy: row.instagramAfterWindowPolicy,
     whatsappAfterWindowPolicy: row.whatsappAfterWindowPolicy,
     whatsappTemplateAutomationAllowlist: row.whatsappTemplateAutomationAllowlist,
+    version: row.version,
     updatedAt: row.updatedAt,
   };
 }
@@ -133,6 +148,12 @@ export async function readPolicies(db: DbExecutor, context: BusinessProfileConte
 }
 
 export interface PolicyEdit {
+  /**
+   * The `version` of the policy this edit was composed against. Required, so that no caller can decide
+   * not to care: a form rendered from version 4 may only write version 4, and anything else is a
+   * conflict rather than a save.
+   */
+  readonly expectedVersion: number;
   readonly mode?: AiMode;
   readonly businessGoal?: string;
   readonly qualificationCriteria?: readonly string[];
@@ -152,9 +173,11 @@ export interface PolicyEdit {
 }
 
 export type PolicyWriteOutcome =
-  | { readonly status: "SAVED"; readonly impacts: readonly PolicyImpact[] }
+  | { readonly status: "SAVED"; readonly impacts: readonly PolicyImpact[]; readonly version: number }
   | { readonly status: "UNCHANGED" }
   | { readonly status: "GONE" }
+  /** Somebody else wrote these settings first. `current` is what is stored now, for the screen to show. */
+  | { readonly status: "CONFLICT"; readonly current: PolicyView }
   | { readonly status: "REFUSED"; readonly reason: string };
 
 /**
@@ -172,6 +195,10 @@ export async function savePolicy(
   edit: PolicyEdit,
 ): Promise<PolicyWriteOutcome> {
   const scope = profileScopeOf(context);
+  // Membership is not permission. `ONBOARDING_UX.md` constrains policy changes by role exactly as it
+  // constrains connecting a channel, and an AGENT who may read a conversation may not switch the
+  // workspace to AUTOPILOT.
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "changing automation settings");
 
   if (edit.confidencePreset !== undefined && edit.confidence !== undefined) {
     // Both would mean two answers to one question, and whichever won would be an accident of ordering.
@@ -182,6 +209,16 @@ export async function savePolicy(
   }
 
   return db.$transaction(async (tx) => {
+    // Locked before it is read, and held until commit, so the version compared below is the version this
+    // transaction will overwrite. Without the lock two savers both read version 4 at READ COMMITTED, both
+    // find their expectation satisfied, and the second write still lands on the first one's result — the
+    // version would then be a check that passes exactly when it is needed least.
+    await tx.$queryRaw`
+      SELECT "id" FROM "automation_policies"
+      WHERE "workspace_id" = ${scope.workspaceId}
+        AND "business_profile_id" = ${scope.businessProfileId}
+        AND "channel_account_id" IS NOT DISTINCT FROM ${channelAccountId}
+      FOR UPDATE`;
     const existing = await tx.automationPolicy.findFirst({ where: { ...scope, channelAccountId }, select: policySelect });
     if (existing === null) {
       // Covers a channel account that is not this profile's as well, and not by luck: the policy's own
@@ -189,6 +226,11 @@ export async function savePolicy(
       // scope necessarily names an account inside it. A second existence check here looked prudent and
       // was unreachable — mutation testing found it by deleting it and breaking nothing.
       return { status: "GONE" };
+    }
+    if (existing.version !== edit.expectedVersion) {
+      // Refused, and the caller is handed what is stored instead, because "your change was not applied"
+      // without the current values is an instruction to guess.
+      return { status: "CONFLICT", current: toView(existing) };
     }
 
     const before = toView(existing);
@@ -273,7 +315,7 @@ export async function savePolicy(
       },
     );
 
-    await tx.automationPolicy.update({ where: { id: existing.id }, data: after });
+    await tx.automationPolicy.update({ where: { id: existing.id }, data: { ...after, version: { increment: 1 } } });
     // Same transaction. Separately, a crash between the two leaves a policy nobody appears to have
     // changed — the one question this table exists to answer.
     await tx.policyChangeAudit.create({
@@ -287,7 +329,7 @@ export async function savePolicy(
         after: after as never,
       },
     });
-    return { status: "SAVED", impacts };
+    return { status: "SAVED", impacts, version: existing.version + 1 };
   });
 }
 
@@ -333,26 +375,67 @@ export interface PolicyAuditEntry {
   readonly after: unknown;
 }
 
-/** The change history, newest first. */
+/**
+ * Where a page of history ends, so the next page can start after it.
+ *
+ * Both halves travel. `changedAt` is not unique — two saves can land in one millisecond — and a cursor on
+ * an instant alone repeats or skips rows, which on a change log reads as a change happening twice or not
+ * at all. The index is on the pair for the same reason.
+ */
+export interface PolicyAuditCursor {
+  readonly changedAt: Date;
+  readonly id: string;
+}
+
+export interface PolicyAuditPage {
+  readonly entries: readonly PolicyAuditEntry[];
+  /** Absent when this is the last page. Present means older entries exist and this is where they resume. */
+  readonly nextCursor?: PolicyAuditCursor;
+}
+
+const DEFAULT_AUDIT_PAGE = 20;
+const MAX_AUDIT_PAGE = 200;
+
+/**
+ * The change history, newest first, in pages.
+ *
+ * Paged rather than capped. `AI_CONFIGURATION_UX.md` requires the old and new values of material changes
+ * to be auditable, and a read that took the newest twenty and said nothing about the rest made the
+ * twenty-first change unreachable from the screen for ever — the record existed and could not be read,
+ * which is indistinguishable from not keeping it.
+ */
 export async function listPolicyAudits(
   db: DbExecutor,
   context: BusinessProfileContext,
-  page: { readonly limit?: number } = {},
-): Promise<readonly PolicyAuditEntry[]> {
+  page: { readonly limit?: number; readonly cursor?: PolicyAuditCursor } = {},
+): Promise<PolicyAuditPage> {
   const scope = profileScopeOf(context);
+  const limit = Math.min(Math.max(Math.trunc(page.limit ?? DEFAULT_AUDIT_PAGE), 1), MAX_AUDIT_PAGE);
   const rows = await db.policyChangeAudit.findMany({
-    where: scope,
+    where: {
+      ...scope,
+      ...(page.cursor === undefined
+        ? {}
+        : { OR: [{ changedAt: { lt: page.cursor.changedAt } }, { changedAt: page.cursor.changedAt, id: { lt: page.cursor.id } }] }),
+    },
     orderBy: [{ changedAt: "desc" }, { id: "desc" }],
-    take: Math.min(Math.max(Math.trunc(page.limit ?? 50), 1), 200),
+    // One more than asked for, which is how this read knows there is a next page rather than guessing
+    // from a full one.
+    take: limit + 1,
     select: { id: true, channelAccountId: true, changedAt: true, impacts: true, before: true, after: true, actor: { select: { name: true } } },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    channelAccountId: row.channelAccountId,
-    actorName: row.actor.name,
-    changedAt: row.changedAt,
-    impacts: row.impacts,
-    before: row.before,
-    after: row.after,
-  }));
+  const window = rows.slice(0, limit);
+  const last = window.at(-1);
+  return {
+    entries: window.map((row) => ({
+      id: row.id,
+      channelAccountId: row.channelAccountId,
+      actorName: row.actor.name,
+      changedAt: row.changedAt,
+      impacts: row.impacts,
+      before: row.before,
+      after: row.after,
+    })),
+    ...(rows.length > limit && last !== undefined ? { nextCursor: { changedAt: last.changedAt, id: last.id } } : {}),
+  };
 }

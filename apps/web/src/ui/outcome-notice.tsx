@@ -44,6 +44,11 @@ const OUTCOMES = [
   "RESTORED",
   "CONFLICT",
   "REFUSED",
+  // Settings answer two refusals of their own: a role that may not change them, and a field too long to
+  // travel back in a refused proposal. Both are refusals, and both have to survive a reload — a person
+  // who was silently not allowed to save reads the screen as a screen that does nothing.
+  "FORBIDDEN",
+  "TOO_LONG",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
@@ -59,6 +64,8 @@ const REFUSALS = new Set<string>([
   // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
   // their edit or their publish landed.
   "CONFLICT",
+  "FORBIDDEN",
+  "TOO_LONG",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {

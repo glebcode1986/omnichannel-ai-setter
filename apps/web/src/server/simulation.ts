@@ -18,6 +18,20 @@
  * Where no model is configured, everything except generation still runs and the result says so. An empty
  * reply with no explanation would read as "the assistant had nothing to say", which is a different and
  * false answer.
+ *
+ * The window's type is reached through `PolicyInput["window"]` rather than imported from
+ * `@omnichannel/channel-core`, which defines it. That is not indirection for its own sake: the
+ * no-send gate in `simulation-never-sends.test.ts` refuses *any* import of a channel package from this
+ * file, and it is right to — a type import today is an import to add a value to tomorrow. The type is
+ * already part of what the evaluator accepts, so the evaluator is where to ask for it.
+ *
+ * **What the run cannot take from the saved configuration, it takes as an input and then shows.** A
+ * conversation has a channel, an account and a messaging window, and a hypothetical message has none of
+ * those — so they are chosen, and the result reports what was chosen. They used to be constants: every run
+ * was Instagram, on a connected account, inside an open free-form window. That made the WhatsApp settings
+ * unreachable from this screen and both Instagram after-window choices untestable, while the screen still
+ * claimed to show "the expected send/review path" for the saved configuration. A playground that silently
+ * tests one path of several is more misleading than one that tests none, because its answer looks complete.
  */
 import { createAnthropicReplyModel } from "@omnichannel/ai";
 import {
@@ -36,8 +50,8 @@ import {
   type BusinessProfileContext,
   type PolicyView,
 } from "@omnichannel/db";
-import { NO_CAPABILITIES, resolveStyleProfile, type StyleProfileLayer } from "@omnichannel/domain";
-import type { KnowledgeHit, StyleHit } from "@omnichannel/application";
+import { NO_CAPABILITIES, resolveStyleProfile, type ChannelCapabilities, type StyleProfileLayer } from "@omnichannel/domain";
+import type { KnowledgeHit, PolicyInput, PolicyLimits, StyleHit } from "@omnichannel/application";
 
 import { loadWebEnv } from "../env";
 import { getDb } from "./db";
@@ -48,8 +62,44 @@ const PROMPT_VERSION = "reply.v1";
 const SCHEMA_VERSION = "ai-draft.v1";
 const MAX_HITS = 8;
 
+/** The channels this screen can ask about. One policy layer holds both channels' after-window choices. */
+export const SIMULATION_CHANNELS = ["INSTAGRAM", "WHATSAPP"] as const;
+export type SimulationChannel = (typeof SIMULATION_CHANNELS)[number];
+
+/**
+ * The messaging window to assume, named in the words the owner's settings use.
+ *
+ * `OPEN` is inside the standard window, where a free-form automated reply is possible at all; `AFTER` is
+ * once it has closed, which is the only state in which an after-window choice does anything. Both are
+ * offered because a configuration that behaves identically in both is a configuration whose after-window
+ * setting has never been exercised.
+ */
+export const SIMULATION_WINDOWS = ["OPEN", "AFTER"] as const;
+export type SimulationWindow = (typeof SIMULATION_WINDOWS)[number];
+
+/** Whether to assume a healthy connection. `DISCONNECTED` is what an expired token looks like to a send. */
+export const SIMULATION_ACCOUNTS = ["CONNECTED", "DISCONNECTED"] as const;
+export type SimulationAccount = (typeof SIMULATION_ACCOUNTS)[number];
+
+/**
+ * The facts a hypothetical message cannot carry, stated rather than assumed.
+ *
+ * Defaults are the most permissive case — the one in which something would actually be sent — because a
+ * playground that defaults to "nothing can go out" answers every question with the same refusal. The
+ * screen shows which values were used, so a permissive default is visible rather than implicit.
+ */
+export interface SimulationInputs {
+  readonly channel: SimulationChannel;
+  readonly window: SimulationWindow;
+  readonly account: SimulationAccount;
+}
+
+export const DEFAULT_SIMULATION_INPUTS: SimulationInputs = { channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED" };
+
 export interface SimulationResult {
   readonly mode: RetrievalMode;
+  /** The hypothetical facts this run used, so the screen can show what it was testing. */
+  readonly inputs: SimulationInputs;
   /** False when no model is configured: everything else ran, and the reply is the only thing missing. */
   readonly modelConfigured: boolean;
   readonly knowledge: readonly KnowledgeHit[];
@@ -67,12 +117,17 @@ export interface SimulationResult {
   readonly failure?: string;
 }
 
-export async function runSimulation(context: BusinessProfileContext, message: string, now = new Date()): Promise<SimulationResult> {
+export async function runSimulation(
+  context: BusinessProfileContext,
+  message: string,
+  inputs: SimulationInputs = DEFAULT_SIMULATION_INPUTS,
+  now = new Date(),
+): Promise<SimulationResult> {
   const text = message.trim();
   const env = loadWebEnv();
   const modelConfigured = env.ANTHROPIC_API_KEY !== undefined;
   if (text === "") {
-    return { mode: retrievalModeOf(), modelConfigured, knowledge: [], style: [], reasonCodes: [], citedSourceIds: [] };
+    return { mode: retrievalModeOf(), inputs, modelConfigured, knowledge: [], style: [], reasonCodes: [], citedSourceIds: [] };
   }
 
   const scope = { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId };
@@ -92,6 +147,7 @@ export async function runSimulation(context: BusinessProfileContext, message: st
   const mode: RetrievalMode = embedding === undefined ? "LEXICAL_ONLY" : "HYBRID";
   const base = {
     mode,
+    inputs,
     modelConfigured,
     knowledge: knowledge?.hits ?? [],
     style: style?.hits ?? [],
@@ -147,8 +203,8 @@ export async function runSimulation(context: BusinessProfileContext, message: st
         },
         // The saved voice, merged the way production merges it: base layer then override.
         styleProfile: resolveStyleProfile(layers.map((layer) => layerOf(layer))),
-        channel: "INSTAGRAM",
-        capabilityHints: ["text"],
+        channel: inputs.channel,
+        capabilityHints: capabilityHintsFor(inputs.channel),
         inbound: [{ kind: "INBOUND", provenance: "simulated", text, occurredAt: now }],
         history: [],
         retrieval: {
@@ -197,13 +253,16 @@ export async function runSimulation(context: BusinessProfileContext, message: st
             // The owner's own saved thresholds, so the outcome shown is the outcome they configured.
             confidenceThreshold: policyUsed.confidenceThreshold,
             mandatoryReviewReasons: policyUsed.mandatoryReviewReasons as never,
-            afterWindow: { channel: "INSTAGRAM", policy: policyUsed.instagramAfterWindowPolicy as "STANDARD_ONLY" | "HUMAN_ASSISTED_EXTENDED" },
+            // The chosen channel's own choice. The union is per channel precisely so a WhatsApp
+            // conversation cannot be judged against an Instagram policy, and reading the Instagram field
+            // whatever the channel was exactly that mistake made by hand.
+            afterWindow: afterWindowFor(inputs.channel, policyUsed),
           },
-          account: "CONNECTED",
-          capabilities: { ...NO_CAPABILITIES, text: true },
-          // A simulation is not inside any real messaging window, so the most permissive assumption is
-          // stated rather than hidden: the window is open. The screen says the run is hypothetical.
-          window: { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() + 3_600_000) },
+          account: inputs.account,
+          capabilities: capabilitiesFor(inputs.channel),
+          // Stated, and stated by the person asking. The screen shows which window this run assumed, so
+          // the answer below is attached to a case rather than to a hidden constant.
+          window: windowFor(inputs, now),
           humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
           replyCycle: "OWNED",
           now,
@@ -234,4 +293,47 @@ function layerOf(layer: Awaited<ReturnType<typeof readStyleProfiles>>[number]): 
     avoidedPhrases: layer.avoidedPhrases,
     ...(layer.language === null ? {} : { language: layer.language }),
   };
+}
+
+/**
+ * What the chosen channel can carry.
+ *
+ * Exported, and deliberately still in this file rather than moved somewhere more convenient to test:
+ * `simulation-never-sends.test.ts` reads *this* module's source, and code that decides what a simulated
+ * send may do belongs inside what that gate reads.
+ *
+ * Taken from the channel rather than from a connected account on purpose: this is a hypothetical run, and
+ * an owner asking "what would WhatsApp do" before connecting WhatsApp should get WhatsApp's answer. The
+ * account's *health* is a separate input, because that is the part an owner can be wrong about.
+ */
+export function capabilitiesFor(channel: SimulationChannel): ChannelCapabilities {
+  return channel === "WHATSAPP"
+    ? { ...NO_CAPABILITIES, text: true, templates: true, image: true, document: true }
+    : { ...NO_CAPABILITIES, text: true, image: true };
+}
+
+/** The same facts as hints for the prompt, which names capabilities rather than asking for a shape. */
+export function capabilityHintsFor(channel: SimulationChannel): readonly string[] {
+  return channel === "WHATSAPP" ? ["text", "templates"] : ["text"];
+}
+
+/** The chosen channel's after-window choice, from the one policy layer that stores both. */
+export function afterWindowFor(channel: SimulationChannel, policy: PolicyView): PolicyLimits["afterWindow"] {
+  return channel === "WHATSAPP"
+    ? { channel: "WHATSAPP", policy: policy.whatsappAfterWindowPolicy as "SERVICE_WINDOW_ONLY" | "TEMPLATE_REVIEW" | "TEMPLATE_AUTOPILOT" }
+    : { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy as "STANDARD_ONLY" | "HUMAN_ASSISTED_EXTENDED" };
+}
+
+/**
+ * The window to judge against.
+ *
+ * `AFTER` is modelled as an expiry in the past rather than as `NOT_ELIGIBLE`: a closed standard window is
+ * a window that *was* open, and the after-window policies exist to say what may still happen then. Using
+ * `NOT_ELIGIBLE` would short-circuit the very gates this run is meant to exercise.
+ */
+export function windowFor(inputs: SimulationInputs, now: Date): PolicyInput["window"] {
+  const hour = 3_600_000;
+  return inputs.window === "AFTER"
+    ? { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() - hour) }
+    : { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() + hour) };
 }

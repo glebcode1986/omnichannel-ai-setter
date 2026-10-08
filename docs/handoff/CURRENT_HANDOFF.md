@@ -226,6 +226,21 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+### Where the review gate actually stands
+
+One list, because two documents disagreeing about this is itself a defect Astra has blocked a release
+over — a note saying "awaiting re-review" next to a note saying "passed" leaves a reader no way to tell
+which is current.
+
+| PR | Branch | Status |
+| --- | --- | --- |
+| #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** at `0b62c9e870b260642cb07d386198870c1f1e659f` (R5, 2026-10-08). All seven blockers repaired on this branch; awaiting independent re-review. |
+| #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
+
+The #79 repairs are summarised under "P5-04" below. They are implemented at this branch's head and merged
+down the chain by ordinary merge; no rebase, no force-push, no merge to `main`.
+
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
 down the chain by ordinary merge, every branch from #79 to #103 carries them, and each was pushed with
@@ -237,8 +252,85 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
-   independent re-review.**
+1. **P5-04 / Issue #30 — the seven R5 blockers on PR #79, repaired.**
+
+   **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
+   and covered none of the seven cases, which is the usual shape of these findings: every one of them is
+   a gap *between* two correct pieces, and a gap has no failing test until somebody writes one.
+
+   **1. Policy changes had no role authorization.** `ONBOARDING_UX.md` says workspace roles constrain
+   policy changes, and connecting a channel already enforced that; changing the automation policy did not.
+   `requireBusinessProfileContext` proves membership and profile visibility, which is not permission, so
+   an AGENT holding a perfectly valid context could switch the workspace to AUTOPILOT and have it audited
+   as a legitimate change. `savePolicy` now requires `WORKSPACE_ADMIN_ROLES` **before it reads the row** —
+   deliberately before, because a store that checked the row first would answer `CONFLICT` for a wrong
+   version and `SAVED` for the right one, which tells a member without permission what the stored version
+   is. The screen renders the settings read-only for anybody else and the action reports `FORBIDDEN`.
+
+   **2. Two tabs silently overwrote each other.** The save read the current row and then wrote by `id`
+   alone, and neither the form nor `PolicyEdit` carried a version — so the second tab posted its whole
+   form from a snapshot predating the first save, succeeded, reverted fields its author had never seen,
+   and left two audit rows deriving `before` from the same stale state. There is now an
+   `automation_policies.version` column, `PolicyEdit.expectedVersion` is **required** rather than optional
+   (an optional guard is a guard the next caller forgets), and the comparison happens under a
+   `SELECT … FOR UPDATE` taken at the top of the save's own transaction. The lock is the part worth
+   keeping: without it both savers read the same version at READ COMMITTED, both find their expectation
+   satisfied, and the second write still lands on the first one's result — a lost update that no amount of
+   version *checking* catches, because the check itself was reading stale data. A `Promise.all` test does
+   not prove this; removing the lock leaves it passing, because the two transactions simply run in turn.
+   The regression is a barrier: one writer is held open across the other's read.
+
+   **3. The high-impact confirmation could be acknowledged before the summary existed.** The checkbox was
+   rendered on every load and the server only asked whether `confirm=on` had been posted, so "show the
+   effect summary before save" was skippable by ticking it first — and when the save *was* refused, the
+   redirect carried only impact codes, so the form was rebuilt from **stored** values and the summary
+   ended up describing a change that was no longer on screen. The acknowledgement is now the summary's own
+   checkbox, its value is the exact list of impact codes the server computed, and the server compares
+   sets: acknowledging fewer, more, or a different set is refused again. The refused proposal travels in
+   the URL and the form renders from it, so the summary and the values being confirmed are the same
+   thing. The proposal carries the version it was composed against, so an acknowledgement cannot be
+   carried across somebody else's change either.
+
+   **4. "Custom" timing could be selected and not configured.** The selector offered `CUSTOM` and the
+   form posted only `timingPreset`, so the store fell back to the previous ranges and selecting Custom
+   saved nothing custom. Four range inputs are now on the form — seconds on screen, milliseconds in the
+   store — posted only when the preset is `CUSTOM`, because a named preset carries its own ranges and
+   sending both is a contradiction the store refuses. They are rendered whichever preset is selected: only
+   rendering them for `CUSTOM` would mean a round trip before the inputs even appeared.
+
+   **5. The audit UI omitted the values and hid everything past twenty entries.** The store returned
+   `before` and `after` and the screen rendered actor, time and impact labels only; the read took the
+   newest twenty with no continuation, so the twenty-first change was unreachable from the screen for
+   ever. `listPolicyAudits` is now a keyset page over `(changedAt, id)` — both halves, because two saves
+   can share a millisecond and a cursor on an instant alone repeats or skips rows, which on a change log
+   reads as a change happening twice or not at all. The screen shows both sides of every field that
+   *moved*, from a named field list rather than `Object.keys`, so a column added later cannot reach this
+   screen with no label and no translation.
+
+   **6. The simulation could not test what it claimed to.** Channel, account health, capabilities and the
+   messaging window were constants: every run was Instagram, connected, inside an open free-form window.
+   So the WhatsApp selector and template allowlist could never affect the result, neither Instagram
+   after-window choice was ever exercised, and the screen still described the answer as the expected
+   send/review path for the saved configuration. A playground that silently tests one path of several is
+   more misleading than one that tests none, because its answer looks complete. All three are explicit
+   inputs now, the chosen channel's own after-window policy is used (the union is per channel precisely so
+   a WhatsApp conversation cannot be judged against an Instagram policy), and the result states which
+   inputs produced it. `AFTER` is modelled as an expired window rather than `NOT_ELIGIBLE`, which would
+   short-circuit the gates the run exists to exercise.
+
+   **7. The coordination documents contradicted each other.** See the table above; both files now say the
+   same thing, and the queue names #79 as current work rather than #78.
+
+   One thing worth carrying forward: the version rule now has **one** implementation. `expectedVersionOf`
+   moved to `apps/web/src/server/form-fields.ts`, which Knowledge, Style and AI settings all read from. It
+   is deliberately strict — `Number.parseInt` is happy to read `2` out of `"2; DROP"`, and a guard whose
+   refusals depend on the shape of the attacker's string is not a guard.
+
+   Every new guard was mutation-checked: removing the role check, the version comparison, the row lock,
+   the acknowledgement comparison, the version refusal in the action and the `CUSTOM`-only timing
+   condition each fails a named test.
+
+1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
 
    **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
    immutability and the per-example lifecycle pagination in full, and returned one blocking reachability

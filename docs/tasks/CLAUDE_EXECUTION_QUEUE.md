@@ -14,6 +14,35 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — P5-04 / Issue #30, the seven R5 blockers on PR #79
+
+**Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
+persisted exact-head run was green and did not cover any of the seven cases.
+
+All seven are repaired on `feat/p5-04-ai-settings-simulation`:
+
+1. **role authorization** — `savePolicy` requires OWNER or ADMIN (`ONBOARDING_UX.md`: workspace roles
+   constrain policy changes), the screen shows the settings read-only to anybody else, and the action
+   reports the refusal as `FORBIDDEN` rather than crashing;
+2. **concurrent writes** — `automation_policies.version`, compared under `SELECT … FOR UPDATE` inside the
+   save's own transaction, with a typed `CONFLICT` carrying the stored values, and a barrier-based
+   regression that fails when the lock is removed;
+3. **the confirmation** — the acknowledgement carries the exact impact codes the server computed and
+   showed, the summary is rendered next to the refused proposal rather than next to stored values, and
+   the proposal travels with the version it was composed against;
+4. **custom timing** — four range inputs on the form, sent only for `CUSTOM`, in seconds on screen and
+   milliseconds in the store;
+5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
+   change is reachable;
+6. **the simulation** — channel, window and connection are explicit inputs, the chosen channel's own
+   after-window policy is used, and the screen states which inputs produced the answer;
+7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
+   defect finding 7 actually was.
+
+**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79
+CHANGES_REQUESTED at `0b62c9e…`, repaired, awaiting independent re-review; #80 and everything below held
+and **not ready for review** until #79 passes, because they contain #79.
+
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
 **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
@@ -67,7 +96,7 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
-### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
+### Previous work, now passed — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
 
 **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
 immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
