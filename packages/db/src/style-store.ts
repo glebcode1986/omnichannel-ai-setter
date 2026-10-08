@@ -25,7 +25,18 @@ export type StyleDecisionValue = "APPROVED" | "REJECTED" | "ARCHIVED" | "RESTORE
 const DEFAULT_PAGE = 25;
 const MAX_PAGE = 100;
 
-/** How much of one example's lifecycle a page carries. Twenty decisions is a long argument. */
+/**
+ * How much of one example's lifecycle a page carries. Twenty decisions is a long argument.
+ *
+ * The number is unchanged; which twenty it means is not. It used to be the twenty **oldest**, so after the
+ * twenty-first decision every later event — including the one that produced the example's current state —
+ * disappeared from the history with nothing on screen to say so. It is now the twenty **most recent**,
+ * still rendered oldest-first, with the count of earlier events and a cursor that reaches them.
+ *
+ * Anchoring the window at the newest end is what makes the bound safe rather than merely small: whatever
+ * is cut is cut from the end a reader can ask for explicitly, and the part that answers "what is the
+ * state of this example and who put it there" is always present.
+ */
 const MAX_DECISIONS = 20;
 
 export type StyleScope = "WORKSPACE" | "BUSINESS_PROFILE";
@@ -249,23 +260,72 @@ export interface StyleExampleView {
   readonly sourceMessageId: string | null;
   readonly createdAt: Date;
   /**
-   * Everything anybody decided about this example, oldest first.
+   * A window of what anybody decided about this example, oldest first within the window.
    *
    * Read with the example rather than on demand, because it is the answer to the question the retired
    * list exists to ask — "who withdrew this, and had anyone approved it before?" — and a history nothing
    * renders is a history nobody can consult.
+   *
+   * The window holds the most recent `MAX_DECISIONS`, so the decision that produced the current state is
+   * always in it. When there are more, `earlierDecisions` says how many and `earlierCursor` reaches them;
+   * a truncation nobody is told about is the defect this replaced.
    */
   readonly decisions: readonly StyleDecisionView[];
+  /** How many decisions happened before the window. Zero means nothing older is hidden. */
+  readonly earlierDecisions: number;
+  /**
+   * How many happened after it. Always zero here, because this window is anchored at the newest end.
+   *
+   * Carried anyway, so that the one type describes both ways a window can be partial. A page of the
+   * lifecycle *can* hide later events, and a reader needs telling in both directions — a history headed
+   * "what has happened to it" whose last entry is `RESTORED`, under a badge reading "Archived", is the
+   * same defect as the one this replaced wearing a different number.
+   */
+  readonly laterDecisions: number;
+  /** Where to continue backwards. Absent when nothing is earlier, or when no row was shown to start from. */
+  readonly earlierCursor?: StyleDecisionCursor;
 }
 
 export interface StyleDecisionView {
+  /**
+   * The row's own id, carried so a reader can tell two identical decisions apart.
+   *
+   * `decidedAt` is not a key — two decisions can share a millisecond — and the history was previously
+   * keyed in React by decision-and-instant, which collides for exactly that pair and makes one of them
+   * disappear from the rendered list. A lifecycle that cannot be *shown* completely is not retrievable
+   * completely, whatever the query returned.
+   */
+  readonly id: string;
   readonly decision: StyleDecisionValue;
   readonly decidedByName: string | null;
   readonly decidedAt: Date;
 }
 
+/**
+ * Where a page of one example's lifecycle ends, so the next page can start before it.
+ *
+ * Both halves travel, for the reason `StyleExampleCursor` carries both of its own: `decidedAt` is not
+ * unique — four decisions can land in one millisecond, and two certainly can — and a cursor on an instant
+ * with no tiebreak silently repeats or skips rows. On a page of audit history that reads as an event
+ * happening twice, or not happening at all, which is precisely what this history exists to rule out.
+ */
+export interface StyleDecisionCursor {
+  readonly decidedAt: Date;
+  readonly id: string;
+}
+
 export interface StyleExampleFilter {
-  readonly status?: "ACTIVE" | "SUGGESTED" | "REJECTED" | "ARCHIVED";
+  /**
+   * One status, or several read as one list.
+   *
+   * Several, because the screen's "not in use" list is archived examples *and* declined suggestions —
+   * the same thing to the person looking at it. Reading them as two pages and concatenating made the
+   * merged list unpageable: one cursor cannot continue two queries, so the second source was always its
+   * own first page and everything past it was unreachable. One query over both statuses is one keyset,
+   * one cursor and one link, which is the only shape in which "every example is reachable" is true by
+   * construction rather than by argument.
+   */
+  readonly status?: StyleExampleStatusValue | readonly StyleExampleStatusValue[];
   readonly provenance?: "HUMAN_TYPED" | "HUMAN_EDITED_DRAFT";
   readonly scope?: StyleScope;
 }
@@ -293,7 +353,7 @@ export async function listStyleExamples(
     where: {
       workspaceId: scope.workspaceId,
       ...exampleScopeFilter(filter.scope, scope.businessProfileId),
-      ...(filter.status === undefined ? {} : { status: filter.status }),
+      ...statusFilter(filter.status),
       ...(filter.provenance === undefined ? {} : { provenance: filter.provenance }),
       ...(page.cursor === undefined
         ? {}
@@ -313,12 +373,21 @@ export async function listStyleExamples(
       sourceMessageId: true,
       createdAt: true,
       approvedByUser: { select: { name: true } },
+      // The count first, because it is the only way to know that the window below is partial. Prisma's
+      // `take` gives no indication of what it left behind, and a window that cannot say it is a window is
+      // the truncation this read used to perform in silence.
+      //
+      // Filtered by workspace like the window under it. The foreign key and `decide()` make the two agree
+      // today, but a count and the rows it describes derived under different predicates is a pair that
+      // only agrees by argument.
+      _count: { select: { decisions: { where: { workspaceId: scope.workspaceId } } } },
       decisions: {
-        orderBy: [{ decidedAt: "asc" }, { id: "asc" }],
-        // Bounded, like every other read in this file. A lifecycle longer than this is one somebody is
-        // fighting over, and the first decisions are the ones that explain how it got here.
+        // Newest first *in the query*, so the window is anchored at the end that holds the current state;
+        // it is reversed below, because the list reads as a story and a lifecycle out of order is not a
+        // lifecycle. Bounded, like every other read in this file.
+        orderBy: [{ decidedAt: "desc" }, { id: "desc" }],
         take: MAX_DECISIONS,
-        select: { decision: true, decidedAt: true, decidedBy: { select: { name: true } } },
+        select: { id: true, decision: true, decidedAt: true, decidedBy: { select: { name: true } } },
       },
     },
   });
@@ -338,14 +407,155 @@ export async function listStyleExamples(
       sourceDraftId: row.sourceDraftId,
       sourceMessageId: row.sourceMessageId,
       createdAt: row.createdAt,
-      decisions: row.decisions.map((decision) => ({
-        decision: decision.decision,
-        decidedByName: decision.decidedBy.name,
-        decidedAt: decision.decidedAt,
-      })),
+      ...lifecycleWindowOf(row._count.decisions, row._count.decisions, row.decisions),
     })),
     ...(rows.length > limit && last !== undefined ? { nextCursor: { createdAt: last.createdAt, id: last.id } } : {}),
   };
+}
+
+/** What one decision row looks like wherever the lifecycle is read. */
+type DecisionRow = {
+  readonly id: string;
+  readonly decision: StyleDecisionValue;
+  readonly decidedAt: Date;
+  readonly decidedBy: { readonly name: string | null };
+};
+
+/**
+ * Turns a newest-first batch of decisions into the oldest-first window a reader sees.
+ *
+ * One function for both readers — the example list and the lifecycle page — because they must agree about
+ * what "earlier" means. Two implementations of a windowing rule is how a cursor comes to skip the row it
+ * was supposed to start before.
+ *
+ * `total` is the count of decisions at or before this batch's own starting point, so `earlierDecisions` is
+ * what remains unreached rather than the lifecycle's whole length.
+ */
+function lifecycleWindowOf(
+  reachable: number,
+  total: number,
+  newestFirst: readonly DecisionRow[],
+): {
+  readonly decisions: readonly StyleDecisionView[];
+  readonly earlierDecisions: number;
+  readonly laterDecisions: number;
+  readonly earlierCursor?: StyleDecisionCursor;
+} {
+  const oldestShown = newestFirst.at(-1);
+  // A page with no rows has no window to describe, so nothing can be "earlier than" it: everything that
+  // exists is simply not shown here, which belongs on the later side because that is where the reader's
+  // route back points. Without this the empty page could report a count with no link to follow — the one
+  // state where the two halves of the original finding would both be true at once.
+  const earlierDecisions = newestFirst.length === 0 ? 0 : Math.max(reachable - newestFirst.length, 0);
+  return {
+    // Reversed rather than re-queried: the window is already the rows wanted, and asking the database for
+    // them again in the other order would be a second query that could disagree with the first.
+    decisions: [...newestFirst].toReversed().map((decision) => ({
+      id: decision.id,
+      decision: decision.decision,
+      decidedByName: decision.decidedBy.name,
+      decidedAt: decision.decidedAt,
+    })),
+    earlierDecisions,
+    // Everything this page does not reach backwards from its own starting point: the lifecycle's length
+    // less the part at or before the cursor. On the newest-anchored window `reachable === total`, so it
+    // is zero, which is what makes the common case silent.
+    laterDecisions: newestFirst.length === 0 ? total : Math.max(total - reachable, 0),
+    // Present when there is something earlier to reach *and* a row to start from, so a caller cannot
+    // offer a link to nothing. A page with no rows has nothing to page before, whatever the count says.
+    ...(earlierDecisions > 0 && oldestShown !== undefined
+      ? { earlierCursor: { decidedAt: oldestShown.decidedAt, id: oldestShown.id } }
+      : {}),
+  };
+}
+
+export interface StyleLifecyclePage {
+  readonly styleExampleId: string;
+  /** This page's decisions, oldest first within the page. */
+  readonly decisions: readonly StyleDecisionView[];
+  /** How many decisions happened before this page. */
+  readonly earlierDecisions: number;
+  /** How many happened after it — the half a page into the past necessarily hides. */
+  readonly laterDecisions: number;
+  readonly earlierCursor?: StyleDecisionCursor;
+  /** The lifecycle's whole length, so a reader is told where this page sits in it. */
+  readonly totalDecisions: number;
+}
+
+/**
+ * One example's lifecycle, a page at a time, paging backwards into the past (R5 re-review).
+ *
+ * This exists because a bounded window is not a complete history, and the reviewer was right that a
+ * bound with no continuation makes events unreachable rather than merely unshown. Every decision is now
+ * reachable: the example list carries the most recent window and a cursor, and each call here returns the
+ * page immediately before the cursor it was given, with the cursor for the one before that.
+ *
+ * Scoped through the caller's own context like every other read in this file, so a cursor carries no
+ * authority — the worst a forged one can do is point into this profile's own history.
+ *
+ * `null` for an example this context cannot see, which is a different answer from an empty lifecycle: an
+ * example in another workspace and an example nobody has decided anything about must not read the same.
+ */
+export async function readStyleExampleLifecycle(
+  db: DbExecutor,
+  context: BusinessProfileContext,
+  styleExampleId: string,
+  page: { readonly limit?: number; readonly before?: StyleDecisionCursor } = {},
+): Promise<StyleLifecyclePage | null> {
+  const scope = profileScopeOf(context);
+  const limit = Math.min(Math.max(Math.trunc(page.limit ?? MAX_DECISIONS), 1), MAX_PAGE);
+  const example = await db.styleExample.findFirst({
+    where: {
+      id: styleExampleId,
+      workspaceId: scope.workspaceId,
+      ...exampleScopeFilter(undefined, scope.businessProfileId),
+    },
+    select: { id: true, _count: { select: { decisions: { where: { workspaceId: scope.workspaceId } } } } },
+  });
+  if (example === null) {
+    return null;
+  }
+
+  const before = page.before;
+  const earlierThanCursor = {
+    ...(before === undefined
+      ? {}
+      : { OR: [{ decidedAt: { lt: before.decidedAt } }, { decidedAt: before.decidedAt, id: { lt: before.id } }] }),
+  };
+  const [rows, reachable] = await Promise.all([
+    db.styleExampleDecision.findMany({
+      where: { workspaceId: scope.workspaceId, styleExampleId: example.id, ...earlierThanCursor },
+      orderBy: [{ decidedAt: "desc" }, { id: "desc" }],
+      take: limit,
+      select: { id: true, decision: true, decidedAt: true, decidedBy: { select: { name: true } } },
+    }),
+    // How many decisions are at or before this page's starting point. Counted rather than derived from
+    // the total, because the page's own position is what decides whether there is anything earlier — and
+    // a cursor in the middle of the lifecycle makes "total minus shown" the wrong number.
+    db.styleExampleDecision.count({ where: { workspaceId: scope.workspaceId, styleExampleId: example.id, ...earlierThanCursor } }),
+  ]);
+
+  return {
+    styleExampleId: example.id,
+    ...lifecycleWindowOf(reachable, example._count.decisions, rows),
+    totalDecisions: example._count.decisions,
+  };
+}
+
+/**
+ * One status, several, or no constraint at all.
+ *
+ * Narrowed in a function rather than inline, because `Array.isArray` on a `readonly` union does not narrow
+ * well enough inside an object spread — and a cast there would be a cast in the one place the status
+ * reaches the database.
+ */
+function statusFilter(
+  status: StyleExampleStatusValue | readonly StyleExampleStatusValue[] | undefined,
+): { readonly status?: StyleExampleStatusValue | { readonly in: StyleExampleStatusValue[] } } {
+  if (status === undefined) {
+    return {};
+  }
+  return typeof status === "string" ? { status } : { status: { in: [...status] } };
 }
 
 function exampleScopeFilter(wanted: StyleScope | undefined, businessProfileId: string) {
