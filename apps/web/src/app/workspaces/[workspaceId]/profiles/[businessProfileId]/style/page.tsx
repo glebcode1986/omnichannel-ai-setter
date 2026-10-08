@@ -39,8 +39,25 @@ export default async function StylePage({
   const target = { workspaceId, businessProfileId };
   // Every read this screen needs, assembled where a test can call it. Each list carries its own cursor,
   // so paging the suggestions cannot move the verified library underneath the operator.
-  const { t, layers, verified, suggestions, retired, test, ask, basePath, verifiedNextHref, suggestionsNextHref, retiredNextHref } =
-    await loadStyleScreen(workspaceId, businessProfileId, query);
+  const {
+    t,
+    layers,
+    verified,
+    suggestions,
+    retired,
+    test,
+    ask,
+    basePath,
+    verifiedNextHref,
+    suggestionsNextHref,
+    retiredNextHref,
+    // One example's lifecycle, opened at a point in the past, and the links into and out of it. Handed to
+    // all three lists: the open example is in exactly one of them, and each list checks whether it is one
+    // of its own rather than the page guessing which section to give it to.
+    lifecycle,
+    earlierHistoryHrefs,
+    latestHistoryHref,
+  } = await loadStyleScreen(workspaceId, businessProfileId, query);
   const actions = {
     approve: approveStyleExampleAction,
     reject: rejectStyleExampleAction,
@@ -82,6 +99,9 @@ export default async function StylePage({
           kind="SUGGESTED"
           actions={actions}
           {...(suggestionsNextHref === undefined ? {} : { nextHref: suggestionsNextHref })}
+          earlierHistoryHrefs={earlierHistoryHrefs}
+          {...(lifecycle === undefined ? {} : { lifecycle })}
+          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
         />
       </section>
 
@@ -95,6 +115,9 @@ export default async function StylePage({
           kind="VERIFIED"
           actions={actions}
           {...(verifiedNextHref === undefined ? {} : { nextHref: verifiedNextHref })}
+          earlierHistoryHrefs={earlierHistoryHrefs}
+          {...(lifecycle === undefined ? {} : { lifecycle })}
+          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
         />
       </section>
 
@@ -113,6 +136,9 @@ export default async function StylePage({
           kind="RETIRED"
           actions={actions}
           {...(retiredNextHref === undefined ? {} : { nextHref: retiredNextHref })}
+          earlierHistoryHrefs={earlierHistoryHrefs}
+          {...(lifecycle === undefined ? {} : { lifecycle })}
+          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
         />
       </section>
     </>

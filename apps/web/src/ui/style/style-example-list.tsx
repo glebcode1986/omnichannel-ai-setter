@@ -12,9 +12,15 @@
  * And every example carries its lifecycle, because the status is the end of a story rather than the story.
  * "Archived" does not say who withdrew it, and an example rejected, restored and archived again looks
  * identical to one archived on the first day unless the decisions themselves are shown.
+ *
+ * The lifecycle shown with an example is a *window* on it — the most recent decisions, oldest-first
+ * within the window — and when it is a window the pane says so and offers the rest. A history that was
+ * silently cut was the R5 re-review's blocking finding, and the shape of the defect is worth keeping in
+ * mind here: the cut used to fall at the newest end, so the events it hid were the ones that explained
+ * the example's current state. Now the window is anchored there and the cut falls where a reader can ask.
  */
 import Link from "next/link";
-import type { StyleExampleView } from "@omnichannel/db";
+import type { StyleLifecyclePage, StyleExampleView } from "@omnichannel/db";
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
@@ -33,6 +39,22 @@ export interface StyleExampleListProps {
    * not move the other.
    */
   readonly nextHref?: string;
+  /**
+   * One example's lifecycle, opened at a point in the past. Absent unless the URL named an example.
+   *
+   * Replaces that one example's window while it is open; every other example keeps its own. Reading back
+   * through one argument must not disturb the rest of the page.
+   */
+  readonly lifecycle?: StyleLifecyclePage;
+  /**
+   * Where the events before what is shown are, per example id.
+   *
+   * A map rather than a field on the example, because the href depends on the whole request — the other
+   * lists' cursors travel with it — and that is the server's to build, not a component's.
+   */
+  readonly earlierHistoryHrefs?: Readonly<Record<string, string>>;
+  /** Back to the most recent events, when a lifecycle is open. */
+  readonly latestHistoryHref?: string;
   readonly actions: {
     readonly approve: (target: StyleTarget, exampleId: string) => Promise<void>;
     readonly reject: (target: StyleTarget, exampleId: string) => Promise<void>;
@@ -41,11 +63,42 @@ export interface StyleExampleListProps {
   };
 }
 
+/**
+ * Which decisions to draw for this example: the open lifecycle page if it is this example's, else its own
+ * window.
+ *
+ * One function so the list, the "earlier" count and the link cannot disagree about which set is on
+ * screen — three readings of the same question is how a count comes to describe a different page from the
+ * one under it.
+ */
+function lifecycleOf(
+  example: StyleExampleView,
+  lifecycle: StyleLifecyclePage | undefined,
+): {
+  readonly decisions: StyleExampleView["decisions"];
+  readonly earlierDecisions: number;
+  readonly laterDecisions: number;
+} {
+  return lifecycle !== undefined && lifecycle.styleExampleId === example.id
+    ? { decisions: lifecycle.decisions, earlierDecisions: lifecycle.earlierDecisions, laterDecisions: lifecycle.laterDecisions }
+    : { decisions: example.decisions, earlierDecisions: example.earlierDecisions, laterDecisions: example.laterDecisions };
+}
+
 const KNOWN_STATUSES = new Set(["ACTIVE", "SUGGESTED", "REJECTED", "ARCHIVED"]);
 const KNOWN_DECISIONS = new Set(["APPROVED", "REJECTED", "ARCHIVED", "RESTORED"]);
 const KNOWN_PROVENANCE = new Set(["HUMAN_TYPED", "HUMAN_EDITED_DRAFT"]);
 
-export function StyleExampleList({ t, examples, target, kind, actions, nextHref }: StyleExampleListProps) {
+export function StyleExampleList({
+  t,
+  examples,
+  target,
+  kind,
+  actions,
+  nextHref,
+  lifecycle,
+  earlierHistoryHrefs,
+  latestHistoryHref,
+}: StyleExampleListProps) {
   if (examples.length === 0) {
     return (
       <p className="muted" data-empty={kind}>
@@ -56,8 +109,14 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
 
   return (
     <ul className="style-examples">
-      {examples.map((example) => (
-        <li key={example.id} data-example={example.id} data-status={example.status}>
+      {examples.map((example) => {
+        // Derived once. Several call sites of the same pure function is how a count comes to describe a
+        // different page from the one rendered under it.
+        const shown = lifecycleOf(example, lifecycle);
+        const earlierHref = earlierHistoryHrefs?.[example.id];
+        const openHere = lifecycle?.styleExampleId === example.id;
+        return (
+          <li key={example.id} data-example={example.id} data-status={example.status}>
           <p className="muted">{t.t("style.exampleInbound")}</p>
           <p className="message-text" data-inbound="true">
             {example.inboundContext}
@@ -84,12 +143,14 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
             {example.approvedByName === null ? t.t("style.notApproved") : t.t("style.approvedBy", { name: example.approvedByName })}
           </p>
 
-          {example.decisions.length === 0 ? undefined : (
+          {shown.decisions.length === 0 && !openHere ? undefined : (
             <>
               <p className="muted">{t.t("style.historyTitle")}</p>
-              <ol className="style-history" data-history={example.id}>
-                {example.decisions.map((entry) => (
-                  <li key={`${entry.decision}-${entry.decidedAt.toISOString()}`} data-decision={entry.decision}>
+              <ol className="style-history" data-history={example.id} data-earlier={shown.earlierDecisions} data-later={shown.laterDecisions}>
+                {shown.decisions.map((entry) => (
+                  // Keyed by the row's own id. Decision-and-instant collides for two identical decisions
+                  // in one millisecond, which is a pair this history can now legitimately contain.
+                  <li key={entry.id} data-decision={entry.decision}>
                     <time className="muted" dateTime={entry.decidedAt.toISOString()}>
                       {t.t("style.historyEntry", {
                         decision: decisionLabel(t, entry.decision),
@@ -102,6 +163,43 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
                   </li>
                 ))}
               </ol>
+              {/* The two things a window owes a reader: that it is one, and the way to the rest. Without
+                  the first the history reads as complete; without the second it is unreachable, and the
+                  reviewer was right that those are different failures with the same appearance. */}
+              {shown.earlierDecisions === 0 ? undefined : (
+                <p className="muted" data-earlier-count={example.id}>
+                  {t.plural("style.historyEarlier", shown.earlierDecisions, { count: t.number(shown.earlierDecisions) })}
+                </p>
+              )}
+              {/* And the other direction, which is the one worth being careful about. A page read back
+                  into the past necessarily hides what came after it, and without this the pane would show
+                  a history ending in "Restored" under a badge reading "Archived" — the same truncation
+                  that was blocked, one click later rather than on the first screen. */}
+              {shown.laterDecisions === 0 ? undefined : (
+                <p className="muted" data-later-count={example.id}>
+                  {t.plural("style.historyLater", shown.laterDecisions, { count: t.number(shown.laterDecisions) })}
+                </p>
+              )}
+              {/* How long the whole argument is, for a reader who has paged into the middle of it.
+                  Without it they can follow links backwards with no idea where they are in it. */}
+              {openHere && lifecycle !== undefined ? (
+                <p className="muted" data-history-total={example.id}>
+                  {t.t("style.historyTotal", { count: t.number(lifecycle.totalDecisions) })}
+                </p>
+              ) : undefined}
+              {earlierHref === undefined ? undefined : (
+                <Link className="button" href={earlierHref} data-action="history-earlier" data-example-history={example.id}>
+                  {t.t("style.historyEarlierLink")}
+                </Link>
+              )}
+              {/* Rendered whenever a history is open, including when the page it opened is empty — a
+                  hand-edited cursor can land past the oldest decision, and the way back must not
+                  disappear along with the rows. */}
+              {openHere && latestHistoryHref !== undefined ? (
+                <Link className="button" href={latestHistoryHref} data-action="history-latest">
+                  {t.t("style.historyLatestLink")}
+                </Link>
+              ) : undefined}
             </>
           )}
 
@@ -134,8 +232,9 @@ export function StyleExampleList({ t, examples, target, kind, actions, nextHref 
               </button>
             </form>
           )}
-        </li>
-      ))}
+          </li>
+        );
+      })}
       {nextHref === undefined ? undefined : (
         <li data-load-more={kind}>
           <Link className="button" href={nextHref}>
