@@ -238,8 +238,11 @@ which is current.
 | #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** twice: at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (R5 re-review, which closed four and kept three). All ten are repaired on this branch; awaiting independent re-review. |
 | #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
 
-The #79 repairs are summarised under "P5-04" below. They are implemented at this branch's head and merged
-down the chain by ordinary merge; no rebase, no force-push, no merge to `main`.
+The #79 repairs are summarised under "P5-04" below. They live **only** on
+`feat/p5-04-ai-settings-simulation` and are deliberately **not propagated**: the repair directive on that
+PR forbids merging them into #80 or later until #79 has an independent PASS, so #80 and below still carry
+the pre-repair #79. Do not read the #78 propagation described in the next paragraph as covering these —
+that one is #78's and it is finished. No rebase, no force-push, no merge to `main`.
 
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
@@ -252,7 +255,7 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-04 / Issue #30 — the seven R5 blockers on PR #79, repaired.**
+1. **P5-04 / Issue #30 — ten R5 blockers on PR #79 across two reviews, all repaired.**
 
    **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
    and covered none of the seven cases, which is the usual shape of these findings: every one of them is
@@ -383,8 +386,9 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
      `automationPolicy.create`/`upsert`/`createMany` in the repository is in a test, no migration inserts
      one, and `automation_policies` has no triggers. `createBusinessProfile` creates the profile and
      nothing else. So for a real Business Profile `readPolicies` returns `[]`, the settings form never
-     renders, and `limitsFrom(undefined, …)` leaves automation at mode OFF with a confidence threshold of
-     1 — permanently off and unconfigurable. Every guard on this branch is exercised only against a row
+     renders, and automation is left permanently off and unconfigurable: `resolveEffectiveMode` falls
+     through to `OFF` with no policy row (`automation-mode.ts`), and `limitsFrom` defaults the confidence
+     threshold to 1 (`delivery-store.ts`) — two functions, not one, and `limitsFrom` sets no mode at all. Every guard on this branch is exercised only against a row
      the fixtures insert by hand; the test helper is literally named `ensureDefault`. The fix is one
      nested `create` in `createBusinessProfile`, and I measured it: **20 test files in `packages/db` and 8
      in `apps/web` fail**, because their fixtures create the row unconditionally and then collide with

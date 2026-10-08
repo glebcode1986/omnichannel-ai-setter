@@ -54,6 +54,14 @@ describe("the refused proposal", () => {
     expect(decodeProposal(encodeProposal(PROPOSAL))).toEqual(PROPOSAL);
   });
 
+  it("distinguishes two versions of otherwise identical values", () => {
+    // What makes "the seal covers the version" true. The seal signs the encoded proposal, and the version
+    // is part of it — so this is the property that guarantees an acknowledgement cannot be carried across
+    // somebody else's change. If `expectedVersion` ever left the encoding, the seal would silently stop
+    // covering it and this is the test that would say so.
+    expect(encodeProposal({ ...PROPOSAL, expectedVersion: 7 })).not.toBe(encodeProposal({ ...PROPOSAL, expectedVersion: 8 }));
+  });
+
   it("is URL-safe, so the link that carries it survives being a link", () => {
     const encoded = encodeProposal(PROPOSAL);
 

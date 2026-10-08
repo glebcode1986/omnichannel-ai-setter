@@ -423,7 +423,9 @@ export async function listPolicyAudits(
     },
     orderBy: [{ changedAt: "desc" }, { id: "desc" }],
     // One more than asked for, which is how this read knows there is a next page rather than guessing
-    // from a full one.
+    // from a full one. The cursor predicate above is a two-arm `OR` rather than a row comparison, so the
+    // ordering is not always answered from the index — the migration records the measured plans and why
+    // the raw-SQL seek is not worth it at this table's size.
     take: limit + 1,
     select: { id: true, channelAccountId: true, changedAt: true, impacts: true, before: true, after: true, actor: { select: { name: true } } },
   });

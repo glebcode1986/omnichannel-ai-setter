@@ -54,6 +54,10 @@ CHANGES_REQUESTED at `0b62c9e…` (seven blockers) and again at `d67da89…` (fo
 repaired, awaiting independent re-review; #80 and everything below held and **not ready for review** until
 #79 passes, because they contain #79.
 
+**The #79 repairs are not propagated.** They exist only on `feat/p5-04-ai-settings-simulation`; the repair
+directive forbids merging them into #80 or later until #79 passes, so every branch below still carries the
+pre-repair #79 and will need this merged down once the PASS lands.
+
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
 **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.

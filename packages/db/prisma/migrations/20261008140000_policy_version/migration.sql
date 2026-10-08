@@ -15,16 +15,24 @@ ALTER TABLE "automation_policies" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 
 -- nothing downstream could interpret.
 ALTER TABLE "automation_policies" ADD CONSTRAINT "automation_policies_version_check" CHECK ("version" >= 1);
 
--- The history is read newest-first in pages, ordered by the `(changed_at, id)` pair, and this index is
--- that order: it removes the sort, so a page is an index-only scan rather than a scan plus a sort.
+-- The history is read newest-first, ordered by the `(changed_at, id)` pair, and this index is that order.
 --
--- What it does **not** do is turn the cursor into an index bound. The page predicate is expressed as
--- `changed_at < $1 OR (changed_at = $1 AND id < $2)`, and Postgres cannot use a two-arm OR as a seek — it
--- scans from the start of the key and filters, so a deep page costs O(offset). A row comparison
--- (`(changed_at, id) < ($1, $2)`) is searchable and would make it a true seek, at the price of raw SQL on
--- this read path. Measured at 200k rows the difference is 14ms against 0.03ms; a workspace's own policy
--- history is a few hundred rows, so the sort is the part worth removing and the seek is not yet worth the
--- raw SQL. Stated rather than implied, because "resumable" and "cheap to resume" are different claims.
+-- What the index does **not** do is make the cursor a seek, and it is worth recording what it does instead
+-- rather than assuming, because the answer is not the obvious one. Prisma emits the page predicate as
+-- `changed_at < $1 OR (changed_at = $1 AND id < $2)`, and measured here on 200k rows with exactly this
+-- index, Postgres 17 picks one of two plans depending on how selective the cursor is:
+--
+--   * deep cursor  — `BitmapOr` over this index and the primary key, then a Bitmap Heap Scan, then an
+--                    explicit `Sort`. So the OR *is* answered from indexes, and the ordering this index
+--                    exists to provide is thrown away and recomputed.
+--   * shallow one  — `Index Only Scan` with the whole OR as a `Filter`.
+--
+-- A row comparison (`(changed_at, id) < ($1, $2)`) is a single `Index Only Scan` with the cursor as an
+-- `Index Cond`, no heap fetch and no sort. That is the shape worth having, and it needs `$queryRaw` plus a
+-- hand-written mapping of the actor join — a second statement of the Prisma `select` to keep in step. A
+-- workspace's own policy history is a few hundred rows, so the trade is not worth it today; the plans are
+-- written down so the next person does not re-derive them, and the index stays because the order it
+-- describes is the order this table is read in.
 --
 -- Resumability itself comes from the pair being unique — `id` is the primary key — not from this index.
 DROP INDEX IF EXISTS "policy_change_audits_history_idx";

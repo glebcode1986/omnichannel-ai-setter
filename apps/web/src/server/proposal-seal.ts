@@ -27,14 +27,22 @@ import { encodeProposal, type PolicyProposal } from "./settings-view";
 const SEAL_BYTES = 32;
 
 /**
- * The bytes signed: the encoded proposal, the version, and the impacts in a fixed order.
+ * The bytes signed: the encoded proposal and the impacts, in a fixed order.
  *
- * Sorted, because the impacts are a set to the comparison that uses them, and a seal that depended on the
- * server's enumeration order would stop verifying the day that order changed. Length-prefixed by the
- * separator so no field can be shifted into another — `a|bc` and `ab|c` must not sign the same bytes.
+ * **Two fields, not three.** The version was signed separately as well until a mutation run showed that
+ * removing it broke no test — because `encodeProposal` already serialises `expectedVersion`, so the
+ * version was in the signed bytes twice and the explicit copy could not be the thing that caught a change.
+ * One statement of one fact; `settings-view.test.ts` pins that the encoded proposal distinguishes two
+ * versions, which is what makes "the seal covers the version" true by construction rather than by a second
+ * concatenation nothing exercises.
+ *
+ * The impacts are sorted, because they are a set to the comparison that uses them and a seal keyed to the
+ * server's enumeration order would stop verifying the day that order changed. The separator cannot be
+ * shifted between fields: base64url contains no `|`, and the impact codes are a closed vocabulary of
+ * `[A-Z_]`, so there is exactly one way to split these bytes.
  */
 function sealedBytes(proposal: PolicyProposal, impacts: readonly PolicyImpact[]): string {
-  return [encodeProposal(proposal), String(proposal.expectedVersion), [...impacts].sort().join(",")].join("|");
+  return [encodeProposal(proposal), [...impacts].sort().join(",")].join("|");
 }
 
 /** The seal the refusal hands to the page, for the form to post back with the acknowledgement. */
@@ -47,17 +55,15 @@ export function sealProposal(secret: string, proposal: PolicyProposal, impacts: 
  *
  * Compared in constant time, and only after the lengths match, because `timingSafeEqual` throws on a
  * length mismatch and both lengths are attacker-visible anyway.
+ *
+ * The length check is the only guard needed before that comparison, and it does the work of the two that
+ * used to precede it. An empty string decodes to zero bytes and a malformed one to some other length, so
+ * both are refused here; `Buffer.from(string, "base64url")` does not throw on bad input, it ignores what
+ * it cannot decode. A mutation run is what established that: deleting the empty-string check broke no
+ * test, because nothing could reach it that this check does not already answer.
  */
 export function proposalSealed(secret: string, proposal: PolicyProposal, impacts: readonly PolicyImpact[], seal: string): boolean {
-  if (seal === "") {
-    return false;
-  }
-  let provided: Buffer;
-  try {
-    provided = Buffer.from(seal, "base64url");
-  } catch {
-    return false;
-  }
+  const provided = Buffer.from(seal, "base64url");
   if (provided.length !== SEAL_BYTES) {
     return false;
   }
