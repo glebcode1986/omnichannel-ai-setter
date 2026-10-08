@@ -347,7 +347,12 @@ export async function setPlatformMember(
     };
     const member = await tx.platformMember.upsert({
       where: { userId: input.userId },
-      create: { userId: input.userId, ...data },
+      // `createdAt` comes from the same instant as the revocation, rather than from the column default,
+      // so a row written with an explicit `at` is consistent with itself: `platform_members_shape_check`
+      // requires a revocation not to precede the creation, and a caller that grants and withdraws at one
+      // stated instant must not be refused because the database clock moved in between. The update branch
+      // leaves `createdAt` alone — when the role was first granted is not something a later change edits.
+      create: { userId: input.userId, createdAt: at, ...data },
       update: data,
       select: { id: true },
     });

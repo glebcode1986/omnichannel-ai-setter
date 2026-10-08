@@ -73,7 +73,13 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
       await expect(authorizePlatformAccess(db(), outsider)).rejects.toThrow(PlatformAccessDeniedError);
 
       const leaver = await createTestUser(db(), "platform-leaver");
-      await db().platformMember.create({ data: { userId: leaver, role: "SUPPORT", note: "left", revokedAt: NOW } });
+      // Both timestamps from the fixture clock, so the row is consistent with itself whatever the wall
+      // clock says. `created_at` defaults to `now()`, and `platform_members_shape_check` requires a
+      // revocation not to precede the creation — so pinning only `revokedAt` made this test depend on
+      // real time being earlier than the constant. It passed for an afternoon and then did not.
+      await db().platformMember.create({
+        data: { userId: leaver, role: "SUPPORT", note: "left", createdAt: NOW, revokedAt: NOW },
+      });
       // Identical refusal: a distinguishable one would tell somebody which user ids are staff.
       await expect(authorizePlatformAccess(db(), leaver)).rejects.toThrow(PlatformAccessDeniedError);
       await expect(authorizePlatformAccess(db(), "")).rejects.toThrow(PlatformAccessDeniedError);
@@ -620,6 +626,22 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
 
       // Withdrawn: the row stays, because audit rows point at it, and authorization refuses.
       await setPlatformMember(db(), admin, { userId: newcomer, role: "SUPPORT", note: "left the rota", revoke: true, at: NOW });
+      await expect(authorizePlatformAccess(db(), newcomer)).rejects.toThrow(PlatformAccessDeniedError);
+    });
+
+    it("dates the row from the stated instant, not from the database clock", async () => {
+      const newcomer = await createTestUser(db(), "platform-backdated");
+      const backdated = new Date("2026-09-01T09:00:00.000Z");
+
+      await setPlatformMember(db(), admin, { userId: newcomer, role: "SUPPORT", note: "joined the rota", at: backdated });
+      const member = await db().platformMember.findUniqueOrThrow({ where: { userId: newcomer }, select: { createdAt: true } });
+      expect(member.createdAt).toEqual(backdated);
+
+      // And a withdrawal at that same instant is accepted. `platform_members_shape_check` compares the two
+      // columns, so taking the creation from `now()` while writing a stated revocation refuses every
+      // backdated withdrawal — and makes any test that states an instant depend on the wall clock not yet
+      // having reached it.
+      await setPlatformMember(db(), admin, { userId: newcomer, role: "SUPPORT", note: "left the rota", revoke: true, at: backdated });
       await expect(authorizePlatformAccess(db(), newcomer)).rejects.toThrow(PlatformAccessDeniedError);
     });
 
