@@ -1888,7 +1888,11 @@ model StyleExample {
 /// it?", because each decision overwrites the last. An example rejected, restored and archived again is a
 /// different thing from one archived on the first day, and the Style screen is asked to tell them apart.
 ///
-/// Append-only by use rather than by trigger: nothing in this package updates or deletes a row here.
+/// Append-only at the database boundary, not by convention: a trigger refuses `UPDATE` and `DELETE`, and a
+/// statement-level one refuses `TRUNCATE` (migration `20261008100000_style_decisions_append_only`). It
+/// said "append-only by use" before, meaning that nothing in this package edited a row — which is a
+/// statement about one package's current source and not about the table, and the case that matters is
+/// precisely the one where that source is not what is running.
 model StyleExampleDecision {
   id             String        @id @default(uuid(7))
   workspaceId    String        @map("workspace_id")
@@ -1902,7 +1906,10 @@ model StyleExampleDecision {
   styleExample StyleExample @relation(fields: [styleExampleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   decidedBy    User         @relation(fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  @@index([workspaceId, styleExampleId, decidedAt])
+  /// The keyset the complete lifecycle is paged by, newest first (R5 re-review). `decidedAt` alone is not
+  /// unique, and a cursor on an instant with no tiebreak silently repeats or skips rows — which on a page
+  /// of audit history reads as an event happening twice or not at all.
+  @@index([workspaceId, styleExampleId, decidedAt(sort: Desc), id(sort: Desc)], map: "style_example_decisions_lifecycle_idx")
   @@map("style_example_decisions")
 }
 
