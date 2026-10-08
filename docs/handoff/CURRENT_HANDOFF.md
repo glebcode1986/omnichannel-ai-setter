@@ -288,11 +288,14 @@ Idempotency is the same decision digest the review path uses.
    whole defect inverted: the cut used to fall at the newest end, so the events it hid were the ones that
    explained an example's current state. The window reports how many earlier events it left behind and
    carries a `(decidedAt, id)` cursor; `readStyleExampleLifecycle` returns the page before any cursor, with
-   the cursor for the one before that, so every decision of a reachable example is reachable by following
-   links the screen renders. The qualification is deliberate and pre-existing: the rejected half of the
-   retired list is still read with no cursor of its own, so a profile with more than twenty-five rejected
-   suggestions cannot reach the twenty-sixth — nor, therefore, its history. That is the accepted
-   retired-list repair's own limit and is left alone here rather than widened into this change.
+   the cursor for the one before that, so every decision is reachable by following links the screen
+   renders — and every example is, which is the part this paragraph used to qualify. It recorded that the
+   rejected half of the retired list had no cursor of its own and that a profile with more than
+   twenty-five declined suggestions could not reach the twenty-sixth. That was true when it was written
+   and is no longer: item 1 above reads the retired list as **one keyset over `ARCHIVED` and `REJECTED`**,
+   so there is no twenty-five-row rejected limit and no second source for a row to fall behind. The
+   sentence is corrected rather than deleted, because the sequence matters — naming the gap in an
+   evidence comment is what led to it being fixed rather than inherited.
 
    Both halves of the cursor travel because `decided_at` is not unique — two decisions can share a
    millisecond, and a cursor on an instant alone silently repeats or skips rows.
