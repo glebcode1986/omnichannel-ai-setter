@@ -293,7 +293,17 @@ export interface StyleDecisionCursor {
 }
 
 export interface StyleExampleFilter {
-  readonly status?: "ACTIVE" | "SUGGESTED" | "REJECTED" | "ARCHIVED";
+  /**
+   * One status, or several read as one list.
+   *
+   * Several, because the screen's "not in use" list is archived examples *and* declined suggestions —
+   * the same thing to the person looking at it. Reading them as two pages and concatenating made the
+   * merged list unpageable: one cursor cannot continue two queries, so the second source was always its
+   * own first page and everything past it was unreachable. One query over both statuses is one keyset,
+   * one cursor and one link, which is the only shape in which "every example is reachable" is true by
+   * construction rather than by argument.
+   */
+  readonly status?: StyleExampleStatusValue | readonly StyleExampleStatusValue[];
   readonly provenance?: "HUMAN_TYPED" | "HUMAN_EDITED_DRAFT";
   readonly scope?: StyleScope;
 }
@@ -321,7 +331,7 @@ export async function listStyleExamples(
     where: {
       workspaceId: scope.workspaceId,
       ...exampleScopeFilter(filter.scope, scope.businessProfileId),
-      ...(filter.status === undefined ? {} : { status: filter.status }),
+      ...statusFilter(filter.status),
       ...(filter.provenance === undefined ? {} : { provenance: filter.provenance }),
       ...(page.cursor === undefined
         ? {}
@@ -508,6 +518,22 @@ export async function readStyleExampleLifecycle(
     ...lifecycleWindowOf(reachable, example._count.decisions, rows),
     totalDecisions: example._count.decisions,
   };
+}
+
+/**
+ * One status, several, or no constraint at all.
+ *
+ * Narrowed in a function rather than inline, because `Array.isArray` on a `readonly` union does not narrow
+ * well enough inside an object spread — and a cast there would be a cast in the one place the status
+ * reaches the database.
+ */
+function statusFilter(
+  status: StyleExampleStatusValue | readonly StyleExampleStatusValue[] | undefined,
+): { readonly status?: StyleExampleStatusValue | { readonly in: StyleExampleStatusValue[] } } {
+  if (status === undefined) {
+    return {};
+  }
+  return typeof status === "string" ? { status } : { status: { in: [...status] } };
 }
 
 function exampleScopeFilter(wanted: StyleScope | undefined, businessProfileId: string) {

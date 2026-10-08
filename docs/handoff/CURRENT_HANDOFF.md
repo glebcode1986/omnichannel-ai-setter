@@ -226,11 +226,39 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
-1. **P5-06 / Issue #32 — the lifecycle-history blocker on PR #78, repaired and awaiting independent
-   re-review.**
+1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
+   independent re-review.**
 
-   **Reviewed head:** `d9d1108d7bf974002b686afd32a4c3327d761558`, the docs-only handoff commit, which
-   Astra re-reviewed and returned `CHANGES_REQUESTED` on.
+   **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
+   immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
+   defect — the one the previous evidence comment had named and deliberately left alone as pre-existing.
+
+   The retired list is archived examples *and* declined suggestions, which are one thing to the person
+   looking at them. They were read as two pages and concatenated: `ARCHIVED` consumed the `retired`
+   cursor while `REJECTED` was always its own first twenty-five, and the merged page inherited
+   continuation only from the archived half. One cursor cannot continue two queries, so the twenty-sixth
+   declined suggestion was unreachable by any rendered link — and its lifecycle went with it, because a
+   history only opens for an example that is on the page.
+
+   The fix is one query over both statuses rather than a second cursor. `StyleExampleFilter.status` now
+   takes one status or several, and the screen asks for `["ARCHIVED", "REJECTED"]` with the `retired`
+   cursor. That makes reachability a property of the query rather than an argument about it:
+   `(createdAt desc, id desc)` over both statuses is total and stable, so following the cursor visits
+   every row exactly once whichever status it has. The merge is deleted rather than repaired.
+
+   One consequence worth knowing: the retired list is now ordered newest-first across both statuses
+   instead of all archived followed by all rejected. Every one of the screen's existing tests passed
+   unchanged, so nothing accepted was pinned to the old grouping.
+
+   **Regressions:** twenty-eight declined suggestions and three withdrawn examples, walked using nothing
+   but the link the screen renders, asserting every row is reached and reached once; the lifecycle of a
+   row only a later page reaches is opened on the page that reached it; and the store-level contract —
+   several statuses read as one keyset, paged two at a time, arriving once each. Mutation-checked:
+   restoring the two concatenated pages fails both screen regressions.
+
+   **Earlier heads in this repair chain:** `d9d1108d7bf974002b686afd32a4c3327d761558` was the docs-only
+   handoff commit; `66a317fa0330e29b6bed9238286158fde48f9c01` added the immutability and lifecycle
+   repair, both now accepted.
 
    Five of the six earlier blocker areas are accepted and this repair changes the behaviour of none of
    them: the retired-example UI, the production suggestion/provenance flow, workspace-scoped example

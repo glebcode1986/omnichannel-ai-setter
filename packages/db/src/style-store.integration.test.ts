@@ -25,6 +25,7 @@ import {
   saveStyleProfile,
   suggestStyleExample,
   type StyleDecisionCursor,
+  type StyleExampleCursor,
 } from "./style-store";
 import { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
@@ -615,6 +616,50 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
         }),
       ).rejects.toThrow(/append-only/u);
       expect(await db().styleExampleDecision.findMany({ where: { styleExampleId: id }, select: { decision: true } })).toEqual([{ decision: "REJECTED" }]);
+    }, 180_000);
+
+    it("reads several statuses as one keyset, so a merged list can be paged", async () => {
+      // The contract the retired list needs. Two queries concatenated cannot share a cursor: one of them
+      // is always its own first page, and everything past it is unreachable by any link. One query over
+      // both statuses is one keyset, so following the cursor visits every row exactly once whichever
+      // status it has.
+      const archived = await suggested("both statuses, archived half?", "Both statuses, archived half.");
+      await approveStyleExample(db(), profile.context, archived);
+      await archiveStyleExample(db(), profile.context, archived);
+      const rejected = await suggested("both statuses, rejected half?", "Both statuses, rejected half.");
+      await rejectStyleExample(db(), profile.context, rejected);
+
+      const both = await listStyleExamples(db(), profile.context, { status: ["ARCHIVED", "REJECTED"] }, { limit: 100 });
+      const ids = both.examples.map((example) => example.id);
+
+      expect(ids).toContain(archived);
+      expect(ids).toContain(rejected);
+      // One list, one order: newest first across both statuses rather than one status after the other.
+      const times = both.examples.map((example) => example.createdAt.getTime());
+      expect(times).toEqual([...times].sort((left, right) => right - left));
+      // And the single-status form still means exactly one status, which every other caller relies on.
+      const onlyRejected = await listStyleExamples(db(), profile.context, { status: "REJECTED" }, { limit: 100 });
+      expect(onlyRejected.examples.map((example) => example.status)).toEqual(onlyRejected.examples.map(() => "REJECTED"));
+      expect(onlyRejected.examples.map((example) => example.id)).not.toContain(archived);
+
+      // Paged two at a time, the merged set still arrives once each — the property the concatenation
+      // could not have, because its second half never moved.
+      const walked: string[] = [];
+      let cursor: StyleExampleCursor | undefined;
+      let pages = 0;
+      do {
+        const page = await listStyleExamples(db(), profile.context, { status: ["ARCHIVED", "REJECTED"] }, {
+          limit: 2,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        walked.push(...page.examples.map((example) => example.id));
+        cursor = page.nextCursor;
+        pages += 1;
+        expect(pages, "paging must terminate").toBeLessThan(40);
+      } while (cursor !== undefined);
+
+      expect(new Set(walked).size).toBe(walked.length);
+      expect(walked.toSorted()).toEqual(ids.toSorted());
     }, 180_000);
 
     it("filters by status, provenance and scope", async () => {

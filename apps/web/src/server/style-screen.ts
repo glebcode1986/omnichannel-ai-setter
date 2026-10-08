@@ -82,19 +82,24 @@ export async function assembleStyleScreen(
 ): Promise<StyleScreenLists> {
   const ask = one(searchParams["ask"]);
   const history = styleHistoryRequest(searchParams);
-  const [layers, verified, suggestions, archived, rejected] = await Promise.all([
+  const [layers, verified, suggestions, retired] = await Promise.all([
     readStyleProfiles(db, context),
     listStyleExamples(db, context, { status: "ACTIVE" }, { cursor: styleCursorOf(searchParams, "verified") }),
     listStyleExamples(db, context, { status: "SUGGESTED" }, { cursor: styleCursorOf(searchParams, "suggested") }),
-    listStyleExamples(db, context, { status: "ARCHIVED" }, { cursor: styleCursorOf(searchParams, "retired") }),
-    listStyleExamples(db, context, { status: "REJECTED" }, {}),
+    // One query over both statuses, not two pages concatenated.
+    //
+    // They are one list to the person looking — an example that is not in use and could be — and they
+    // were previously read as two and joined. That made the merged list unpageable, and not by a little:
+    // one cursor cannot continue two queries, so `ARCHIVED` consumed the `retired` cursor while
+    // `REJECTED` was always its own first twenty-five, and the twenty-sixth declined suggestion was
+    // unreachable by any rendered link. Its lifecycle went with it, because a history only opens for an
+    // example that is on the page.
+    //
+    // Read as one keyset the reachability is a property of the query rather than an argument about it:
+    // `(createdAt desc, id desc)` over both statuses is total and stable, so following the cursor visits
+    // every row exactly once whichever status it has.
+    listStyleExamples(db, context, { status: ["ARCHIVED", "REJECTED"] }, { cursor: styleCursorOf(searchParams, "retired") }),
   ]);
-  // One list for both, because they are the same thing to the person looking: an example that is not in
-  // use and could be. The cursor follows the archived half, which is the one that grows.
-  const retired: StyleExamplePage = {
-    ...archived,
-    examples: [...archived.examples, ...rejected.examples],
-  };
 
   const onScreen: readonly StyleExampleView[] = [...verified.examples, ...suggestions.examples, ...retired.examples];
 

@@ -62,10 +62,26 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
-### Current work — P5-06 / Issue #32, the lifecycle-history blocker on PR #78
+### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
 
-**Reviewed head:** `d9d1108d7bf974002b686afd32a4c3327d761558` — the docs-only handoff commit, which Astra
-re-reviewed and returned `CHANGES_REQUESTED` on. Five of the six earlier blocker areas are accepted and
+**Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
+immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
+defect — the one the previous evidence comment had named and left alone as pre-existing.
+
+The retired list showed archived examples and declined suggestions as one list and read them as two pages
+concatenated. `ARCHIVED` consumed the `retired` cursor; `REJECTED` was always its own first twenty-five;
+the merged page inherited continuation only from the archived half. One cursor cannot continue two
+queries, so the twenty-sixth declined suggestion was unreachable by any rendered link, and its lifecycle
+with it — a history opens only for an example on the page.
+
+Fixed with one query over both statuses rather than a second cursor: `StyleExampleFilter.status` takes one
+status or several, and the merge is deleted. Reachability is now a property of the query —
+`(createdAt desc, id desc)` over both statuses is total and stable, so the cursor visits every row exactly
+once whichever status it has. The list is ordered newest-first across both statuses instead of archived
+then rejected; every existing screen test passed unchanged.
+
+**Earlier heads in this repair chain:** `d9d1108` was the docs-only handoff; `66a317f` carried the
+immutability and lifecycle repair, both now accepted. Five of the six earlier blocker areas are accepted and
 this repair changes the behaviour of none of them. Four are untouched; the fifth — the retired-example UI —
 shares the component, the assembler and the route that carry the history, so those three files gain props
 and a derivation additively, with the restore control and the badges byte-identical.
