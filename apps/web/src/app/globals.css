@@ -873,3 +873,50 @@ a {
 .knowledge-history li[data-current="false"] {
   opacity: 0.75;
 }
+
+/* ---- style training ----------------------------------------------------------------------------- */
+
+.voice-layers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--gap);
+}
+
+.voice-layers h3 {
+  margin: 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.style-examples {
+  list-style: none;
+  margin: var(--gap) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.style-examples li {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+/* A suggestion is visibly not yet in use: dashed, the same way a pending send is. */
+.style-examples li[data-status="SUGGESTED"] {
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.style-examples .muted {
+  margin: 0;
+  font-size: 13px;
+}
+
+.style-examples .message-text {
+  margin: 2px 0 8px;
+}

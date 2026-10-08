@@ -24,20 +24,26 @@ const OUTCOMES = [
   "STALE",
   "GONE",
   "REJECTED",
+  // The human composer's own outcomes (#29).
   "COMPOSED",
   "COMPOSE_REPLAYED",
   "ALREADY_PENDING",
   "NOT_OPEN",
-  // The Knowledge Library's own family. It was missing, so every save, publish and archive redirected
-  // with an outcome this component then ignored: the operator pressed Save and was told nothing, which
-  // is indistinguishable from pressing Save and nothing happening.
+  // Knowledge and Style report their own outcomes through the same notice, for the same reason: a refusal
+  // that survives a reload is one somebody actually reads. The Knowledge family was missing once, and
+  // every save, publish and archive redirected with an outcome this component then ignored — the
+  // operator pressed Save and was told nothing, which is indistinguishable from nothing happening.
+  "SAVED",
   "CREATED",
   "VERSIONED",
   "UNCHANGED",
   "PUBLISHED",
   "ARCHIVED",
+  "ACTIVATED",
+  "REJECTED_EXAMPLE",
   "RESTORED",
   "CONFLICT",
+  "REFUSED",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
@@ -49,6 +55,7 @@ const REFUSALS = new Set<string>([
   "ALREADY_RESOLVED",
   "ALREADY_PENDING",
   "NOT_OPEN",
+  "REFUSED",
   // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
   // their edit or their publish landed.
   "CONFLICT",

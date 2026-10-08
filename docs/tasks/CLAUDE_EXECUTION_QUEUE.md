@@ -14,6 +14,106 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
+
+**Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
+**Repaired at:** `a3d27e39d479a5c00ea5ebea2e6af9216e869e17`, exact-head GitHub Actions run
+[37608987350](https://github.com/glebcode1986/omnichannel-ai-setter/actions/runs/37608987350) succeeded.
+This note is the canonical handoff the same directive asked for, so the branch head is one commit later
+than the repair SHA; PR #78 carries the current one.
+
+**Independent Astra re-review of the new live head is the only active gate.** Every branch below #78 in
+the chain already contains this repair by ordinary merge, and that propagation happened *before* an
+independent PASS. It is therefore held rather than advanced: nothing from #79 onwards is ready, no review
+is requested on any of them, and the propagated branches are left in place and unrewritten — no rebase,
+no force-push, no merge to `main`, no rollback.
+
+The six findings and what each repair actually was:
+
+1. **Archive and restore were unreachable through the UI.** `loadStyleScreen` loaded only `ACTIVE` and
+   `SUGGESTED` rows, so an archived example or a rejected suggestion vanished from both lists while
+   `StyleExampleList` carried a restore branch nothing could ever reach. The screen now loads and renders
+   the withdrawn rows, which is what makes the acceptance path exist at all.
+2. **The suggestion flow had no production producer.** `suggestStyleExample` was called only by its own
+   tests, and it hard-coded `HUMAN_TYPED` with no `sourceDraftId`, so a `HUMAN_EDITED_DRAFT` suggestion
+   was unconstructible. `resolve-review.ts` now suggests the edited draft through a
+   `StyleLearningStore.suggestEditedDraft` port, so an unticked edit becomes a `SUGGESTED` example with
+   its real provenance and its source draft.
+3. **A workspace-scoped example could not be created from the screen.** The add-example form posted no
+   `scope`, and `scopeFrom` defaults a missing value to `BUSINESS_PROFILE`, so the store's `WORKSPACE`
+   support was unreachable. The form carries the control, and the cross-profile write goes through the
+   same admin-or-owner check `createBusinessProfile` applies.
+4. **The Style test was a retrieval browser, not the contracted test.** `KNOWLEDGE_STYLE_UX` asks for a
+   neutral prompt with a *candidate output* plus the instructions and examples that influenced it;
+   `runStyleTrial` returned a retrieval mode and hits. `style-test.ts` now resolves the effective voice
+   through the worker's own `createStyleProfileStore` path and produces a candidate, with
+   `knowledge: []` by contract so a style test cannot borrow factual retrieval.
+5. **Voice-profile saves were unsafe under the R5 multi-tab contract.** `findFirst` then an
+   unconditional `create`/`update` let two first saves both see no row, and let a stale tab overwrite a
+   newer operator's profile. The write is conditional on an expected `updatedAt`, returns a typed
+   `CONFLICT`, and has deterministic concurrent-create and stale-update regressions.
+6. **The decision history was not persisted.** Reject, archive and restore only replaced `status`, and
+   restore overwrote `approvedByUserId`, destroying the identity of the prior approver. `decide()` writes
+   append-only `style_example_decisions` rows (migration `20261004160000_style_example_decisions`) and
+   never re-stamps the first approver, so the lifecycle is reconstructable.
+
+**Exact-head verification reported for the repair SHA**, in addition to the successful Actions run:
+clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL and Redis infrastructure
+suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
+`db:check-drift` reporting `No difference detected.`
+
+### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
+
+**Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
+immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
+defect — the one the previous evidence comment had named and left alone as pre-existing.
+
+The retired list showed archived examples and declined suggestions as one list and read them as two pages
+concatenated. `ARCHIVED` consumed the `retired` cursor; `REJECTED` was always its own first twenty-five;
+the merged page inherited continuation only from the archived half. One cursor cannot continue two
+queries, so the twenty-sixth declined suggestion was unreachable by any rendered link, and its lifecycle
+with it — a history opens only for an example on the page.
+
+Fixed with one query over both statuses rather than a second cursor: `StyleExampleFilter.status` takes one
+status or several, and the merge is deleted. Reachability is now a property of the query —
+`(createdAt desc, id desc)` over both statuses is total and stable, so the cursor visits every row exactly
+once whichever status it has. The list is ordered newest-first across both statuses instead of archived
+then rejected; every existing screen test passed unchanged.
+
+**Earlier heads in this repair chain:** `d9d1108` was the docs-only handoff; `66a317f` carried the
+immutability and lifecycle repair, both now accepted. Five of the six earlier blocker areas are accepted and
+this repair changes the behaviour of none of them. Four are untouched; the fifth — the retired-example UI —
+shares the component, the assembler and the route that carry the history, so those three files gain props
+and a derivation additively, with the restore control and the badges byte-identical.
+
+One finding remained: the decision history was neither database-enforced append-only nor fully
+retrievable. Both halves were the same shape — a guarantee that held because of what this package's source
+currently does, rather than because the system makes it hold.
+
+**Immutability belongs to the table now.** The history was "append-only by use": nothing in the store
+edits one of these rows, and the foreign key protects the *example* rather than its history. The case that
+matters is the one where this package is not what is running — a support script, a later migration, a
+hand-typed `UPDATE` during an incident. A row trigger refuses `UPDATE` and `DELETE`, and a statement-level
+one refuses `TRUNCATE`, because a row trigger never fires for a truncate and the guarantee would otherwise
+have ended at the one statement that destroys everything rather than editing one thing. Both are
+`ENABLE ALWAYS`: a plain `CREATE TRIGGER` is origin-only, so `SET session_replication_role = 'replica'` —
+an ordinary statement on this connection — would have switched both off in one line, with no DDL and
+nothing recorded. DDL on the table by its owner remains open and no trigger can close it, so the claim is
+"unrewritable by anything short of DDL" rather than "unrewritable".
+
+**The lifecycle is reachable end to end.** The window is still twenty decisions, but the twenty *most
+recent* instead of the twenty oldest — the defect exactly inverted, because the cut used to fall at the
+newest end and hide the events that explained an example's current state. The window says how many earlier
+events it left behind and carries a `(decidedAt, id)` cursor, and `readStyleExampleLifecycle` returns the
+page before any cursor with the cursor for the one before that. The window reports **both** of its edges:
+a page read backwards hides the newer half, and the first version of this repair therefore reproduced the
+blocked defect one click later — a history ending in `RESTORED` under a badge reading "Archived". Both
+halves of the cursor travel: `decided_at` is not unique, and a cursor on an instant alone silently repeats
+or skips rows.
+
+**Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is not
+propagated downstream. No rebase, no force-push, no merge to `main`.
+
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 
 **Reviewed head:** `e4e640a8fafc4fbca92ca64e5588551539410f6e`.
@@ -44,6 +144,10 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Fourth blocker repair — P5-05 / Issue #31, reachability and atomicity
+
+Astra re-reviewed `fcd4983` and returned four blocking findings. All four were in the space between
+pieces that were individually correct.
 
 1. An edited ACTIVE source had no UI path to publish its staged version: the page rendered the
    "saved v2, answered with v1" warning above a control row whose only button was Archive.
@@ -59,6 +163,13 @@ individually correct.
 
 This file was not updated in that cycle, which Astra was right to call out: the canonical launch state was
 still describing the three-blocker repair below.
+   guard moved to `knowledge-submission.ts`, refuses before the store is reached, and is tested against
+   requests no browser builds.
+3. Publish was not bound to the version the operator saw. It travels page → control → action → store
+   now, and a mismatch is a `CONFLICT`.
+4. Publishing and recording an indexing failure could race into a raw `23514` constraint error. Each
+   write names every column its decision came from, and the health write re-decides once against the
+   state that replaced it.
 
 ### Second blocker repair — P5-05 / Issue #31, the concurrency interleavings
 
@@ -87,6 +198,18 @@ temporarily unavailable due to reviewer limits, so Astra is the active reviewer 
    now carry their version and apply conditionally; anything else is `STALE`.
 3. **The library truncated at 25.** The cursor the store returns is now carried through the route's query
    parameters, with the next link built from the incoming query so filters cannot drift.
+
+### Follow-up repair — P5-06 / Issue #32, Style Training's missing pagination
+
+The third instance of the defect Astra raised on #77, found by the same sweep over every paged store list
+and fixed at the owner's request. Both example lists paged at 25 in the store and neither paged on screen.
+
+Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
+carries the other list's cursor through, so paging the suggestions cannot move the verified library.
+
+Note on ordering: this branch does **not** yet contain the newer heads of #76 (`68cb3ac`, the Review
+queue's pagination) or #77 (`b8d0eea`, the P5-05 blockers). Propagation waits for #77's verdict, because
+merging into #77 would change the exact head being reviewed; when it lands, the whole chain gets one pass.
 
 ### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
 

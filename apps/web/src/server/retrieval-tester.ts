@@ -14,8 +14,8 @@
  * It reads and returns provenance. It cannot write, publish or index anything.
  */
 import { createVoyageEmbeddingProvider } from "@omnichannel/ai";
-import { createKnowledgeRetriever, EMBEDDING_DIMENSIONS, type BusinessProfileContext } from "@omnichannel/db";
-import type { KnowledgeHit } from "@omnichannel/application";
+import { createKnowledgeRetriever, createStyleRetriever, EMBEDDING_DIMENSIONS, type BusinessProfileContext } from "@omnichannel/db";
+import type { KnowledgeHit, StyleHit } from "@omnichannel/application";
 
 import { loadWebEnv } from "../env";
 import { getDb } from "./db";
@@ -89,5 +89,44 @@ async function embed(text: string) {
     // the worker does with the same outage.
     getLogger().warn("knowledge.embedding_unavailable", { message: error instanceof Error ? error.message : "unknown" });
     return undefined;
+  }
+}
+
+export interface StyleTrial {
+  readonly mode: RetrievalMode;
+  readonly hits: readonly StyleHit[];
+  readonly unavailable: boolean;
+}
+
+/**
+ * The same trial, for style (Issue #32).
+ *
+ * Also the real retriever, for the same reason — and worth saying explicitly: style retrieval matches the
+ * *customer's message* against the inbound half of each example, not against the replies. So the question
+ * this answers is "which of our replies would the assistant look at, given a customer saying this?", which
+ * is what an operator wants to know and not what a naive implementation would have searched.
+ *
+ * Only verified examples can appear: the query filters `status = 'ACTIVE'`, and an ACTIVE example names
+ * its approver by CHECK. A suggestion is therefore absent from this surface until somebody activates it,
+ * which makes the tester an honest preview of what the assistant will actually draw on.
+ */
+export async function runStyleTrial(context: BusinessProfileContext, text: string): Promise<StyleTrial> {
+  const query = text.trim();
+  if (query === "") {
+    return { mode: modeOf(), hits: [], unavailable: false };
+  }
+
+  const embedding = await embed(query);
+  try {
+    const result = await createStyleRetriever(getDb()).search({
+      scope: { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId },
+      text: query,
+      ...(embedding === undefined ? {} : { embedding }),
+      limit: MAX_RESULTS,
+    });
+    return { mode: embedding === undefined ? "LEXICAL_ONLY" : "HYBRID", hits: result.hits, unavailable: false };
+  } catch (error) {
+    getLogger().warn("style.retrieval_trial_failed", { message: error instanceof Error ? error.message : "unknown" });
+    return { mode: modeOf(), hits: [], unavailable: true };
   }
 }

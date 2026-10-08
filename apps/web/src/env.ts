@@ -48,6 +48,35 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
   AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
   AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
+
+  /**
+   * The reply model, for the Style screen's test only (ADR-010, Issue #32).
+   *
+   * Optional, unlike the worker's, where a missing key means no draft can ever be produced and booting
+   * without one would be booting broken. Here a missing key costs one part of one screen: the effective
+   * voice, its layers and the retrieved examples are all still shown, and the candidate says it is not
+   * configured. A deployment that never wants the web app talking to a provider gets that by leaving this
+   * unset, which is a supported configuration rather than a degraded one.
+   *
+   * The model and token bound are named the same as the worker's so one deployment configures one voice;
+   * nothing here writes a draft, a delivery or a message.
+   */
+  ANTHROPIC_API_KEY: z.string().min(1).max(512).optional(),
+  AI_REPLY_MODEL: z.string().min(1).max(128).default("claude-opus-5"),
+  AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
+  /**
+   * The platform's voice of last resort, used by the Style test only where a business has configured no
+   * StyleProfile of its own.
+   *
+   * It must carry the same value as the worker's, for the same reason the embedding settings must: the
+   * test exists to answer "how will the assistant sound?", and a fallback persona that differs from the
+   * one the worker drafts with answers a different question.
+   */
+  AI_PERSONA: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .default("You are the business's own assistant. Be warm, brief and concrete, and never invent facts."),
 });
 
 export type WebEnv = ReturnType<typeof loadWebEnv>;

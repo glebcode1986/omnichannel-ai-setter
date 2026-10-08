@@ -115,7 +115,9 @@ export interface SeedStyleInput {
   readonly inboundContext: string;
   readonly outboundText: string;
   readonly provenance?: "HUMAN_TYPED" | "HUMAN_EDITED_DRAFT";
-  readonly status?: "ACTIVE" | "ARCHIVED";
+  readonly status?: "ACTIVE" | "SUGGESTED" | "REJECTED" | "ARCHIVED";
+  /** Who approved it. Required for ACTIVE by a CHECK; resolved from the workspace's members when absent. */
+  readonly approvedByUserId?: string;
   readonly embedding?: readonly number[];
   readonly embeddingProfile?: string;
   /** Stored exactly as given, so a test can also plant a spelling production would have normalized. */
@@ -124,21 +126,37 @@ export interface SeedStyleInput {
 
 export async function seedStyleExample(db: DbClient, input: SeedStyleInput): Promise<string> {
   const id = randomUUID();
+  const status = input.status ?? "ACTIVE";
+  // An ACTIVE example names its approver, because a CHECK insists: "verified" with nobody's name on it is
+  // unattributed rather than verified. A fixture that named nobody would be testing a state production
+  // cannot reach, so it borrows a member of the workspace it is seeding into.
+  const approvedByUserId = input.approvedByUserId ?? (status === "ACTIVE" ? await anyMemberOf(db, input.workspaceId) : null);
   await db.$executeRawUnsafe(
     `INSERT INTO "style_examples"
        ("id", "workspace_id", "business_profile_id", "inbound_context", "outbound_text", "provenance", "status",
-        "embedding_profile", "embedding", "language", "created_at", "updated_at")
-     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", $7::"StyleExampleStatus", $8, $9::vector, $10, NOW(), NOW())`,
+        "approved_by_user_id", "embedding_profile", "embedding", "language", "created_at", "updated_at")
+     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", $7::"StyleExampleStatus", $8, $9, $10::vector, $11, NOW(), NOW())`,
     id,
     input.workspaceId,
     input.businessProfileId ?? null,
     input.inboundContext,
     input.outboundText,
     input.provenance ?? "HUMAN_TYPED",
-    input.status ?? "ACTIVE",
+    status,
+    approvedByUserId,
     input.embedding === undefined ? null : (input.embeddingProfile ?? TEST_EMBEDDING_PROFILE),
     input.embedding === undefined ? null : `[${input.embedding.join(",")}]`,
     input.language ?? null,
   );
   return id;
+}
+
+/** A member of this workspace, preferring its owner, so a seeded approval names somebody who exists. */
+async function anyMemberOf(db: DbClient, workspaceId: string): Promise<string | null> {
+  const member = await db.workspaceMember.findFirst({
+    where: { workspaceId },
+    orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+    select: { userId: true },
+  });
+  return member?.userId ?? null;
 }

@@ -10,7 +10,8 @@
  *
  * Two things it will not do, because they are the invariants retrieval rests on:
  *
- * - a style example may only claim a verified human provenance, because the schema admits nothing else;
+ * - a style example may only claim a verified human provenance, because the schema admits nothing else, and
+ *   an ACTIVE one names the member who approved it, because a CHECK insists;
  * - nothing here writes a knowledge chunk from a message or a draft. Style is learned from human writing;
  *   facts are not learned at all, they are stated.
  */
@@ -102,14 +103,18 @@ export async function seedStyleExample(db: DbClient, context: BusinessProfileCon
   await db.$executeRawUnsafe(
     `INSERT INTO "style_examples"
        ("id", "workspace_id", "business_profile_id", "inbound_context", "outbound_text", "provenance", "status",
-        "language", "embedding_profile", "embedding", "created_at", "updated_at")
-     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", 'ACTIVE', $7, $8, $9::vector, NOW(), NOW())`,
+        "approved_by_user_id", "language", "embedding_profile", "embedding", "created_at", "updated_at")
+     VALUES ($1, $2, $3, $4, $5, $6::"StyleExampleProvenance", 'ACTIVE', $7, $8, $9, $10::vector, NOW(), NOW())`,
     id,
     scope.workspaceId,
     input.businessProfileScoped === true ? scope.businessProfileId : null,
     input.inboundContext,
     input.outboundText,
     input.provenance ?? "HUMAN_TYPED",
+    // An ACTIVE example names the person who approved it — a CHECK insists, and this path is no exception
+    // just because it is internal. Seeding on behalf of the authorized member is what it already claims
+    // to do everywhere else.
+    context.userId,
     language(input.language),
     input.embedding === undefined ? null : (input.embeddingProfile ?? null),
     input.embedding === undefined ? null : `[${input.embedding.join(",")}]`,
