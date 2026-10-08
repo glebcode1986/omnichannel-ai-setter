@@ -318,6 +318,25 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    inputs produced it. `AFTER` is modelled as an expired window rather than `NOT_ELIGIBLE`, which would
    short-circuit the gates the run exists to exercise.
 
+   One part of finding 6 I could not satisfy, and did not pretend to: **WhatsApp's three after-window
+   modes and its template allowlist cannot materially affect this run on this branch.** The evaluator is
+   channel-neutral and `PolicyLimits` carries no allowlist, because whether an *approved template* may go
+   out is `template-route.ts`'s decision — introduced by `e0eae80` with the WhatsApp template catalogue
+   (Issue #20), which is further down this chain than #79. The playground could only make the allowlist
+   look material by deciding template routing itself, which would be a second implementation of a send
+   rule, and the two would eventually disagree about the same template. So the run states what it answers:
+   it drafts an ordinary reply and answers the ordinary path, and the screen says on a WhatsApp run that
+   the template rules decide the rest. What *is* proved material, through the production evaluator and the
+   simulation's own mappings, is the channel, the window, the connection, the human-support exception and
+   **both** Instagram after-window modes.
+
+   That last pair needed a fifth input to be provable at all. `HUMAN_ASSISTED_EXTENDED` opens a human-only
+   review path only while a human-support exception is live, and the exception was hard-coded unavailable
+   — so both Instagram choices produced the same `WINDOW_CLOSED` and nothing selected on this screen could
+   change a single answer. It is an explicit input now, and the only one whose default is the conservative
+   value: an exception is something a business has to have been approved for, and assuming it would show
+   an owner a review path their account may not offer.
+
    **7. The coordination documents contradicted each other.** See the table above; both files now say the
    same thing, and the queue names #79 as current work rather than #78.
 

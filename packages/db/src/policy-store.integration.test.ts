@@ -123,6 +123,45 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
       ).toEqual({ status: "REFUSED", reason: "choose a timing preset or exact values, not both" });
     }, 180_000);
 
+    it("refuses a custom range whose bounds are the wrong way round", async () => {
+      const outcome = await save({
+        timingPreset: "CUSTOM",
+        timing: { debounceWindowMs: { minMs: 9_000, maxMs: 2_000 }, deliveryDelayMs: { minMs: 6_000, maxMs: 11_000 } },
+      });
+
+      // The domain's refusal, named by field. A store that accepted it would write a window the scheduler
+      // cannot draw a delay from, and the first reply after the save would be the one to find out.
+      expect(outcome.status).toBe("REFUSED");
+      expect(outcome.status === "REFUSED" ? outcome.reason : "").toContain("minMs must not exceed maxMs");
+    }, 180_000);
+
+    it("refuses a negative custom bound, and writes nothing", async () => {
+      const before = await theDefault();
+
+      const outcome = await save({
+        timingPreset: "CUSTOM",
+        timing: { debounceWindowMs: { minMs: -1_000, maxMs: 2_000 }, deliveryDelayMs: { minMs: 6_000, maxMs: 11_000 } },
+      });
+
+      expect(outcome.status).toBe("REFUSED");
+      expect((await theDefault())?.debounceWindowMs).toEqual(before?.debounceWindowMs);
+      expect((await theDefault())?.version).toBe(before?.version);
+    }, 180_000);
+
+    it("persists a custom range and reads it back as the same four numbers", async () => {
+      await save({
+        timingPreset: "CUSTOM",
+        timing: { debounceWindowMs: { minMs: 3_000, maxMs: 9_000 }, deliveryDelayMs: { minMs: 20_000, maxMs: 45_000 } },
+      });
+
+      // Read back through `readPolicies` rather than from the write's return value: the owner's next page
+      // load is what has to show their numbers, and that is a different query.
+      const reread = (await readPolicies(db(), profile.context)).find((policy) => policy.channelAccountId === null);
+      expect(reread?.debounceWindowMs).toEqual({ minMs: 3_000, maxMs: 9_000 });
+      expect(reread?.deliveryDelayMs).toEqual({ minMs: 20_000, maxMs: 45_000 });
+      expect(reread?.timingPreset).toBe("CUSTOM");
+    }, 180_000);
+
     it("accepts CUSTOM alongside exact ranges, because that is what CUSTOM means", async () => {
       // The guard is about a *named* preset contradicting values. `CUSTOM` names no values, so it agrees
       // with them rather than competing.

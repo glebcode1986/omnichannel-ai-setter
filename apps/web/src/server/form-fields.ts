@@ -31,8 +31,8 @@ export function lines(formData: FormData, name: string): readonly string[] {
  * be the number. Zero, a negative, a fraction and an absent field are all the same answer: this
  * submission does not say which version it was composed against, and nothing here is allowed to guess.
  */
-export function expectedVersionOf(formData: FormData, name = "expectedVersion"): number | undefined {
-  const raw = field(formData, name).trim();
+export function expectedVersionOf(formData: FormData): number | undefined {
+  const raw = field(formData, "expectedVersion").trim();
   if (!/^[1-9][0-9]*$/u.test(raw)) {
     return undefined;
   }

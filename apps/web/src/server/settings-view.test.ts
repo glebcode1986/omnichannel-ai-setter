@@ -234,23 +234,24 @@ describe("what a change actually changed", () => {
 });
 
 describe("the playground's hypothetical facts", () => {
-  it("defaults to the case where something would actually be sent", () => {
-    expect(simulationInputsFrom({})).toEqual({ channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED" });
+  it("defaults to the case where something would actually be sent, except the exception", () => {
+    // Three permissive defaults and one conservative: a human-support exception is something a business
+    // has to have been approved for, and assuming it would show a review path their account may not have.
+    expect(simulationInputsFrom({})).toEqual({ channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED", humanSupport: "UNAVAILABLE" });
   });
 
-  it("takes all three from the link", () => {
-    expect(simulationInputsFrom({ simChannel: "WHATSAPP", simWindow: "AFTER", simAccount: "DISCONNECTED" })).toEqual({
-      channel: "WHATSAPP",
-      window: "AFTER",
-      account: "DISCONNECTED",
-    });
+  it("takes all four from the link", () => {
+    expect(
+      simulationInputsFrom({ simChannel: "WHATSAPP", simWindow: "AFTER", simAccount: "DISCONNECTED", simHumanSupport: "AVAILABLE" }),
+    ).toEqual({ channel: "WHATSAPP", window: "AFTER", account: "DISCONNECTED", humanSupport: "AVAILABLE" });
   });
 
   it("falls back to the default for a value nobody defined", () => {
-    expect(simulationInputsFrom({ simChannel: "TELEGRAM", simWindow: "SOMETIME", simAccount: "MAYBE" })).toEqual({
+    expect(simulationInputsFrom({ simChannel: "TELEGRAM", simWindow: "SOMETIME", simAccount: "MAYBE", simHumanSupport: "SURE" })).toEqual({
       channel: "INSTAGRAM",
       window: "OPEN",
       account: "CONNECTED",
+      humanSupport: "UNAVAILABLE",
     });
   });
 });

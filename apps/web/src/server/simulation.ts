@@ -25,6 +25,17 @@
  * file, and it is right to — a type import today is an import to add a value to tomorrow. The type is
  * already part of what the evaluator accepts, so the evaluator is where to ask for it.
  *
+ * **What this run decides, and what it does not.** It drafts a free-form text reply and asks the
+ * deterministic evaluator what would happen to it. So the channel, the window, the connection, the
+ * human-support exception and Instagram's after-window choice all change the answer, and there are tests
+ * showing each of them doing so. WhatsApp's three after-window modes and its template allowlist do not,
+ * and cannot here: the evaluator is channel-neutral and takes no allowlist, because whether an *approved
+ * template* may go out is `template-route.ts`'s decision, which arrives with the WhatsApp template
+ * catalogue (Issue #20) later in this chain. A playground that answered that question itself would be a
+ * second implementation of a send rule, and the two would eventually disagree about the same template.
+ * The screen says so where it matters rather than letting an owner read an unchanged outcome as proof
+ * that their allowlist does nothing.
+ *
  * **What the run cannot take from the saved configuration, it takes as an input and then shows.** A
  * conversation has a channel, an account and a messaging window, and a hypothetical message has none of
  * those — so they are chosen, and the result reports what was chosen. They used to be constants: every run
@@ -82,6 +93,19 @@ export const SIMULATION_ACCOUNTS = ["CONNECTED", "DISCONNECTED"] as const;
 export type SimulationAccount = (typeof SIMULATION_ACCOUNTS)[number];
 
 /**
+ * Whether a human-support exception is available for this hypothetical conversation.
+ *
+ * This is the input that makes Instagram's after-window choice mean anything. `HUMAN_ASSISTED_EXTENDED`
+ * opens a human-only review path **only** while the exception is live, and the evaluator is right to
+ * demand that: an absent approval is not a weaker form of approval. With the exception hard-coded
+ * unavailable — as it was — both Instagram after-window choices produced the same refusal, so the
+ * selector on this screen could not change a single answer. `AVAILABLE` is offered precisely so an owner
+ * can see what the setting buys them, and the screen names which of the two it assumed.
+ */
+export const SIMULATION_HUMAN_SUPPORT = ["UNAVAILABLE", "AVAILABLE"] as const;
+export type SimulationHumanSupport = (typeof SIMULATION_HUMAN_SUPPORT)[number];
+
+/**
  * The facts a hypothetical message cannot carry, stated rather than assumed.
  *
  * Defaults are the most permissive case — the one in which something would actually be sent — because a
@@ -92,9 +116,18 @@ export interface SimulationInputs {
   readonly channel: SimulationChannel;
   readonly window: SimulationWindow;
   readonly account: SimulationAccount;
+  readonly humanSupport: SimulationHumanSupport;
 }
 
-export const DEFAULT_SIMULATION_INPUTS: SimulationInputs = { channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED" };
+export const DEFAULT_SIMULATION_INPUTS: SimulationInputs = {
+  channel: "INSTAGRAM",
+  window: "OPEN",
+  account: "CONNECTED",
+  // Not the permissive default, unlike the other three. The exception is a fact about a conversation that
+  // a business has to have been approved for, and assuming it would show an owner a review path that
+  // their account may not actually offer.
+  humanSupport: "UNAVAILABLE",
+};
 
 export interface SimulationResult {
   readonly mode: RetrievalMode;
@@ -263,7 +296,7 @@ export async function runSimulation(
           // Stated, and stated by the person asking. The screen shows which window this run assumed, so
           // the answer below is attached to a case rather than to a hidden constant.
           window: windowFor(inputs, now),
-          humanAgent: { state: "UNAVAILABLE", reason: "NOT_APPROVED" },
+          humanAgent: humanAgentFor(inputs, now),
           replyCycle: "OWNED",
           now,
         });
@@ -336,4 +369,17 @@ export function windowFor(inputs: SimulationInputs, now: Date): PolicyInput["win
   return inputs.window === "AFTER"
     ? { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() - hour) }
     : { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() + hour) };
+}
+
+/**
+ * The human-support exception, as the evaluator takes it.
+ *
+ * An expiry an hour out rather than no expiry: `ELIGIBLE` is a fact about a moment, and the evaluator
+ * treats a lapsed exception as absent — so a hypothetical one has to carry a moment too, or this run
+ * would be asking a question the real path never asks.
+ */
+export function humanAgentFor(inputs: SimulationInputs, now: Date): PolicyInput["humanAgent"] {
+  return inputs.humanSupport === "AVAILABLE"
+    ? { state: "ELIGIBLE", expiresAt: new Date(now.getTime() + 3_600_000) }
+    : { state: "UNAVAILABLE", reason: "NOT_APPROVED" };
 }

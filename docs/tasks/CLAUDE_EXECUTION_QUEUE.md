@@ -34,8 +34,12 @@ All seven are repaired on `feat/p5-04-ai-settings-simulation`:
    milliseconds in the store;
 5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
    change is reachable;
-6. **the simulation** — channel, window and connection are explicit inputs, the chosen channel's own
-   after-window policy is used, and the screen states which inputs produced the answer;
+6. **the simulation** — channel, window, connection and the human-support exception are explicit inputs,
+   the chosen channel's own after-window policy is used, and the screen states which inputs produced the
+   answer. Proved material through the production evaluator: the window, the connection, the exception and
+   **both** Instagram after-window modes. Not material here and said so rather than faked: WhatsApp's
+   three modes and its template allowlist, whose decision point (`template-route.ts`, Issue #20) is
+   further down this chain;
 7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
    defect finding 7 actually was.
 

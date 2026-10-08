@@ -38,7 +38,7 @@ import {
   policyChangeDiff,
   simulationInputsFrom,
 } from "@/server/settings-view";
-import { runSimulation, SIMULATION_ACCOUNTS, SIMULATION_CHANNELS, SIMULATION_WINDOWS } from "@/server/simulation";
+import { runSimulation, SIMULATION_ACCOUNTS, SIMULATION_CHANNELS, SIMULATION_HUMAN_SUPPORT, SIMULATION_WINDOWS } from "@/server/simulation";
 import type { MessageKey } from "@/i18n/catalogue";
 import type { RawSearchParams } from "@/server/inbox-view";
 
@@ -345,6 +345,18 @@ export default async function SettingsPage({
             ))}
           </select>
 
+          {/* The input that makes the Instagram choice above mean something: that policy opens a
+              human-only review path *only* while the exception is live, so with it assumed away both
+              Instagram choices gave the same refusal and nothing selected here could change an answer. */}
+          <label htmlFor="sim-human-support">{t.t("sim.humanSupport")}</label>
+          <select id="sim-human-support" name="simHumanSupport" defaultValue={simulationInputs.humanSupport}>
+            {SIMULATION_HUMAN_SUPPORT.map((value) => (
+              <option key={value} value={value}>
+                {t.t(`simHumanSupport.${value}`)}
+              </option>
+            ))}
+          </select>
+
           <button className="button" type="submit">
             {t.t("sim.run")}
           </button>
@@ -369,6 +381,7 @@ export default async function SettingsPage({
                 channel: t.t(`channel.${simulation.inputs.channel}`),
                 window: t.t(`simWindow.${simulation.inputs.window}`),
                 account: t.t(`simAccount.${simulation.inputs.account}`),
+                humanSupport: t.t(`simHumanSupport.${simulation.inputs.humanSupport}`),
               })}
             </p>
 
@@ -417,6 +430,15 @@ export default async function SettingsPage({
               </>
             )}
             <p className="muted">{t.t("sim.hypothetical")}</p>
+            {/* Said where an owner would otherwise draw the wrong conclusion. This run drafts a free-form
+                reply, so it answers the free-form path; whether an approved template may go out is the
+                template rules' decision and not this one. Without this line, a WhatsApp run whose outcome
+                does not move when the allowlist changes reads as proof that the allowlist does nothing. */}
+            {simulation.inputs.channel === "WHATSAPP" ? (
+              <p className="muted" data-sim-scope="true">
+                {t.t("sim.freeformOnly")}
+              </p>
+            ) : undefined}
 
             <h4>{t.t("sim.knowledge")}</h4>
             <ol className="retrieval-hits">

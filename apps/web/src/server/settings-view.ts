@@ -31,6 +31,7 @@ import {
   DEFAULT_SIMULATION_INPUTS,
   SIMULATION_ACCOUNTS,
   SIMULATION_CHANNELS,
+  SIMULATION_HUMAN_SUPPORT,
   SIMULATION_WINDOWS,
   type SimulationInputs,
 } from "./simulation";
@@ -324,10 +325,12 @@ export function simulationInputsFrom(query: RawSearchParams): SimulationInputs {
   const channel = one(query["simChannel"]);
   const window = one(query["simWindow"]);
   const account = one(query["simAccount"]);
+  const humanSupport = one(query["simHumanSupport"]);
   return {
     channel: SIMULATION_CHANNELS.find((candidate) => candidate === channel) ?? DEFAULT_SIMULATION_INPUTS.channel,
     window: SIMULATION_WINDOWS.find((candidate) => candidate === window) ?? DEFAULT_SIMULATION_INPUTS.window,
     account: SIMULATION_ACCOUNTS.find((candidate) => candidate === account) ?? DEFAULT_SIMULATION_INPUTS.account,
+    humanSupport: SIMULATION_HUMAN_SUPPORT.find((candidate) => candidate === humanSupport) ?? DEFAULT_SIMULATION_INPUTS.humanSupport,
   };
 }
 
