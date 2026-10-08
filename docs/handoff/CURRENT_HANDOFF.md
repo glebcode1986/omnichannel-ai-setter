@@ -375,6 +375,28 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    value: an exception is something a business has to have been approved for, and assuming it would show
    an owner a review path their account may not offer.
 
+   **Two defects found, measured, and deliberately not fixed here.** Both are reported on the PR rather
+   than repaired, because this repair is scoped to named blockers and widening it would make the diff
+   unreviewable against them.
+
+   - **Nothing in production creates an `automation_policies` row.** Verified: every
+     `automationPolicy.create`/`upsert`/`createMany` in the repository is in a test, no migration inserts
+     one, and `automation_policies` has no triggers. `createBusinessProfile` creates the profile and
+     nothing else. So for a real Business Profile `readPolicies` returns `[]`, the settings form never
+     renders, and `limitsFrom(undefined, …)` leaves automation at mode OFF with a confidence threshold of
+     1 — permanently off and unconfigurable. Every guard on this branch is exercised only against a row
+     the fixtures insert by hand; the test helper is literally named `ensureDefault`. The fix is one
+     nested `create` in `createBusinessProfile`, and I measured it: **20 test files in `packages/db` and 8
+     in `apps/web` fail**, because their fixtures create the row unconditionally and then collide with
+     `automation_policies_profile_default_key`. Mechanical, and its own task.
+   - **The send path still asks "has this policy changed?" with `updated_at`.**
+     `delivery-store.ts policyUnchanged` compares a `TIMESTAMP(3)`, which is the mechanism this branch's
+     own migration rejects for that exact question — two writes inside one millisecond compare equal.
+     `version` is now the precise answer, so this is one rule with two implementations and the weaker one
+     is in the send path. Harmless today, because every write moves both. Not changed here: it is a
+     reviewed send gate, and a send gate is not something to alter inside a repair about a settings
+     screen.
+
    **7. The coordination documents contradicted each other.** See the table above; both files now say the
    same thing, and the queue names #79 as current work rather than #78.
 

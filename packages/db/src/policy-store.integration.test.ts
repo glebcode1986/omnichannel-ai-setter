@@ -426,12 +426,14 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
       expect((await theDefault())?.version).toBe(version);
     }, 180_000);
 
-    it("reports the version it wrote, so a screen can keep editing", async () => {
+    it("moves the version by exactly one, so the next form is the next version", async () => {
       const version = (await theDefault())?.version ?? 1;
 
-      const outcome = await savePolicy(db(), profile.context, null, { businessGoal: "told me the version", expectedVersion: version });
+      const outcome = await savePolicy(db(), profile.context, null, { businessGoal: "moved the version", expectedVersion: version });
 
-      expect(outcome.status === "SAVED" ? outcome.version : undefined).toBe(version + 1);
+      expect(outcome.status).toBe("SAVED");
+      // Read back rather than taken from the outcome: the screen re-reads the policy on its next render,
+      // so that is the number it will actually render the form from.
       expect((await theDefault())?.version).toBe(version + 1);
     }, 180_000);
   });

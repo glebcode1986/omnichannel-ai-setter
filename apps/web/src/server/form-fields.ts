@@ -5,9 +5,15 @@
  * request carrying whichever fields its author felt like sending is another. These helpers are the part
  * both callers go through, and they live in one module so that the rules they encode have one
  * implementation — the expected-version rule in particular, which decides whether a submission may be
- * completed against whatever happens to be current. Knowledge, Style and AI settings all ask that
- * question, and a rule with three implementations does not fail when they disagree; it fails on the one
- * nobody checked.
+ * completed against whatever happens to be current. The Knowledge forms and the AI-settings form ask that
+ * question in the same words and now get the same answer; a rule with two implementations does not fail
+ * when they disagree, it fails on the one nobody checked.
+ *
+ * The Style form deliberately does **not** come through here. It carries an `updatedAt` rather than a
+ * counter, because a voice layer may legitimately not exist yet and "there was no layer here" is a claim
+ * it has to be able to make — so an unparseable value is *absent* there and a *refusal* here. Two
+ * different questions, two answers, and worth saying out loud so this module is not mistaken for a
+ * unification it has not performed.
  */
 export function field(formData: FormData, name: string): string {
   const value = formData.get(name);

@@ -39,6 +39,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { getDb } from "./db";
+import { getLogger } from "./logger";
 import { requireBusinessProfileContext } from "./request-context";
 import { loadWebEnv } from "../env";
 import { proposalSealed, sealProposal } from "./proposal-seal";
@@ -129,7 +130,21 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
   }
 
   const outcome = await saveOrRefuse(context, proposal);
+  if (outcome.status === "REFUSED") {
+    // The domain's own message names the field it refused, and the screen cannot show it: it is English
+    // prose from a layer below the translation catalogue, and putting it on a localized page would be the
+    // one thing the i18n gate exists to stop. Logged instead, so the detail the store took care to
+    // preserve is diagnosable rather than discarded — which is what "dropped on the floor" looked like.
+    getLogger().warn("settings.save_refused", { reason: outcome.reason });
+  }
   revalidatePath(path);
+  if (outcome.status === "REFUSED" || outcome.status === "FORBIDDEN") {
+    // These keep the proposal too. A refusal that also loses the owner's form costs more than the change
+    // it prevented, and the `CONFLICT` branch below already says so about itself — three exits out of the
+    // same function should not disagree about whether the owner's work survives being told no.
+    revalidatePath(path);
+    redirect(`${path}?outcome=${outcome.status}&proposal=${encodeProposal(proposal)}`);
+  }
   if (outcome.status === "CONFLICT") {
     // The proposal comes back, because the owner's answer to "somebody else changed this" is to decide
     // between the two, and losing their edit would cost more than the refusal prevented. It comes back
@@ -152,6 +167,7 @@ async function saveOrRefuse(
     return await savePolicy(getDb(), context, null, editFrom(proposal));
   } catch (error) {
     if (error instanceof WorkspacePermissionError) {
+      getLogger().warn("settings.save_not_permitted", { operation: error.message });
       // The store is the authority on who may change settings, and it refuses an AGENT. The screen hides
       // the form from one, so reaching here means a direct post — answered, not crashed.
       return { status: "FORBIDDEN" };

@@ -237,11 +237,20 @@ export function decodeAuditCursor(encoded: string | undefined): PolicyAuditCurso
   }
   const changedAt = new Date(decoded.slice(0, separator));
   const id = decoded.slice(separator + 1);
-  if (Number.isNaN(changedAt.getTime()) || id === "") {
+  // Both halves are checked for what the column actually is. The audit row's id is a `uuid`, and Postgres
+  // refuses a comparison against anything that is not one — so `?auditCursor=<not a uuid>` reached the
+  // query as a thrown `invalid input syntax for type uuid` and took the whole screen with it, form,
+  // playground and history, because this page is rendered inside one `Promise.all` and the route has no
+  // error boundary. The date arm had this check from the start; the id arm did not, which is the same
+  // half-validated shape `decodeProposal` exists to avoid.
+  if (Number.isNaN(changedAt.getTime()) || !UUID.test(id)) {
     return undefined;
   }
   return { changedAt, id };
 }
+
+/** The shape Postgres will accept for a `uuid` comparison; anything else is not a cursor we minted. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /**
  * Parameters the history link deliberately drops.

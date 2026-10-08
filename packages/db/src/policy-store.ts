@@ -173,7 +173,7 @@ export interface PolicyEdit {
 }
 
 export type PolicyWriteOutcome =
-  | { readonly status: "SAVED"; readonly impacts: readonly PolicyImpact[]; readonly version: number }
+  | { readonly status: "SAVED"; readonly impacts: readonly PolicyImpact[] }
   | { readonly status: "UNCHANGED" }
   | { readonly status: "GONE" }
   /** Somebody else wrote these settings first. `current` is what is stored now, for the screen to show. */
@@ -329,7 +329,10 @@ export async function savePolicy(
         after: after as never,
       },
     });
-    return { status: "SAVED", impacts, version: existing.version + 1 };
+    // No version in the outcome. It was returned "so a screen can keep editing" and nothing read it: the
+    // only caller redirects, and the next render re-reads the policy. A value nothing reads is a value
+    // that will be wrong one day without anybody noticing.
+    return { status: "SAVED", impacts };
   });
 }
 
@@ -436,6 +439,8 @@ export async function listPolicyAudits(
       before: row.before,
       after: row.after,
     })),
-    ...(rows.length > limit && last !== undefined ? { nextCursor: { changedAt: last.changedAt, id: last.id } } : {}),
+    // `rows.length > limit` already implies a full window, so `last` cannot be absent here; it is read
+    // through `?.` rather than guarded by a second condition no input can falsify.
+    ...(rows.length > limit && last ? { nextCursor: { changedAt: last.changedAt, id: last.id } } : {}),
   };
 }

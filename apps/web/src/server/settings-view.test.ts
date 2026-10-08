@@ -146,13 +146,30 @@ describe("the acknowledgement", () => {
 
 describe("the history's cursor", () => {
   it("round-trips the instant and the row it ended on", () => {
-    const cursor = { changedAt: new Date("2026-09-01T10:00:00.000Z"), id: "pca_1" };
+    const cursor = { changedAt: new Date("2026-09-01T10:00:00.000Z"), id: "8f14e45f-ce9a-4b3d-8c1e-2a4b6d8e0f12" };
 
     expect(decodeAuditCursor(encodeAuditCursor(cursor))).toEqual(cursor);
   });
 
+  it("refuses an id that is not a uuid, because the column is one", () => {
+    // Postgres refuses the comparison outright, and this page is rendered inside one `Promise.all` with
+    // no error boundary on the route — so a hand-edited cursor used to 500 the whole screen: form,
+    // playground and history. A cursor we did not mint is simply not a cursor.
+    for (const id of ["42", "pca_1", "'; drop table policy_change_audits; --", "8f14e45f-ce9a-4b3d-8c1e"]) {
+      const forged = Buffer.from(`2026-09-01T10:00:00.000Z|${id}`, "utf8").toString("base64url");
+      expect(decodeAuditCursor(forged), id).toBeUndefined();
+    }
+  });
+
   it("is absent for anything this module did not write", () => {
-    for (const encoded of [undefined, "", "nonsense", Buffer.from("no separator", "utf8").toString("base64url"), Buffer.from("not-a-date|pca_1", "utf8").toString("base64url"), Buffer.from("2026-09-01T10:00:00.000Z|", "utf8").toString("base64url")]) {
+    for (const encoded of [
+      undefined,
+      "",
+      "nonsense",
+      Buffer.from("no separator", "utf8").toString("base64url"),
+      Buffer.from("not-a-date|8f14e45f-ce9a-4b3d-8c1e-2a4b6d8e0f12", "utf8").toString("base64url"),
+      Buffer.from("2026-09-01T10:00:00.000Z|", "utf8").toString("base64url"),
+    ]) {
       expect(decodeAuditCursor(encoded), String(encoded)).toBeUndefined();
     }
   });

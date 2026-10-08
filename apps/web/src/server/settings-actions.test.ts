@@ -46,6 +46,7 @@ vi.mock("next/cache", () => ({
   },
 }));
 vi.mock("./db", () => ({ getDb: () => ({ marker: "the client the action resolved" }) }));
+vi.mock("./logger", () => ({ getLogger: () => ({ warn: () => {}, info: () => {}, error: () => {}, debug: () => {} }) }));
 // The real secret shape, because the seal is an HMAC over it and a short one would be a different test.
 vi.mock("../env", () => ({ loadWebEnv: () => ({ AUTH_SECRET: "a-test-secret-at-least-32-characters-long" }) }));
 vi.mock("./request-context", () => ({
@@ -135,7 +136,7 @@ beforeEach(() => {
   store.readPolicies.mockReset();
   store.savePolicy.mockReset();
   store.readPolicies.mockResolvedValue([STORED]);
-  store.savePolicy.mockResolvedValue({ status: "SAVED", impacts: [], version: 5 });
+  store.savePolicy.mockResolvedValue({ status: "SAVED", impacts: [] });
   revalidated.length = 0;
 });
 
@@ -364,7 +365,9 @@ describe("custom timing", () => {
 
     const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ businessGoal: "Book consultations" })));
 
-    expect(path).toBe(`${SETTINGS}?outcome=REFUSED`);
+    expect(queryOf(path).get("outcome")).toBe("REFUSED");
+    // And it keeps the proposal, like every other refusal out of this function.
+    expect(decodeProposal(queryOf(path).get("proposal") ?? undefined)?.businessGoal).toBe("Book consultations");
   });
 });
 
@@ -376,7 +379,7 @@ describe("who may save", () => {
 
     // The screen hides the form from an agent, so reaching here means a direct post. Answered, not an
     // error page — and not a save.
-    expect(path).toBe(`${SETTINGS}?outcome=FORBIDDEN`);
+    expect(queryOf(path).get("outcome")).toBe("FORBIDDEN");
   });
 
   it("lets any other failure out, rather than reporting it as a refusal", async () => {
