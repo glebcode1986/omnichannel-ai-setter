@@ -477,3 +477,49 @@ export function customTimingProblem(seconds: readonly (number | undefined)[]): C
   }
   return debounceMin > debounceMax || delayMin > delayMax ? "REVERSED" : undefined;
 }
+
+/** A change under review on this URL: what it widens, the values it proposes, and the server's seal. */
+export interface PendingReview {
+  readonly impacts: readonly PolicyImpact[];
+  readonly proposal: PolicyProposal;
+  readonly seal: string;
+}
+
+/**
+ * The change under review on this URL, or `undefined` when there is none.
+ *
+ * **One object, because a review is one thing.** The screen used to read `impacts`, `proposal` and
+ * `proposalSeal` as three independent parameters, and any partial set rendered as a normal pending
+ * confirmation: a URL with impacts and a seal but no decodable proposal showed the alarming summary and a
+ * live acknowledgement over a form that had fallen back to the *stored* values, under a sentence saying
+ * those values were the ones proposed — the opposite of what was on screen. Ticking it then posted the
+ * stored values, computed no impacts, and reported a save.
+ *
+ * It also belongs to a reader who may edit. A refusal keeps the proposal in the URL, including the
+ * refusal for *not being allowed to save* — so an admin demoted while their form was open was shown their
+ * own unsaved values under "you are seeing what is in use".
+ */
+export function pendingReview(input: {
+  readonly mayEdit: boolean;
+  readonly impacts: readonly PolicyImpact[];
+  readonly proposal?: PolicyProposal;
+  readonly seal: string;
+}): PendingReview | undefined {
+  if (!input.mayEdit || input.proposal === undefined || input.seal === "" || input.impacts.length === 0) {
+    return undefined;
+  }
+  return { impacts: input.impacts, proposal: input.proposal, seal: input.seal };
+}
+
+/**
+ * Whether the acknowledgement may be offered — and therefore whether anything on the page may tell the
+ * owner to use it.
+ *
+ * A second question, not a restatement of the first: a stale review is still rendered, because showing the
+ * summary and saying it is out of date is the recovery path. What a stale review may not do is offer a
+ * control that cannot complete. Asked once, because the checkbox weighed every fact here and the sentence
+ * naming the checkbox weighed only staleness.
+ */
+export function acknowledgementOffered(review: PendingReview | undefined, stale: boolean, hasForm: boolean): boolean {
+  return review !== undefined && !stale && hasForm;
+}

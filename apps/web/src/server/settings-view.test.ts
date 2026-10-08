@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { catalogues } from "../i18n/catalogue";
 import {
+  acknowledgementOffered,
   acknowledges,
   AUDITED_POLICY_FIELDS,
   auditHistoryHref,
@@ -27,6 +28,7 @@ import {
   MAX_PROPOSAL_FIELD_CHARS,
   mayEditSettings,
   oversizedField,
+  pendingReview,
   policyChangeDiff,
   takeoverPauseProblem,
   simulationInputsFrom,
@@ -407,5 +409,52 @@ describe("the takeover pause", () => {
     expect(takeoverPauseProblem("0")).toBe("OUT_OF_RANGE");
     expect(takeoverPauseProblem("-6")).toBe("OUT_OF_RANGE");
     expect(takeoverPauseProblem("100000")).toBe("OUT_OF_RANGE");
+  });
+});
+
+describe("the change under review on a URL", () => {
+  const whole = { mayEdit: true, impacts: ["AUTOPILOT_ENABLED"] as const, proposal: PROPOSAL, seal: "a-seal" };
+
+  it("is one thing, or nothing at all", () => {
+    expect(pendingReview(whole)).toEqual({ impacts: ["AUTOPILOT_ENABLED"], proposal: PROPOSAL, seal: "a-seal" });
+  });
+
+  it("is nothing when any part of it is missing", () => {
+    // Read as three independent parameters, a partial set rendered as a normal pending confirmation: the
+    // alarming summary and a live acknowledgement over a form that had fallen back to the stored values,
+    // under a sentence saying those values were the ones proposed.
+    expect(pendingReview({ ...whole, proposal: undefined }), "no decodable proposal").toBeUndefined();
+    expect(pendingReview({ ...whole, seal: "" }), "no seal").toBeUndefined();
+    expect(pendingReview({ ...whole, impacts: [] }), "nothing widened").toBeUndefined();
+  });
+
+  it("belongs to a reader who may edit", () => {
+    // A refusal keeps the proposal in the URL — including the refusal for not being allowed to save — so
+    // an admin demoted while their form was open would otherwise read their own unsaved values as the
+    // live settings, under a notice saying exactly that.
+    expect(pendingReview({ ...whole, mayEdit: false })).toBeUndefined();
+  });
+});
+
+describe("whether the acknowledgement may be offered", () => {
+  const review = { impacts: ["AUTOPILOT_ENABLED"] as const, proposal: PROPOSAL, seal: "a-seal" };
+
+  it("is offered for a review that is current and has a form to sit in", () => {
+    expect(acknowledgementOffered(review, false, true)).toBe(true);
+  });
+
+  it("is withheld with no review, with a stale one, and with no form", () => {
+    // Each of these was a state in which the page still said "tick the box to save them", because the
+    // sentence that names the control weighed only staleness while the control weighed everything.
+    expect(acknowledgementOffered(undefined, false, true), "no review").toBe(false);
+    expect(acknowledgementOffered(review, true, true), "stale").toBe(false);
+    expect(acknowledgementOffered(review, false, false), "no form").toBe(false);
+  });
+
+  it("does not suppress the review itself when it is stale", () => {
+    // Showing the summary and saying it is out of date *is* the recovery path; what a stale review may
+    // not do is offer a control that cannot complete. Two questions, two answers.
+    expect(pendingReview({ mayEdit: true, impacts: ["AUTOPILOT_ENABLED"], proposal: PROPOSAL, seal: "a-seal" })).toBeDefined();
+    expect(acknowledgementOffered(review, true, true)).toBe(false);
   });
 });

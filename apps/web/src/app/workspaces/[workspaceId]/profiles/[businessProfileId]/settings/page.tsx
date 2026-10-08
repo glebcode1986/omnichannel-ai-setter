@@ -28,6 +28,7 @@ import { requireBusinessProfileContext } from "@/server/request-context";
 import { getDb } from "@/server/db";
 import { saveSettingsAction } from "@/server/settings-actions";
 import {
+  acknowledgementOffered,
   auditHistoryHref,
   CUSTOM_TIMING_BOUNDS,
   decodeAuditCursor,
@@ -38,6 +39,7 @@ import {
   mayEditSettings,
   TAKEOVER_PAUSE_HOURS,
   one,
+  pendingReview,
   policyChangeDiff,
   simulationInputsFrom,
 } from "@/server/settings-view";
@@ -86,16 +88,29 @@ export default async function SettingsPage({
   const simulation = await runSimulation(context, ask ?? "", simulationInputs);
 
   // The impacts the server refused to save without an acknowledgement, and the proposal it refused.
-  const pending = impactsFromQuery(one(query["impacts"]));
   const proposed = decodeProposal(one(query["proposal"]));
   // The seal the refusal minted. The form posts it back with the acknowledgement; the save verifies it,
   // so an acknowledgement cannot be a claim the caller simply makes.
   const proposalSeal = one(query["proposalSeal"]) ?? "";
+  // Only a reader who may edit is shown their own unsaved values; anybody else is shown what is stored,
+  // because the notice above the form tells them that is what they are looking at. A refusal keeps the
+  // proposal in the URL — including the refusal for not being allowed to save — so without this an admin
+  // demoted while their form was open read their own proposal as the live settings.
+  const edited = mayEdit ? proposed : undefined;
+  // The change under review, as one thing. Read as three independent parameters, any partial set rendered
+  // as a normal pending confirmation over values it did not describe.
+  const review = pendingReview({
+    mayEdit,
+    impacts: impactsFromQuery(one(query["impacts"])),
+    ...(proposed === undefined ? {} : { proposal: proposed }),
+    seal: proposalSeal,
+  });
+  const pending = review?.impacts ?? [];
   // Whether the pending proposal is already out of date. The page holds both numbers — the one the
   // proposal was composed against and the one stored now — so it can say so rather than offering an
   // acknowledgement the save is certain to refuse. Deliberately *not* re-stamped here: an acknowledgement
   // must not cross somebody else's change, so a moved policy needs a fresh review.
-  const proposalStale = proposed !== undefined && stored !== undefined && proposed.expectedVersion !== stored.version;
+  const proposalStale = edited !== undefined && stored !== undefined && edited.expectedVersion !== stored.version;
 
   // What the form shows: the rejected proposal when there is one, otherwise what is stored. The version
   // always comes from the proposal when it has one, so confirming re-submits the same claim about the
@@ -104,21 +119,33 @@ export default async function SettingsPage({
     stored === undefined
       ? undefined
       : {
-          mode: proposed?.mode ?? stored.mode,
-          businessGoal: proposed?.businessGoal ?? stored.businessGoal ?? "",
-          criteria: (proposed?.qualificationCriteria ?? stored.qualificationCriteria).join("\n"),
-          confidencePreset: proposed?.confidencePreset ?? stored.confidencePreset ?? "",
-          timingPreset: proposed?.timingPreset ?? stored.timingPreset,
-          debounceMinSeconds: Math.round((proposed?.timing?.debounceWindowMs.minMs ?? stored.debounceWindowMs.minMs) / MS_PER_SECOND),
-          debounceMaxSeconds: Math.round((proposed?.timing?.debounceWindowMs.maxMs ?? stored.debounceWindowMs.maxMs) / MS_PER_SECOND),
-          deliveryDelayMinSeconds: Math.round((proposed?.timing?.deliveryDelayMs.minMs ?? stored.deliveryDelayMs.minMs) / MS_PER_SECOND),
-          deliveryDelayMaxSeconds: Math.round((proposed?.timing?.deliveryDelayMs.maxMs ?? stored.deliveryDelayMs.maxMs) / MS_PER_SECOND),
-          takeoverPauseHours: proposed?.takeoverPauseHours ?? Math.round(stored.takeoverPauseMs / 3_600_000),
-          instagramAfterWindowPolicy: proposed?.instagramAfterWindowPolicy ?? stored.instagramAfterWindowPolicy,
-          whatsappAfterWindowPolicy: proposed?.whatsappAfterWindowPolicy ?? stored.whatsappAfterWindowPolicy,
-          allowlist: (proposed?.whatsappTemplateAutomationAllowlist ?? stored.whatsappTemplateAutomationAllowlist).join("\n"),
-          expectedVersion: proposed?.expectedVersion ?? stored.version,
+          mode: edited?.mode ?? stored.mode,
+          businessGoal: edited?.businessGoal ?? stored.businessGoal ?? "",
+          criteria: (edited?.qualificationCriteria ?? stored.qualificationCriteria).join("\n"),
+          confidencePreset: edited?.confidencePreset ?? stored.confidencePreset ?? "",
+          timingPreset: edited?.timingPreset ?? stored.timingPreset,
+          debounceMinSeconds: Math.round((edited?.timing?.debounceWindowMs.minMs ?? stored.debounceWindowMs.minMs) / MS_PER_SECOND),
+          debounceMaxSeconds: Math.round((edited?.timing?.debounceWindowMs.maxMs ?? stored.debounceWindowMs.maxMs) / MS_PER_SECOND),
+          deliveryDelayMinSeconds: Math.round((edited?.timing?.deliveryDelayMs.minMs ?? stored.deliveryDelayMs.minMs) / MS_PER_SECOND),
+          deliveryDelayMaxSeconds: Math.round((edited?.timing?.deliveryDelayMs.maxMs ?? stored.deliveryDelayMs.maxMs) / MS_PER_SECOND),
+          takeoverPauseHours: edited?.takeoverPauseHours ?? Math.round(stored.takeoverPauseMs / 3_600_000),
+          instagramAfterWindowPolicy: edited?.instagramAfterWindowPolicy ?? stored.instagramAfterWindowPolicy,
+          whatsappAfterWindowPolicy: edited?.whatsappAfterWindowPolicy ?? stored.whatsappAfterWindowPolicy,
+          allowlist: (edited?.whatsappTemplateAutomationAllowlist ?? stored.whatsappTemplateAutomationAllowlist).join("\n"),
+          expectedVersion: edited?.expectedVersion ?? stored.version,
         };
+
+  /**
+   * Whether the acknowledgement can be offered at all — and therefore whether anything on this page may
+   * tell the owner to use it.
+   *
+   * Asked once, because the previous version asked it twice and differently: the checkbox weighed all of
+   * these and the sentence naming the checkbox weighed only the stale one, so a reader without permission
+   * to edit, a URL carrying impacts but no seal, and a profile with no stored policy each got told to tick
+   * a control that was not on the page. The rule was already written beside the sentence in those words;
+   * it just was not the rule the code applied.
+   */
+  const mayAcknowledge = acknowledgementOffered(review, proposalStale, form !== undefined);
 
   return (
     <>
@@ -139,9 +166,12 @@ export default async function SettingsPage({
             ))}
           </ul>
           {/* Said plainly, because the form below is showing the proposal rather than what is stored — and
-              only when there is a box to tick. While the proposal is stale the notice below replaces this
-              one, because telling somebody to tick a control that is not rendered is worse than silence. */}
-          {proposalStale ? undefined : <p>{t.t("settings.confirmPending")}</p>}
+              only when the box it names is actually on the page. The rule was already written here, in
+              these words, and then encoded as one of the four reasons the box is withheld rather than all
+              of them: a reader without permission to edit, or a URL carrying impacts but no seal, or a
+              profile with no stored policy to render a form from, each got told to tick a control that was
+              not there. One predicate now answers it for the control and for the sentence that names it. */}
+          {mayAcknowledge ? <p>{t.t("settings.confirmPending")}</p> : undefined}
         </div>
       )}
 
@@ -157,7 +187,7 @@ export default async function SettingsPage({
         </div>
       )}
 
-      {one(query["outcome"]) !== "CONFLICT" || proposed === undefined ? undefined : (
+      {one(query["outcome"]) !== "CONFLICT" || edited === undefined ? undefined : (
         <div className="notice" data-tone="stop" data-stale-proposal="true" role="alert">
           {/* Said here rather than in the shared outcome line, because the shared one tells the reader to
               reload — and reloading would discard the values this form is still showing. What they need
@@ -345,7 +375,7 @@ export default async function SettingsPage({
               stand for a change the owner never read, and a stale tick cannot stand for a different one.
               An always-present checkbox made "show the effect summary before save" skippable by ticking
               it first. */}
-          {pending.length === 0 || !mayEdit || proposalSeal === "" || proposalStale ? undefined : (
+          {!mayAcknowledge ? undefined : (
             <>
               <input type="hidden" name="proposalSeal" value={proposalSeal} />
               <label className="checkbox" htmlFor="settings-confirm">
@@ -379,7 +409,7 @@ export default async function SettingsPage({
               of the same rule, and the one without the test was the one that lost state. */}
           {one(query["outcome"]) === undefined ? undefined : <input type="hidden" name="outcome" value={one(query["outcome"])} />}
           {pending.length === 0 ? undefined : <input type="hidden" name="impacts" value={pending.join(",")} />}
-          {proposed === undefined ? undefined : <input type="hidden" name="proposal" value={one(query["proposal"]) ?? ""} />}
+          {edited === undefined ? undefined : <input type="hidden" name="proposal" value={one(query["proposal"]) ?? ""} />}
           {proposalSeal === "" ? undefined : <input type="hidden" name="proposalSeal" value={proposalSeal} />}
           {one(query["auditCursor"]) === undefined ? undefined : <input type="hidden" name="auditCursor" value={one(query["auditCursor"])} />}
 

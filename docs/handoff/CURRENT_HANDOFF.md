@@ -284,6 +284,24 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    current settings* in the state where pressing it does that, rather than "Save anyway" for a save the
    gate would refuse.
 
+   **A follow-up on that copy fix, because the first version of it was complete-looking rather than
+   complete.** The checkbox is withheld for five reasons and the sentence that names it weighed only one of
+   them, so a reader without permission to edit, a URL carrying impacts but no seal, and a profile with no
+   stored policy were each still told to tick a control that was not on the page — the worst of them
+   showing "You are seeing what is in use" and "Tick the box to save them" at the same time. The rule was
+   written in a comment beside the sentence, in those words, and was simply not the rule the code applied.
+   It is one predicate now, `acknowledgementOffered`, asked once for the control and for the sentence that
+   names it, and tested for each missing piece.
+
+   **Found in the same pass and deliberately not fixed, because the directive scopes this repair to the
+   stale-proposal blocker:** `policyImpactsOf` models **no impact at all** for widening the WhatsApp
+   template allowlist once `TEMPLATE_AUTOPILOT` is already the stored policy. The allowlist sub-check sits
+   inside an arm guarded by `before.whatsappAfterWindowPolicy !== "TEMPLATE_AUTOPILOT"`
+   (`automation-presets.ts:152`), so it is unreachable in exactly the state the screen itself produces and
+   warns about — autopilot enabled with an empty allowlist. Adding the first template to that list is the
+   dormant-to-live step for unattended after-window sends, and it saves with no effect summary, no
+   acknowledgement, and `impacts: []` on its own audit row. Reported on PR #79 with a reproduction.
+
    **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
    and covered none of the seven cases, which is the usual shape of these findings: every one of them is
    a gap *between* two correct pieces, and a gap has no failing test until somebody writes one.

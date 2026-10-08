@@ -52,6 +52,14 @@ re-posting a stale version into the same refusal. A seal stops verifying as soon
 moves, including when the change leaves the impact list identical; the store's conditional write remains
 the separate answer to "is this still the state you saw".
 
+**One predicate decides whether the acknowledgement is offered**, and the sentence that names the control
+asks the same one — `acknowledgementOffered`. Weighing a subset of its five facts somewhere else is how the
+page came to say "tick the box" with no box.
+
+**Open, reported on #79, not fixed here:** `policyImpactsOf` models no impact for widening the WhatsApp
+template allowlist once `TEMPLATE_AUTOPILOT` is already stored, so the edit that makes unattended
+after-window template sends possible is saved with no effect summary and `impacts: []` in its audit row.
+
 **The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
 and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
 impact codes is not proof, because the codes are in the URL, the page and the catalogue.
