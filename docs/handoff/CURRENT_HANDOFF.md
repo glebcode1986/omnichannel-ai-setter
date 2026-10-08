@@ -226,6 +226,17 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+**PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
+That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
+down the chain by ordinary merge, every branch from #79 to #103 carries them, and each was pushed with
+its own CI run. No rebase, no force-push, no merge to `main`.
+
+Propagating found one thing nothing else would have: `style_example_decisions` is append-only from #32,
+and a customer's erasure has to empty it, so every deletion request ended `PARTIAL_FAILURE` the moment
+the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is permitted only while a
+transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
+way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
+
 1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
    independent re-review.**
 
@@ -325,9 +336,9 @@ Idempotency is the same decision digest the review path uses.
    Both repairs were mutation-checked: removing the trigger fails the immutability regression, and
    returning the window to the oldest twenty fails the long-lifecycle regression.
 
-   **Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is **not**
-   propagated: the branches below #78 still carry the earlier head. No rebase, no force-push, no merge to
-   `main`.
+   **The hold on #79 and below is lifted.** PR #78 has an independent PASS at
+   `8692d8f35d16256beb819488da9ae5a263a1a3e1`, which was the condition this note was waiting on, and the
+   repairs are merged down the chain. No rebase, no force-push, no merge to `main`.
 
 2. **The six original findings on PR #78, repaired at `a3d27e3` and still the basis of the above.**
    
@@ -337,11 +348,10 @@ Idempotency is the same decision digest the review path uses.
    This note is the canonical handoff the same directive asked for, so the branch head is one commit later
    than the repair SHA; PR #78 carries the current one.
    
-   **Independent Astra re-review of the new live head is the only active gate.** Every branch below #78 in
-   the chain already contains this repair by ordinary merge, and that propagation happened *before* an
-   independent PASS. It is therefore held rather than advanced: nothing from #79 onwards is ready, no review
-   is requested on any of them, and the propagated branches are left in place and unrewritten — no rebase,
-   no force-push, no merge to `main`, no rollback.
+   **That gate is now passed.** The earlier propagation of this repair happened *before* an independent
+   PASS, which is why it was held; the PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1` released it, and
+   the chain has been merged down and pushed since. No rebase, no force-push, no merge to `main`, no
+   rollback.
    
    The six findings and what each repair actually was:
    
