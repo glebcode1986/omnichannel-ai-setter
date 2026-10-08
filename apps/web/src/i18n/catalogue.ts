@@ -292,6 +292,9 @@ const en = {
   "style.historyTitle": "What has happened to it",
   "style.historyEntry": "{decision} by {name}, {when}",
   "style.historyUnknownActor": "someone no longer on the team",
+  "style.historyEarlierLink": "Earlier events",
+  "style.historyTotal": "This example has {count} recorded events, oldest last.",
+  "style.historyLatestLink": "Most recent events",
   "style.suggestionExplain": "Noticed from a reply someone sent. It is not being used until you approve it.",
   "style.filterStatus": "Status",
   "style.filterProvenance": "Where it came from",
@@ -943,6 +946,9 @@ const ru: Catalogue = {
   "style.historyTitle": "Что с ним происходило",
   "style.historyEntry": "{decision}: {name}, {when}",
   "style.historyUnknownActor": "участник, которого больше нет в команде",
+  "style.historyEarlierLink": "Более ранние события",
+  "style.historyTotal": "Всего записанных событий у примера: {count}, самые свежие — внизу.",
+  "style.historyLatestLink": "Самые свежие события",
   "style.suggestionExplain": "Замечено в отправленном ответе. Не используется, пока вы не одобрите.",
   "style.filterStatus": "Статус",
   "style.filterProvenance": "Откуда взялось",
@@ -1337,6 +1343,17 @@ export const pluralCatalogues: Readonly<Record<UiLocale, Readonly<Record<string,
       one: "{count} knowledge source",
       other: "{count} knowledge sources",
     },
+    // The first truncation anybody reaches is at one hidden event, so this is the key that would read
+    // "1 earlier events" if it were an ordinary message. The Russian string could dodge agreement by
+    // putting the number last; English cannot, and a counted sentence is what `plural` is for.
+    "style.historyEarlier": {
+      one: "{count} earlier event is not shown here.",
+      other: "{count} earlier events are not shown here.",
+    },
+    "style.historyLater": {
+      one: "{count} later event is not shown here, including the one that set the current state.",
+      other: "{count} later events are not shown here, including the one that set the current state.",
+    },
   },
   ru: {
     "setup.reviewItemsWaiting": {
@@ -1350,6 +1367,18 @@ export const pluralCatalogues: Readonly<Record<UiLocale, Readonly<Record<string,
       few: "{count} источника знаний",
       many: "{count} источников знаний",
       other: "{count} источника знаний",
+    },
+    "style.historyEarlier": {
+      one: "Не показано ещё {count} событие.",
+      few: "Не показано ещё {count} события.",
+      many: "Не показано ещё {count} событий.",
+      other: "Не показано ещё {count} события.",
+    },
+    "style.historyLater": {
+      one: "Позже произошло ещё {count} событие, и среди них то, которое задало текущее состояние.",
+      few: "Позже произошло ещё {count} события, и среди них то, которое задало текущее состояние.",
+      many: "Позже произошло ещё {count} событий, и среди них то, которое задало текущее состояние.",
+      other: "Позже произошло ещё {count} события, и среди них то, которое задало текущее состояние.",
     },
   },
 };
