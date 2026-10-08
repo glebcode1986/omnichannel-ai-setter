@@ -43,6 +43,7 @@ const conversation = (overrides: Partial<ConversationDetail> = {}): Conversation
   lastOutboundAt: null,
   messages: [],
   pendingSends: [],
+  pendingSendsBeyondWindow: 0,
   ...overrides,
 });
 

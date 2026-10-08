@@ -639,6 +639,36 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
       expect(sends.get(inFlight)?.claimed).toBe(true);
       expect(sends.get(queued)?.scheduledFor.toISOString()).toBe(at(1610).toISOString());
       expect(sends.get(queued)?.text).toBe("Queued reply");
+      // Nothing hidden, which is the ordinary case and what makes the count below mean something.
+      expect(detail?.pendingSendsBeyondWindow).toBe(0);
+    }, 180_000);
+
+    it("says how many queued sends the window leaves out, and keeps the soonest ones in it", async () => {
+      // The cap was silent: past the tenth queued reply the controls rendered ten cancel buttons and
+      // nothing to say an eleventh send existed — and this read's own comment is that a send the operator
+      // cannot see is a send they cannot stop. Thirteen, so the window binds and the remainder is a
+      // number rather than a boolean.
+      const id = await conversation({ name: "Has Many Pending", occurredAt: at(1700) });
+      const queued: string[] = [];
+      for (let index = 0; index < 13; index += 1) {
+        queued.push(await pendingDelivery(id, "SCHEDULED", at(1710 + index)));
+      }
+
+      const detail = await readConversation(db(), context, id);
+
+      expect(detail?.pendingSends).toHaveLength(10);
+      expect(detail?.pendingSendsBeyondWindow).toBe(3);
+      // The soonest ten, in the order they go out. The cap drops the least urgent, which is the right way
+      // round for a control an operator is racing.
+      expect(detail?.pendingSends.map((send) => send.operationId)).toEqual(queued.slice(0, 10));
+
+      // And every hidden one is reachable by acting: cancelling a visible send takes it out of the window
+      // and the next appears, which is what the sentence on screen tells the reader to do.
+      await db().deliveryJobRecord.updateMany({ where: { operationId: queued[0] }, data: { status: "CANCELLED_HUMAN_TAKEOVER" } });
+      const after = await readConversation(db(), context, id);
+      expect(after?.pendingSends).toHaveLength(10);
+      expect(after?.pendingSendsBeyondWindow).toBe(2);
+      expect(after?.pendingSends.map((send) => send.operationId)).toEqual(queued.slice(1, 11));
     }, 180_000);
 
     it("reports a reply the person wrote themselves, which has no draft to be found through", async () => {

@@ -1872,6 +1872,12 @@ export const pluralCatalogues: Readonly<Record<UiLocale, Readonly<Record<string,
       one: "{count} knowledge source",
       other: "{count} knowledge sources",
     },
+    // A counted sentence, because the first time this appears at all it says "1", and "1 more queued
+    // replies" is what an ordinary message would have produced.
+    "control.pendingBeyond": {
+      one: "{count} more queued reply is not shown. Cancel one above and it appears.",
+      other: "{count} more queued replies are not shown. Cancel one above and the next appears.",
+    },
   },
   ru: {
     "setup.reviewItemsWaiting": {
@@ -1885,6 +1891,12 @@ export const pluralCatalogues: Readonly<Record<UiLocale, Readonly<Record<string,
       few: "{count} источника знаний",
       many: "{count} источников знаний",
       other: "{count} источника знаний",
+    },
+    "control.pendingBeyond": {
+      one: "Ещё {count} отложенный ответ не показан. Отмените один выше — он появится.",
+      few: "Ещё {count} отложенных ответа не показаны. Отмените один выше — появится следующий.",
+      many: "Ещё {count} отложенных ответов не показаны. Отмените один выше — появится следующий.",
+      other: "Ещё {count} отложенных ответа не показаны. Отмените один выше — появится следующий.",
     },
   },
 };

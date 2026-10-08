@@ -17,6 +17,7 @@ import {
   BREAK_GLASS_MAX_MS,
   PLATFORM_PERMISSION_MATRIX,
   PLATFORM_PERMISSIONS,
+  NO_CAPABILITIES,
   PLATFORM_ROLES,
   platformAuditSeverity,
   type PlatformRole,
@@ -430,6 +431,92 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
       expect(await db().platformAuditEvent.count({ where: { kind: "KILL_SWITCH_LIFTED", subjectId: pulled.suspensionId } })).toBe(1);
       expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toBeUndefined();
     });
+
+    it("reports a channel-scoped pause however many accounts the tenant has", async () => {
+      // `readActivePause` used to answer this by enumerating the workspace's channel accounts and asking
+      // the domain about each — `take: 50`, and with no `orderBy`, so the fifty were whichever rows the
+      // heap returned. A switch on anything outside that arbitrary set was not found, and the screen then
+      // said nothing was paused while outbound really was stopped. On an incident screen that is its own
+      // kind of harm: an operator asking "why is nothing going out?" was told to look elsewhere.
+      //
+      // Fifty-one accounts, and the switch on the last one, because that is the only shape the old code
+      // got wrong. It now asks from the other end — every suspension is its own witness — so no number
+      // of accounts can hide one.
+      const profile = tenant.profiles[0];
+      if (profile === undefined) {
+        throw new Error("the fixture expected a seeded Business Profile");
+      }
+      // Written directly and `DISCONNECTED`, because only one *live* account per channel per profile may
+      // exist. The old probe filtered by nothing but the workspace, so a disconnected account crowded it
+      // exactly as a connected one did — which is the point: the rows that hid a switch did not have to
+      // be rows anybody could send from.
+      const accounts: string[] = [];
+      for (let index = 0; index < 51; index += 1) {
+        const id = `ca_crowded_${String(index).padStart(2, "0")}`;
+        await db().$executeRaw`
+          INSERT INTO "channel_accounts"
+            ("id", "workspace_id", "business_profile_id", "channel", "external_account_id", "display_name", "status", "capabilities", "updated_at")
+          VALUES (${id}, ${tenant.workspaceId}, ${profile.businessProfileId}, 'INSTAGRAM', ${`ig-crowded-${index}`}, ${`Crowded ${index}`},
+                  'DISCONNECTED', ${JSON.stringify({ ...NO_CAPABILITIES, text: true })}::jsonb, now())`;
+        accounts.push(id);
+      }
+      const last = accounts.at(-1);
+      if (last === undefined) {
+        throw new Error("the fixture expected fifty-one channel accounts");
+      }
+
+      const pulled = await pullKillSwitch(db(), operations, {
+        scope: "CHANNEL_ACCOUNT",
+        workspaceId: tenant.workspaceId,
+        // No profile: the constraint refuses one, because the account already names it and two ways to
+        // say the same thing is two ways for them to disagree.
+        channelAccountId: last,
+        reason: "one account's credentials",
+        at: NOW,
+      });
+
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toMatchObject({
+        scope: "CHANNEL_ACCOUNT",
+        byOperator: true,
+      });
+      await liftKillSwitch(db(), operations, { suspensionId: pulled.suspensionId, reason: "rotated", at: NOW });
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toBeUndefined();
+    }, 300_000);
+
+    it("reports the widest pause when a narrow one and a wide one are both live", async () => {
+      // The precedence the domain owns, asserted through this read because the read now chooses across
+      // several answers rather than returning the first one it finds.
+      const profile = tenant.profiles[0];
+      if (profile === undefined) {
+        throw new Error("the fixture expected a seeded Business Profile");
+      }
+      const narrow = await pullKillSwitch(db(), operations, {
+        scope: "BUSINESS_PROFILE",
+        workspaceId: tenant.workspaceId,
+        businessProfileId: profile.businessProfileId,
+        reason: "one profile",
+        at: NOW,
+      });
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toMatchObject({ scope: "BUSINESS_PROFILE" });
+
+      const wide = await pullKillSwitch(db(), operations, { scope: "GLOBAL", reason: "everything", at: NOW });
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toMatchObject({ scope: "GLOBAL" });
+
+      // And a pause whose window has closed is not reported at all, which the removed fallback used to
+      // decide with its own copy of the clock comparison.
+      await liftKillSwitch(db(), operations, { suspensionId: wide.suspensionId, reason: "done", at: NOW });
+      await liftKillSwitch(db(), operations, { suspensionId: narrow.suspensionId, reason: "done", at: NOW });
+      const lapsed = await pullKillSwitch(db(), operations, {
+        scope: "WORKSPACE",
+        workspaceId: tenant.workspaceId,
+        reason: "brief",
+        until: new Date(NOW.getTime() + 60_000),
+        at: NOW,
+      });
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, NOW))?.pause).toMatchObject({ scope: "WORKSPACE" });
+      expect((await readSupportSnapshot(db(), operations, tenant.workspaceId, new Date(NOW.getTime() + 120_000)))?.pause).toBeUndefined();
+      await liftKillSwitch(db(), operations, { suspensionId: lapsed.suspensionId, reason: "done", at: NOW });
+    }, 300_000);
 
     it("refuses a narrow scope whose identifiers are missing", async () => {
       // A `BUSINESS_PROFILE` switch with no profile named is a global stop wearing a narrow label — the

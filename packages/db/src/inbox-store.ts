@@ -25,6 +25,7 @@
  */
 import type { ConversationStatus, LeadStage } from "@omnichannel/domain";
 
+import type { Prisma } from "./generated/prisma/client";
 import { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 import type { DbExecutor } from "./client";
 import { deliveryOfConversation } from "./delivery-origin";
@@ -33,6 +34,16 @@ import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 const DEFAULT_PAGE = 30;
 const MAX_PAGE = 100;
 /** How many batches one page may read while a two-column filter thins them out. */
+/**
+ * How many queued sends the conversation controls show at once.
+ *
+ * Small on purpose — these are controls, not a list, and the ones that matter are the ones about to go
+ * out. What makes the bound safe is not its size but `pendingSendsBeyondWindow`: the cap was silent
+ * before, so past the tenth queued reply the pane rendered ten cancel buttons and nothing to say an
+ * eleventh send existed.
+ */
+const PENDING_SENDS_WINDOW = 10;
+
 const MAX_FILL_ROUNDS = 5;
 
 /** Where the previous page stopped. Opaque to callers, and only meaningful for the same filters. */
@@ -319,8 +330,23 @@ export interface ConversationDetail {
   readonly lastOutboundAt: Date | null;
   readonly messages: readonly ThreadMessage[];
   readonly latestDraft?: LatestDraft;
-  /** Replies queued behind their delay, newest first. Usually empty, and never more than a handful. */
+  /**
+   * Replies queued behind their delay, soonest first.
+   *
+   * A window, not the list: it holds the `PENDING_SENDS_WINDOW` that go out next, which are the ones an
+   * operator is racing. `pendingSendsBeyondWindow` says how many more there are.
+   */
   readonly pendingSends: readonly PendingSend[];
+  /**
+   * Queued sends this window does not show. Zero in every ordinary case.
+   *
+   * Reported because of what the read's own comment says about itself — "a send the operator cannot see
+   * is a send they cannot stop". The cap used to be silent, so past the tenth queued reply the controls
+   * rendered ten cancel buttons and no indication that an eleventh send existed. Each remaining one is
+   * still reachable: cancelling a visible send takes it out of this window and the next one appears. What
+   * was missing was any reason to keep going.
+   */
+  readonly pendingSendsBeyondWindow: number;
 }
 
 /**
@@ -344,14 +370,25 @@ export async function readConversation(
   const policiesPromise = readModePolicies(db, scope);
   // Queued replies, read alongside rather than after: the thread cannot be drawn without them, because a
   // send the operator cannot see is a send they cannot stop.
+  //
+  // Soonest first, and the window therefore holds the sends an operator is actually racing — the cap
+  // drops the least urgent rather than the most, which is the right way round. What it did not do was
+  // say that it had dropped anything, so the count is read alongside. One extra row rather than a second
+  // `count()` would not do: the number wanted is how many are hidden, not whether any are.
+  const pendingWhere = {
+    ...scope,
+    status: { in: ["SCHEDULED", "SENDING"] },
+    ...deliveryOfConversation(conversationId),
+  } satisfies Prisma.DeliveryJobRecordWhereInput;
   const pendingPromise = db.deliveryJobRecord.findMany({
     // Both legal origins: a reply a person wrote has no draft to reach this conversation through, and a
     // queued send the operator cannot see is a send they cannot stop.
-    where: { ...scope, status: { in: ["SCHEDULED", "SENDING"] }, ...deliveryOfConversation(conversationId) },
-    orderBy: [{ scheduledFor: "asc" }],
-    take: 10,
+    where: pendingWhere,
+    orderBy: [{ scheduledFor: "asc" }, { operationId: "asc" }],
+    take: PENDING_SENDS_WINDOW,
     select: { operationId: true, draftId: true, status: true, scheduledFor: true, authority: true, humanText: true, draft: { select: { text: true } } },
   });
+  const pendingCountPromise = db.deliveryJobRecord.count({ where: pendingWhere });
   const row = await db.conversation.findFirst({
     where: { ...scope, id: conversationId },
     select: {
@@ -408,7 +445,7 @@ export async function readConversation(
       },
     },
   });
-  const [policies, pending] = await Promise.all([policiesPromise, pendingPromise]);
+  const [policies, pending, pendingTotal] = await Promise.all([policiesPromise, pendingPromise, pendingCountPromise]);
   if (row === null) {
     return undefined;
   }
@@ -447,6 +484,7 @@ export async function readConversation(
       claimed: job.status === "SENDING",
       authority: job.authority,
     })),
+    pendingSendsBeyondWindow: Math.max(pendingTotal - pending.length, 0),
     messages: [...row.messages].reverse().map((message) => ({
       id: message.id,
       direction: message.direction,

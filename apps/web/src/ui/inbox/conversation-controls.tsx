@@ -114,6 +114,15 @@ export function ConversationControls({
               </li>
             ))}
           </ul>
+          {/* The window's own edge. Cancelling a visible send takes it out of this window and the next
+              one appears, so every queued reply is reachable — but nothing said there was anything left
+              to reach, and the read's own comment is that a send the operator cannot see is a send they
+              cannot stop. */}
+          {conversation.pendingSendsBeyondWindow === 0 ? undefined : (
+            <p className="muted" data-pending-beyond={conversation.pendingSendsBeyondWindow}>
+              {t.plural("control.pendingBeyond", conversation.pendingSendsBeyondWindow, { count: t.number(conversation.pendingSendsBeyondWindow) })}
+            </p>
+          )}
         </section>
       )}
     </section>
