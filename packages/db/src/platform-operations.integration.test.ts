@@ -470,6 +470,46 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
       await liftKillSwitch(db(), admin, { suspensionId: global.suspensionId, reason: "done", at: NOW });
       expect((await listKillSwitches(db(), admin, { at: NOW })).map((row) => row.suspensionId)).not.toContain(global.suspensionId);
     });
+
+    it("drops a switch whose window has closed, whether or not a workspace was asked about", async () => {
+      // The listing held two bare `OR` keys in one object literal, and the second silently replaced the
+      // first — so supplying a workspace, which is exactly what the workspace screen always does, dropped
+      // the expiry half. An expired pause was then listed as in force, and an incident console reading
+      // "outbound is stopped" while it is not is the wrong direction to be wrong in.
+      //
+      // Asserted both ways round in one test, because each passed on its own: the unfiltered call was
+      // always correct, and the filtered one was never exercised against a lapsed switch.
+      const lapsed = await pullKillSwitch(db(), admin, {
+        scope: "WORKSPACE",
+        workspaceId: tenant.workspaceId,
+        reason: "short hold",
+        until: new Date(NOW.getTime() + 60_000),
+        at: NOW,
+      });
+      const after = new Date(NOW.getTime() + 120_000);
+
+      expect((await listKillSwitches(db(), admin, { at: NOW })).map((row) => row.suspensionId)).toContain(lapsed.suspensionId);
+      expect((await listKillSwitches(db(), admin, { workspaceId: tenant.workspaceId, at: NOW })).map((row) => row.suspensionId)).toContain(
+        lapsed.suspensionId,
+      );
+
+      expect((await listKillSwitches(db(), admin, { at: after })).map((row) => row.suspensionId)).not.toContain(lapsed.suspensionId);
+      expect((await listKillSwitches(db(), admin, { workspaceId: tenant.workspaceId, at: after })).map((row) => row.suspensionId)).not.toContain(
+        lapsed.suspensionId,
+      );
+
+      // And the workspace filter still does its own job: a switch in another tenant is not listed here,
+      // while a platform-wide one is.
+      const elsewhere = await pullKillSwitch(db(), admin, { scope: "WORKSPACE", workspaceId: otherTenant.workspaceId, reason: "theirs", at: NOW });
+      const platformWide = await pullKillSwitch(db(), admin, { scope: "GLOBAL", reason: "everything", at: NOW });
+      const scoped = (await listKillSwitches(db(), admin, { workspaceId: tenant.workspaceId, at: NOW })).map((row) => row.suspensionId);
+
+      expect(scoped).not.toContain(elsewhere.suspensionId);
+      expect(scoped).toContain(platformWide.suspensionId);
+      await liftKillSwitch(db(), admin, { suspensionId: platformWide.suspensionId, reason: "done", at: NOW });
+      await liftKillSwitch(db(), admin, { suspensionId: elsewhere.suspensionId, reason: "done", at: NOW });
+      await liftKillSwitch(db(), admin, { suspensionId: lapsed.suspensionId, reason: "done", at: NOW });
+    });
   });
 
   describe("ambiguous operations", () => {
