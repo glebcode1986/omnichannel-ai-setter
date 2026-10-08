@@ -12,7 +12,7 @@
  * than 25 suggestions could see 25 of them — and a suggestion nobody can reach is one nobody can approve
  * or reject, so it stays SUGGESTED.
  */
-import type { StyleExampleCursor } from "@omnichannel/db";
+import type { StyleDecisionCursor, StyleExampleCursor } from "@omnichannel/db";
 
 import type { RawSearchParams } from "./inbox-view";
 
@@ -61,6 +61,82 @@ export function decodeStyleCursor(encoded: string | undefined): StyleExampleCurs
   return { createdAt, id };
 }
 
+/**
+ * The two parameters that open one example's complete lifecycle (R5 re-review).
+ *
+ * Two rather than one, and for the same reason the three lists get a parameter each: the example decides
+ * *whose* history is open and the cursor decides *where in it*, so going back a page cannot accidentally
+ * open a different example's history, and dropping the cursor alone returns to the most recent events.
+ */
+const HISTORY_EXAMPLE_PARAM = "historyExample";
+const HISTORY_CURSOR_PARAM = "historyCursor";
+
+/** Not secret, only opaque: the `(decidedAt, id)` tuple the lifecycle pages by. */
+export function encodeDecisionCursor(cursor: StyleDecisionCursor): string {
+  return Buffer.from(`${cursor.decidedAt.toISOString()}|${cursor.id}`, "utf8").toString("base64url");
+}
+
+export function decodeDecisionCursor(encoded: string | undefined): StyleDecisionCursor | undefined {
+  if (encoded === undefined || encoded === "") {
+    return undefined;
+  }
+  const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+  const separator = decoded.indexOf("|");
+  if (separator === -1) {
+    return undefined;
+  }
+  const decidedAt = new Date(decoded.slice(0, separator));
+  const id = decoded.slice(separator + 1);
+  if (Number.isNaN(decidedAt.getTime()) || id === "") {
+    return undefined;
+  }
+  return { decidedAt, id };
+}
+
+/** Which example's lifecycle this request has open, and where in it. */
+export function styleHistoryRequest(query: RawSearchParams): { readonly styleExampleId?: string; readonly before?: StyleDecisionCursor } {
+  const styleExampleId = one(query[HISTORY_EXAMPLE_PARAM]);
+  const before = decodeDecisionCursor(one(query[HISTORY_CURSOR_PARAM]));
+  // A cursor with no example names no history, and is dropped rather than guessed at: the alternative is
+  // applying one example's cursor to whichever example happened to be first.
+  return { ...(styleExampleId === undefined ? {} : { styleExampleId }), ...(styleExampleId === undefined || before === undefined ? {} : { before }) };
+}
+
+/**
+ * The same page with one example's lifecycle opened at a point in the past, and everything else as it was.
+ *
+ * Built from the incoming query for the reason `styleNextHref` gives: a URL rebuilt from parsed values
+ * drifts the moment a parameter is added and forgotten, and here that would mean opening a history and
+ * silently resetting the list the example is in to its first page.
+ *
+ * A `cursor` of `undefined` is the link back to the most recent events.
+ */
+export function styleHistoryHref(
+  basePath: string,
+  query: RawSearchParams,
+  styleExampleId: string | undefined,
+  cursor: StyleDecisionCursor | undefined,
+): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (key === HISTORY_EXAMPLE_PARAM || key === HISTORY_CURSOR_PARAM || key === "outcome") {
+      continue;
+    }
+    const first = Array.isArray(value) ? value[0] : value;
+    if (first !== undefined && first !== "") {
+      params.set(key, first);
+    }
+  }
+  if (styleExampleId !== undefined) {
+    params.set(HISTORY_EXAMPLE_PARAM, styleExampleId);
+  }
+  if (cursor !== undefined) {
+    params.set(HISTORY_CURSOR_PARAM, encodeDecisionCursor(cursor));
+  }
+  const query_ = params.toString();
+  return query_ === "" ? basePath : `${basePath}?${query_}`;
+}
+
 /** The cursor this request carries for one of the two lists. */
 export function styleCursorOf(query: RawSearchParams, list: StyleList): StyleExampleCursor | undefined {
   return decodeStyleCursor(one(query[PARAM[list]]));
@@ -79,7 +155,12 @@ export function styleNextHref(basePath: string, query: RawSearchParams, list: St
   for (const [key, value] of Object.entries(query)) {
     // `outcome` announces a write that already happened; repeating it on the next page would announce it
     // again. This list's own cursor is replaced, and the other list's is carried through untouched.
-    if (key === PARAM[list] || key === "outcome") {
+    //
+    // The open history goes too, for the reason the Inbox drops its cursor when a filter changes: a new
+    // page of a list is a new set of rows, and an example whose history is open is very likely not on it.
+    // Carrying the parameters forward produced a URL that loaded a lifecycle no list rendered, and took
+    // the link back to the newest events with it.
+    if (key === PARAM[list] || key === "outcome" || key === HISTORY_EXAMPLE_PARAM || key === HISTORY_CURSOR_PARAM) {
       continue;
     }
     const first = Array.isArray(value) ? value[0] : value;
