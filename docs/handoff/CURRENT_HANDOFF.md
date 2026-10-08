@@ -246,6 +246,159 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
+   independent re-review.**
+
+   **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
+   immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
+   defect — the one the previous evidence comment had named and deliberately left alone as pre-existing.
+
+   The retired list is archived examples *and* declined suggestions, which are one thing to the person
+   looking at them. They were read as two pages and concatenated: `ARCHIVED` consumed the `retired`
+   cursor while `REJECTED` was always its own first twenty-five, and the merged page inherited
+   continuation only from the archived half. One cursor cannot continue two queries, so the twenty-sixth
+   declined suggestion was unreachable by any rendered link — and its lifecycle went with it, because a
+   history only opens for an example that is on the page.
+
+   The fix is one query over both statuses rather than a second cursor. `StyleExampleFilter.status` now
+   takes one status or several, and the screen asks for `["ARCHIVED", "REJECTED"]` with the `retired`
+   cursor. That makes reachability a property of the query rather than an argument about it:
+   `(createdAt desc, id desc)` over both statuses is total and stable, so following the cursor visits
+   every row exactly once whichever status it has. The merge is deleted rather than repaired.
+
+   One consequence worth knowing: the retired list is now ordered newest-first across both statuses
+   instead of all archived followed by all rejected. Every one of the screen's existing tests passed
+   unchanged, so nothing accepted was pinned to the old grouping.
+
+   **Regressions:** twenty-eight declined suggestions and three withdrawn examples, walked using nothing
+   but the link the screen renders, asserting every row is reached and reached once; the lifecycle of a
+   row only a later page reaches is opened on the page that reached it; and the store-level contract —
+   several statuses read as one keyset, paged two at a time, arriving once each. Mutation-checked:
+   restoring the two concatenated pages fails both screen regressions.
+
+   **Earlier heads in this repair chain:** `d9d1108d7bf974002b686afd32a4c3327d761558` was the docs-only
+   handoff commit; `66a317fa0330e29b6bed9238286158fde48f9c01` added the immutability and lifecycle
+   repair, both now accepted.
+
+   Five of the six earlier blocker areas are accepted and this repair changes the behaviour of none of
+   them: the retired-example UI, the production suggestion/provenance flow, workspace-scoped example
+   creation, the Style Test's candidate and context disclosure, and conflict-safe voice-profile writes.
+   Four of the five are not touched at all. The fifth is: the retired list's own component, assembler and
+   route all carry the history, so `style-example-list.tsx`, `style-screen.ts` and the route gain props and
+   a derivation — additively, with the restore branch, the badges and the approver line byte-identical, and
+   every one of that file's existing tests passing on its original assertions. The accepted P5-05 parent
+   behaviour and the tenant boundaries are untouched.
+
+   The one remaining finding was that the decision history was neither database-enforced append-only nor
+   fully retrievable. Both halves are now fixed, and both were the same shape — a guarantee that existed
+   as a property of the current source rather than of the system.
+
+   **Immutability is now the table's, not the package's.** `style_example_decisions` was described as
+   "append-only by use": nothing in `style-store.ts` updates or deletes one of these rows, and the
+   foreign key stops the *example* being deleted while they point at it. Neither is a statement about the
+   rows themselves, and the case that matters is precisely the one where this package's source is not what
+   is running — a support script, a later migration, a hand-typed `UPDATE` during an incident. Migration
+   `20261008100000_style_decisions_append_only` refuses `UPDATE` and `DELETE` with a row trigger and
+   `TRUNCATE` with a statement-level one; a row trigger never fires for a truncate, so without the second
+   the guarantee would have ended at the one statement that destroys everything rather than editing one
+   thing.
+
+   **The lifecycle is complete and reachable.** `MAX_DECISIONS` is still twenty, but it is now the twenty
+   *most recent* rather than the twenty oldest, still rendered oldest-first within the window. That is the
+   whole defect inverted: the cut used to fall at the newest end, so the events it hid were the ones that
+   explained an example's current state. The window reports how many earlier events it left behind and
+   carries a `(decidedAt, id)` cursor; `readStyleExampleLifecycle` returns the page before any cursor, with
+   the cursor for the one before that, so every decision is reachable by following links the screen
+   renders — and every example is, which is the part this paragraph used to qualify. It recorded that the
+   rejected half of the retired list had no cursor of its own and that a profile with more than
+   twenty-five declined suggestions could not reach the twenty-sixth. That was true when it was written
+   and is no longer: item 1 above reads the retired list as **one keyset over `ARCHIVED` and `REJECTED`**,
+   so there is no twenty-five-row rejected limit and no second source for a row to fall behind. The
+   sentence is corrected rather than deleted, because the sequence matters — naming the gap in an
+   evidence comment is what led to it being fixed rather than inherited.
+
+   Both halves of the cursor travel because `decided_at` is not unique — two decisions can share a
+   millisecond, and a cursor on an instant alone silently repeats or skips rows.
+
+   Two things an adversarial pass over the first attempt found, both now fixed and both worth remembering.
+   **A page read backwards hides the newer half**, so the first version reproduced the blocked defect one
+   click later: a history ending in `RESTORED` under a badge reading "Archived", with the number that would
+   have said so computed and discarded. The window now reports both of its edges and the lifecycle's whole
+   length. And **a plain `CREATE TRIGGER` is origin-only**: `SET session_replication_role = 'replica'` is
+   an ordinary statement on this connection and an origin-only trigger is silent under it, so one `SET`
+   would have switched the whole guarantee off with no DDL and nothing recorded. Both triggers are
+   `ENABLE ALWAYS`, and a regression proves the refusal holds inside replica mode rather than only
+   checking the flag. What remains open is DDL on the table by its owner, which no trigger can close; the
+   claim is therefore "unrewritable by anything short of DDL", not "unrewritable".
+
+   `StyleDecisionView` now carries the row's `id`, and the rendered history is keyed by it. It was keyed by
+   decision-and-instant, which collides for exactly the pair the lifecycle can now contain: a history that
+   cannot be *shown* completely is not retrievable completely, whatever the query returned.
+
+   **Regressions added:** direct SQL `UPDATE`, `DELETE` and `TRUNCATE` against `style_example_decisions`
+   are each proven rejected, with a control asserting the stored row is unchanged afterwards; a
+   twenty-five-decision lifecycle is reassembled page by page through the cursors and compared with the
+   whole expected sequence; a lifecycle whose decisions share one instant is paged two at a time and every
+   row is seen exactly once; and the screen's own assembly is driven through the links it renders, with a
+   forged `historyExample` proving a cursor carries no authority.
+
+   Both repairs were mutation-checked: removing the trigger fails the immutability regression, and
+   returning the window to the oldest twenty fails the long-lifecycle regression.
+
+   **Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is **not**
+   propagated: the branches below #78 still carry the earlier head. No rebase, no force-push, no merge to
+   `main`.
+
+2. **The six original findings on PR #78, repaired at `a3d27e3` and still the basis of the above.**
+   
+      **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
+   **Repaired at:** `a3d27e39d479a5c00ea5ebea2e6af9216e869e17`, exact-head GitHub Actions run
+   [37608987350](https://github.com/glebcode1986/omnichannel-ai-setter/actions/runs/37608987350) succeeded.
+   This note is the canonical handoff the same directive asked for, so the branch head is one commit later
+   than the repair SHA; PR #78 carries the current one.
+   
+   **Independent Astra re-review of the new live head is the only active gate.** Every branch below #78 in
+   the chain already contains this repair by ordinary merge, and that propagation happened *before* an
+   independent PASS. It is therefore held rather than advanced: nothing from #79 onwards is ready, no review
+   is requested on any of them, and the propagated branches are left in place and unrewritten — no rebase,
+   no force-push, no merge to `main`, no rollback.
+   
+   The six findings and what each repair actually was:
+   
+   1. **Archive and restore were unreachable through the UI.** `loadStyleScreen` loaded only `ACTIVE` and
+      `SUGGESTED` rows, so an archived example or a rejected suggestion vanished from both lists while
+      `StyleExampleList` carried a restore branch nothing could ever reach. The screen now loads and renders
+      the withdrawn rows, which is what makes the acceptance path exist at all.
+   2. **The suggestion flow had no production producer.** `suggestStyleExample` was called only by its own
+      tests, and it hard-coded `HUMAN_TYPED` with no `sourceDraftId`, so a `HUMAN_EDITED_DRAFT` suggestion
+      was unconstructible. `resolve-review.ts` now suggests the edited draft through a
+      `StyleLearningStore.suggestEditedDraft` port, so an unticked edit becomes a `SUGGESTED` example with
+      its real provenance and its source draft.
+   3. **A workspace-scoped example could not be created from the screen.** The add-example form posted no
+      `scope`, and `scopeFrom` defaults a missing value to `BUSINESS_PROFILE`, so the store's `WORKSPACE`
+      support was unreachable. The form carries the control, and the cross-profile write goes through the
+      same admin-or-owner check `createBusinessProfile` applies.
+   4. **The Style test was a retrieval browser, not the contracted test.** `KNOWLEDGE_STYLE_UX` asks for a
+      neutral prompt with a *candidate output* plus the instructions and examples that influenced it;
+      `runStyleTrial` returned a retrieval mode and hits. `style-test.ts` now resolves the effective voice
+      through the worker's own `createStyleProfileStore` path and produces a candidate, with
+      `knowledge: []` by contract so a style test cannot borrow factual retrieval.
+   5. **Voice-profile saves were unsafe under the R5 multi-tab contract.** `findFirst` then an
+      unconditional `create`/`update` let two first saves both see no row, and let a stale tab overwrite a
+      newer operator's profile. The write is conditional on an expected `updatedAt`, returns a typed
+      `CONFLICT`, and has deterministic concurrent-create and stale-update regressions.
+   6. **The decision history was not persisted.** Reject, archive and restore only replaced `status`, and
+      restore overwrote `approvedByUserId`, destroying the identity of the prior approver. `decide()` writes
+      `style_example_decisions` rows (migration `20261004160000_style_example_decisions`) and never
+      re-stamps the first approver, so the lifecycle is reconstructable. That first repair called the
+      table append-only when nothing but this package's own source made it so, and bounded the history at
+      twenty rows from the wrong end; both are what item 1 above fixes.
+   
+   **Exact-head verification reported for the repair SHA**, in addition to the successful Actions run:
+   clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL and Redis infrastructure
+   suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
+   `db:check-drift` reporting `No difference detected.`
+
 1. **Style Training could not show more than 25 of either list (#32).** The third instance of one defect,
    found by checking every paged store list against the screen that spends its cursor after Astra raised
    it on PR #77. `listStyleExamples` pages at 25 and returns a cursor; the route called it twice — once
