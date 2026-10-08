@@ -235,7 +235,7 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** at `0b62c9e870b260642cb07d386198870c1f1e659f` (R5, 2026-10-08). All seven blockers repaired on this branch; awaiting independent re-review. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** twice: at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (R5 re-review, which closed four and kept three). All ten are repaired on this branch; awaiting independent re-review. |
 | #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
 
 The #79 repairs are summarised under "P5-04" below. They are implemented at this branch's head and merged
@@ -318,17 +318,55 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    inputs produced it. `AFTER` is modelled as an expired window rather than `NOT_ELIGIBLE`, which would
    short-circuit the gates the run exists to exercise.
 
-   One part of finding 6 I could not satisfy, and did not pretend to: **WhatsApp's three after-window
-   modes and its template allowlist cannot materially affect this run on this branch.** The evaluator is
-   channel-neutral and `PolicyLimits` carries no allowlist, because whether an *approved template* may go
-   out is `template-route.ts`'s decision — introduced by `e0eae80` with the WhatsApp template catalogue
-   (Issue #20), which is further down this chain than #79. The playground could only make the allowlist
-   look material by deciding template routing itself, which would be a second implementation of a send
-   rule, and the two would eventually disagree about the same template. So the run states what it answers:
-   it drafts an ordinary reply and answers the ordinary path, and the screen says on a WhatsApp run that
-   the template rules decide the rest. What *is* proved material, through the production evaluator and the
-   simulation's own mappings, is the channel, the window, the connection, the human-support exception and
-   **both** Instagram after-window modes.
+   **The re-review at `d67da89e…` closed findings 1, 2, 5 and 7 and kept three.** All three are now fixed,
+   and the third one corrects a judgement of mine rather than only a defect.
+
+   **The acknowledgement needed a server-issued proof, not a comparison.** Comparing the posted impact
+   codes against the freshly computed ones is necessary and not sufficient: the codes are public — URL,
+   page, translation catalogue — so a first crafted POST naming the right code satisfied the comparison
+   with no summary ever rendered, and "the page only renders the checkbox after a refusal" is a statement
+   about one caller of a public endpoint. The refusal now mints an HMAC seal over the encoded proposal, the
+   version and the sorted impacts (`proposal-seal.ts`, `AUTH_SECRET`, compared with `timingSafeEqual`), and
+   the save accepts an acknowledgement only with a seal it minted. Stateless rather than a persisted
+   pending proposal: a table would need an owner, a lifetime, a cleanup policy and an answer for two tabs
+   proposing at once, and what is being authenticated already travels with the request.
+
+   **An invalid Custom submission was reported as a success, and a test of mine said that was correct.**
+   The permanent case read "sends nothing when a custom range is only half typed" — so a repair-directive
+   requirement was contradicted by a green suite, which is the trap of a test quoting a spec and asserting
+   its opposite. It refuses now, with three outcomes, and the bounds are shared with the form's own
+   `min`/`max`. The same hole sat three lines below the fieldset: `takeoverPauseHours` omitted a cleared
+   box, the store kept the stored hours, and a crafted `100000` was eleven years of silence accepted as a
+   deliberate choice.
+
+   **The allowlist: I argued a limitation where the mechanism already existed.** My previous note said
+   making the playground decide template routing would be a second implementation of a send rule. The
+   premise was right and the conclusion was wrong, because `templateRoute` — two settled booleans computed
+   where the catalogue is, never inside the engine — is this chain's own design for exactly this question.
+   It is implemented here: `TemplateRoute` and the optional `PolicyInput.templateRoute`, an
+   `evaluateTemplateGate` in which `TEMPLATE_REQUIRED` is a review item a person can resolve while
+   `NO_ELIGIBLE_TEMPLATE` is a dead end, the reason code itself, and a simulation that computes
+   `automatable` from the owner's **saved** allowlist. Empty versus non-empty now decides `SKIP` against
+   `SCHEDULE`, and the three WhatsApp modes are distinguishable — asserted in the engine's own suite, where
+   a policy rule belongs.
+
+   **The bug that was the real cause.** I had mapped "after the window" to an expired free-form window for
+   both channels. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is the state the template gate
+   keys on — so the gate never ran, and nothing done to the allowlist could have changed an answer.
+   Instagram's closed window stays an expired free-form one, because its after-window policy is about what
+   may still happen then.
+
+   **Six more came from my own adversarial pass before sending the evidence**, and two were as serious as
+   anything in the review: the playground's GET form replaced the whole query and so silently destroyed a
+   pending proposal — while the history link three hundred lines away obeyed the opposite rule *and had a
+   test saying why*, one rule with two implementations and the untested one losing state; and the audit
+   diff sorted every list and compared the *rendered* line, so a criteria reorder or a criterion split in
+   two wrote an audit row whose diff rendered empty — a history entry asserting a change and showing none.
+   The comparison is on a JSON encoding now, and only the two lists the store itself treats as unordered
+   are sorted. Also: the page held both versions and compared them nowhere; "show earlier changes" carried
+   the playground's question and so billed a model request per page of history; and the length bound
+   covered one of the three free-text fields that share the proposal parameter, which is a bound on
+   nothing.
 
    That last pair needed a fifth input to be provable at all. `HUMAN_ASSISTED_EXTENDED` opens a human-only
    review path only while a human-support exception is live, and the exception was hard-coded unavailable

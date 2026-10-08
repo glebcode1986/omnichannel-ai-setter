@@ -29,16 +29,26 @@ import { getDb } from "@/server/db";
 import { saveSettingsAction } from "@/server/settings-actions";
 import {
   auditHistoryHref,
+  CUSTOM_TIMING_BOUNDS,
   decodeAuditCursor,
   decodeProposal,
   impactsFromQuery,
   MAX_PROPOSAL_FIELD_CHARS,
+  MAX_TEMPLATE_NAME_CHARS,
   mayEditSettings,
+  TAKEOVER_PAUSE_HOURS,
   one,
   policyChangeDiff,
   simulationInputsFrom,
 } from "@/server/settings-view";
-import { runSimulation, SIMULATION_ACCOUNTS, SIMULATION_CHANNELS, SIMULATION_HUMAN_SUPPORT, SIMULATION_WINDOWS } from "@/server/simulation";
+import {
+  runSimulation,
+  SIMULATION_ACCOUNTS,
+  SIMULATION_CHANNELS,
+  SIMULATION_HUMAN_SUPPORT,
+  SIMULATION_REPLY_KINDS,
+  SIMULATION_WINDOWS,
+} from "@/server/simulation";
 import type { MessageKey } from "@/i18n/catalogue";
 import type { RawSearchParams } from "@/server/inbox-view";
 
@@ -78,6 +88,15 @@ export default async function SettingsPage({
   // The impacts the server refused to save without an acknowledgement, and the proposal it refused.
   const pending = impactsFromQuery(one(query["impacts"]));
   const proposed = decodeProposal(one(query["proposal"]));
+  // The seal the refusal minted. The form posts it back with the acknowledgement; the save verifies it,
+  // so an acknowledgement cannot be a claim the caller simply makes.
+  const proposalSeal = one(query["proposalSeal"]) ?? "";
+  // Whether the pending proposal is already out of date. The page holds both numbers — the one the
+  // proposal was composed against and the one stored now — so it can say so rather than offering an
+  // acknowledgement the save is certain to refuse. Deliberately *not* re-stamped here: an acknowledgement
+  // must not cross somebody else's change, so a moved policy needs a fresh review.
+  const proposalStale = proposed !== undefined && stored !== undefined && proposed.expectedVersion !== stored.version;
+
   // What the form shows: the rejected proposal when there is one, otherwise what is stored. The version
   // always comes from the proposal when it has one, so confirming re-submits the same claim about the
   // world rather than a fresh one — if the policy moved meanwhile, the store refuses it as a conflict.
@@ -121,6 +140,15 @@ export default async function SettingsPage({
           </ul>
           {/* Said plainly, because the form below is showing the proposal rather than what is stored. */}
           <p>{t.t("settings.confirmPending")}</p>
+        </div>
+      )}
+
+      {!proposalStale || one(query["outcome"]) === "CONFLICT" ? undefined : (
+        <div className="notice" data-tone="stop" data-stale-version="true" role="alert">
+          {/* The summary above was computed against settings that have since moved, so acknowledging it
+              would be acknowledging a different change. Saving again re-asks the question against what is
+              stored now; what the other person changed is in the history below. */}
+          <p>{t.t("settings.staleProposal")}</p>
         </div>
       )}
 
@@ -168,13 +196,25 @@ export default async function SettingsPage({
           <p className="muted">{t.t("settings.goalHint")}</p>
 
           <label htmlFor="settings-criteria">{t.t("settings.criteria")}</label>
-          <textarea id="settings-criteria" name="criteria" rows={3} defaultValue={form.criteria} disabled={!mayEdit} />
+          {/* Bounded like the goal: all three free-text fields travel in one URL parameter when a save is
+              refused, so a bound on one of them is a bound on nothing. */}
+          <textarea
+            id="settings-criteria"
+            name="criteria"
+            rows={3}
+            maxLength={MAX_PROPOSAL_FIELD_CHARS}
+            defaultValue={form.criteria}
+            disabled={!mayEdit}
+          />
 
           <label htmlFor="settings-confidence">{t.t("settings.confidence")}</label>
           <select id="settings-confidence" name="confidencePreset" defaultValue={form.confidencePreset} disabled={!mayEdit}>
             {/* An owner who tuned values by hand is told so rather than shown a preset that no longer
                 describes them. Choosing a preset then replaces those values. */}
-            {form.confidencePreset === "" ? <option value="">{t.t("settings.custom")}</option> : undefined}
+            {/* Offered whenever the *stored* settings are hand-tuned, not only when the proposal is. Keyed
+                to the proposal, an owner who had tuned a threshold by hand and then selected a preset
+                could not change their mind without abandoning the whole proposal. */}
+            {form.confidencePreset === "" || stored?.confidencePreset === undefined ? <option value="">{t.t("settings.custom")}</option> : undefined}
             {CONFIDENCE_PRESETS.map((preset) => (
               <option key={preset} value={preset}>
                 {t.t(`confidencePreset.${preset}`)}
@@ -211,8 +251,8 @@ export default async function SettingsPage({
               id="settings-debounce-min"
               name="debounceMinSeconds"
               type="number"
-              min="0"
-              max="600"
+              min={CUSTOM_TIMING_BOUNDS.debounceSeconds.min}
+              max={CUSTOM_TIMING_BOUNDS.debounceSeconds.max}
               defaultValue={form.debounceMinSeconds}
               disabled={!mayEdit}
             />
@@ -222,8 +262,8 @@ export default async function SettingsPage({
               id="settings-debounce-max"
               name="debounceMaxSeconds"
               type="number"
-              min="0"
-              max="600"
+              min={CUSTOM_TIMING_BOUNDS.debounceSeconds.min}
+              max={CUSTOM_TIMING_BOUNDS.debounceSeconds.max}
               defaultValue={form.debounceMaxSeconds}
               disabled={!mayEdit}
             />
@@ -233,8 +273,8 @@ export default async function SettingsPage({
               id="settings-delay-min"
               name="deliveryDelayMinSeconds"
               type="number"
-              min="0"
-              max="86400"
+              min={CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.min}
+              max={CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.max}
               defaultValue={form.deliveryDelayMinSeconds}
               disabled={!mayEdit}
             />
@@ -244,8 +284,8 @@ export default async function SettingsPage({
               id="settings-delay-max"
               name="deliveryDelayMaxSeconds"
               type="number"
-              min="0"
-              max="86400"
+              min={CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.min}
+              max={CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.max}
               defaultValue={form.deliveryDelayMaxSeconds}
               disabled={!mayEdit}
             />
@@ -256,8 +296,8 @@ export default async function SettingsPage({
             id="settings-takeover"
             name="takeoverPauseHours"
             type="number"
-            min="1"
-            max="168"
+            min={TAKEOVER_PAUSE_HOURS.min}
+            max={TAKEOVER_PAUSE_HOURS.max}
             defaultValue={form.takeoverPauseHours}
             disabled={!mayEdit}
           />
@@ -281,7 +321,14 @@ export default async function SettingsPage({
           </select>
 
           <label htmlFor="settings-allowlist">{t.t("settings.allowlist")}</label>
-          <textarea id="settings-allowlist" name="allowlist" rows={3} defaultValue={form.allowlist} disabled={!mayEdit} />
+          <textarea
+            id="settings-allowlist"
+            name="allowlist"
+            rows={3}
+            maxLength={MAX_PROPOSAL_FIELD_CHARS}
+            defaultValue={form.allowlist}
+            disabled={!mayEdit}
+          />
           {form.whatsappAfterWindowPolicy === "TEMPLATE_AUTOPILOT" && form.allowlist.trim() === "" ? (
             <p className="notice" data-tone="stop" data-empty-allowlist="true">
               {t.t("settings.allowlistEmpty")}
@@ -293,11 +340,14 @@ export default async function SettingsPage({
               stand for a change the owner never read, and a stale tick cannot stand for a different one.
               An always-present checkbox made "show the effect summary before save" skippable by ticking
               it first. */}
-          {pending.length === 0 || !mayEdit ? undefined : (
-            <label className="checkbox" htmlFor="settings-confirm">
-              <input id="settings-confirm" type="checkbox" name="acknowledged" value={pending.join(",")} />
-              {t.t("settings.confirmAck")}
-            </label>
+          {pending.length === 0 || !mayEdit || proposalSeal === "" || proposalStale ? undefined : (
+            <>
+              <input type="hidden" name="proposalSeal" value={proposalSeal} />
+              <label className="checkbox" htmlFor="settings-confirm">
+                <input id="settings-confirm" type="checkbox" name="acknowledged" value={pending.join(",")} />
+                {t.t("settings.confirmAck")}
+              </label>
+            </>
           )}
 
           <button className="button primary" type="submit" data-action="save-settings" disabled={!mayEdit}>
@@ -312,6 +362,18 @@ export default async function SettingsPage({
           {t.t("sim.neverSends")}
         </p>
         <form action={basePath} method="get" role="search" className="inbox-search">
+          {/* A GET form replaces the whole query, so anything the save refused has to be carried in it.
+              Without these the most natural next action on a refusal — "let me see what this change would
+              do" — navigated away from the pending proposal, and the form silently reverted to the stored
+              values with no notice that the owner's change had been dropped. The history link next to it
+              already obeyed this rule and had a test saying why; this form was the second implementation
+              of the same rule, and the one without the test was the one that lost state. */}
+          {one(query["outcome"]) === undefined ? undefined : <input type="hidden" name="outcome" value={one(query["outcome"])} />}
+          {pending.length === 0 ? undefined : <input type="hidden" name="impacts" value={pending.join(",")} />}
+          {proposed === undefined ? undefined : <input type="hidden" name="proposal" value={one(query["proposal"]) ?? ""} />}
+          {proposalSeal === "" ? undefined : <input type="hidden" name="proposalSeal" value={proposalSeal} />}
+          {one(query["auditCursor"]) === undefined ? undefined : <input type="hidden" name="auditCursor" value={one(query["auditCursor"])} />}
+
           <label htmlFor="settings-ask">{t.t("sim.queryLabel")}</label>
           <input id="settings-ask" name="ask" type="search" defaultValue={ask ?? ""} />
 
@@ -357,6 +419,28 @@ export default async function SettingsPage({
             ))}
           </select>
 
+          {/* What would be sent. Outside WhatsApp's service window an ordinary reply is not a route at
+              all — an approved template is the only one — so without this the three WhatsApp modes and
+              the allowlist below could never change an answer. */}
+          <label htmlFor="sim-reply-kind">{t.t("sim.replyKind")}</label>
+          <select id="sim-reply-kind" name="simReplyKind" defaultValue={simulationInputs.replyKind}>
+            {SIMULATION_REPLY_KINDS.map((value) => (
+              <option key={value} value={value}>
+                {t.t(`simReplyKind.${value}`)}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="sim-template">{t.t("sim.templateName")}</label>
+          <input
+            id="sim-template"
+            name="simTemplate"
+            type="text"
+            maxLength={MAX_TEMPLATE_NAME_CHARS}
+            defaultValue={simulationInputs.templateName}
+          />
+          <p className="muted">{t.t("sim.templateNameHint")}</p>
+
           <button className="button" type="submit">
             {t.t("sim.run")}
           </button>
@@ -382,6 +466,7 @@ export default async function SettingsPage({
                 window: t.t(`simWindow.${simulation.inputs.window}`),
                 account: t.t(`simAccount.${simulation.inputs.account}`),
                 humanSupport: t.t(`simHumanSupport.${simulation.inputs.humanSupport}`),
+                replyKind: t.t(`simReplyKind.${simulation.inputs.replyKind}`),
               })}
             </p>
 
@@ -434,9 +519,9 @@ export default async function SettingsPage({
                 reply, so it answers the free-form path; whether an approved template may go out is the
                 template rules' decision and not this one. Without this line, a WhatsApp run whose outcome
                 does not move when the allowlist changes reads as proof that the allowlist does nothing. */}
-            {simulation.inputs.channel === "WHATSAPP" ? (
+            {simulation.inputs.channel === "WHATSAPP" && simulation.inputs.replyKind === "TEMPLATE" ? (
               <p className="muted" data-sim-scope="true">
-                {t.t("sim.freeformOnly")}
+                {t.t("sim.templateAssumed")}
               </p>
             ) : undefined}
 
@@ -487,6 +572,11 @@ export default async function SettingsPage({
                 {/* Both sides of every field that moved, which is what the spec asks of a material
                     change. Only the fields that moved: an entry listing every column hides the one
                     that did. */}
+                {policyChangeDiff(audit.before, audit.after).length === 0 ? (
+                  <p className="muted" data-audit-unreadable="true">
+                    {t.t("settings.auditNoValues")}
+                  </p>
+                ) : undefined}
                 <dl data-audit-values="true">
                   {policyChangeDiff(audit.before, audit.after).map((change) => (
                     <div key={change.field} data-field={change.field}>

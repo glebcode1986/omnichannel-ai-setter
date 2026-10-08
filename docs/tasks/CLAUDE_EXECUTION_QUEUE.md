@@ -34,18 +34,25 @@ All seven are repaired on `feat/p5-04-ai-settings-simulation`:
    milliseconds in the store;
 5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
    change is reachable;
-6. **the simulation** — channel, window, connection and the human-support exception are explicit inputs,
-   the chosen channel's own after-window policy is used, and the screen states which inputs produced the
-   answer. Proved material through the production evaluator: the window, the connection, the exception and
-   **both** Instagram after-window modes. Not material here and said so rather than faked: WhatsApp's
-   three modes and its template allowlist, whose decision point (`template-route.ts`, Issue #20) is
-   further down this chain;
+6. **the simulation** — channel, window, connection, the human-support exception, what would be sent and
+   which approved template are all explicit inputs; the chosen channel's own after-window policy is used,
+   and the screen states which inputs produced the answer. Every one of them is proved to move the
+   deterministic outcome, including the **template allowlist**: it reaches the engine as
+   `templateRoute.automatable`, computed where a catalogue would be rather than inside the engine
+   (ADR-016), so empty versus non-empty decides `SKIP` against `SCHEDULE` and the three WhatsApp modes are
+   distinguishable. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is what the gate keys on —
+   modelling it as an expired free-form window was why the modes had been indistinguishable;
 7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
    defect finding 7 actually was.
 
+**The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
+and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
+impact codes is not proof, because the codes are in the URL, the page and the catalogue.
+
 **Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79
-CHANGES_REQUESTED at `0b62c9e…`, repaired, awaiting independent re-review; #80 and everything below held
-and **not ready for review** until #79 passes, because they contain #79.
+CHANGES_REQUESTED at `0b62c9e…` (seven blockers) and again at `d67da89…` (four closed, three kept), all
+repaired, awaiting independent re-review; #80 and everything below held and **not ready for review** until
+#79 passes, because they contain #79.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 

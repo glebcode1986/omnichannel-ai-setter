@@ -25,16 +25,15 @@
  * file, and it is right to — a type import today is an import to add a value to tomorrow. The type is
  * already part of what the evaluator accepts, so the evaluator is where to ask for it.
  *
- * **What this run decides, and what it does not.** It drafts a free-form text reply and asks the
- * deterministic evaluator what would happen to it. So the channel, the window, the connection, the
- * human-support exception and Instagram's after-window choice all change the answer, and there are tests
- * showing each of them doing so. WhatsApp's three after-window modes and its template allowlist do not,
- * and cannot here: the evaluator is channel-neutral and takes no allowlist, because whether an *approved
- * template* may go out is `template-route.ts`'s decision, which arrives with the WhatsApp template
- * catalogue (Issue #20) later in this chain. A playground that answered that question itself would be a
- * second implementation of a send rule, and the two would eventually disagree about the same template.
- * The screen says so where it matters rather than letting an owner read an unchanged outcome as proof
- * that their allowlist does nothing.
+ * **Every input an owner can choose here changes the answer, and each is pinned by a test.** The channel,
+ * the messaging window, the connection's health, the human-support exception, Instagram's after-window
+ * choice, WhatsApp's three after-window modes and the **template allowlist** all move the deterministic
+ * outcome. The allowlist reaches the evaluator the way production will reach it: as
+ * `templateRoute.automatable`, two settled booleans computed where the catalogue is rather than inside
+ * the engine (ADR-016, Issue #20). Here the "catalogue" is the hypothetical template an owner names, and
+ * `automatable` is that name tested against their own saved allowlist — the same predicate
+ * `selectTemplate` applies, not a second one, so an owner's allowlist cannot mean one thing on this screen
+ * and another on the wire.
  *
  * **What the run cannot take from the saved configuration, it takes as an input and then shows.** A
  * conversation has a channel, an account and a messaging window, and a hypothetical message has none of
@@ -106,6 +105,16 @@ export const SIMULATION_HUMAN_SUPPORT = ["UNAVAILABLE", "AVAILABLE"] as const;
 export type SimulationHumanSupport = (typeof SIMULATION_HUMAN_SUPPORT)[number];
 
 /**
+ * What this hypothetical send would be: an ordinary reply, or an approved template.
+ *
+ * It has to be asked, because outside WhatsApp's service window an ordinary reply is not a route at all —
+ * a template is the only one — so a run that always drafted text could only ever report "a template is
+ * required" and the three WhatsApp modes would be indistinguishable.
+ */
+export const SIMULATION_REPLY_KINDS = ["ORDINARY", "TEMPLATE"] as const;
+export type SimulationReplyKind = (typeof SIMULATION_REPLY_KINDS)[number];
+
+/**
  * The facts a hypothetical message cannot carry, stated rather than assumed.
  *
  * Defaults are the most permissive case — the one in which something would actually be sent — because a
@@ -117,6 +126,13 @@ export interface SimulationInputs {
   readonly window: SimulationWindow;
   readonly account: SimulationAccount;
   readonly humanSupport: SimulationHumanSupport;
+  readonly replyKind: SimulationReplyKind;
+  /**
+   * Which approved template this hypothetical send would use. Only meaningful for a `TEMPLATE` reply, and
+   * it is matched against the owner's **saved** allowlist — so the answer is about their configuration
+   * rather than about a name typed into a box.
+   */
+  readonly templateName: string;
 }
 
 export const DEFAULT_SIMULATION_INPUTS: SimulationInputs = {
@@ -127,6 +143,8 @@ export const DEFAULT_SIMULATION_INPUTS: SimulationInputs = {
   // a business has to have been approved for, and assuming it would show an owner a review path that
   // their account may not actually offer.
   humanSupport: "UNAVAILABLE",
+  replyKind: "ORDINARY",
+  templateName: "",
 };
 
 export interface SimulationResult {
@@ -276,7 +294,7 @@ export async function runSimulation(
             confidence: draft.confidence,
             reasonCodes: draft.reasonCodes,
             citedSourceIds: draft.factualSourceIds,
-            contentType: "TEXT",
+            contentType: inputs.replyKind === "TEMPLATE" ? "TEMPLATE" : "TEXT",
           },
           retrieval: {
             suppliedSourceIds: (knowledge?.hits ?? []).map((hit) => hit.chunkId),
@@ -297,6 +315,7 @@ export async function runSimulation(
           // the answer below is attached to a case rather than to a hidden constant.
           window: windowFor(inputs, now),
           humanAgent: humanAgentFor(inputs, now),
+          ...(templateRouteFor(inputs, policyUsed) === undefined ? {} : { templateRoute: templateRouteFor(inputs, policyUsed) }),
           replyCycle: "OWNED",
           now,
         });
@@ -358,17 +377,49 @@ export function afterWindowFor(channel: SimulationChannel, policy: PolicyView): 
 }
 
 /**
- * The window to judge against.
+ * The window to judge against, in the state that channel's closed window actually has.
  *
- * `AFTER` is modelled as an expiry in the past rather than as `NOT_ELIGIBLE`: a closed standard window is
- * a window that *was* open, and the after-window policies exist to say what may still happen then. Using
- * `NOT_ELIGIBLE` would short-circuit the very gates this run is meant to exercise.
+ * Not one shape for both channels. Once WhatsApp's service window closes the conversation is
+ * `TEMPLATE_ONLY` — an approved template is the only remaining route — and that is the state the template
+ * gate keys on, so modelling it as an expired free-form window made every WhatsApp after-window answer
+ * identical and the three modes indistinguishable. Instagram has no template route, so its closed window
+ * is an expiry in the past rather than `NOT_ELIGIBLE`: a closed standard window is a window that *was*
+ * open, and the after-window policies exist to say what may still happen then, which `NOT_ELIGIBLE` would
+ * short-circuit.
  */
 export function windowFor(inputs: SimulationInputs, now: Date): PolicyInput["window"] {
   const hour = 3_600_000;
-  return inputs.window === "AFTER"
-    ? { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() - hour) }
-    : { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() + hour) };
+  if (inputs.window !== "AFTER") {
+    return { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() + hour) };
+  }
+  return inputs.channel === "WHATSAPP"
+    ? { state: "TEMPLATE_ONLY", expiresAt: new Date(now.getTime() + hour) }
+    : { state: "OPEN_FREEFORM", expiresAt: new Date(now.getTime() - hour) };
+}
+
+/**
+ * The two facts the evaluator may know about the outside-window template route (ADR-016).
+ *
+ * `undefined` for Instagram, whose policy vocabulary has no templates — and absent is not a weaker form of
+ * "available", which is why the gate treats it as no route at all.
+ *
+ * `automatable` is the owner's **saved** allowlist tested against the template this run names, which is
+ * the same predicate `selectTemplate` applies where the real catalogue lives. The two other conditions it
+ * also checks there — that the template is approved right now and that its values match the approved shape
+ * — are assumed here and said so on screen: this run has no catalogue, and a playground that invented an
+ * approval status would be answering a question only the provider can.
+ */
+export function templateRouteFor(inputs: SimulationInputs, policy: PolicyView): PolicyInput["templateRoute"] {
+  if (inputs.channel !== "WHATSAPP") {
+    return undefined;
+  }
+  const named = inputs.templateName.trim();
+  return {
+    // A hypothetical template is available to a person by assumption; naming none is the case where
+    // nothing can go out at all, which is a different and worth-showing answer.
+    approvedTemplateAvailable: named !== "",
+    automatable: named !== "" && policy.whatsappTemplateAutomationAllowlist.includes(named),
+  };
 }
 
 /**

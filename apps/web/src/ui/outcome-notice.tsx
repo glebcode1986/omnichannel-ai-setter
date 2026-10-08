@@ -49,6 +49,16 @@ const OUTCOMES = [
   // who was silently not allowed to save reads the screen as a screen that does nothing.
   "FORBIDDEN",
   "TOO_LONG",
+  // Custom timing, refused three ways rather than one. "Incomplete", "out of range" and "the wrong way
+  // round" send a person to different fields, and an invalid Custom submission used to be reported as a
+  // success with the previous ranges silently kept.
+  "TIMING_INCOMPLETE",
+  "TIMING_OUT_OF_RANGE",
+  "TIMING_REVERSED",
+  // The takeover pause is the fifth number on the same form and gets the same treatment, because a
+  // cleared box used to be read as "leave it alone" and report a success about something else.
+  "TAKEOVER_INCOMPLETE",
+  "TAKEOVER_OUT_OF_RANGE",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
@@ -66,6 +76,11 @@ const REFUSALS = new Set<string>([
   "CONFLICT",
   "FORBIDDEN",
   "TOO_LONG",
+  "TIMING_INCOMPLETE",
+  "TIMING_OUT_OF_RANGE",
+  "TIMING_REVERSED",
+  "TAKEOVER_INCOMPLETE",
+  "TAKEOVER_OUT_OF_RANGE",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {

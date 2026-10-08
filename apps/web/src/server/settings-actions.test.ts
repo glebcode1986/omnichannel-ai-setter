@@ -46,6 +46,8 @@ vi.mock("next/cache", () => ({
   },
 }));
 vi.mock("./db", () => ({ getDb: () => ({ marker: "the client the action resolved" }) }));
+// The real secret shape, because the seal is an HMAC over it and a short one would be a different test.
+vi.mock("../env", () => ({ loadWebEnv: () => ({ AUTH_SECRET: "a-test-secret-at-least-32-characters-long" }) }));
 vi.mock("./request-context", () => ({
   requireBusinessProfileContext: (workspaceId: string, businessProfileId: string) =>
     Promise.resolve({ userId: "usr_1", workspaceId, businessProfileId, role: "OWNER" }),
@@ -117,6 +119,17 @@ const outcomeOf = async (run: () => Promise<void>): Promise<string> => {
 };
 
 const queryOf = (path: string) => new URLSearchParams(path.slice(path.indexOf("?") + 1));
+
+/**
+ * The two fields a refusal hands back, as the page would render them into the form.
+ *
+ * Going through the refusal is the point: the acknowledgement is only valid with a seal the server minted,
+ * so a test that could assemble one by hand would be testing something the product does not do.
+ */
+const afterRefusal = async (data: FormData): Promise<{ readonly acknowledged: string; readonly seal: string }> => {
+  const refused = queryOf(await outcomeOf(() => saveSettingsAction(TARGET, data)));
+  return { acknowledged: refused.get("impacts") ?? "", seal: refused.get("proposalSeal") ?? "" };
+};
 
 beforeEach(() => {
   store.readPolicies.mockReset();
@@ -216,14 +229,59 @@ describe("a change that widens what goes out", () => {
     expect(store.savePolicy).not.toHaveBeenCalled();
   });
 
-  it("is saved when the acknowledgement names exactly what the server computed", async () => {
-    const refused = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT" })));
-    const shown = queryOf(refused).get("impacts") ?? "";
+  it("is not saved by the right impact codes on a first request", async () => {
+    // Astra's finding: the codes are public — they are in the URL, in the page and in the translation
+    // catalogue — so naming them proves nothing about having seen a summary. A first crafted POST that
+    // names exactly the right code must still be refused.
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", acknowledged: "AUTOPILOT_ENABLED" })));
 
-    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", acknowledged: shown })));
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("is not saved with a seal the server did not mint", async () => {
+    const path = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", acknowledged: "AUTOPILOT_ENABLED", proposalSeal: "Zm9yZ2VkLXNlYWw" })),
+    );
+
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("is saved when the acknowledgement carries the seal the refusal minted", async () => {
+    const { acknowledged, seal } = await afterRefusal(wholeForm({ mode: "AUTOPILOT" }));
+    expect(seal).not.toBe("");
+
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", acknowledged, proposalSeal: seal })));
 
     expect(path).toBe(`${SETTINGS}?outcome=SAVED`);
     expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({ mode: "AUTOPILOT", expectedVersion: 4 });
+  });
+
+  it("is not saved with a seal minted for a different proposal", async () => {
+    const { acknowledged, seal } = await afterRefusal(wholeForm({ mode: "AUTOPILOT" }));
+
+    // The same impacts, the same version, a different change. A seal that verified here would let one
+    // acknowledgement stand for any change that happens to widen the same thing.
+    const path = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", businessGoal: "Something else entirely", acknowledged, proposalSeal: seal })),
+    );
+
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("is not saved with a seal minted against a different version", async () => {
+    const { acknowledged, seal } = await afterRefusal(wholeForm({ mode: "AUTOPILOT" }));
+
+    // The policy moved underneath the acknowledgement. A changed proposal or a changed version must
+    // require a fresh review rather than reusing the owner's last decision.
+    const path = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ expectedVersion: "5", mode: "AUTOPILOT", acknowledged, proposalSeal: seal })),
+    );
+
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
   });
 
   it("needs no acknowledgement when it widens nothing", async () => {
@@ -266,22 +324,46 @@ describe("custom timing", () => {
     expect(edit["timing"]).toBeUndefined();
   });
 
-  it("sends nothing when a custom range is only half typed", async () => {
-    await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ timingPreset: "CUSTOM", debounceMinSeconds: "" })));
+  it("refuses a half-typed custom range instead of keeping the old one", async () => {
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ timingPreset: "CUSTOM", debounceMinSeconds: "" })));
 
-    // Completing it from stored values would mix a typed number with a previous one and produce a window
-    // the owner never chose; the store then keeps the stored ranges, which is at least explicable.
-    expect((store.savePolicy.mock.calls[0]?.[3] as Record<string, unknown>)["timing"]).toBeUndefined();
+    // The previous version sent `CUSTOM` with no ranges, and the store then kept the stored ones — so an
+    // owner who cleared one field saw "Saved" over timing they had not chosen while the rest of their
+    // form applied. An invalid submission reported as a success is worse than a refusal, because nothing
+    // on screen disagrees with it.
+    expect(queryOf(path).get("outcome")).toBe("TIMING_INCOMPLETE");
+    expect(store.savePolicy).not.toHaveBeenCalled();
   });
 
-  it("refuses a range the domain refuses, in the domain's own words", async () => {
-    store.savePolicy.mockResolvedValue({ status: "REFUSED", reason: "deliveryDelayMs: minMs must not exceed maxMs" });
+  it("refuses a custom range outside the bounds the form offers", async () => {
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ timingPreset: "CUSTOM", deliveryDelayMaxSeconds: "999999" })));
 
+    expect(queryOf(path).get("outcome")).toBe("TIMING_OUT_OF_RANGE");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a custom range whose bounds are the wrong way round, before the store", async () => {
     const path = await outcomeOf(() =>
       saveSettingsAction(TARGET, wholeForm({ timingPreset: "CUSTOM", deliveryDelayMinSeconds: "90", deliveryDelayMaxSeconds: "30" })),
     );
 
-    // Reversed bounds are the domain's refusal to make. The action passes the range and reports it.
+    // The domain refuses this too, and still would; naming it here lets the screen say which pair is
+    // wrong rather than reporting the domain's field name for a form the owner is looking at.
+    expect(queryOf(path).get("outcome")).toBe("TIMING_REVERSED");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the proposal on every timing refusal", async () => {
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ timingPreset: "CUSTOM", debounceMinSeconds: "", businessGoal: "Book consultations" })));
+
+    expect(decodeProposal(queryOf(path).get("proposal") ?? undefined)?.businessGoal).toBe("Book consultations");
+  });
+
+  it("reports the domain's own refusal when the store makes one", async () => {
+    store.savePolicy.mockResolvedValue({ status: "REFUSED", reason: "whatsappTemplateAutomationAllowlist: entries must be non-empty" });
+
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ businessGoal: "Book consultations" })));
+
     expect(path).toBe(`${SETTINGS}?outcome=REFUSED`);
   });
 });
@@ -312,5 +394,49 @@ describe("a field too long to carry", () => {
 
     expect(path).toBe(`${SETTINGS}?outcome=TOO_LONG`);
     expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+});
+
+describe("the takeover pause", () => {
+  it("refuses a cleared box rather than keeping the stored hours", async () => {
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ takeoverPauseHours: "" })));
+
+    // The same rule as the four timing numbers, three lines below them on the same form. Omitting the
+    // field let the store keep the stored hours and report a success about something else.
+    expect(queryOf(path).get("outcome")).toBe("TAKEOVER_INCOMPLETE");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("refuses hours outside what the form offers", async () => {
+    // `max="168"` is a hint to a browser and nothing to a crafted POST, and the domain asks only for a
+    // positive integer — so this used to accept eleven years of silence as a deliberate choice.
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ takeoverPauseHours: "100000" })));
+
+    expect(queryOf(path).get("outcome")).toBe("TAKEOVER_OUT_OF_RANGE");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+  });
+
+  it("passes a usable value through in milliseconds", async () => {
+    await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ takeoverPauseHours: "12" })));
+
+    expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({ takeoverPauseMs: 43_200_000 });
+  });
+});
+
+describe("the fields that share the proposal parameter", () => {
+  it("refuse together, so a bound on one of them is not a bound on nothing", async () => {
+    const long = "x".repeat(MAX_PROPOSAL_FIELD_CHARS + 1);
+
+    for (const [name, value] of [
+      ["businessGoal", long],
+      ["criteria", long],
+      ["allowlist", long],
+    ] as const) {
+      store.savePolicy.mockClear();
+      const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ [name]: value })));
+
+      expect(path, name).toBe(`${SETTINGS}?outcome=TOO_LONG`);
+      expect(store.savePolicy, name).not.toHaveBeenCalled();
+    }
   });
 });

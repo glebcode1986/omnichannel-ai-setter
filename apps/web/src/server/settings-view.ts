@@ -32,6 +32,7 @@ import {
   SIMULATION_ACCOUNTS,
   SIMULATION_CHANNELS,
   SIMULATION_HUMAN_SUPPORT,
+  SIMULATION_REPLY_KINDS,
   SIMULATION_WINDOWS,
   type SimulationInputs,
 } from "./simulation";
@@ -65,7 +66,8 @@ export interface PolicyProposal {
     readonly debounceWindowMs: { readonly minMs: number; readonly maxMs: number };
     readonly deliveryDelayMs: { readonly minMs: number; readonly maxMs: number };
   };
-  readonly takeoverPauseHours?: number;
+  /** Hours, always present: an unusable value is refused rather than omitted and silently kept. */
+  readonly takeoverPauseHours: number;
   readonly instagramAfterWindowPolicy?: InstagramAfterWindowPolicy;
   readonly whatsappAfterWindowPolicy?: WhatsAppAfterWindowPolicy;
   readonly whatsappTemplateAutomationAllowlist: readonly string[];
@@ -115,7 +117,10 @@ export function decodeProposal(encoded: string | undefined): PolicyProposal | un
   const goal = typeof raw["businessGoal"] === "string" ? raw["businessGoal"] : "";
   const criteria = stringList(raw["qualificationCriteria"]);
   const allowlist = stringList(raw["whatsappTemplateAutomationAllowlist"]);
-  if (goal.length > MAX_PROPOSAL_FIELD_CHARS) {
+  // All three, not just the goal. They travel in the same parameter, so a bound on one of them is a bound
+  // on nothing: a pasted criteria list is as capable of producing a `Location` a server will not accept,
+  // and then the high-impact change can never be confirmed at all.
+  if (oversizedField([goal, criteria.join("\n"), allowlist.join("\n")])) {
     return undefined;
   }
   const mode = raw["mode"];
@@ -131,12 +136,40 @@ export function decodeProposal(encoded: string | undefined): PolicyProposal | un
     ...(isConfidencePreset(confidencePreset) ? { confidencePreset } : {}),
     ...(isTimingPreset(timingPreset) ? { timingPreset } : {}),
     ...(timingFrom(raw["timing"]) === undefined ? {} : { timing: timingFrom(raw["timing"]) as NonNullable<PolicyProposal["timing"]> }),
-    ...(typeof hours === "number" && Number.isSafeInteger(hours) && hours > 0 ? { takeoverPauseHours: hours } : {}),
+    takeoverPauseHours:
+      typeof hours === "number" && hours >= TAKEOVER_PAUSE_HOURS.min && hours <= TAKEOVER_PAUSE_HOURS.max && Number.isSafeInteger(hours)
+        ? hours
+        : TAKEOVER_PAUSE_HOURS.min,
     ...(isInstagramAfterWindowPolicy(instagram) ? { instagramAfterWindowPolicy: instagram } : {}),
     ...(isWhatsAppAfterWindowPolicy(whatsapp) ? { whatsappAfterWindowPolicy: whatsapp } : {}),
     whatsappTemplateAutomationAllowlist: allowlist,
     expectedVersion: version,
   };
+}
+
+/** Whether any of the free-text fields that share the proposal parameter is over its stated bound. */
+export function oversizedField(fields: readonly string[]): boolean {
+  return fields.some((value) => value.length > MAX_PROPOSAL_FIELD_CHARS);
+}
+
+/**
+ * The hours an owner may ask the assistant to stay out for after a person replies.
+ *
+ * Bounded here as well as on the input, for the reason the custom timing numbers are: `min` and `max` are
+ * a hint to a browser and nothing to a crafted POST, and the domain only asks for a positive integer — so
+ * `takeoverPauseHours=100000` was eleven years of silence, accepted and audited as a deliberate choice.
+ * A week is the product bound the form has always shown.
+ */
+export const TAKEOVER_PAUSE_HOURS = { min: 1, max: 168 } as const;
+
+/** Whether the takeover pause a form submitted may be used, or `undefined` when the field was omitted. */
+export function takeoverPauseProblem(raw: string): "INCOMPLETE" | "OUT_OF_RANGE" | undefined {
+  const trimmed = raw.trim();
+  if (!/^-?[0-9]+$/u.test(trimmed)) {
+    return "INCOMPLETE";
+  }
+  const hours = Number.parseInt(trimmed, 10);
+  return hours >= TAKEOVER_PAUSE_HOURS.min && hours <= TAKEOVER_PAUSE_HOURS.max ? undefined : "OUT_OF_RANGE";
 }
 
 function stringList(value: unknown): readonly string[] {
@@ -210,12 +243,23 @@ export function decodeAuditCursor(encoded: string | undefined): PolicyAuditCurso
   return { changedAt, id };
 }
 
-/** The link to the next page of history, keeping whatever else the URL carried. */
+/**
+ * Parameters the history link deliberately drops.
+ *
+ * `ask` is the playground's question, and the page runs the playground on every render that carries one —
+ * embedding the question, searching both corpora and calling the reply model. Reading the change history
+ * is not asking the playground anything, so carrying the question billed a model request per page of
+ * history and regenerated the answer underneath the reader, who had not asked for a different one. The
+ * chosen *inputs* are kept, so re-running after paging asks the same case again.
+ */
+const HISTORY_DROPS = new Set<string>([AUDIT_CURSOR_PARAM, "ask"]);
+
+/** The link to the next page of history, keeping the state the screen must not lose. */
 export function auditHistoryHref(basePath: string, query: RawSearchParams, cursor: PolicyAuditCursor): string {
   const next = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
     const single = one(value);
-    if (single !== undefined && key !== AUDIT_CURSOR_PARAM) {
+    if (single !== undefined && !HISTORY_DROPS.has(key)) {
       next.set(key, single);
     }
   }
@@ -276,8 +320,13 @@ export function policyChangeDiff(before: unknown, after: unknown): readonly Poli
     if (!hadBefore && !hadAfter) {
       continue;
     }
-    const rendered = { before: renderValue(left[field]), after: renderValue(right[field]) };
-    if (hadBefore && hadAfter && rendered.before === rendered.after) {
+    const sortLists = UNORDERED_POLICY_FIELDS.has(field);
+    const rendered = { before: renderValue(left[field], sortLists), after: renderValue(right[field], sortLists) };
+    // Compared on the normalised *value*, never on the rendered line. A list joined for display is
+    // ambiguous — `["fast replies, polite tone"]` and `["fast replies", "polite tone"]` read identically
+    // — so comparing the display form reported two different settings as no change at all, and the entry
+    // rendered with nothing in it.
+    if (hadBefore && hadAfter && comparable(left[field], sortLists) === comparable(right[field], sortLists)) {
       continue;
     }
     changes.push({
@@ -290,18 +339,44 @@ export function policyChangeDiff(before: unknown, after: unknown): readonly Poli
 }
 
 /**
+ * The two stored lists whose order carries no meaning, and may therefore be compared as sets.
+ *
+ * Exactly the two the store sorts in its own `changed()` check. `qualificationCriteria` is deliberately
+ * not one of them: it is sentences a person wrote in an order they chose, the store treats a reorder as a
+ * change and writes an audit row for it — so sorting it here made the screen disagree with the database
+ * about what a change is. The entry was then rendered with an empty value list: a history row asserting
+ * that somebody changed something and showing nothing, which is the defect this diff exists to prevent.
+ * Splitting one criterion into two was invisible the same way, because the joined strings matched.
+ */
+const UNORDERED_POLICY_FIELDS = new Set<AuditedPolicyField>(["mandatoryReviewReasons", "whatsappTemplateAutomationAllowlist"]);
+
+/**
+ * A stored value in a form that two of them can be compared by, unambiguously.
+ *
+ * JSON rather than the rendered line, so a separator inside an entry cannot make two different lists look
+ * like one. Sorted only where the order carries no meaning, which is the same question the store asks.
+ */
+function comparable(value: unknown, sortLists: boolean): string {
+  if (Array.isArray(value) && sortLists) {
+    return JSON.stringify([...value.map((entry) => String(entry))].sort());
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
  * A stored value as one line of text.
  *
- * Lists are sorted before they are joined, because `mandatoryReviewReasons` is written from a `Set` and
- * its order is an implementation detail: two snapshots with the same topics in a different order are the
- * same settings, and reporting them as a change would make every save look like it touched review topics.
+ * A list is sorted only when its order means nothing. `mandatoryReviewReasons` is written from a `Set`, so
+ * two snapshots with the same topics in a different order are the same settings and reporting them as a
+ * change would make every save look like it touched review topics. The criteria are not like that.
  */
-function renderValue(value: unknown): string {
+function renderValue(value: unknown, sortLists = false): string {
   if (value === null || value === undefined) {
     return "";
   }
   if (Array.isArray(value)) {
-    return [...value.map((entry) => renderValue(entry))].sort().join(", ");
+    const rendered = value.map((entry) => renderValue(entry, sortLists));
+    return (sortLists ? [...rendered].sort() : rendered).join(", ");
   }
   if (typeof value === "object") {
     // Serialised rather than coerced. Every field in the list above is a scalar or an array of scalars
@@ -326,13 +401,22 @@ export function simulationInputsFrom(query: RawSearchParams): SimulationInputs {
   const window = one(query["simWindow"]);
   const account = one(query["simAccount"]);
   const humanSupport = one(query["simHumanSupport"]);
+  const replyKind = one(query["simReplyKind"]);
+  // Trimmed and bounded like any other free text that travels in a link. A template name is an identifier
+  // the provider issued, not prose, so a long one is a malformed link rather than a long name.
+  const templateName = (one(query["simTemplate"]) ?? "").trim().slice(0, MAX_TEMPLATE_NAME_CHARS);
   return {
     channel: SIMULATION_CHANNELS.find((candidate) => candidate === channel) ?? DEFAULT_SIMULATION_INPUTS.channel,
     window: SIMULATION_WINDOWS.find((candidate) => candidate === window) ?? DEFAULT_SIMULATION_INPUTS.window,
     account: SIMULATION_ACCOUNTS.find((candidate) => candidate === account) ?? DEFAULT_SIMULATION_INPUTS.account,
     humanSupport: SIMULATION_HUMAN_SUPPORT.find((candidate) => candidate === humanSupport) ?? DEFAULT_SIMULATION_INPUTS.humanSupport,
+    replyKind: SIMULATION_REPLY_KINDS.find((candidate) => candidate === replyKind) ?? DEFAULT_SIMULATION_INPUTS.replyKind,
+    templateName,
   };
 }
+
+/** A provider template name is an identifier, so a bound is a sanity check rather than a product limit. */
+export const MAX_TEMPLATE_NAME_CHARS = 512;
 
 /**
  * Whether this member may change the settings, by the same list the store enforces.
@@ -343,4 +427,44 @@ export function simulationInputsFrom(query: RawSearchParams): SimulationInputs {
  */
 export function mayEditSettings(role: string): boolean {
   return (WORKSPACE_ADMIN_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * The bounds the form offers for a custom timing range, enforced on the server as well.
+ *
+ * The `min`/`max` attributes on a number input are a hint to a browser and nothing at all to a crafted
+ * POST, so the same numbers live here and the action refuses outside them. They are generous rather than
+ * tight — this is a product bound, not a policy — but they are finite: a delivery delay of a year is a
+ * reply that never arrives, which is a setting an owner cannot have meant.
+ */
+export const CUSTOM_TIMING_BOUNDS = {
+  debounceSeconds: { min: 0, max: 600 },
+  deliveryDelaySeconds: { min: 0, max: 86_400 },
+} as const;
+
+/** Why a custom timing submission cannot be accepted, or `undefined` when it can. */
+export type CustomTimingProblem = "INCOMPLETE" | "OUT_OF_RANGE" | "REVERSED";
+
+/**
+ * Whether the four numbers behind "Custom" are usable, and if not, which way they are wrong.
+ *
+ * Refusing rather than ignoring is the whole point. A submission that selected `CUSTOM` and left a field
+ * empty used to be sent without any ranges at all, and the store then kept the stored ones — so an owner
+ * saw "Saved" over timing they had not chosen, with the rest of their form applied. An invalid Custom
+ * submission presented as a success is worse than a refusal, because nothing on screen disagrees with it.
+ *
+ * `REVERSED` is named separately although the domain would also refuse it: naming it here lets the screen
+ * say which pair is the wrong way round, and the domain still refuses it if this check is ever bypassed.
+ */
+export function customTimingProblem(seconds: readonly (number | undefined)[]): CustomTimingProblem | undefined {
+  if (seconds.length !== 4 || seconds.some((value) => value === undefined || !Number.isFinite(value) || !Number.isInteger(value))) {
+    return "INCOMPLETE";
+  }
+  const [debounceMin, debounceMax, delayMin, delayMax] = seconds as [number, number, number, number];
+  const withinDebounce = (value: number) => value >= CUSTOM_TIMING_BOUNDS.debounceSeconds.min && value <= CUSTOM_TIMING_BOUNDS.debounceSeconds.max;
+  const withinDelay = (value: number) => value >= CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.min && value <= CUSTOM_TIMING_BOUNDS.deliveryDelaySeconds.max;
+  if (!withinDebounce(debounceMin) || !withinDebounce(debounceMax) || !withinDelay(delayMin) || !withinDelay(delayMax)) {
+    return "OUT_OF_RANGE";
+  }
+  return debounceMin > debounceMax || delayMin > delayMax ? "REVERSED" : undefined;
 }

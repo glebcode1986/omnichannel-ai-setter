@@ -11,9 +11,12 @@
  *
  * Three things the acknowledgement is deliberately not:
  *
- * - **not a flag.** A bare `confirm=on` is satisfied by a checkbox that was on the page before any summary
- *   existed, so the promised "effect summary before save" never had to happen. The field carries the exact
- *   impact codes instead, and a set that is not the one computed here is refused again.
+ * - **not a flag, and not a claim.** A bare `confirm=on` is satisfied by a checkbox that was on the page
+ *   before any summary existed. Carrying the exact impact codes is necessary and *not* sufficient either:
+ *   the codes are public, so a first crafted POST could name them without any summary having been
+ *   rendered. The acknowledgement therefore carries a **seal the refusal minted** over this exact
+ *   proposal, version and impact list — see `proposal-seal.ts` — and the codes are still compared, because
+ *   the seal proves provenance and the comparison proves it is about this change.
  * - **not durable.** It travels with the policy version it was computed against, so it cannot be carried
  *   across somebody else's change; `savePolicy` refuses a stale version outright.
  * - **not a replacement for the proposal.** The refusal carries the proposed values too, so the page can
@@ -37,10 +40,14 @@ import { revalidatePath } from "next/cache";
 
 import { getDb } from "./db";
 import { requireBusinessProfileContext } from "./request-context";
+import { loadWebEnv } from "../env";
+import { proposalSealed, sealProposal } from "./proposal-seal";
 import {
   acknowledges,
+  customTimingProblem,
   encodeProposal,
-  MAX_PROPOSAL_FIELD_CHARS,
+  oversizedField,
+  takeoverPauseProblem,
   type PolicyProposal,
 } from "./settings-view";
 import { expectedVersionOf, field, lines } from "./form-fields";
@@ -71,9 +78,31 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
   const proposal = proposalFrom(formData, version);
   const acknowledged = lines(formData, "acknowledged").flatMap((line) => line.split(",").map((entry) => entry.trim()));
 
-  if (proposal.businessGoal.length > MAX_PROPOSAL_FIELD_CHARS) {
+  const takeoverProblem = takeoverPauseProblem(field(formData, "takeoverPauseHours"));
+  if (takeoverProblem !== undefined) {
+    // The same rule as the timing ranges, three lines below the fieldset that got it right. `min` and
+    // `max` on a number input are a hint to a browser and nothing at all to a crafted POST, and the
+    // domain asks only for a positive integer.
+    revalidatePath(path);
+    redirect(`${path}?outcome=TAKEOVER_${takeoverProblem}&proposal=${encodeProposal(proposal)}`);
+  }
+
+  if (field(formData, "timingPreset") === "CUSTOM") {
+    const problem = customTimingProblem(customSecondsFrom(formData));
+    if (problem !== undefined) {
+      // Refused, not quietly dropped. Sending `CUSTOM` with no ranges let the store keep the stored ones,
+      // so an owner who cleared one field saw "Saved" over timing they had not chosen while the rest of
+      // their form applied. Each problem is its own sentence, because "incomplete", "out of range" and
+      // "the wrong way round" send a person to different fields.
+      revalidatePath(path);
+      redirect(`${path}?outcome=TIMING_${problem}&proposal=${encodeProposal(proposal)}`);
+    }
+  }
+
+  if (oversizedField([proposal.businessGoal, proposal.qualificationCriteria.join("\n"), proposal.whatsappTemplateAutomationAllowlist.join("\n")])) {
     // Refused rather than truncated, and refused before anything is encoded: a goal cut in half would be
-    // saved as the owner's own words without being them.
+    // saved as the owner's own words without being them. All three fields, because they travel in one
+    // parameter — a bound on one of them is a bound on nothing.
     revalidatePath(path);
     redirect(`${path}?outcome=TOO_LONG`);
   }
@@ -82,12 +111,20 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
   const before = (await readPolicies(getDb(), context)).find((policy) => policy.channelAccountId === null);
   if (before !== undefined) {
     const impacts = impactsOf(before, proposal);
-    if (impacts.length > 0 && !acknowledges(acknowledged, impacts)) {
+    const secret = loadWebEnv().AUTH_SECRET;
+    const sealed = proposalSealed(secret, proposal, impacts, field(formData, "proposalSeal").trim());
+    if (impacts.length > 0 && !(sealed && acknowledges(acknowledged, impacts))) {
       // Refused, not saved-and-warned. The point of a confirmation is that the change has not happened —
-      // and the proposal goes back with it, so the summary the page renders describes the values still in
-      // the form rather than the ones in the database.
+      // and the proposal goes back with it, together with the seal, so the page can render the summary
+      // next to the values it describes and the acknowledgement can prove where it came from.
       revalidatePath(path);
-      redirect(`${path}?outcome=CONFIRM&impacts=${encodeURIComponent(impacts.join(","))}&proposal=${encodeProposal(proposal)}`);
+      const query = new URLSearchParams({
+        outcome: "CONFIRM",
+        impacts: impacts.join(","),
+        proposal: encodeProposal(proposal),
+        proposalSeal: sealProposal(secret, proposal, impacts),
+      });
+      redirect(`${path}?${query.toString()}`);
     }
   }
 
@@ -130,8 +167,9 @@ function proposalFrom(formData: FormData, expectedVersion: number): PolicyPropos
   const timingPreset = field(formData, "timingPreset");
   const instagram = field(formData, "instagramAfterWindowPolicy");
   const whatsapp = field(formData, "whatsappAfterWindowPolicy");
-  const takeoverHours = Number.parseInt(field(formData, "takeoverPauseHours"), 10);
-  const custom = customTimingFrom(formData);
+  const takeoverHours = Number.parseInt(field(formData, "takeoverPauseHours").trim(), 10);
+  const customSeconds = customSecondsFrom(formData);
+  const custom = timingPreset === "CUSTOM" && customTimingProblem(customSeconds) === undefined ? timingFromSeconds(customSeconds) : undefined;
 
   return {
     ...(isAiMode(mode) ? { mode } : {}),
@@ -141,9 +179,13 @@ function proposalFrom(formData: FormData, expectedVersion: number): PolicyPropos
     ...(isTimingPreset(timingPreset) ? { timingPreset } : {}),
     // Only for CUSTOM: a named preset means its own ranges, and sending both is a contradiction the store
     // refuses. The inputs stay on the page whichever preset is selected, so switching to Custom does not
-    // require a round trip to reveal them.
-    ...(timingPreset === "CUSTOM" && custom !== undefined ? { timing: custom } : {}),
-    ...(Number.isFinite(takeoverHours) && takeoverHours > 0 ? { takeoverPauseHours: takeoverHours } : {}),
+    // require a round trip to reveal them. When the preset is CUSTOM the ranges are always present, since
+    // the action refuses an unusable set before it builds a proposal at all.
+    ...(custom === undefined ? {} : { timing: custom }),
+    // Always present, because the action refuses an unusable value before it builds a proposal: omitting
+    // it let the store keep the stored hours and report `SAVED`, so clearing the box or posting eleven
+    // years both looked like a successful change to something else.
+    takeoverPauseHours: takeoverHours,
     ...(isInstagramAfterWindowPolicy(instagram) ? { instagramAfterWindowPolicy: instagram } : {}),
     ...(isWhatsAppAfterWindowPolicy(whatsapp) ? { whatsappAfterWindowPolicy: whatsapp } : {}),
     whatsappTemplateAutomationAllowlist: lines(formData, "allowlist"),
@@ -155,18 +197,22 @@ function proposalFrom(formData: FormData, expectedVersion: number): PolicyPropos
  * The four numbers behind "Custom" timing, in seconds on the form and milliseconds in the store.
  *
  * Seconds because that is the unit an owner thinks in for "wait before replying"; milliseconds because
- * that is what the policy stores and the scheduler uses. `undefined` when any of the four is missing or
- * not a number: a partial range would be completed from stored values, and a half-typed custom range
- * silently mixed with the previous one is the least explicable outcome available.
+ * that is what the policy stores and the scheduler uses. The numbers are returned as typed, valid or not —
+ * `customTimingProblem` decides whether they may be sent, and the action **refuses** rather than sending
+ * `CUSTOM` with no ranges. Sending none let the store fall back to the stored ranges, so an invalid
+ * submission reported "Saved" over timing the owner had not chosen.
  */
-function customTimingFrom(formData: FormData): PolicyProposal["timing"] | undefined {
-  const parts = ["debounceMinSeconds", "debounceMaxSeconds", "deliveryDelayMinSeconds", "deliveryDelayMaxSeconds"].map((name) =>
-    Number.parseInt(field(formData, name), 10),
-  );
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
-    return undefined;
-  }
-  const [debounceMin, debounceMax, delayMin, delayMax] = parts as [number, number, number, number];
+function customSecondsFrom(formData: FormData): readonly (number | undefined)[] {
+  return ["debounceMinSeconds", "debounceMaxSeconds", "deliveryDelayMinSeconds", "deliveryDelayMaxSeconds"].map((name) => {
+    const raw = field(formData, name).trim();
+    // The whole field has to be the number, for the reason `expectedVersionOf` gives: a guard that reads
+    // `3` out of `"3 or so"` has refusals that depend on the shape of the input rather than on its value.
+    return /^-?[0-9]+$/u.test(raw) ? Number.parseInt(raw, 10) : undefined;
+  });
+}
+
+function timingFromSeconds(seconds: readonly (number | undefined)[]): PolicyProposal["timing"] {
+  const [debounceMin, debounceMax, delayMin, delayMax] = seconds as [number, number, number, number];
   return {
     debounceWindowMs: { minMs: debounceMin * MS_PER_SECOND, maxMs: debounceMax * MS_PER_SECOND },
     deliveryDelayMs: { minMs: delayMin * MS_PER_SECOND, maxMs: delayMax * MS_PER_SECOND },
@@ -183,7 +229,7 @@ function editFrom(proposal: PolicyProposal): PolicyEdit {
     ...(proposal.confidencePreset === undefined ? {} : { confidencePreset: proposal.confidencePreset }),
     ...(proposal.timingPreset === undefined ? {} : { timingPreset: proposal.timingPreset }),
     ...(proposal.timing === undefined ? {} : { timing: proposal.timing }),
-    ...(proposal.takeoverPauseHours === undefined ? {} : { takeoverPauseMs: proposal.takeoverPauseHours * 3_600_000 }),
+    takeoverPauseMs: proposal.takeoverPauseHours * 3_600_000,
     ...(proposal.instagramAfterWindowPolicy === undefined ? {} : { instagramAfterWindowPolicy: proposal.instagramAfterWindowPolicy }),
     ...(proposal.whatsappAfterWindowPolicy === undefined ? {} : { whatsappAfterWindowPolicy: proposal.whatsappAfterWindowPolicy }),
     whatsappTemplateAutomationAllowlist: proposal.whatsappTemplateAutomationAllowlist,

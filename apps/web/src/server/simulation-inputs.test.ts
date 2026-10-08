@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import { evaluatePolicy } from "@omnichannel/application";
 
-import { afterWindowFor, capabilitiesFor, capabilityHintsFor, humanAgentFor, windowFor } from "./simulation";
+import { afterWindowFor, capabilitiesFor, capabilityHintsFor, humanAgentFor, templateRouteFor, windowFor } from "./simulation";
 import type { SimulationInputs } from "./simulation";
 import type { PolicyView } from "@omnichannel/db";
 
@@ -25,7 +25,14 @@ const POLICY = {
 
 const NOW = new Date("2026-09-01T10:00:00.000Z");
 
-const INPUTS: SimulationInputs = { channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED", humanSupport: "UNAVAILABLE" };
+const INPUTS: SimulationInputs = {
+  channel: "INSTAGRAM",
+  window: "OPEN",
+  account: "CONNECTED",
+  humanSupport: "UNAVAILABLE",
+  replyKind: "ORDINARY",
+  templateName: "",
+};
 
 describe("the after-window policy a run is judged against", () => {
   it("is the chosen channel's own", () => {
@@ -68,8 +75,17 @@ describe("the messaging window a run assumes", () => {
     expect(decision.state === "OPEN_FREEFORM" ? (decision.expiresAt?.getTime() ?? 0) : 0).toBeGreaterThan(NOW.getTime());
   });
 
-  it("is an expired window after it closes, not an ineligible one", () => {
+  it("is template-only once WhatsApp's service window closes", () => {
     const decision = windowFor({ ...INPUTS, channel: "WHATSAPP", window: "AFTER" }, NOW);
+
+    // The state the template gate keys on. Modelling it as an expired free-form window — which the first
+    // version of this repair did — made every WhatsApp after-window answer identical and the three modes
+    // indistinguishable, because the gate never ran.
+    expect(decision.state).toBe("TEMPLATE_ONLY");
+  });
+
+  it("is an expired window after Instagram's closes, not an ineligible one", () => {
+    const decision = windowFor({ ...INPUTS, channel: "INSTAGRAM", window: "AFTER" }, NOW);
 
     // A closed standard window is a window that *was* open, and the after-window policies exist to say
     // what may still happen then. `NOT_ELIGIBLE` would short-circuit the very gates this run exercises.
@@ -87,11 +103,18 @@ describe("the messaging window a run assumes", () => {
  * a cited source that was supplied — so every difference below comes from the inputs and nothing else.
  */
 function decide(inputs: SimulationInputs, policy: PolicyView) {
+  const route = templateRouteFor(inputs, policy);
   return evaluatePolicy({
     mode: "AUTOPILOT",
     aiEnabled: true,
     takeover: { state: "NONE" },
-    draft: { usable: true, confidence: 0.95, reasonCodes: [], citedSourceIds: ["chunk-1"], contentType: "TEXT" },
+    draft: {
+      usable: true,
+      confidence: 0.95,
+      reasonCodes: [],
+      citedSourceIds: ["chunk-1"],
+      contentType: inputs.replyKind === "TEMPLATE" ? "TEMPLATE" : "TEXT",
+    },
     retrieval: { suppliedSourceIds: ["chunk-1"], corpusReachable: true },
     limits: {
       confidenceThreshold: 0.8,
@@ -102,6 +125,7 @@ function decide(inputs: SimulationInputs, policy: PolicyView) {
     capabilities: capabilitiesFor(inputs.channel),
     window: windowFor(inputs, NOW),
     humanAgent: humanAgentFor(inputs, NOW),
+    ...(route === undefined ? {} : { templateRoute: route }),
     replyCycle: "OWNED",
     now: NOW,
   });
@@ -142,15 +166,98 @@ describe("whether a chosen input can change the answer at all", () => {
 
   it("keeps the human-support path unreachable on WhatsApp, exception or not", () => {
     // The exception is Instagram's. The union is what stops it being reachable on a channel whose policy
-    // vocabulary does not contain it, and choosing WhatsApp here must not smuggle it in.
+    // vocabulary does not contain it, and choosing WhatsApp here must not smuggle it in — so the refusal
+    // is about the template route rather than offering a human-agent review.
     const whatsapp = decide({ ...INPUTS, channel: "WHATSAPP", window: "AFTER", humanSupport: "AVAILABLE" }, POLICY);
 
-    expect(whatsapp.reasons).toEqual(["WINDOW_CLOSED"]);
+    expect(whatsapp.reasons).not.toContain("HUMAN_AGENT_REVIEW_REQUIRED");
+    expect(whatsapp.reasons).toContain("WINDOW_CLOSED");
   });
 
   it("refuses on a disconnected account whatever the window says", () => {
     const decision = decide({ ...INPUTS, account: "DISCONNECTED" }, POLICY);
 
     expect(decision.action).not.toBe("SCHEDULE");
+  });
+});
+
+describe("the WhatsApp template route", () => {
+  /** Outside the service window, sending an approved template named `booking_reminder`. */
+  const sendingTemplate = {
+    ...INPUTS,
+    channel: "WHATSAPP",
+    window: "AFTER",
+    replyKind: "TEMPLATE",
+    templateName: "booking_reminder",
+  } as const satisfies SimulationInputs;
+
+  const withAllowlist = (allowlist: readonly string[], mode = "TEMPLATE_AUTOPILOT") =>
+    ({ ...POLICY, whatsappAfterWindowPolicy: mode, whatsappTemplateAutomationAllowlist: allowlist }) as unknown as PolicyView;
+
+  it("is only offered to the channel that has one", () => {
+    // Absent on Instagram, and absent is not a weaker form of "available": the gate treats it as no route.
+    expect(templateRouteFor({ ...sendingTemplate, channel: "INSTAGRAM" }, POLICY)).toBeUndefined();
+    expect(templateRouteFor(sendingTemplate, withAllowlist(["booking_reminder"]))).toEqual({
+      approvedTemplateAvailable: true,
+      automatable: true,
+    });
+  });
+
+  it("reads the owner's saved allowlist and nothing else", () => {
+    expect(templateRouteFor(sendingTemplate, withAllowlist([]))?.automatable).toBe(false);
+    expect(templateRouteFor(sendingTemplate, withAllowlist(["something_else"]))?.automatable).toBe(false);
+    expect(templateRouteFor(sendingTemplate, withAllowlist(["booking_reminder"]))?.automatable).toBe(true);
+  });
+
+  it("makes an empty allowlist and a non-empty one decide differently", () => {
+    // The finding. With the allowlist unread, these two produced the same answer, so nothing an owner
+    // typed into the allowlist could change what this screen told them.
+    const empty = decide(sendingTemplate, withAllowlist([]));
+    const listed = decide(sendingTemplate, withAllowlist(["booking_reminder"]));
+
+    expect(empty.action).toBe("HOLD_REVIEW");
+    expect(empty.reasons).toContain("TEMPLATE_REQUIRED");
+    expect(listed.action).toBe("SCHEDULE");
+    expect(listed.reasons).toEqual([]);
+  });
+
+  it("distinguishes the three WhatsApp modes with the same allowlist", () => {
+    const allowlist = ["booking_reminder"];
+
+    // SERVICE_WINDOW_ONLY has no template route at all: the window simply closed.
+    const serviceOnly = decide(sendingTemplate, withAllowlist(allowlist, "SERVICE_WINDOW_ONLY"));
+    expect(serviceOnly.reasons).toEqual(["WINDOW_CLOSED"]);
+
+    // TEMPLATE_REVIEW allows the template only once a person has approved it, so unattended it holds.
+    const review = decide(sendingTemplate, withAllowlist(allowlist, "TEMPLATE_REVIEW"));
+    expect(review.action).toBe("HOLD_REVIEW");
+    expect(review.reasons).toContain("TEMPLATE_REQUIRED");
+
+    // TEMPLATE_AUTOPILOT with the template allowlisted is the one case that may go out unattended.
+    expect(decide(sendingTemplate, withAllowlist(allowlist, "TEMPLATE_AUTOPILOT")).action).toBe("SCHEDULE");
+  });
+
+  it("ends the matter when no template is named at all", () => {
+    // A dead end rather than a review item: with nothing sendable, there is nothing for a person to do
+    // either, and a review item nobody can resolve is worse than an empty queue.
+    const nothing = decide({ ...sendingTemplate, templateName: "   " }, withAllowlist(["booking_reminder"]));
+
+    expect(nothing.reasons).toContain("NO_ELIGIBLE_TEMPLATE");
+  });
+
+  it("asks for a template when an ordinary reply is proposed outside the service window", () => {
+    const ordinary = decide({ ...sendingTemplate, replyKind: "ORDINARY" }, withAllowlist(["booking_reminder"]));
+
+    // An ordinary reply is not a route once the service window has closed, whatever the allowlist says.
+    expect(ordinary.reasons).toContain("TEMPLATE_REQUIRED");
+    expect(ordinary.action).toBe("HOLD_REVIEW");
+  });
+
+  it("still refuses inside an open window on a disconnected account", () => {
+    // The template route is reached only once the window has closed; it must not become a way around the
+    // other gates.
+    const disconnected = decide({ ...sendingTemplate, account: "DISCONNECTED" }, withAllowlist(["booking_reminder"]));
+
+    expect(disconnected.action).not.toBe("SCHEDULE");
   });
 });

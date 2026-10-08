@@ -14,8 +14,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { catalogues } from "../i18n/catalogue";
 import {
   acknowledges,
+  AUDITED_POLICY_FIELDS,
   auditHistoryHref,
   decodeAuditCursor,
   decodeProposal,
@@ -24,7 +26,9 @@ import {
   impactsFromQuery,
   MAX_PROPOSAL_FIELD_CHARS,
   mayEditSettings,
+  oversizedField,
   policyChangeDiff,
+  takeoverPauseProblem,
   simulationInputsFrom,
   type PolicyProposal,
 } from "./settings-view";
@@ -161,9 +165,8 @@ describe("the history's cursor", () => {
       { changedAt: new Date("2026-09-01T10:00:00.000Z"), id: "pca_9" },
     );
 
-    // The playground's question and inputs survive paging the history: losing them would re-run the
-    // simulation with different inputs for no reason the reader could see.
-    expect(href).toContain("ask=do+you+deliver%3F");
+    // The playground's chosen inputs survive paging the history, so re-running afterwards asks the same
+    // case. The question itself does not — see the next case for why.
     expect(href).toContain("simChannel=WHATSAPP");
     // And so does a pending confirmation. Reading the history is exactly what somebody does *before*
     // acknowledging a change, and dropping the proposal there would silently reset the form they were
@@ -173,6 +176,20 @@ describe("the history's cursor", () => {
     // And the old cursor is replaced rather than repeated, or the link would not advance.
     expect(href.match(/auditCursor=/gu)).toHaveLength(1);
     expect(href).not.toContain("auditCursor=stale");
+  });
+
+  it("drops the playground's question, which would re-run it", () => {
+    const href = auditHistoryHref("/settings", { ask: "do you deliver?", simChannel: "WHATSAPP" }, {
+      changedAt: new Date("2026-09-01T10:00:00.000Z"),
+      id: "pca_9",
+    });
+
+    // The page runs the playground on every render that carries a question — embedding it, searching both
+    // corpora and calling the reply model. Reading the history is not asking it anything, so carrying the
+    // question billed a model request per page and regenerated the answer underneath the reader. The
+    // chosen inputs stay, so re-running after paging asks the same case again.
+    expect(href).not.toContain("ask=");
+    expect(href).toContain("simChannel=WHATSAPP");
   });
 });
 
@@ -191,7 +208,7 @@ describe("what a change actually changed", () => {
     ]);
   });
 
-  it("does not report a list that was merely reordered", () => {
+  it("does not report an unordered list that was merely reordered", () => {
     const changes = policyChangeDiff(
       { mandatoryReviewReasons: ["PAYMENT_DISPUTE", "LOW_CONFIDENCE"] },
       { mandatoryReviewReasons: ["LOW_CONFIDENCE", "PAYMENT_DISPUTE"] },
@@ -200,6 +217,21 @@ describe("what a change actually changed", () => {
     // `mandatoryReviewReasons` is written from a Set, so its order is an implementation detail; reporting
     // it would make every save look like it touched the review topics.
     expect(changes).toEqual([]);
+  });
+
+  it("reports a criteria change the store recorded as a change", () => {
+    // The store's own `changed()` sorts the two unordered lists and deliberately not the criteria, so a
+    // reorder writes an audit row. Sorting them here made the screen disagree with the database: the row
+    // existed, the diff was empty, and the entry claimed somebody changed something while showing
+    // nothing.
+    expect(policyChangeDiff({ qualificationCriteria: ["b", "a"] }, { qualificationCriteria: ["a", "b"] })).toEqual([
+      { field: "qualificationCriteria", before: "b, a", after: "a, b" },
+    ]);
+
+    // And splitting one criterion into two, which the joined strings made identical.
+    expect(
+      policyChangeDiff({ qualificationCriteria: ["fast replies, polite tone"] }, { qualificationCriteria: ["fast replies", "polite tone"] }),
+    ).toHaveLength(1);
   });
 
   it("distinguishes a field that was absent from a field that was empty", () => {
@@ -237,21 +269,47 @@ describe("the playground's hypothetical facts", () => {
   it("defaults to the case where something would actually be sent, except the exception", () => {
     // Three permissive defaults and one conservative: a human-support exception is something a business
     // has to have been approved for, and assuming it would show a review path their account may not have.
-    expect(simulationInputsFrom({})).toEqual({ channel: "INSTAGRAM", window: "OPEN", account: "CONNECTED", humanSupport: "UNAVAILABLE" });
-  });
-
-  it("takes all four from the link", () => {
-    expect(
-      simulationInputsFrom({ simChannel: "WHATSAPP", simWindow: "AFTER", simAccount: "DISCONNECTED", simHumanSupport: "AVAILABLE" }),
-    ).toEqual({ channel: "WHATSAPP", window: "AFTER", account: "DISCONNECTED", humanSupport: "AVAILABLE" });
-  });
-
-  it("falls back to the default for a value nobody defined", () => {
-    expect(simulationInputsFrom({ simChannel: "TELEGRAM", simWindow: "SOMETIME", simAccount: "MAYBE", simHumanSupport: "SURE" })).toEqual({
+    expect(simulationInputsFrom({})).toEqual({
       channel: "INSTAGRAM",
       window: "OPEN",
       account: "CONNECTED",
       humanSupport: "UNAVAILABLE",
+      replyKind: "ORDINARY",
+      templateName: "",
+    });
+  });
+
+  it("takes all six from the link", () => {
+    expect(
+      simulationInputsFrom({
+        simChannel: "WHATSAPP",
+        simWindow: "AFTER",
+        simAccount: "DISCONNECTED",
+        simHumanSupport: "AVAILABLE",
+        simReplyKind: "TEMPLATE",
+        simTemplate: "  booking_reminder  ",
+      }),
+    ).toEqual({
+      channel: "WHATSAPP",
+      window: "AFTER",
+      account: "DISCONNECTED",
+      humanSupport: "AVAILABLE",
+      replyKind: "TEMPLATE",
+      // Trimmed, because it is matched against an allowlist and a stray space is not a different template.
+      templateName: "booking_reminder",
+    });
+  });
+
+  it("falls back to the default for a value nobody defined", () => {
+    expect(
+      simulationInputsFrom({ simChannel: "TELEGRAM", simWindow: "SOMETIME", simAccount: "MAYBE", simHumanSupport: "SURE", simReplyKind: "SMOKE_SIGNAL" }),
+    ).toEqual({
+      channel: "INSTAGRAM",
+      window: "OPEN",
+      account: "CONNECTED",
+      humanSupport: "UNAVAILABLE",
+      replyKind: "ORDINARY",
+      templateName: "",
     });
   });
 });
@@ -264,5 +322,65 @@ describe("who the screen offers the form to", () => {
     // refuses one, and a form offered here would be a form that cannot be submitted.
     expect(mayEditSettings("AGENT")).toBe(false);
     expect(mayEditSettings("")).toBe(false);
+  });
+});
+
+describe("every audited field has a label in every locale", () => {
+  it("covers the whole list, so adding a field cannot reach the screen unlabelled", () => {
+    // The page renders `policyField.${field}` through a cast, which the compiler cannot check. That cast
+    // is the only thing between this list and a raw key on a customer's screen, so the list is compared
+    // with the catalogues instead.
+    for (const locale of ["en", "ru"] as const) {
+      for (const field of AUDITED_POLICY_FIELDS) {
+        expect(catalogues[locale][`policyField.${field}`], `${locale} has no label for ${field}`).toBeTruthy();
+      }
+    }
+  });
+});
+
+describe("the fields that share one URL parameter", () => {
+  it("are bounded together, because a bound on one of them is a bound on nothing", () => {
+    const long = "x".repeat(MAX_PROPOSAL_FIELD_CHARS + 1);
+
+    expect(oversizedField([long, "", ""])).toBe(true);
+    // The criteria and the allowlist travel in the same parameter as the goal. Bounding only the goal let
+    // a pasted criteria list produce a redirect a server will not accept, and the change could then never
+    // be confirmed at all.
+    expect(oversizedField(["", long, ""])).toBe(true);
+    expect(oversizedField(["", "", long])).toBe(true);
+    expect(oversizedField(["a", "b", "c"])).toBe(false);
+  });
+
+  it("refuses a proposal whose criteria or allowlist are over the bound", () => {
+    const long = "x".repeat(MAX_PROPOSAL_FIELD_CHARS + 1);
+
+    for (const field of ["qualificationCriteria", "whatsappTemplateAutomationAllowlist"] as const) {
+      const encoded = Buffer.from(JSON.stringify({ ...PROPOSAL, [field]: [long] }), "utf8").toString("base64url");
+      expect(decodeProposal(encoded), field).toBeUndefined();
+    }
+  });
+});
+
+describe("the takeover pause", () => {
+  it("accepts a whole number of hours inside the product's own bounds", () => {
+    expect(takeoverPauseProblem("6")).toBeUndefined();
+    expect(takeoverPauseProblem(" 168 ")).toBeUndefined();
+  });
+
+  it("refuses a cleared box rather than leaving the stored value in place", () => {
+    // A cleared box used to be read as "leave it alone": the field was omitted, the store kept the stored
+    // hours, and the save reported success about something else entirely — with the next render refilling
+    // the box from storage so nothing on screen disagreed.
+    expect(takeoverPauseProblem("")).toBe("INCOMPLETE");
+    expect(takeoverPauseProblem("   ")).toBe("INCOMPLETE");
+    expect(takeoverPauseProblem("6 or so")).toBe("INCOMPLETE");
+  });
+
+  it("refuses hours outside what the form offers", () => {
+    // `min` and `max` on a number input are a hint to a browser and nothing to a crafted POST, and the
+    // domain asks only for a positive integer — so this used to accept eleven years of silence.
+    expect(takeoverPauseProblem("0")).toBe("OUT_OF_RANGE");
+    expect(takeoverPauseProblem("-6")).toBe("OUT_OF_RANGE");
+    expect(takeoverPauseProblem("100000")).toBe("OUT_OF_RANGE");
   });
 });
