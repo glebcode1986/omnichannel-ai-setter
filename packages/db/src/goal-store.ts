@@ -222,6 +222,14 @@ export async function closeGoal(
 }
 
 /** Stops every pending follow-up hanging off one goal. Shared, so both paths that retire a goal agree. */
+/**
+ * How much of a conversation's goal history one read carries.
+ *
+ * A window for a reader. What makes it safe is that nothing is derived from it: the primary goal, which is
+ * the one value a decision depends on, has its own query.
+ */
+const GOAL_HISTORY_WINDOW = 50;
+
 async function settleFollowUpsForGoal(tx: DbExecutor, goalId: string, reason: "GOAL_TERMINAL", at: Date): Promise<number> {
   const stopped = await tx.followUp.updateMany({
     where: { goalId, status: "PENDING" },
@@ -230,21 +238,37 @@ async function settleFollowUpsForGoal(tx: DbExecutor, goalId: string, reason: "G
   return stopped.count;
 }
 
-/** The goals of one conversation, current first. */
+/**
+ * The goals of one conversation, current first — and the primary one, asked for directly.
+ *
+ * `primary` used to be found inside `all`, which is a window of the fifty newest. A conversation with
+ * more goals than that would have reported no primary goal while an active one existed, and nothing in
+ * the answer could have said so: the caller sees `undefined`, which also means "there isn't one". That is
+ * the shape worth avoiding — a derived authority value computed inside a bound chosen for display.
+ *
+ * Its own query cannot miss it and cannot be ambiguous: `conversation_goals_active_primary_key` is a
+ * partial unique index over (workspace, profile, conversation) where the row is `ACTIVE` and primary, so
+ * there is at most one and the database is what guarantees it.
+ *
+ * `all` stays a window, and is a window for a reader rather than for a decision — nothing in the product
+ * derives anything from it.
+ */
 export async function readGoals(
   db: DbExecutor,
   context: BusinessProfileContext,
   conversationId: string,
 ): Promise<{ readonly primary: GoalView | undefined; readonly all: readonly GoalView[] }> {
   const scope = profileScopeOf(context);
-  const rows = await db.conversationGoal.findMany({
-    where: { ...scope, conversationId },
-    orderBy: [{ createdAt: "desc" }],
-    take: 50,
-    select: goalSelect,
-  });
-  const all = rows.map(toView);
-  return { primary: all.find((goal) => goal.isPrimary && goal.status === "ACTIVE"), all };
+  const [rows, primary] = await Promise.all([
+    db.conversationGoal.findMany({
+      where: { ...scope, conversationId },
+      orderBy: [{ createdAt: "desc" }],
+      take: GOAL_HISTORY_WINDOW,
+      select: goalSelect,
+    }),
+    db.conversationGoal.findFirst({ where: { ...scope, conversationId, isPrimary: true, status: "ACTIVE" }, select: goalSelect }),
+  ]);
+  return { primary: primary === null ? undefined : toView(primary), all: rows.map(toView) };
 }
 
 /**
