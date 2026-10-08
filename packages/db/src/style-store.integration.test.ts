@@ -18,11 +18,14 @@ import {
   archiveStyleExample,
   createStyleExample,
   listStyleExamples,
+  readStyleExampleLifecycle,
   readStyleProfiles,
   rejectStyleExample,
   restoreStyleExample,
   saveStyleProfile,
   suggestStyleExample,
+  type StyleDecisionCursor,
+  type StyleExampleCursor,
 } from "./style-store";
 import { createKnowledgeRetriever, createStyleRetriever } from "./retrieval/retrievers";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
@@ -410,15 +413,134 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(await db().styleExampleDecision.count({ where: { styleExampleId: id } })).toBe(0);
     }, 180_000);
 
-    it("records a decision that cannot be unmade, even by this package", async () => {
+    it("records a decision that cannot be unmade, by this package or by anybody", async () => {
       const id = await suggested("append only?", "Append only.");
       await rejectStyleExample(db(), profile.context, id);
+      expect(await db().styleExampleDecision.count({ where: { styleExampleId: id } })).toBe(1);
 
-      // The trail is append-only by use: nothing in this store updates or deletes one of these rows, and
-      // the example itself cannot be deleted while its history points at it.
+      // The example itself cannot be deleted while its history points at it. That protects the *parent*,
+      // which is not the same guarantee and was previously the only one there was.
       await expect(db().$executeRaw`DELETE FROM "style_examples" WHERE "id" = ${id}`).rejects.toThrow(
         /style_example_decisions_style_example_id_fkey/u,
       );
+
+      // And the rows themselves, at the database boundary rather than by convention. "Nothing in this
+      // store does it" is a statement about one package's current source, and the case that matters is
+      // precisely the one where that source is not what is running: a support script, a later migration,
+      // or a hand-typed statement during an incident.
+      //
+      // The quiet edit is the dangerous one. Turning this REJECTED into an APPROVED leaves a history that
+      // reads as complete and is not, which is the difference between an audit trail and a log somebody
+      // could have tidied.
+      await expect(db().$executeRaw`UPDATE "style_example_decisions" SET "decision" = 'APPROVED' WHERE "style_example_id" = ${id}`).rejects.toThrow(
+        /append-only/u,
+      );
+      await expect(db().$executeRaw`DELETE FROM "style_example_decisions" WHERE "style_example_id" = ${id}`).rejects.toThrow(/append-only/u);
+      // A row trigger never fires for TRUNCATE, and nothing references this table, so without a
+      // statement-level guard the one statement that destroys every row would be the one it permitted.
+      await expect(db().$executeRaw`TRUNCATE "style_example_decisions"`).rejects.toThrow(/cannot be truncated/u);
+
+      // The control: the refusals above are refusals, not a write that silently did nothing.
+      const after = await db().styleExampleDecision.findMany({ where: { styleExampleId: id }, select: { decision: true } });
+      expect(after).toEqual([{ decision: "REJECTED" }]);
+    }, 180_000);
+
+    it("keeps every event of a long lifecycle reachable, and shows the current one first of all", async () => {
+      // The defect this replaces: the window took the twenty *oldest* decisions, so from the
+      // twenty-first onwards every later event — including the one that produced the example's current
+      // state — disappeared from the history with nothing on screen to say so.
+      const id = await suggested("a long argument?", "A long argument.");
+      await rejectStyleExample(db(), profile.context, id);
+      const expected: string[] = ["REJECTED"];
+      // Twelve more round trips: 25 decisions in total, comfortably past the window of twenty.
+      for (let round = 0; round < 12; round += 1) {
+        await restoreStyleExample(db(), profile.context, id);
+        await archiveStyleExample(db(), profile.context, id);
+        expected.push("RESTORED", "ARCHIVED");
+      }
+      expect(expected).toHaveLength(25);
+
+      const example = (await listStyleExamples(db(), profile.context, { status: "ARCHIVED" })).examples.find((candidate) => candidate.id === id);
+      // The window is the most recent twenty, still oldest-first within itself, and it says how many it
+      // left behind rather than leaving a reader to wonder.
+      expect(example?.decisions).toHaveLength(20);
+      expect(example?.earlierDecisions).toBe(5);
+      expect(example?.earlierCursor).toBeDefined();
+      // The current state's own decision is the last entry of the window, which is the part that used to
+      // be missing.
+      expect(example?.decisions.at(-1)?.decision).toBe("ARCHIVED");
+      expect(example?.decisions.map((entry) => entry.decision)).toEqual(expected.slice(5));
+
+      // Every page is reachable by following the cursor, and the pages reassemble into the whole
+      // lifecycle in order with nothing repeated and nothing skipped.
+      const collected: string[] = [...(example?.decisions.map((entry) => entry.decision) ?? [])];
+      let cursor: StyleDecisionCursor | undefined = example?.earlierCursor;
+      let pages = 0;
+      while (cursor !== undefined) {
+        const page = await readStyleExampleLifecycle(db(), profile.context, id, { limit: 7, before: cursor });
+        expect(page, "a cursor the previous page offered must lead somewhere").not.toBeNull();
+        expect(page?.totalDecisions).toBe(25);
+        collected.unshift(...(page?.decisions.map((entry) => entry.decision) ?? []));
+        cursor = page?.earlierCursor;
+        pages += 1;
+        expect(pages, "paging must terminate").toBeLessThan(10);
+      }
+
+      expect(collected).toEqual(expected);
+      // And strictly ordered end to end: a lifecycle out of order is not a lifecycle.
+      const whole = await readStyleExampleLifecycle(db(), profile.context, id, { limit: 100 });
+      const times = whole?.decisions.map((entry) => entry.decidedAt.getTime()) ?? [];
+      expect(times).toHaveLength(25);
+      expect(times).toEqual([...times].sort((left, right) => left - right));
+      expect(whole?.earlierDecisions).toBe(0);
+      expect(whole?.earlierCursor).toBeUndefined();
+      expect(whole?.laterDecisions).toBe(0);
+
+      // A cursor pointing at the oldest decision yields a page with no rows. It describes itself as
+      // hiding everything rather than reporting a count with no link to follow, and the screen keeps the
+      // way back for exactly this case.
+      const oldest = whole?.decisions[0];
+      const past = await readStyleExampleLifecycle(db(), profile.context, id, {
+        before: { decidedAt: oldest?.decidedAt ?? new Date(0), id: oldest?.id ?? "" },
+      });
+      expect(past?.decisions).toEqual([]);
+      expect(past?.earlierDecisions).toBe(0);
+      expect(past?.earlierCursor).toBeUndefined();
+      expect(past?.laterDecisions).toBe(25);
+    }, 180_000);
+
+    it("pages a lifecycle whose decisions share one instant, because an instant is not a key", async () => {
+      // `decided_at` is not unique: these are written by one transaction per decision, and two can land
+      // in the same millisecond. A cursor on the instant alone would repeat or skip a row here, which on
+      // a page of audit history reads as an event happening twice or not at all.
+      const id = await suggested("same instant?", "Same instant.");
+      await rejectStyleExample(db(), profile.context, id);
+      const at = new Date("2026-10-01T09:00:00.000Z");
+      // Written directly because no product path can produce a tie deliberately — and these rows cannot
+      // be edited afterwards, so they are inserted with the instant they need.
+      for (let index = 0; index < 6; index += 1) {
+        await db().$executeRaw`
+          INSERT INTO "style_example_decisions" ("id", "workspace_id", "style_example_id", "decision", "decided_by_user_id", "decided_at")
+          VALUES (${`sed_tie_${index}`}, ${profile.context.workspaceId}, ${id}, 'RESTORED', ${workspace.ownerUserId}, ${at})`;
+      }
+
+      const seen: string[] = [];
+      let cursor: StyleDecisionCursor | undefined;
+      let pages = 0;
+      do {
+        const page = await readStyleExampleLifecycle(db(), profile.context, id, { limit: 2, ...(cursor === undefined ? {} : { before: cursor }) });
+        // The row ids, because that is what "exactly once" has to be counted over: counting decision
+        // names would pass against a cursor that returned `RESTORED` seven times from two rows.
+        seen.unshift(...(page?.decisions.map((entry) => entry.id) ?? []));
+        cursor = page?.earlierCursor;
+        pages += 1;
+        expect(pages, "paging must terminate").toBeLessThan(12);
+      } while (cursor !== undefined);
+
+      // Seven decisions, every one seen exactly once despite six of them sharing an instant.
+      expect(seen).toHaveLength(7);
+      expect(new Set(seen).size).toBe(7);
+      expect(seen.filter((seenId) => seenId.startsWith("sed_tie_"))).toHaveLength(6);
     }, 180_000);
 
     it("cannot archive one that is not in use", async () => {
@@ -452,6 +574,92 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect((await listStyleExamples(db(), profile.context)).examples.map((example) => example.id)).not.toContain(theirId);
       expect(await archiveStyleExample(db(), profile.context, theirId)).toEqual({ status: "GONE" });
       expect(await approveStyleExample(db(), profile.context, theirId)).toEqual({ status: "GONE" });
+      // And the lifecycle read, which is the only one in this file that takes an id straight from a URL.
+      // `null` rather than an empty page: "not yours" and "nothing has happened to it" are different
+      // answers, and conflating them would leak the existence of the example.
+      // Archived, not rejected: this example was created ACTIVE, and rejecting is a suggestion's
+      // transition — it would have returned GONE and written no history, leaving the assertion below
+      // passing against an empty lifecycle rather than against a hidden one.
+      expect(await archiveStyleExample(db(), theirProfile.context, theirId)).toEqual({ status: "ARCHIVED" });
+      expect(await readStyleExampleLifecycle(db(), profile.context, theirId)).toBeNull();
+      expect((await readStyleExampleLifecycle(db(), theirProfile.context, theirId))?.totalDecisions).toBeGreaterThan(0);
+    }, 180_000);
+
+    it("keeps one profile's example history out of its sibling's reach", async () => {
+      // The narrower boundary, inside one workspace. A workspace-scoped example is shared by design; a
+      // profile-scoped one is not, and the history read must follow the same rule the list does.
+      const mine = await suggested("sibling may not read this?", "Sibling may not read this.");
+      await rejectStyleExample(db(), profile.context, mine);
+
+      expect((await readStyleExampleLifecycle(db(), profile.context, mine))?.decisions).toHaveLength(1);
+      expect(await readStyleExampleLifecycle(db(), sibling.context, mine)).toBeNull();
+    }, 180_000);
+
+    it("refuses an edit even in replica mode, where an ordinary trigger would not fire", async () => {
+      // `SET session_replication_role = 'replica'` is a plain SET available to this connection, and an
+      // origin-only trigger is silent under it — one statement would have switched the whole guarantee
+      // off with no DDL and nothing recorded. Both triggers are therefore ENABLE ALWAYS.
+      const id = await suggested("replica mode?", "Replica mode.");
+      await rejectStyleExample(db(), profile.context, id);
+
+      const flags = await db().$queryRaw<{ tgname: string; tgenabled: string }[]>`
+        SELECT "tgname", "tgenabled"::text AS "tgenabled" FROM "pg_trigger"
+        WHERE "tgrelid" = '"style_example_decisions"'::regclass AND NOT "tgisinternal"
+        ORDER BY "tgname"`;
+      expect(flags.map((row) => row.tgenabled)).toEqual(["A", "A"]);
+
+      // The property itself, not only the flag: the flag could be right while the trigger does nothing.
+      await expect(
+        db().$transaction(async (tx) => {
+          await tx.$executeRaw`SET LOCAL session_replication_role = 'replica'`;
+          await tx.$executeRaw`UPDATE "style_example_decisions" SET "decision" = 'APPROVED' WHERE "style_example_id" = ${id}`;
+        }),
+      ).rejects.toThrow(/append-only/u);
+      expect(await db().styleExampleDecision.findMany({ where: { styleExampleId: id }, select: { decision: true } })).toEqual([{ decision: "REJECTED" }]);
+    }, 180_000);
+
+    it("reads several statuses as one keyset, so a merged list can be paged", async () => {
+      // The contract the retired list needs. Two queries concatenated cannot share a cursor: one of them
+      // is always its own first page, and everything past it is unreachable by any link. One query over
+      // both statuses is one keyset, so following the cursor visits every row exactly once whichever
+      // status it has.
+      const archived = await suggested("both statuses, archived half?", "Both statuses, archived half.");
+      await approveStyleExample(db(), profile.context, archived);
+      await archiveStyleExample(db(), profile.context, archived);
+      const rejected = await suggested("both statuses, rejected half?", "Both statuses, rejected half.");
+      await rejectStyleExample(db(), profile.context, rejected);
+
+      const both = await listStyleExamples(db(), profile.context, { status: ["ARCHIVED", "REJECTED"] }, { limit: 100 });
+      const ids = both.examples.map((example) => example.id);
+
+      expect(ids).toContain(archived);
+      expect(ids).toContain(rejected);
+      // One list, one order: newest first across both statuses rather than one status after the other.
+      const times = both.examples.map((example) => example.createdAt.getTime());
+      expect(times).toEqual([...times].sort((left, right) => right - left));
+      // And the single-status form still means exactly one status, which every other caller relies on.
+      const onlyRejected = await listStyleExamples(db(), profile.context, { status: "REJECTED" }, { limit: 100 });
+      expect(onlyRejected.examples.map((example) => example.status)).toEqual(onlyRejected.examples.map(() => "REJECTED"));
+      expect(onlyRejected.examples.map((example) => example.id)).not.toContain(archived);
+
+      // Paged two at a time, the merged set still arrives once each — the property the concatenation
+      // could not have, because its second half never moved.
+      const walked: string[] = [];
+      let cursor: StyleExampleCursor | undefined;
+      let pages = 0;
+      do {
+        const page = await listStyleExamples(db(), profile.context, { status: ["ARCHIVED", "REJECTED"] }, {
+          limit: 2,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        walked.push(...page.examples.map((example) => example.id));
+        cursor = page.nextCursor;
+        pages += 1;
+        expect(pages, "paging must terminate").toBeLessThan(40);
+      } while (cursor !== undefined);
+
+      expect(new Set(walked).size).toBe(walked.length);
+      expect(walked.toSorted()).toEqual(ids.toSorted());
     }, 180_000);
 
     it("filters by status, provenance and scope", async () => {
