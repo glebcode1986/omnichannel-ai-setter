@@ -301,6 +301,18 @@ async function purge(tx: DbExecutor, row: { workspaceId: string; businessProfile
     counts[table] = (counts[table] ?? 0) + (await run).count;
   };
 
+  // Says, for this transaction only, that what follows is a customer erasure.
+  //
+  // `style_example_decisions` is append-only — a style example's lifecycle is evidence about who approved
+  // and who withdrew it — and its trigger refuses a `DELETE` unless a session has declared this. Without
+  // the declaration the `DELETE` below was refused, this whole transaction aborted, and every deletion
+  // request ended `PARTIAL_FAILURE`: a privacy deletion that silently removed nothing.
+  //
+  // `SET LOCAL` rather than `SET`, and set here rather than by the caller, so the permission lives for
+  // exactly the transaction that does the work and cannot be left switched on. `UPDATE` on that table
+  // stays refused either way: an erasure removes rows, it never rewrites a verdict.
+  await tx.$executeRaw`SET LOCAL "omnichannel.erasing_customer_data" = 'on'`;
+
   const conversations = await tx.conversation.findMany({ where: conversationFilter(row), select: { id: true, contactId: true } });
   const conversationIds = conversations.map((conversation) => conversation.id);
   const contactIds =
