@@ -40,16 +40,11 @@ import type {
 import { randomUUID } from "node:crypto";
 
 import {
-  activeSuspension,
   commercialAccessOf,
   isReasonCode,
-  toBusinessProfileId,
-  toChannelAccountId,
   toQuietHours,
   toUserId,
-  toWorkspaceId,
   type Actor,
-  type AutomationSuspension,
   type CommercialAccess,
   type DeliveryJobStatus,
   type SuspensionReason,
@@ -61,7 +56,9 @@ import {
 import type { DbClient, DbExecutor } from "./client";
 import { entitlementLockKeyFor } from "./entitlement-lock";
 import { readEntitlement } from "./entitlement-store";
+import { resolveEffectiveMode } from "./automation-mode";
 import { releaseCatalogueLockKey } from "./release-lock";
+import { coveringSuspensionAt } from "./suspension-covering";
 import { readReleaseInForce, readRolloutAccess, rolloutAccessFrom } from "./release-store";
 import { suspensionLockKeysFor } from "./suspension-lock";
 import type {
@@ -273,7 +270,15 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         ...(outboundText === null ? {} : { text: outboundText }),
         status: job.status,
         attemptCount: job.attemptCount,
-        mode: conversation.modeOverride ?? effective?.mode ?? "OFF",
+        // Through the one rule, not an inline copy of it. The expression here was
+        // `conversation.modeOverride ?? effective?.mode ?? "OFF"` — the same answer as
+        // `resolveEffectiveMode`, arrived at separately, in the file that decides whether a reply goes
+        // out. `automation-mode.ts` says in its own header that a second implementation of this rule is
+        // "the kind of duplication that eventually disagrees with itself", and there were four.
+        mode: resolveEffectiveMode(conversation.modeOverride, conversation.channelAccountId, [
+          ...(policies.account === undefined ? [] : [{ channelAccountId: conversation.channelAccountId, mode: policies.account.mode }]),
+          ...(policies.default === undefined ? [] : [{ channelAccountId: null, mode: policies.default.mode }]),
+        ]),
         limits: limitsFrom(effective, conversation.channelIdentity.channelAccount.channel),
         ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
         aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
@@ -441,40 +446,9 @@ async function coveringSuspension(
   target: { readonly workspaceId: string; readonly businessProfileId: string; readonly channelAccountId: string },
   at: Date,
 ): Promise<{ readonly scope: SuspensionScope; readonly reason: SuspensionReason } | undefined> {
-  const rows = await db.automationSuspension.findMany({
-    where: {
-      liftedAt: null,
-      OR: [
-        { scope: "GLOBAL" },
-        { scope: "WORKSPACE", workspaceId: target.workspaceId },
-        { scope: "BUSINESS_PROFILE", workspaceId: target.workspaceId, businessProfileId: target.businessProfileId },
-        { scope: "CHANNEL_ACCOUNT", workspaceId: target.workspaceId, channelAccountId: target.channelAccountId },
-      ],
-    },
-    select: { scope: true, workspaceId: true, businessProfileId: true, channelAccountId: true, reason: true, since: true, until: true },
-  });
-  // Which of several switches applies is the domain's rule, not this file's: widest wins, and an expired
-  // or not-yet-started one covers nothing.
-  const covering = rows.map(
-    (row): AutomationSuspension => ({
-      scope: row.scope,
-      ...(row.workspaceId === null ? {} : { workspaceId: toWorkspaceId(row.workspaceId) }),
-      ...(row.businessProfileId === null ? {} : { businessProfileId: toBusinessProfileId(row.businessProfileId) }),
-      ...(row.channelAccountId === null ? {} : { channelAccountId: toChannelAccountId(row.channelAccountId) }),
-      reason: row.reason,
-      since: row.since,
-      ...(row.until === null ? {} : { until: row.until }),
-    }),
-  );
-  const active = activeSuspension(
-    {
-      workspaceId: toWorkspaceId(target.workspaceId),
-      businessProfileId: toBusinessProfileId(target.businessProfileId),
-      channelAccountId: toChannelAccountId(target.channelAccountId),
-    },
-    covering,
-    at,
-  );
+  // The predicate and the domain's precedence both live in `suspension-covering.ts` now. This file used
+  // to carry its own copy of the query — correct, but one of four, and the other three disagreed with it.
+  const active = await coveringSuspensionAt(db, target, at);
   return active === undefined ? undefined : { scope: active.scope, reason: active.reason };
 }
 

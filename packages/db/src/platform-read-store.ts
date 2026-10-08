@@ -39,6 +39,7 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
+import { loadCoveringSuspensions } from "./suspension-covering";
 import { readEntitlement } from "./entitlement-store";
 import { DbInputError, PlatformPermissionError } from "./errors";
 import { platformActorOf, requirePlatformPermission, type PlatformContext } from "./platform-tenancy";
@@ -238,24 +239,10 @@ async function readEntitlementFor(db: DbExecutor, workspaceId: string, at: Date)
  * as the wide one.
  */
 async function readActivePause(db: DbExecutor, workspaceId: string, at: Date): Promise<SupportSnapshot["pause"]> {
-  const rows = await db.automationSuspension.findMany({
-    where: { liftedAt: null, OR: [{ scope: "GLOBAL" }, { workspaceId }] },
-    select: { scope: true, workspaceId: true, businessProfileId: true, channelAccountId: true, reason: true, note: true, since: true, until: true, byUserId: true },
-  });
-  const suspensions = rows.map(
-    (row) =>
-      ({
-        scope: row.scope,
-        ...(row.workspaceId === null ? {} : { workspaceId: row.workspaceId }),
-        ...(row.businessProfileId === null ? {} : { businessProfileId: row.businessProfileId }),
-        ...(row.channelAccountId === null ? {} : { channelAccountId: row.channelAccountId }),
-        reason: row.reason,
-        ...(row.note === null ? {} : { note: row.note }),
-        since: row.since,
-        ...(row.until === null ? {} : { until: row.until }),
-        ...(row.byUserId === null ? {} : { byUserId: row.byUserId }),
-      }) as AutomationSuspension,
-  );
+  // Through the one reader, like every other path that asks what is paused. This file had its own copy
+  // of the predicate and its own mapping to domain values; it agreed with the delivery claim, which is
+  // more than two of the other three managed.
+  const suspensions = await loadCoveringSuspensions(db, { workspaceId });
   // Every suspension is its own witness, so nothing has to be enumerated.
   //
   // This used to probe up to fifty of the workspace's channel accounts and ask the domain whether each

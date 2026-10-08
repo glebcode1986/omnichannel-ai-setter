@@ -30,6 +30,7 @@ import {
   presenceSettingsOf,
   readEntitlement,
   readRolloutAccess,
+  resolveEffectiveMode,
   requestHumanReview,
   scheduleAutomatedDelivery,
   type DbClient,
@@ -191,7 +192,11 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
     const decision: PolicyDecision = evaluatePolicy({
       commercial,
       rollout,
-      mode: conversation.modeOverride ?? policy.mode,
+      // Through the one rule, not an inline copy. This read was
+      // `conversation.modeOverride ?? policy.mode` with its own precedence pick above it — the same
+      // answer as `resolveEffectiveMode`, reached separately, on the other path that decides whether a
+      // reply goes out unattended.
+      mode: resolveEffectiveMode(conversation.modeOverride, conversation.channelAccountId, policies),
       aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
       takeover:
         conversation.takeoverState === "HUMAN_ACTIVE"

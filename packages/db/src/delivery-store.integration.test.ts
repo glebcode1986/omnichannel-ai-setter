@@ -90,6 +90,35 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     return { operationId, draftId: aiDraftId };
   };
 
+  /**
+   * The whole precedence table, read through the claim's own load.
+   *
+   * `resolveEffectiveMode` declares itself the single implementation of this rule — "a second
+   * implementation of a rule that governs whether we send to a customer is the kind of duplication that
+   * eventually disagrees with itself" — and there were four, with the two that decide whether a reply
+   * goes out being the two that did not call it. They agreed; the point is that nothing made them.
+   *
+   * Driven through `loadForSend` rather than through the function, because what matters is that the send
+   * path's answer *is* the rule's answer.
+   */
+  const modeFromSendPath = async (override: "OFF" | "DRAFT" | "AUTOPILOT" | null, accountMode: "OFF" | "DRAFT" | "AUTOPILOT" | null) => {
+    await database.db.conversation.update({ where: { id: profile.conversationId }, data: { modeOverride: override } });
+    // Written rather than updated: `updateMany` silently matches nothing when the row is absent, and an
+    // earlier case in this file may have removed it — which is how the default-policy case came to read
+    // `OFF` and look like a precedence bug rather than a missing fixture.
+    await database.db.automationPolicy.deleteMany({ where: { ...scope(), channelAccountId: null } });
+    await database.db.automationPolicy.create({ data: { ...scope(), channelAccountId: null, mode: "DRAFT", mandatoryReviewReasons: [] } });
+    await database.db.automationPolicy.deleteMany({ where: { ...scope(), channelAccountId: profile.channelAccount.id } });
+    if (accountMode !== null) {
+      await database.db.automationPolicy.create({
+        data: { ...scope(), channelAccountId: profile.channelAccount.id, mode: accountMode, mandatoryReviewReasons: [] },
+      });
+    }
+    const { operationId } = await scheduleDelivery();
+    const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+    return context?.mode;
+  };
+
   const statusOf = async (operationId: string) =>
     (await database.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } })).status;
 
@@ -1322,4 +1351,29 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       await logged.$disconnect();
     }, 120_000);
   });
+
+  describe("which mode the send path reads", () => {
+    it("follows the one precedence rule, for every case of it", async () => {
+      // Override first, then the account's own policy, then the profile default, and `OFF` when nothing
+      // has been written. The profile default is `DRAFT` throughout, so a reading that fell through to it
+      // by accident is distinguishable from one that honoured what was asked.
+      expect(await modeFromSendPath("AUTOPILOT", "OFF"), "a conversation's own override wins").toBe("AUTOPILOT");
+      expect(await modeFromSendPath("OFF", "AUTOPILOT"), "even when the override is the restrictive one").toBe("OFF");
+      expect(await modeFromSendPath(null, "AUTOPILOT"), "then the policy written for this account").toBe("AUTOPILOT");
+      expect(await modeFromSendPath(null, null), "then the profile's default").toBe("DRAFT");
+    }, 180_000);
+
+    it("reads OFF when the profile never opted into automation at all", async () => {
+      // The floor, and the direction it has to fail in: a profile with no policy row has not asked for
+      // anything to be sent on its behalf.
+      await database.db.conversation.update({ where: { id: profile.conversationId }, data: { modeOverride: null } });
+      await database.db.automationPolicy.deleteMany({ where: scope() });
+      const { operationId } = await scheduleDelivery();
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+
+      expect(context?.mode).toBe("OFF");
+    }, 180_000);
+  });
+
 });
