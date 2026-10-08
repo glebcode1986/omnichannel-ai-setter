@@ -92,7 +92,8 @@ file, and the gates nothing automated settles are listed by name. The summary:
 - **Evidenced with a stated gap:** §4 autopilot headless (the mechanism is tested; observing a full cycle
   needs a deployment), §5 AI regression (**`pnpm evals` is not run by CI** — see below), §9 reliability
   (in-process failures only), §10 load (correctness under contention, not sustained load), §11 billing
-  (everything except a real provider event — #41), §17 kill switches (four of the six scopes §17 names),
+  (everything except a real provider event — #41), §17 kill switches (all four scopes §17 names exist; its
+  feature-flag half does not),
   §19 per-customer readiness (the rest is an operator judgement).
 - **Nothing automated at all:** §2 staging (no staging environment exists), §14 booking (no booking
   capability exists), §16 observability/runbooks (health is computed and logged; there is no alerting

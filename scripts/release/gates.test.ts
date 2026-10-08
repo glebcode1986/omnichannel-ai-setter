@@ -142,6 +142,34 @@ describe("the evidence behind each gate", () => {
     expect(unautomated).toEqual(["BOOKING", "OBSERVABILITY", "STAGING"]);
   });
 
+  it("quotes counts the spec actually gives, so a number cannot drift from the document", () => {
+    // The defect this exists for was mine: the `KILL_SWITCHES` admission said §17 named six kill-switch
+    // scopes and that two were missing. §17 names four, and all four exist — the gap is its *second*
+    // sentence, about feature flags. A release record that misreads the section it cites is worse than
+    // one that says nothing, because the misreading is what a reader will carry away.
+    //
+    // Prose cannot be checked against prose, but a number can. These three admissions quote a count out
+    // of the document, so the document is parsed and the counts are held against it.
+    const section = (number: number): string => {
+      const body = readFileSync(specPath, "utf8");
+      const start = body.indexOf(`## ${number}. `);
+      const next = body.indexOf(`## ${number + 1}. `, start);
+      return body.slice(start, next === -1 ? undefined : next);
+    };
+    const bullets = (number: number): number => [...section(number).matchAll(/^- /gmu)].length;
+
+    // §5 enumerates its golden-case categories in one sentence rather than as bullets.
+    const regressionCategories = (section(5).match(/Include ([^.]+)\./u)?.[1] ?? "").split(/,| and /u).filter((part) => part.trim() !== "").length;
+
+    expect(regressionCategories, "§5's case categories").toBe(11);
+    expect(bullets(16), "§16's required alerts").toBe(7);
+    expect(bullets(19), "§19's per-profile checklist").toBe(8);
+
+    expect(GATE_EVIDENCE["AI_REGRESSION"]?.manual, "§5's count, as the admission quotes it").toContain("eleven case categories");
+    expect(GATE_EVIDENCE["OBSERVABILITY"]?.manual, "§16's count").toContain("all seven alerts");
+    expect(GATE_EVIDENCE["PER_CUSTOMER_READINESS"]?.manual, "§19's count").toContain("eight checklist items");
+  });
+
   it("produces a quotable evidence line for every gate, admissions included", () => {
     // What the release record stores. A line that quoted only the suites would be the "looks fine" the
     // spec refuses, dressed as a file list — so a gate with an admission must carry it into the record.

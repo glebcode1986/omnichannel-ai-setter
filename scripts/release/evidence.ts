@@ -136,11 +136,12 @@ export const GATE_EVIDENCE: Readonly<Record<string, GateEvidence>> = {
   OBSERVABILITY: {
     implementation: ["apps/worker/src/health-reporter.ts", "apps/worker/src/backlog-guard.ts", "apps/web/src/app/api/health/route.ts"],
     manual:
-      "Nothing automated settles this one, and the three files above are the implementation rather than evidence about it. Health is computed and logged, and the console (#59) shows pause state and ambiguous operations. There is no alerting integration and no runbook document, so every alert §16 requires is unevidenced.",
+      "Nothing automated settles this one, and the three files above are the implementation rather than evidence about it. Health is computed and logged, and the console (#59) shows pause state and ambiguous operations. There is no alerting integration and no runbook document, so all seven alerts §16 requires — inbound/webhook failure, queue backlog, AI provider outage, channel credential reconnect, ambiguous-send spike, DB or Redis incident, billing reconciliation failure — are unevidenced, as is its requirement that each actionable alert have a runbook rather than a metric.",
   },
   KILL_SWITCHES: {
     suites: ["apps/worker/src/kill-switch.integration.test.ts", "packages/db/src/platform-operations.integration.test.ts"],
-    manual: "Kill switches exist at four of the six scopes §17 names. A channel/provider class and a high-risk-feature scope do not exist yet.",
+    manual:
+      "The kill-switch half of §17 is complete: it names global, Workspace, Business Profile and channel, and all four scopes exist, stop automated outbound, and leave inbound ingestion untouched. What does not exist is §17's second sentence — progressive feature flags for high-risk or new capabilities, disableable without a deploy rollback. `release_records.enabled_flags` records flag names and nothing reads them, so a release cannot yet say which capabilities it switched on. This admission previously claimed §17 named six scopes and that two were missing, which was a misreading of the section: the gap is the flags, not the scopes.",
   },
   STAGED_ROLLOUT: {
     suites: [
@@ -154,7 +155,7 @@ export const GATE_EVIDENCE: Readonly<Record<string, GateEvidence>> = {
   PER_CUSTOMER_READINESS: {
     suites: ["packages/db/src/onboarding-store.integration.test.ts", "apps/web/src/server/style-screen.integration.test.ts"],
     manual:
-      "Onboarding readiness is computed and gates activation. The rest of §19's per-profile checklist — objectives configured, Test Drive acceptable, no unresolved operational blocker — is an operator judgement, not a suite.",
+      "Onboarding readiness is computed and gates activation, covering the channel, Knowledge, Style and the review policy. Four of §19's eight checklist items are an operator judgement rather than a suite: objectives and qualification configured, timezone and language correct, Test Drive and golden scenarios acceptable, and no unresolved operational blocker.",
   },
   RELEASE_EVIDENCE: {
     suites: ["packages/db/src/release-store.integration.test.ts", "scripts/release/gates.test.ts"],
