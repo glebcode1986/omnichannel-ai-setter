@@ -45,6 +45,13 @@ All seven are repaired on `feat/p5-04-ai-settings-simulation`:
 7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
    defect finding 7 actually was.
 
+**The stale-proposal flow converges.** A refusal hands the owner's values back rebased onto the version
+stored now, with the impact summary recomputed against it and a seal minted for that exact pair — so after
+another admin's save the original operator reviews a refreshed proposal and completes it, instead of
+re-posting a stale version into the same refusal. A seal stops verifying as soon as the stored version
+moves, including when the change leaves the impact list identical; the store's conditional write remains
+the separate answer to "is this still the state you saw".
+
 **The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
 and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
 impact codes is not proof, because the codes are in the URL, the page and the catalogue.

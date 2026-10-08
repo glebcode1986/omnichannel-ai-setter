@@ -113,17 +113,33 @@ export async function saveSettingsAction(target: SettingsTarget, formData: FormD
   if (before !== undefined) {
     const impacts = impactsOf(before, proposal);
     const secret = loadWebEnv().AUTH_SECRET;
-    const sealed = proposalSealed(secret, proposal, impacts, field(formData, "proposalSeal").trim());
+    // The review this acknowledgement has to be *for*: the owner's values, the version stored now, and the
+    // impacts those values have against it. One triple, minted on refusal and verified here, so the
+    // acknowledgement is bound to the state it was given about rather than to the state the form was
+    // composed against. A seal from an earlier version therefore stops verifying the moment anybody else
+    // saves — including when their change leaves the impact list identical, which is the case a seal over
+    // the *posted* version could not tell apart and left for the store's version check to catch.
+    const reviewed = { ...proposal, expectedVersion: before.version };
+    const sealed = proposalSealed(secret, reviewed, impacts, field(formData, "proposalSeal").trim());
     if (impacts.length > 0 && !(sealed && acknowledges(acknowledged, impacts))) {
       // Refused, not saved-and-warned. The point of a confirmation is that the change has not happened —
       // and the proposal goes back with it, together with the seal, so the page can render the summary
       // next to the values it describes and the acknowledgement can prove where it came from.
+      //
+      // **Rebased onto the version that is stored now**, which is what makes this converge. `impacts` was
+      // computed against the current policy a line above, so the summary the owner is about to read is
+      // already about the current state; handing the proposal back at the version they *composed* it
+      // against meant the page saw a stale proposal, withheld the acknowledgement, and re-posted the same
+      // stale version for ever. The review state is therefore always (their values, the current version,
+      // the impacts those values have against the current version) — one triple, and the seal covers
+      // exactly it. A seal minted for the older version cannot validate against this one, because the
+      // version is part of the encoded proposal the seal is taken over.
       revalidatePath(path);
       const query = new URLSearchParams({
         outcome: "CONFIRM",
         impacts: impacts.join(","),
-        proposal: encodeProposal(proposal),
-        proposalSeal: sealProposal(secret, proposal, impacts),
+        proposal: encodeProposal(reviewed),
+        proposalSeal: sealProposal(secret, reviewed, impacts),
       });
       redirect(`${path}?${query.toString()}`);
     }

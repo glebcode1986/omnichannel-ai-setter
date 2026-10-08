@@ -272,17 +272,20 @@ describe("a change that widens what goes out", () => {
     expect(store.savePolicy).not.toHaveBeenCalled();
   });
 
-  it("is not saved with a seal minted against a different version", async () => {
+  it("leaves a form claiming a version that is not the stored one to the store", async () => {
+    store.savePolicy.mockResolvedValue({ status: "CONFLICT", current: STORED });
     const { acknowledged, seal } = await afterRefusal(wholeForm({ mode: "AUTOPILOT" }));
 
-    // The policy moved underneath the acknowledgement. A changed proposal or a changed version must
-    // require a fresh review rather than reusing the owner's last decision.
+    // The acknowledgement is about the review the server gave, and it gave one of the stored version — so
+    // the seal verifies here even though the form names version 5. What the form names is a different
+    // question, and the store's conditional write is where it is answered: the two gates ask different
+    // things and neither stands in for the other.
     const path = await outcomeOf(() =>
       saveSettingsAction(TARGET, wholeForm({ expectedVersion: "5", mode: "AUTOPILOT", acknowledged, proposalSeal: seal })),
     );
 
-    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
-    expect(store.savePolicy).not.toHaveBeenCalled();
+    expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({ expectedVersion: 5 });
+    expect(queryOf(path).get("outcome")).toBe("CONFLICT");
   });
 
   it("needs no acknowledgement when it widens nothing", async () => {
@@ -441,5 +444,127 @@ describe("the fields that share the proposal parameter", () => {
       expect(path, name).toBe(`${SETTINGS}?outcome=TOO_LONG`);
       expect(store.savePolicy, name).not.toHaveBeenCalled();
     }
+  });
+});
+
+/**
+ * Two admins, one settings screen (the stale-proposal recovery blocker).
+ *
+ * The dead end this closes: A composes a widening change against version 4, B saves, and A submits. The
+ * CONFIRM gate refuses before `savePolicy`, so the CONFLICT path that re-stamps a proposal never ran — the
+ * refusal handed A's proposal back still at version 4, the page saw a stale proposal, withheld the
+ * acknowledgement and the seal, and the form re-posted version 4 for ever. It failed closed, which is the
+ * right direction to fail, and it never converged, which is the defect: the screen promised a recovery
+ * path that could not complete.
+ *
+ * The property these cases pin is that the review state is always one triple — the owner's values, the
+ * version stored *now*, and the impacts those values have against that version — so every refusal is a
+ * usable review rather than a repetition.
+ */
+describe("when somebody else saves underneath a pending confirmation", () => {
+  /** B's save: the stored policy moves on, and its values move with it. */
+  const storedAt = (version: number, overrides: Readonly<Record<string, unknown>> = {}) => ({ ...STORED, version, ...overrides });
+
+  it("hands the proposal back rebased onto the version that is stored now", async () => {
+    store.readPolicies.mockResolvedValue([storedAt(9)]);
+
+    // A's form was rendered against version 4 and still says so.
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ expectedVersion: "4", mode: "AUTOPILOT" })));
+    const query = queryOf(path);
+
+    expect(query.get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+    const returned = decodeProposal(query.get("proposal") ?? undefined);
+    // Their values, kept.
+    expect(returned?.mode).toBe("AUTOPILOT");
+    // Bound to the current version, which is what makes the next submit able to complete.
+    expect(returned?.expectedVersion).toBe(9);
+    // And the summary is the one these values produce against the current state.
+    expect(query.get("impacts")).toContain("AUTOPILOT_ENABLED");
+    expect(query.get("proposalSeal")).not.toBe("");
+  });
+
+  it("refuses the seal minted against the older version", async () => {
+    // A got this far before B saved: a refusal at version 4 with a seal for version 4.
+    store.readPolicies.mockResolvedValue([storedAt(4)]);
+    const stale = await afterRefusal(wholeForm({ expectedVersion: "4", mode: "AUTOPILOT" }));
+
+    // B saves. A ticks the box and submits the form they already had.
+    store.readPolicies.mockResolvedValue([storedAt(9)]);
+    const path = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ expectedVersion: "4", mode: "AUTOPILOT", acknowledged: stale.acknowledged, proposalSeal: stale.seal })),
+    );
+
+    // Not a write. The seal is taken over the encoded proposal, and the version is part of that encoding,
+    // so a seal minted for version 4 cannot authenticate a review of version 9.
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+    // And the refusal is itself the refreshed review, so A is not sent round again for nothing.
+    expect(decodeProposal(queryOf(path).get("proposal") ?? undefined)?.expectedVersion).toBe(9);
+  });
+
+  it("completes exactly once from the refreshed review", async () => {
+    store.readPolicies.mockResolvedValue([storedAt(9)]);
+
+    const refreshed = await afterRefusal(wholeForm({ expectedVersion: "4", mode: "AUTOPILOT" }));
+    // The page renders the refreshed proposal, so the next submit carries version 9.
+    const path = await outcomeOf(() =>
+      saveSettingsAction(
+        TARGET,
+        wholeForm({ expectedVersion: "9", mode: "AUTOPILOT", acknowledged: refreshed.acknowledged, proposalSeal: refreshed.seal }),
+      ),
+    );
+
+    expect(path).toBe(`${SETTINGS}?outcome=SAVED`);
+    expect(store.savePolicy).toHaveBeenCalledTimes(1);
+    expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({ mode: "AUTOPILOT", expectedVersion: 9 });
+  });
+
+  it("forces another refresh when a further change lands, rather than overwriting it", async () => {
+    store.readPolicies.mockResolvedValue([storedAt(9)]);
+    const refreshed = await afterRefusal(wholeForm({ expectedVersion: "4", mode: "AUTOPILOT" }));
+
+    // Between the refreshed review and the acknowledgement, a third change lands — and it is one that
+    // changes what A's values would widen, so the summary A read is no longer the right summary.
+    store.readPolicies.mockResolvedValue([storedAt(11, { mode: "AUTOPILOT" })]);
+    const path = await outcomeOf(() =>
+      saveSettingsAction(
+        TARGET,
+        wholeForm({ expectedVersion: "9", mode: "AUTOPILOT", confidencePreset: "AGGRESSIVE", acknowledged: refreshed.acknowledged, proposalSeal: refreshed.seal }),
+      ),
+    );
+
+    expect(store.savePolicy).not.toHaveBeenCalled();
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    // Rebased again, onto 11.
+    expect(decodeProposal(queryOf(path).get("proposal") ?? undefined)?.expectedVersion).toBe(11);
+  });
+
+  it("refuses the acknowledgement even when the change leaves the impact list identical", async () => {
+    store.readPolicies.mockResolvedValue([storedAt(9)]);
+    const refreshed = await afterRefusal(wholeForm({ expectedVersion: "4", mode: "AUTOPILOT" }));
+
+    // The hard case: somebody saves something that does not alter what A's values would widen, so the
+    // impact list and the acknowledgement still match. Binding the seal to the version stored *now* is
+    // what catches it — a seal over the version the form carried could not tell this apart and would have
+    // left the store's conditional write as the only thing standing between A and an overwrite.
+    store.readPolicies.mockResolvedValue([storedAt(10)]);
+    const path = await outcomeOf(() =>
+      saveSettingsAction(
+        TARGET,
+        wholeForm({ expectedVersion: "9", mode: "AUTOPILOT", acknowledged: refreshed.acknowledged, proposalSeal: refreshed.seal }),
+      ),
+    );
+
+    expect(store.savePolicy).not.toHaveBeenCalled();
+    expect(queryOf(path).get("outcome")).toBe("CONFIRM");
+    expect(decodeProposal(queryOf(path).get("proposal") ?? undefined)?.expectedVersion).toBe(10);
+  });
+
+  it("does not disturb the ordinary case, where nothing moved", async () => {
+    const { acknowledged, seal } = await afterRefusal(wholeForm({ mode: "AUTOPILOT" }));
+    const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ mode: "AUTOPILOT", acknowledged, proposalSeal: seal })));
+
+    expect(path).toBe(`${SETTINGS}?outcome=SAVED`);
   });
 });

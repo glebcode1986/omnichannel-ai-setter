@@ -441,8 +441,9 @@ export async function listPolicyAudits(
       before: row.before,
       after: row.after,
     })),
-    // `rows.length > limit` already implies a full window, so `last` cannot be absent here; it is read
-    // through `?.` rather than guarded by a second condition no input can falsify.
+    // `rows.length > limit` already implies a full window, so `last` cannot be absent here. It is still
+    // named in the condition because the compiler cannot see that and `last` is `T | undefined`; what it
+    // is not is a second *predicate* over the data, which would be a branch no input could falsify.
     ...(rows.length > limit && last ? { nextCursor: { changedAt: last.changedAt, id: last.id } } : {}),
   };
 }

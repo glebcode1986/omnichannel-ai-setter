@@ -235,7 +235,7 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** twice: at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (R5 re-review, which closed four and kept three). All ten are repaired on this branch; awaiting independent re-review. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** twice — at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (re-review: four closed, three kept) — plus one directed repair at `e3210e88…` for the stale-proposal dead end my own adversarial pass found. All eleven are repaired on this branch; awaiting independent re-review. |
 | #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
 
 The #79 repairs are summarised under "P5-04" below. They live **only** on
@@ -255,7 +255,34 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-04 / Issue #30 — ten R5 blockers on PR #79 across two reviews, all repaired.**
+1. **P5-04 / Issue #30 — eleven blockers on PR #79 across two reviews and one directed repair, all
+   repaired.**
+
+   **The stale-proposal dead end, directed at `e3210e88…`.** Two admins, one screen: A composes a change
+   that widens something against version N, B saves, A submits. The CONFIRM gate refuses *before*
+   `savePolicy`, so the CONFLICT path that re-stamps a proposal never ran — the refusal handed A's values
+   back still at version N, the page saw a stale proposal, withheld the acknowledgement and the seal, and
+   the form re-posted version N for ever. It failed closed, which is the right direction, and it never
+   converged, which is the defect: the screen promised a recovery that could not complete, and two pieces
+   of copy said so in as many words.
+
+   The fix is one idea: **the review is always a triple — the owner's values, the version stored now, and
+   the impacts those values have against that version.** The refusal mints that triple and the gate
+   verifies it, so a refusal is a usable review rather than a repetition. Three things follow:
+
+   - a refusal hands back the values rebased onto the current version, with the summary recomputed against
+     it, so submitting again completes instead of looping;
+   - a seal stops verifying the moment anybody else saves — **including a change that leaves the impact
+     list identical**, which a seal over the version the *form* carried could not tell apart and left to
+     the store's conditional write as the only guard;
+   - the two gates stay distinct questions. "Did you see this summary" is the seal; "is this still the
+     state you saw" is the store's versioned write. Neither stands in for the other, and the write is
+     still refused when a form names a version that is not the stored one.
+
+   The copy was wrong as well as the flow, and that is fixed with it: the "tick the box to save them"
+   sentence no longer renders when there is no box, and the button says *re-check these values against the
+   current settings* in the state where pressing it does that, rather than "Save anyway" for a save the
+   gate would refuse.
 
    **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
    and covered none of the seven cases, which is the usual shape of these findings: every one of them is

@@ -138,16 +138,21 @@ export default async function SettingsPage({
               </li>
             ))}
           </ul>
-          {/* Said plainly, because the form below is showing the proposal rather than what is stored. */}
-          <p>{t.t("settings.confirmPending")}</p>
+          {/* Said plainly, because the form below is showing the proposal rather than what is stored — and
+              only when there is a box to tick. While the proposal is stale the notice below replaces this
+              one, because telling somebody to tick a control that is not rendered is worse than silence. */}
+          {proposalStale ? undefined : <p>{t.t("settings.confirmPending")}</p>}
         </div>
       )}
 
       {!proposalStale || one(query["outcome"]) === "CONFLICT" ? undefined : (
         <div className="notice" data-tone="stop" data-stale-version="true" role="alert">
           {/* The summary above was computed against settings that have since moved, so acknowledging it
-              would be acknowledging a different change. Saving again re-asks the question against what is
-              stored now; what the other person changed is in the history below. */}
+              would be acknowledging a different change. Submitting again is the recovery path and it
+              converges: the action recomputes the impacts against what is stored now, rebases these same
+              values onto the current version and mints a seal for that pair, so the next render is a
+              review of the owner's values against the current state with a working acknowledgement. What
+              the other person changed is in the history below. */}
           <p>{t.t("settings.staleProposal")}</p>
         </div>
       )}
@@ -351,7 +356,11 @@ export default async function SettingsPage({
           )}
 
           <button className="button primary" type="submit" data-action="save-settings" disabled={!mayEdit}>
-            {pending.length === 0 ? t.t("settings.save") : t.t("settings.confirmSave")}
+            {/* Three labels, because the button does three different things here: save, confirm a change
+                that widens something, and — when somebody else has saved underneath a pending
+                confirmation — re-check these values against the settings as they now are. Calling that
+                last one "Save anyway" promised a save that the gate would refuse. */}
+            {proposalStale ? t.t("settings.refreshReview") : pending.length === 0 ? t.t("settings.save") : t.t("settings.confirmSave")}
           </button>
         </form>
       )}
