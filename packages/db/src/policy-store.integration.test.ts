@@ -45,6 +45,43 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
   const theDefault = async () => (await readPolicies(db(), profile.context)).find((policy) => policy.channelAccountId === null);
 
   /**
+   * Resolves once a backend is observably blocked waiting for `xid` to end — which is how this suite knows
+   * a concurrent save has reached its `SELECT … FOR UPDATE` and is parked there.
+   *
+   * Asking the database for the state the barrier depends on, rather than sleeping and hoping. A
+   * `setTimeout` is a guess about how the host scheduled two connections, and under a full parallel suite
+   * the guess is sometimes wrong: the hold is released before the save reaches its lock, and the case then
+   * reports a lost update that is really a race inside the test. In the one regression that distinguishes a
+   * real row lock from a version check reading stale data, a flake is worse than no case at all — it
+   * teaches whoever next sees it red to re-run rather than look.
+   *
+   * Keyed to the **holding transaction's own id**, not to "some lock is ungranted anywhere". A blocked
+   * `FOR UPDATE` waits on a `transactionid` lock for the holder, so that is the precise fact; counting
+   * every ungranted lock in the database would be satisfied by an unrelated suite's contention and would
+   * reintroduce exactly the race this replaces. `pg_current_xact_id()::xid` narrows the 64-bit id to the
+   * 32-bit form `pg_locks` reports.
+   *
+   * Bounded, and it throws rather than returning: a barrier that never formed must fail loudly instead of
+   * letting the case pass for the wrong reason.
+   */
+  const waitForBackendBlockedOn = async (xid: string, timeoutMs = 15_000) => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [blocked] = await db().$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM pg_locks
+        WHERE NOT granted AND locktype = 'transactionid' AND transactionid = ${xid}::xid`;
+      if ((blocked?.count ?? 0n) > 0n) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`no backend ever blocked on transaction ${xid}: the barrier never formed`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+
+  /**
    * Saves against the stored version, which is what the screen does: it renders the version it read and
    * posts that version back. Spelling it out in every case below would bury the behaviour each case is
    * about — so the cases where the version *is* the subject call `savePolicy` directly instead.
@@ -385,6 +422,13 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      // The holder announces its own transaction id, so the barrier below can wait for a backend blocked
+      // on *this* transaction rather than on any contention in the database.
+      let holderXid = "";
+      let announced = () => {};
+      const xidKnown = new Promise<void>((resolve) => {
+        announced = resolve;
+      });
       const other = db().$transaction(
         async (tx) => {
           await tx.$queryRaw`SELECT "id" FROM "automation_policies" WHERE "id" = ${policyId} FOR UPDATE`;
@@ -392,16 +436,21 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
             where: { id: policyId },
             data: { businessGoal: "the other transaction wrote this", version: { increment: 1 } },
           });
+          const [self] = await tx.$queryRaw<{ xid: string }[]>`SELECT pg_current_xact_id()::xid::text AS xid`;
+          holderXid = self?.xid ?? "";
+          announced();
           // Still uncommitted, and holding the row's lock. A reader that does not ask for the lock sees
           // the pre-transaction version here and concludes its own expectation is satisfied.
           await held;
         },
-        { timeout: 30_000 },
+        { timeout: 60_000 },
       );
+      await xidKnown;
 
       const saving = savePolicy(db(), profile.context, null, { businessGoal: "the stale writer's goal", expectedVersion: version });
-      // Long enough for the save to have reached its first statement and blocked there.
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      // The save is in position once a backend is blocked on the holder's transaction, which is a fact
+      // about the database rather than an assumption about scheduling.
+      await waitForBackendBlockedOn(holderXid);
       release();
       await other;
       const outcome = await saving;

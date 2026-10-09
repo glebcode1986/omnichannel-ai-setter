@@ -235,7 +235,7 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **CHANGES_REQUESTED** twice — at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (re-review: four closed, three kept) — plus one directed repair at `e3210e88…` for the stale-proposal dead end my own adversarial pass found. All eleven are repaired on this branch; awaiting independent re-review. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **Still the current gate.** CHANGES_REQUESTED twice — at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (re-review: four closed, three kept) — plus two directed follow-ups: the stale-proposal dead end at `e3210e88…`, and a test-only determinism repair of the concurrency barrier. The review request issued against `ef8b0d4f…` is **superseded** by that test-only head. Awaiting independent re-review. |
 | #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
 
 The #79 repairs are summarised under "P5-04" below. They live **only** on
@@ -422,6 +422,25 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    change a single answer. It is an explicit input now, and the only one whose default is the conservative
    value: an exception is something a business has to have been approved for, and assuming it would show
    an owner a review path their account may not offer.
+
+   **The concurrency proof is deterministic, by directive.** The barrier in "does not lose a write that
+   commits between the read and the update" synchronised with `setTimeout(250)`, which is a guess about how
+   the host scheduled two connections rather than a fact about the database. Under the full parallel suite
+   the guess was sometimes wrong and the case then reported a lost update that was really a race inside the
+   test. Where that was observed matters, so it is recorded precisely: on the **propagation tree**, where
+   this branch is merged into the chain tip and the `@omnichannel/db` suite is 1,078 cases, one of three
+   identical runs failed. On this branch's own 460-case suite the race does not lose — six consecutive full
+   runs pass, and so does the timed version under two suites in parallel. So the repetition here is not
+   what makes the repair sound; the argument is structural, and the merged tree is what proves the
+   assumption can be false in this repository at all. In the one regression that distinguishes a real row lock
+   from a version check reading stale data, that is worse than having no case: a flake there teaches the
+   next person to re-run rather than look.
+
+   It now waits for the state it depends on: a backend observably blocked on the **holding transaction's
+   own id**, read from `pg_locks`. Keyed to that transaction rather than to "some lock is ungranted
+   somewhere", because the broad form is satisfied by an unrelated suite's contention and would reintroduce
+   the race it replaces. Bounded, and it throws if the barrier never forms, so the case cannot pass for the
+   wrong reason. Still load-bearing: deleting the `FOR UPDATE` from `savePolicy` fails it.
 
    **Two defects found, measured, and deliberately not fixed here.** Both are reported on the PR rather
    than repaired, because this repair is scoped to named blockers and widening it would make the diff

@@ -69,6 +69,11 @@ CHANGES_REQUESTED at `0b62c9e…` (seven blockers) and again at `d67da89…` (fo
 repaired, awaiting independent re-review; #80 and everything below held and **not ready for review** until
 #79 passes, because they contain #79.
 
+**The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
+on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
+observably blocked on the holding transaction's own id. The review request issued against `ef8b0d4f…` is
+superseded by this test-only head, and #79 remains the current gate.
+
 **The #79 repairs are not propagated.** They exist only on `feat/p5-04-ai-settings-simulation`; the repair
 directive forbids merging them into #80 or later until #79 passes, so every branch below still carries the
 pre-repair #79 and will need this merged down once the PASS lands.
