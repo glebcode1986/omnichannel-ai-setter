@@ -20,7 +20,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { searchAuditEvents } from "./audit-store";
 import {
+  billingProviderCanCheckout,
   clearBillingProviders,
+  openProviderCheckout,
   reconcileProviderState,
   registerBillingProvider,
   verifyProviderDelivery,
@@ -179,15 +181,21 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
     registerBillingProvider({
       provider: "test-psp",
-      verify: (delivery) => (delivery.headers["x-signature"] === "good" ? deliveries.get(delivery.body) ?? null : null),
+      verify: (delivery) => authenticated(delivery),
     });
     registerBillingProvider({
       provider: "test-mor",
-      verify: (delivery) => (delivery.headers["x-signature"] === "good" ? deliveries.get(delivery.body) ?? null : null),
+      // Asynchronous on purpose: this provider's authentication is a round trip rather than a signature
+      // check, which is the shape the port has to be able to represent at all.
+      verify: (delivery) => Promise.resolve(authenticated(delivery)),
     });
     registerBillingProvider({
       provider: "test-crypto",
-      verify: (delivery) => (delivery.headers["x-signature"] === "good" ? deliveries.get(delivery.body) ?? null : null),
+      // And this one owes the provider a signed acknowledgement in the response body.
+      verify: (delivery) => {
+        const authentic = authenticated(delivery);
+        return authentic === null ? null : { ...authentic, acknowledgement: { body: `ack:${authentic.event.providerEventId}` } };
+      },
       reconcile: (query) => Promise.resolve(deliveries.get(`reconcile:${query.providerReference}`) ?? null),
     });
   }, 120_000);
@@ -244,10 +252,19 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return opened;
   }
 
+  /** A signed delivery the stubs will accept, in the shape the port now expects. */
+  const authenticated = (delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string }) => {
+    if (delivery.headers["x-signature"] !== "good") {
+      return null;
+    }
+    const event = deliveries.get(delivery.body);
+    return event === undefined ? null : { event };
+  };
+
   /** Mints a verified event the way production does: through an adapter, from a signed delivery. */
-  function verified(provider: string, event: NormalizedBillingEvent): VerifiedBillingEvent {
+  async function verified(provider: string, event: NormalizedBillingEvent): Promise<VerifiedBillingEvent> {
     deliveries.set(event.providerEventId, event);
-    const minted = verifyProviderDelivery({
+    const minted = await verifyProviderDelivery({
       provider,
       body: event.providerEventId,
       headers: { "x-signature": "good" },
@@ -256,7 +273,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     if (minted === null) {
       throw new Error("the stub adapter refused its own delivery");
     }
-    return minted;
+    return minted.event;
   }
 
   type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds">;
@@ -439,7 +456,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       ] as const) {
         const result = await recordVerifiedBillingEvent(
           db(),
-          verified(provider, {
+          await verified(provider, {
             routeCode: provider === "test-psp" ? "direct-eu" : "mor-global",
             providerEventId: `settled-${workspaceId}`,
             kind: "PAYMENT_SETTLED",
@@ -484,16 +501,142 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(await readArrangement(db(), workspaceId)).toMatchObject({ state: "PENDING" });
     });
 
-    it("mints nothing from an unsigned delivery or an unknown provider", () => {
+    it("mints nothing from an unsigned delivery or an unknown provider", async () => {
       deliveries.set("unsigned", { routeCode: "direct-eu", providerEventId: "unsigned", kind: "PAYMENT_SETTLED", occurredAt: NOW });
 
-      expect(verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: {}, receivedAt: NOW })).toBeNull();
-      expect(verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "bad" }, receivedAt: NOW })).toBeNull();
-      expect(verifyProviderDelivery({ provider: "nobody", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW })).toBeNull();
+      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: {}, receivedAt: NOW })).toBeNull();
+      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "bad" }, receivedAt: NOW })).toBeNull();
+      expect(await verifyProviderDelivery({ provider: "nobody", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW })).toBeNull();
       // Signed, and then mutation is refused: a holder of a minted event cannot edit the amount in it.
-      const minted = verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW });
+      const minted = await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW });
       expect(minted).not.toBeNull();
-      expect(Object.isFrozen(minted)).toBe(true);
+      expect(Object.isFrozen(minted?.event)).toBe(true);
+    });
+
+    it("authenticates a provider whose verification is a round trip", async () => {
+      // `test-mor`'s stub is asynchronous, which is the case a synchronous-only port could not represent
+      // at all: PayPal's IPN validation asks the provider whether it sent the message.
+      deliveries.set("async-1", { routeCode: "mor-eu", providerEventId: "async-1", kind: "PAYMENT_SETTLED", occurredAt: NOW });
+
+      const minted = await verifyProviderDelivery({ provider: "test-mor", body: "async-1", headers: { "x-signature": "good" }, receivedAt: NOW });
+
+      expect(minted?.event.providerEventId).toBe("async-1");
+      expect(await verifyProviderDelivery({ provider: "test-mor", body: "async-1", headers: { "x-signature": "bad" }, receivedAt: NOW })).toBeNull();
+    });
+
+    it("carries back the acknowledgement a provider is owed, and only the adapter can produce it", async () => {
+      // WayForPay retries a delivery it does not get a signed body back for, so the reply is part of the
+      // protocol rather than transport — and only the adapter holds the signing secret.
+      deliveries.set("ack-1", { routeCode: "crypto-usdt", providerEventId: "ack-1", kind: "PAYMENT_SETTLED", occurredAt: NOW });
+
+      const minted = await verifyProviderDelivery({ provider: "test-crypto", body: "ack-1", headers: { "x-signature": "good" }, receivedAt: NOW });
+
+      expect(minted?.acknowledgement?.body).toBe("ack:ack-1");
+      // And a provider that needs nothing back says so by omission rather than with an empty body.
+      deliveries.set("no-ack", { routeCode: "direct-eu", providerEventId: "no-ack", kind: "PAYMENT_SETTLED", occurredAt: NOW });
+      const plain = await verifyProviderDelivery({ provider: "test-psp", body: "no-ack", headers: { "x-signature": "good" }, receivedAt: NOW });
+      expect(plain?.acknowledgement).toBeUndefined();
+    });
+
+    it("hands a customer off the way the provider actually works, not always as a redirect", async () => {
+      // The shape question the FastyAds inspection settled: Stripe and a crypto invoice return a link,
+      // WayForPay returns fields to POST as a signed form. A port that assumed a URL would force every
+      // adapter without one to invent a hosted page.
+      registerBillingProvider({
+        provider: "test-redirect",
+        verify: () => null,
+        openCheckout: () => Promise.resolve({ kind: "REDIRECT", url: "https://provider.test/pay/abc" }),
+      });
+      registerBillingProvider({
+        provider: "test-form",
+        verify: () => null,
+        openCheckout: (checkout) =>
+          Promise.resolve({ kind: "FORM_POST", action: "https://provider.test/post", fields: { reference: checkout.clientReference } }),
+      });
+
+      const ask = {
+        routeCode: "direct-eu",
+        arrangement: "RECURRING",
+        amountMinor: 9_900,
+        currency: "EUR",
+        priceReference: "price_v1",
+        clientReference: "opaque-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no",
+      } as const;
+
+      expect(await openProviderCheckout("test-redirect", ask)).toEqual({ kind: "REDIRECT", url: "https://provider.test/pay/abc" });
+      expect(await openProviderCheckout("test-form", ask)).toEqual({
+        kind: "FORM_POST",
+        action: "https://provider.test/post",
+        fields: { reference: "opaque-1" },
+      });
+    });
+
+    it("says it cannot open a checkout rather than pretending, when the adapter has none", async () => {
+      // A route may exist to *receive* settlements without this process being the one that opens them.
+      // "Not yet" on the screen is the honest answer, and the same one `billingProviderRegistered` gives
+      // before a contract is written.
+      expect(billingProviderCanCheckout("test-psp")).toBe(false);
+      expect(
+        await openProviderCheckout("test-psp", {
+          routeCode: "direct-eu",
+          arrangement: "RECURRING",
+          amountMinor: 9_900,
+          currency: "EUR",
+          priceReference: "price_v1",
+          clientReference: "opaque-2",
+          successUrl: "https://app.test/ok",
+          cancelUrl: "https://app.test/no",
+        }),
+      ).toBeNull();
+      expect(await openProviderCheckout("nobody-at-all", {
+        routeCode: "direct-eu",
+        arrangement: "RECURRING",
+        amountMinor: 9_900,
+        currency: "EUR",
+        priceReference: "price_v1",
+        clientReference: "opaque-3",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no",
+      })).toBeNull();
+    });
+
+    it("lets a checkout failure reach the caller, unlike a verification failure", async () => {
+      registerBillingProvider({
+        provider: "test-checkout-down",
+        verify: () => null,
+        openCheckout: () => Promise.reject(new Error("provider API timeout")),
+      });
+
+      // The asymmetry is deliberate. A verification that fails must be indistinguishable from a forgery,
+      // so it is swallowed into `null`. A checkout that could not be opened is an operational fact the
+      // caller has to report and retry, so it is not.
+      await expect(
+        openProviderCheckout("test-checkout-down", {
+          routeCode: "direct-eu",
+          arrangement: "RECURRING",
+          amountMinor: 9_900,
+          currency: "EUR",
+          priceReference: "price_v1",
+          clientReference: "opaque-4",
+          successUrl: "https://app.test/ok",
+          cancelUrl: "https://app.test/no",
+        }),
+      ).rejects.toThrow("provider API timeout");
+    });
+
+    it("refuses a delivery whose verification threw, rather than letting the outage through", async () => {
+      registerBillingProvider({
+        provider: "test-exploding",
+        verify: () => {
+          throw new Error("the provider's validation endpoint is down");
+        },
+      });
+
+      // A verification that could not complete has not succeeded. Reporting an outage as an authenticated
+      // delivery is the one direction this must never fail in.
+      expect(await verifyProviderDelivery({ provider: "test-exploding", body: "any", headers: {}, receivedAt: NOW })).toBeNull();
     });
 
     it("mints from an authoritative reconciliation, which is the other way a payment becomes a fact", async () => {
@@ -531,7 +674,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `recurring-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -546,7 +689,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const renewal = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `recurring-renewed-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
@@ -570,7 +713,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-crypto", {
+        await verified("test-crypto", {
           routeCode: "crypto-usdt",
           providerEventId: `prepaid-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -599,7 +742,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `early-renewal-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
@@ -624,7 +767,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-crypto", {
+        await verified("test-crypto", {
           routeCode: "crypto-usdt",
           providerEventId: `under-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -649,7 +792,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-crypto", {
+        await verified("test-crypto", {
           routeCode: "crypto-usdt",
           providerEventId: `late-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -671,7 +814,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-crypto", {
+        await verified("test-crypto", {
           routeCode: "crypto-usdt",
           providerEventId: `expired-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -692,7 +835,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-crypto", {
+        await verified("test-crypto", {
           routeCode: "crypto-usdt",
           providerEventId: `settled-quote-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -720,7 +863,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("applies once and reports the first effect for every redelivery", async () => {
       const { context, workspaceId } = await freshWorkspace();
       const opened = await openFor(context, request());
-      const event = verified("test-psp", {
+      const event = await verified("test-psp", {
         routeCode: "direct-eu",
         providerEventId: `once-${workspaceId}`,
         kind: "PAYMENT_SETTLED",
@@ -734,7 +877,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const second = await recordVerifiedBillingEvent(db(), event, new Date(NOW.getTime() + 60_000));
       const third = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `once-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -768,7 +911,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const shared = "evt_shared_identifier";
       const a = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: shared,
           kind: "PAYMENT_SETTLED",
@@ -780,7 +923,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       );
       const b = await recordVerifiedBillingEvent(
         db(),
-        verified("test-mor", {
+        await verified("test-mor", {
           routeCode: "mor-global",
           providerEventId: shared,
           kind: "PAYMENT_SETTLED",
@@ -802,7 +945,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-mor", {
+        await verified("test-mor", {
           routeCode: "mor-global",
           providerEventId: "cross-route",
           kind: "PAYMENT_SETTLED",
@@ -821,12 +964,12 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("records an event it cannot attribute, so a redelivery is not processed afresh", async () => {
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", { routeCode: "direct-eu", providerEventId: "about-nothing", kind: "PAYMENT_FAILED", occurredAt: NOW }),
+        await verified("test-psp", { routeCode: "direct-eu", providerEventId: "about-nothing", kind: "PAYMENT_FAILED", occurredAt: NOW }),
         NOW,
       );
       const again = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", { routeCode: "direct-eu", providerEventId: "about-nothing", kind: "PAYMENT_FAILED", occurredAt: NOW }),
+        await verified("test-psp", { routeCode: "direct-eu", providerEventId: "about-nothing", kind: "PAYMENT_FAILED", occurredAt: NOW }),
         NOW,
       );
 
@@ -837,7 +980,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("reports an unknown route rather than inventing one", async () => {
       const result = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", { routeCode: "route-that-was-deleted", providerEventId: "orphan", kind: "PAYMENT_SETTLED", occurredAt: NOW }),
+        await verified("test-psp", { routeCode: "route-that-was-deleted", providerEventId: "orphan", kind: "PAYMENT_SETTLED", occurredAt: NOW }),
         NOW,
       );
 
@@ -851,7 +994,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const first = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `migrate-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -894,7 +1037,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const late = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `late-old-provider-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -942,7 +1085,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `refund-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -955,7 +1098,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const refunded = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `refunded-${workspaceId}`,
           kind: "REFUNDED",
@@ -980,7 +1123,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -993,7 +1136,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const canceled = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `canceled-${workspaceId}`,
           kind: "SUBSCRIPTION_CANCELED",
@@ -1015,7 +1158,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `grace-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -1028,7 +1171,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const failed = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `failed-${workspaceId}`,
           kind: "PAYMENT_FAILED",
@@ -1252,7 +1395,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `audited-${workspaceId}`,
           kind: "PAYMENT_SETTLED",

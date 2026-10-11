@@ -121,8 +121,10 @@ export {
 } from "./billing-overview";
 export {
   assertVerifiedBillingEvent,
+  billingProviderCanCheckout,
   billingProviderRegistered,
   clearBillingProviders,
+  openProviderCheckout,
   reconcileProviderState,
   registerBillingProvider,
   verifyProviderDelivery,
