@@ -14,6 +14,89 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — P5-04 / Issue #30, the blockers on PR #79
+
+**Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
+persisted exact-head run was green and did not cover any of the seven cases.
+
+All seven are repaired on `feat/p5-04-ai-settings-simulation`:
+
+1. **role authorization** — `savePolicy` requires OWNER or ADMIN (`ONBOARDING_UX.md`: workspace roles
+   constrain policy changes), the screen shows the settings read-only to anybody else, and the action
+   reports the refusal as `FORBIDDEN` rather than crashing;
+2. **concurrent writes** — `automation_policies.version`, compared under `SELECT … FOR UPDATE` inside the
+   save's own transaction, with a typed `CONFLICT` carrying the stored values, and a barrier-based
+   regression that fails when the lock is removed;
+3. **the confirmation** — the acknowledgement carries the exact impact codes the server computed and
+   showed, the summary is rendered next to the refused proposal rather than next to stored values, and
+   the proposal travels with the version it was composed against;
+4. **custom timing** — four range inputs on the form, sent only for `CUSTOM`, in seconds on screen and
+   milliseconds in the store;
+5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
+   change is reachable;
+6. **the simulation** — channel, window, connection, the human-support exception, what would be sent and
+   which approved template are all explicit inputs; the chosen channel's own after-window policy is used,
+   and the screen states which inputs produced the answer. Every one of them is proved to move the
+   deterministic outcome, including the **template allowlist**: it reaches the engine as
+   `templateRoute.automatable`, computed where a catalogue would be rather than inside the engine
+   (ADR-016), so empty versus non-empty decides `SKIP` against `SCHEDULE` and the three WhatsApp modes are
+   distinguishable. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is what the gate keys on —
+   modelling it as an expired free-form window was why the modes had been indistinguishable;
+7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
+   defect finding 7 actually was.
+
+**The stale-proposal flow converges.** A refusal hands the owner's values back rebased onto the version
+stored now, with the impact summary recomputed against it and a seal minted for that exact pair — so after
+another admin's save the original operator reviews a refreshed proposal and completes it, instead of
+re-posting a stale version into the same refusal. A seal stops verifying as soon as the stored version
+moves, including when the change leaves the impact list identical; the store's conditional write remains
+the separate answer to "is this still the state you saw".
+
+**One predicate decides whether the acknowledgement is offered**, and the sentence that names the control
+asks the same one — `acknowledgementOffered`. Weighing a subset of its five facts somewhere else is how the
+page came to say "tick the box" with no box.
+
+**Closed — Astra's two R5-final blockers at `c4ebadb0…`.**
+
+8. **Widening an already-enabled allowlist is material.** With `TEMPLATE_AUTOPILOT` already stored, adding
+   a template used to emit `impacts: []`: no effect summary, no sealed acknowledgement, an audit row
+   claiming nothing material happened. `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is now its own impact code
+   in both catalogues, compared as a **set** — empty→non-empty and any addition are material, removal and
+   reorder are not, a repeated name is not a change, a one-for-one swap is — and it sits in an `else if`
+   beside the enablement arm, so enabling the mode and filling the list in one edit gets one warning
+   rather than the same consequence twice. The action needed no change: the gate already refuses any
+   proposal with impacts and no server-minted seal, and the store already recomputes impacts for the audit
+   inside the write's transaction.
+9. **A normally created Business Profile now has settings to render.** `createBusinessProfile` writes the
+   conservative default **in the same statement** as the profile, so the two rows arrive together or
+   neither does; the test-only `ensureDefault` that had been masking its absence is gone. Values come from
+   the domain's `defaultAutomationSettings`, not from the column defaults, and a domain test asserts the
+   two agree field by field. Migration `20261011090000_profile_default_policy` backfills older profiles
+   idempotently by `NOT EXISTS`. The regression starts at profile creation
+   (`apps/web/src/server/settings-screen.integration.test.ts`) and asks the page's own predicate,
+   `profileDefaultOf`, whether there is a form; the database side proves a rolled-back creating
+   transaction leaves neither row, that concurrent creations get exactly one default each, and that no
+   Business Profile exists without one.
+
+**The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
+and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
+impact codes is not proof, because the codes are in the URL, the page and the catalogue.
+
+**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79
+CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at `d67da89…` (four closed, three kept) and at
+`c4ebadb…` (two contract blockers: allowlist widening, and the missing default policy), all repaired,
+awaiting independent re-review; #80 and everything below held and **not ready for review** until #79
+passes, because they contain #79.
+
+**The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
+on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
+observably blocked on the holding transaction's own id. The review request issued against `ef8b0d4f…` is
+superseded by this test-only head, and #79 remains the current gate.
+
+**The #79 repairs are not propagated.** They exist only on `feat/p5-04-ai-settings-simulation`; the repair
+directive forbids merging them into #80 or later until #79 passes, so every branch below still carries the
+pre-repair #79 and will need this merged down once the PASS lands.
+
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
 **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
@@ -22,11 +105,16 @@ Nothing is merged to `main`.
 This note is the canonical handoff the same directive asked for, so the branch head is one commit later
 than the repair SHA; PR #78 carries the current one.
 
-**Independent Astra re-review of the new live head is the only active gate.** Every branch below #78 in
-the chain already contains this repair by ordinary merge, and that propagation happened *before* an
-independent PASS. It is therefore held rather than advanced: nothing from #79 onwards is ready, no review
-is requested on any of them, and the propagated branches are left in place and unrewritten — no rebase,
-no force-push, no merge to `main`, no rollback.
+**PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
+That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
+down the chain by ordinary merge, every branch from #79 to #103 carries them, and each was pushed with
+its own CI run. No rebase, no force-push, no merge to `main`.
+
+Propagating found one thing nothing else would have: `style_example_decisions` is append-only from #32,
+and a customer's erasure has to empty it, so every deletion request ended `PARTIAL_FAILURE` the moment
+the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is permitted only while a
+transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
+way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
 The six findings and what each repair actually was:
 
@@ -62,7 +150,7 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
-### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
+### Previous work, now passed — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
 
 **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
 immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
@@ -111,8 +199,8 @@ blocked defect one click later — a history ending in `RESTORED` under a badge 
 halves of the cursor travel: `decided_at` is not unique, and a cursor on an instant alone silently repeats
 or skips rows.
 
-**Nothing from #79 onwards is ready**, no review is requested on any of them, and this repair is not
-propagated downstream. No rebase, no force-push, no merge to `main`.
+**The hold is lifted**: PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`,
+and the repairs are merged down the chain. No rebase, no force-push, no merge to `main`.
 
 ### Fifth blocker repair — P5-05 / Issue #31, the archive a stale Publish could undo
 

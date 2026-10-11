@@ -331,6 +331,7 @@ model User {
   approvedDeliveries        DeliveryJobRecord[]
   composedDeliveries        DeliveryJobRecord[]   @relation("ComposedDeliveries")
   onboardingSkips           OnboardingSkip[]
+  policyChangeAudits        PolicyChangeAudit[]
 
   styleExampleDecisions     StyleExample[]         @relation("StyleExampleDecider")
   styleDecisionsMade        StyleExampleDecision[]
@@ -391,6 +392,7 @@ model Workspace {
   knowledgeDocuments KnowledgeDocument[]
   styleExamples      StyleExample[]
   styleProfiles      StyleProfile[]
+  policyChangeAudits PolicyChangeAudit[]
   styleExampleDecisions StyleExampleDecision[]
 
   @@map("workspaces")
@@ -437,6 +439,7 @@ model BusinessProfile {
   queueOutbox        QueueOutbox[]
   connectStates      ChannelConnectState[]
   onboardingSkips    OnboardingSkip[]
+  policyChangeAudits PolicyChangeAudit[]
 
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
@@ -1106,6 +1109,10 @@ model AutomationPolicy {
   /// Absent for the Business Profile default; set for a channel-account override in the same profile.
   channelAccountId                    String?                    @map("channel_account_id")
   mode                                AiMode                     @default(OFF)
+  /// What this assistant is for, in the owner's words. Not how it sounds — that is the StyleProfile's.
+  businessGoal                        String?                    @map("business_goal")
+  /// When a lead is worth booking, as sentences a person wrote. A CHECK forbids an empty one.
+  qualificationCriteria               String[]                   @default([]) @map("qualification_criteria")
   confidenceThreshold                 Float                      @default(0.8) @map("confidence_threshold")
   mandatoryReviewReasons              String[]                   @map("mandatory_review_reasons")
   debounceMinMs                       Int                        @default(7000) @map("debounce_min_ms")
@@ -1119,6 +1126,9 @@ model AutomationPolicy {
   instagramAfterWindowPolicy          InstagramAfterWindowPolicy @default(STANDARD_ONLY) @map("instagram_after_window_policy")
   whatsappAfterWindowPolicy           WhatsAppAfterWindowPolicy  @default(SERVICE_WINDOW_ONLY) @map("whatsapp_after_window_policy")
   whatsappTemplateAutomationAllowlist String[]                   @default([]) @map("whatsapp_template_automation_allowlist")
+  /// Incremented by every write. A save carries the version its form was rendered from, so a change made
+  /// against settings that have since moved is refused instead of silently reverting the other change.
+  version                             Int                        @default(1)
   createdAt                           DateTime                   @default(now()) @map("created_at")
   updatedAt                           DateTime                   @updatedAt @map("updated_at")
 
@@ -1129,6 +1139,31 @@ model AutomationPolicy {
   @@unique([workspaceId, businessProfileId], where: raw("channel_account_id IS NULL"), map: "automation_policies_profile_default_key")
   @@unique([workspaceId, businessProfileId, channelAccountId], map: "automation_policies_channel_override_key")
   @@map("automation_policies")
+}
+
+/// Who changed the automation rules, when, and the values on both sides (AI_CONFIGURATION_UX.md, #30).
+///
+/// Every change that altered a stored value, with the computed impacts alongside — so "material" is a
+/// predicate over `impacts` rather than a judgement made at write time and impossible to revisit.
+model PolicyChangeAudit {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String   @map("workspace_id")
+  businessProfileId String   @map("business_profile_id")
+  /// Absent when the Business Profile default was edited; set for a channel-account override.
+  channelAccountId  String?  @map("channel_account_id")
+  /// A policy change is always somebody's; there is no system path that edits these settings.
+  actorUserId       String   @map("actor_user_id")
+  changedAt         DateTime @default(now()) @map("changed_at")
+  impacts           String[] @default([])
+  before            Json
+  after             Json
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict, map: "policy_change_audits_business_profile_fkey")
+  actor           User            @relation(fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "policy_change_audits_actor_fkey")
+
+  @@index([workspaceId, businessProfileId, changedAt(sort: Desc), id(sort: Desc)], map: "policy_change_audits_history_idx")
+  @@map("policy_change_audits")
 }
 
 // ---------------------------------------------------------------------------------------------------------

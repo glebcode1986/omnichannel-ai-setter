@@ -7,6 +7,24 @@
  */
 export * from "./ai-draft";
 export * from "./automation-policy";
+export {
+  CONFIDENCE_PRESETS,
+  confidencePresetOf,
+  confidenceSettingsFor,
+  isConfidencePreset,
+  isTimingPreset,
+  POLICY_IMPACTS,
+  policyImpactsOf,
+  TIMING_PRESETS,
+  timingPresetOf,
+  timingSettingsFor,
+  type ConfidencePreset,
+  type ConfidenceSettings,
+  type PolicyImpact,
+  type PolicyImpactInput,
+  type TimingPreset,
+  type TimingSettings,
+} from "./automation-presets";
 export * from "./business-profile";
 export * from "./channel";
 export * from "./channel-account";

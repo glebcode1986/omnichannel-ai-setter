@@ -27,21 +27,15 @@ describe("loadWebEnv", () => {
       AI_EMBEDDING_MODEL: "voyage-3.5",
       AI_EMBEDDING_DIMENSIONS: 1_024,
       AI_EMBEDDING_REVISION: "v1",
-      // The reply model, for the Style screen's test. The key is optional — a deployment that wants no
-      // provider call from the web app leaves it unset and the candidate says it is not configured — but
-      // the model, the token bound and the fallback persona all default to the worker's values, so the
-      // test previews the voice the worker actually drafts with.
+      // The reply model, for the simulation playground and the Style screen's test. The key is optional —
+      // a deployment that wants no provider call from the web app leaves it unset and both screens say so
+      // — but the model, the token bound and the fallback persona all default to the worker's values, so
+      // the Style test previews the voice the worker actually drafts with.
       AI_REPLY_MODEL: "claude-opus-5",
       AI_REPLY_MAX_OUTPUT_TOKENS: 4_096,
       AI_PERSONA: "You are the business's own assistant. Be warm, brief and concrete, and never invent facts.",
       ...required,
     });
-  });
-
-  it("takes no reply-model key, because a deployment may want no provider call from the web app", () => {
-    // Requiring one would make the whole Style screen unreachable in a deployment that drafts only in the
-    // worker. The candidate reports itself as not configured instead.
-    expect(loadWebEnv(required).ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   it("defaults the fallback persona to the worker's, so the Style test previews the real voice", () => {
@@ -60,6 +54,12 @@ describe("loadWebEnv", () => {
 
     expect(env.VOYAGE_API_KEY).toBe("fake-key");
     expect(env.AI_EMBEDDING_DIMENSIONS).toBe(1_024);
+  });
+
+  it("takes no reply-model key, because neither the playground nor the Style test is required to work", () => {
+    // Requiring one would make two read-only screens a boot condition. Each says it is not configured
+    // instead, and loses only the part that needs a provider.
+    expect(loadWebEnv(required).ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   it("rejects invalid values", () => {

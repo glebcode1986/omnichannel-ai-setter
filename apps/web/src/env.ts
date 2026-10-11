@@ -45,25 +45,26 @@ export const webEnvSchema = runtimeEnvSchema.extend({
    * Nothing here is used to *write* embeddings. Indexing is the worker's, and the web app never chunks.
    */
   VOYAGE_API_KEY: z.string().min(1).max(512).optional(),
-  AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
-  AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
-  AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
-
   /**
-   * The reply model, for the Style screen's test only (ADR-010, Issue #32).
+   * The reply model, for the simulation playground and the Style screen's test (Issues #30, #32).
    *
    * Optional, unlike the worker's, where a missing key means no draft can ever be produced and booting
-   * without one would be booting broken. Here a missing key costs one part of one screen: the effective
-   * voice, its layers and the retrieved examples are all still shown, and the candidate says it is not
-   * configured. A deployment that never wants the web app talking to a provider gets that by leaving this
-   * unset, which is a supported configuration rather than a degraded one.
+   * without one would be booting broken. Here a missing key costs part of two read-only screens, and both
+   * of them say so: the playground still runs retrieval and the deterministic policy, and the Style test
+   * still shows the effective voice and the examples retrieval would pick. A deployment that never wants
+   * the web app talking to a provider gets that by leaving this unset, which is a supported configuration
+   * rather than a degraded one.
    *
-   * The model and token bound are named the same as the worker's so one deployment configures one voice;
-   * nothing here writes a draft, a delivery or a message.
+   * Neither surface can send, whether this is set or not. The `ReplyModel` port has no transport, no
+   * recipient and no tools, so a live run against a real provider still cannot reach a customer.
    */
   ANTHROPIC_API_KEY: z.string().min(1).max(512).optional(),
   AI_REPLY_MODEL: z.string().min(1).max(128).default("claude-opus-5"),
   AI_REPLY_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(8_192).default(4_096),
+  AI_EMBEDDING_MODEL: z.string().min(1).max(128).default("voyage-3.5"),
+  AI_EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(4_096).default(1_024),
+  AI_EMBEDDING_REVISION: z.string().min(1).max(32).default("v1"),
+
   /**
    * The platform's voice of last resort, used by the Style test only where a business has configured no
    * StyleProfile of its own.
