@@ -41,6 +41,7 @@ import {
   one,
   pendingReview,
   policyChangeDiff,
+  profileDefaultOf,
   simulationInputsFrom,
 } from "@/server/settings-view";
 import {
@@ -78,7 +79,7 @@ export default async function SettingsPage({
     readPolicies(getDb(), context),
     listPolicyAudits(getDb(), context, { limit: 20, ...(auditCursor === undefined ? {} : { cursor: auditCursor }) }),
   ]);
-  const stored = policies.find((candidate) => candidate.channelAccountId === null);
+  const stored = profileDefaultOf(policies);
   // The store refuses a save from anyone else, so a form offered to an AGENT would be a form that cannot
   // be submitted. Showing the settings read-only is the honest version of the same restriction.
   const mayEdit = mayEditSettings(context.role);

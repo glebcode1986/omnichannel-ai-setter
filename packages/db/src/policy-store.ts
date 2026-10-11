@@ -29,6 +29,7 @@ import {
   confidencePresetOf,
   confidenceSettingsFor,
   createAutomationPolicy,
+  defaultAutomationSettings,
   policyImpactsOf,
   timingPresetOf,
   timingSettingsFor,
@@ -42,6 +43,44 @@ import {
 
 import type { DbClient, DbExecutor } from "./client";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
+
+/**
+ * The Business Profile default, as the nested write that creates it alongside the profile.
+ *
+ * Written explicitly rather than left to the column defaults. The schema's defaults say the same thing
+ * today, and a row written by this statement would look identical either way — but then "what a profile
+ * starts with" would be stated twice, once in the domain and once in a migration, and only one of them is
+ * read when somebody changes their mind. Here the columns are set from the domain's answer, and the
+ * schema's defaults are what protects the rows this statement does not write.
+ */
+export function profileDefaultPolicyWrite(): {
+  readonly mode: AiMode;
+  readonly confidenceThreshold: number;
+  readonly mandatoryReviewReasons: string[];
+  readonly debounceMinMs: number;
+  readonly debounceMaxMs: number;
+  readonly deliveryDelayMinMs: number;
+  readonly deliveryDelayMaxMs: number;
+  readonly takeoverPauseMs: number;
+  readonly instagramAfterWindowPolicy: InstagramAfterWindowPolicy;
+  readonly whatsappAfterWindowPolicy: WhatsAppAfterWindowPolicy;
+  readonly whatsappTemplateAutomationAllowlist: string[];
+} {
+  const settings = defaultAutomationSettings();
+  return {
+    mode: settings.mode,
+    confidenceThreshold: settings.confidenceThreshold,
+    mandatoryReviewReasons: [...settings.mandatoryReviewReasons],
+    debounceMinMs: settings.debounceWindowMs.minMs,
+    debounceMaxMs: settings.debounceWindowMs.maxMs,
+    deliveryDelayMinMs: settings.deliveryDelayMs.minMs,
+    deliveryDelayMaxMs: settings.deliveryDelayMs.maxMs,
+    takeoverPauseMs: settings.takeoverPauseMs,
+    instagramAfterWindowPolicy: settings.instagramAfterWindowPolicy,
+    whatsappAfterWindowPolicy: settings.whatsappAfterWindowPolicy,
+    whatsappTemplateAutomationAllowlist: [...settings.whatsappTemplateAutomationAllowlist],
+  };
+}
 
 export interface PolicyView {
   readonly id: string;

@@ -428,6 +428,23 @@ export function simulationInputsFrom(query: RawSearchParams): SimulationInputs {
 export const MAX_TEMPLATE_NAME_CHARS = 512;
 
 /**
+ * The Business Profile's own automation settings among everything `readPolicies` returned.
+ *
+ * The one the screen renders. A channel account may have an override of its own and the list contains
+ * those too, but the settings screen is about the profile — so "no channel account" is the whole
+ * definition, and it is spelled once because the screen renders no form at all without it.
+ *
+ * Which used to be reachable: nothing in production created this row, so a normally created profile had
+ * no profile default, this returned nothing, and the owner's settings screen rendered no form and offered
+ * no first save. `createBusinessProfile` now writes it in the same statement as the profile; this function
+ * is the predicate that decides whether the screen has anything to render, and
+ * `settings-screen.integration.test.ts` drives it from the real profile creation path.
+ */
+export function profileDefaultOf<T extends { readonly channelAccountId: string | null }>(policies: readonly T[]): T | undefined {
+  return policies.find((candidate) => candidate.channelAccountId === null);
+}
+
+/**
  * Whether this member may change the settings, by the same list the store enforces.
  *
  * The same list on purpose. The store refuses anybody else, so a screen that offered the form to an agent

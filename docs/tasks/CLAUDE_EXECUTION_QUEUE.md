@@ -14,7 +14,7 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — P5-04 / Issue #30, the seven R5 blockers on PR #79
+### Current work — P5-04 / Issue #30, the blockers on PR #79
 
 **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
 persisted exact-head run was green and did not cover any of the seven cases.
@@ -56,18 +56,37 @@ the separate answer to "is this still the state you saw".
 asks the same one — `acknowledgementOffered`. Weighing a subset of its five facts somewhere else is how the
 page came to say "tick the box" with no box.
 
-**Open, reported on #79, not fixed here:** `policyImpactsOf` models no impact for widening the WhatsApp
-template allowlist once `TEMPLATE_AUTOPILOT` is already stored, so the edit that makes unattended
-after-window template sends possible is saved with no effect summary and `impacts: []` in its audit row.
+**Closed — Astra's two R5-final blockers at `c4ebadb0…`.**
+
+8. **Widening an already-enabled allowlist is material.** With `TEMPLATE_AUTOPILOT` already stored, adding
+   a template used to emit `impacts: []`: no effect summary, no sealed acknowledgement, an audit row
+   claiming nothing material happened. `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is now its own impact code
+   in both catalogues, compared as a **set** — empty→non-empty and any addition are material, removal and
+   reorder are not, a repeated name is not a change, a one-for-one swap is — and it sits in an `else if`
+   beside the enablement arm, so enabling the mode and filling the list in one edit gets one warning
+   rather than the same consequence twice. The action needed no change: the gate already refuses any
+   proposal with impacts and no server-minted seal, and the store already recomputes impacts for the audit
+   inside the write's transaction.
+9. **A normally created Business Profile now has settings to render.** `createBusinessProfile` writes the
+   conservative default **in the same statement** as the profile, so the two rows arrive together or
+   neither does; the test-only `ensureDefault` that had been masking its absence is gone. Values come from
+   the domain's `defaultAutomationSettings`, not from the column defaults, and a domain test asserts the
+   two agree field by field. Migration `20261011090000_profile_default_policy` backfills older profiles
+   idempotently by `NOT EXISTS`. The regression starts at profile creation
+   (`apps/web/src/server/settings-screen.integration.test.ts`) and asks the page's own predicate,
+   `profileDefaultOf`, whether there is a form; the database side proves a rolled-back creating
+   transaction leaves neither row, that concurrent creations get exactly one default each, and that no
+   Business Profile exists without one.
 
 **The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
 and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
 impact codes is not proof, because the codes are in the URL, the page and the catalogue.
 
 **Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79
-CHANGES_REQUESTED at `0b62c9e…` (seven blockers) and again at `d67da89…` (four closed, three kept), all
-repaired, awaiting independent re-review; #80 and everything below held and **not ready for review** until
-#79 passes, because they contain #79.
+CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at `d67da89…` (four closed, three kept) and at
+`c4ebadb…` (two contract blockers: allowlist widening, and the missing default policy), all repaired,
+awaiting independent re-review; #80 and everything below held and **not ready for review** until #79
+passes, because they contain #79.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is

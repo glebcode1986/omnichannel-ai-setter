@@ -235,7 +235,7 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **Still the current gate.** CHANGES_REQUESTED twice — at `0b62c9e8…` (R5, seven blockers) and at `d67da89e…` (re-review: four closed, three kept) — plus two directed follow-ups: the stale-proposal dead end at `e3210e88…`, and a test-only determinism repair of the concurrency barrier. The review request issued against `ef8b0d4f…` is **superseded** by that test-only head. Awaiting independent re-review. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **Still the current gate.** CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Every earlier review request is **superseded** by the head that closes those two blockers. Awaiting independent re-review. |
 | #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
 
 The #79 repairs are summarised under "P5-04" below. They live **only** on
@@ -255,7 +255,7 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-04 / Issue #30 — eleven blockers on PR #79 across two reviews and one directed repair, all
+1. **P5-04 / Issue #30 — thirteen blockers on PR #79 across three reviews and two directed repairs, all
    repaired.**
 
    **The stale-proposal dead end, directed at `e3210e88…`.** Two admins, one screen: A composes a change
@@ -293,14 +293,11 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    It is one predicate now, `acknowledgementOffered`, asked once for the control and for the sentence that
    names it, and tested for each missing piece.
 
-   **Found in the same pass and deliberately not fixed, because the directive scopes this repair to the
-   stale-proposal blocker:** `policyImpactsOf` models **no impact at all** for widening the WhatsApp
-   template allowlist once `TEMPLATE_AUTOPILOT` is already the stored policy. The allowlist sub-check sits
-   inside an arm guarded by `before.whatsappAfterWindowPolicy !== "TEMPLATE_AUTOPILOT"`
-   (`automation-presets.ts:152`), so it is unreachable in exactly the state the screen itself produces and
-   warns about — autopilot enabled with an empty allowlist. Adding the first template to that list is the
-   dormant-to-live step for unattended after-window sends, and it saves with no effect summary, no
-   acknowledgement, and `impacts: []` on its own audit row. Reported on PR #79 with a reproduction.
+   **Found in the same pass, reported rather than fixed at the time, and now closed as Astra's first
+   R5-final blocker:** `policyImpactsOf` modelled **no impact at all** for widening the WhatsApp template
+   allowlist once `TEMPLATE_AUTOPILOT` was already the stored policy — the allowlist sub-check sat inside
+   an arm guarded by `before.whatsappAfterWindowPolicy !== "TEMPLATE_AUTOPILOT"`, so it was unreachable in
+   exactly the state the screen itself produces and warns about. See blocker 8 below for the repair.
 
    **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
    and covered none of the seven cases, which is the usual shape of these findings: every one of them is
@@ -446,17 +443,11 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    than repaired, because this repair is scoped to named blockers and widening it would make the diff
    unreviewable against them.
 
-   - **Nothing in production creates an `automation_policies` row.** Verified: every
-     `automationPolicy.create`/`upsert`/`createMany` in the repository is in a test, no migration inserts
-     one, and `automation_policies` has no triggers. `createBusinessProfile` creates the profile and
-     nothing else. So for a real Business Profile `readPolicies` returns `[]`, the settings form never
-     renders, and automation is left permanently off and unconfigurable: `resolveEffectiveMode` falls
-     through to `OFF` with no policy row (`automation-mode.ts`), and `limitsFrom` defaults the confidence
-     threshold to 1 (`delivery-store.ts`) — two functions, not one, and `limitsFrom` sets no mode at all. Every guard on this branch is exercised only against a row
-     the fixtures insert by hand; the test helper is literally named `ensureDefault`. The fix is one
-     nested `create` in `createBusinessProfile`, and I measured it: **20 test files in `packages/db` and 8
-     in `apps/web` fail**, because their fixtures create the row unconditionally and then collide with
-     `automation_policies_profile_default_key`. Mechanical, and its own task.
+   - **Nothing in production created an `automation_policies` row.** Reported here, and now closed as
+     Astra's second R5-final blocker — see blocker 9 below. The measurement in this note was close: the
+     fixtures that collided with `automation_policies_profile_default_key` turned out to be **14 files**
+     (5 in `packages/db`, 5 in `apps/worker`, 1 in `apps/web`, plus the three suites whose own cases were
+     about the absent row), not the 20 + 8 estimated from the grep.
    - **The send path still asks "has this policy changed?" with `updated_at`.**
      `delivery-store.ts policyUnchanged` compares a `TIMESTAMP(3)`, which is the mechanism this branch's
      own migration rejects for that exact question — two writes inside one millisecond compare equal.
@@ -476,6 +467,51 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    Every new guard was mutation-checked: removing the role check, the version comparison, the row lock,
    the acknowledgement comparison, the version refusal in the action and the `CUSTOM`-only timing
    condition each fails a named test.
+
+   **8. Widening an already-enabled WhatsApp template allowlist was not a material change.** Astra's
+   first R5-final blocker, and the finding this document had been carrying as reported-not-fixed. With
+   `TEMPLATE_AUTOPILOT` already stored, adding a template emitted `impacts: []`: no effect summary, no
+   sealed acknowledgement, and an audit row saying nothing material happened. ADR-016 makes an empty
+   allowlist permit no unattended template send at all, so the first entry is the dormant-to-live step and
+   every later one widens the same unattended authority.
+
+   `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is its own impact code, in both catalogues, compared as a
+   **set**: empty→non-empty and any addition are material, removal and reorder are not, a repeated name is
+   not a change, and a one-for-one swap *is* one — which is why a length comparison would have been
+   wrong. It is an `else if` beside the enablement arm, so enabling the mode and filling the list in one
+   edit is one decision with one warning rather than the same consequence stated twice. Nothing in the
+   action changed: the gate already refuses any proposal with impacts that carries no server-minted seal,
+   so emitting the code is what makes the existing confirmation apply, and the store already recomputes
+   impacts for the audit row inside the same transaction as the write.
+
+   **9. A production Business Profile had no automation settings, so this feature had no form.** Astra's
+   second R5-final blocker, and the other finding carried here. `createBusinessProfile` created the
+   profile and nothing else, `readPolicies` returned `[]`, the page set `stored` from that list, and `form`
+   was `undefined` — a profile that is listed, accepts a channel account and cannot be configured, with
+   automation stuck at OFF. The permanent policy suite passed because it created the row itself, in a
+   helper named `ensureDefault`.
+
+   The default is now written **in the same statement** as the profile, as a nested create, so the two
+   rows arrive together or neither does; `ensureDefault` is gone, and the suite runs against the policy a
+   real profile has. Not a second call afterwards, because two statements can be interrupted between them
+   and what is left behind is exactly the half-made profile; and not lazily on first read, because reading
+   settings is open to any member who may see the profile while writing them is OWNER/ADMIN only, so an
+   initialization hidden in a read would have to break that boundary. The values come from the domain
+   (`defaultAutomationSettings`), not from the column defaults, with a domain test asserting it agrees
+   with `createAutomationPolicy` field by field. Migration `20261011090000_profile_default_policy`
+   backfills profiles created before this, idempotently by `NOT EXISTS` rather than by an inferred
+   `ON CONFLICT` target, because the index that would catch a duplicate is partial.
+
+   The product-path regression starts where an owner starts:
+   `apps/web/src/server/settings-screen.integration.test.ts` creates the Workspace and the profile through
+   the production path, authorizes an owner, asks the screen's own predicate (`profileDefaultOf`, now
+   extracted from `page.tsx` so the test drives the page's rule rather than a restatement of it) whether
+   there is a form, asserts the conservative values, and completes the first save against the version the
+   form rendered. All four cases fail if the nested create is removed. On the database side,
+   `policy-store.integration.test.ts` proves the row is conservative, that a rolled-back creating
+   transaction leaves **neither** row, that four concurrent creations get exactly one default each, and —
+   asked of the whole database rather than of the rows the case knows about — that no Business Profile
+   exists without one.
 
 1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
 

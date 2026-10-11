@@ -288,6 +288,79 @@ describe("a change that widens what goes out", () => {
     expect(queryOf(path).get("outcome")).toBe("CONFLICT");
   });
 
+  it("refuses a widened allowlist while template autopilot is already stored, and saves it exactly once after a sealed acknowledgement", async () => {
+    // Astra's first R5 blocker, through the endpoint rather than through the domain: with
+    // TEMPLATE_AUTOPILOT already stored, adding a template saved immediately and was audited as
+    // non-material, so the one gate that exists for unattended sending never ran.
+    store.readPolicies.mockResolvedValue([
+      { ...STORED, whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: ["booking_reminder"] },
+    ]);
+    const live = (overrides: Readonly<Record<string, string>> = {}) =>
+      wholeForm({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", allowlist: "booking_reminder\npayment_due", ...overrides });
+
+    const refused = queryOf(await outcomeOf(() => saveSettingsAction(TARGET, live())));
+
+    expect(refused.get("outcome")).toBe("CONFIRM");
+    expect(refused.get("impacts")).toBe("TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED");
+    // The proposal travels back, so the owner confirms next to the values that would widen it.
+    expect(decodeProposal(refused.get("proposal") ?? undefined)?.whatsappTemplateAutomationAllowlist).toEqual([
+      "booking_reminder",
+      "payment_due",
+    ]);
+    expect(store.savePolicy).not.toHaveBeenCalled();
+
+    // Naming the code without the seal the server minted is still a refusal: the code is public.
+    const named = queryOf(await outcomeOf(() => saveSettingsAction(TARGET, live({ acknowledged: "TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED" }))));
+    expect(named.get("outcome")).toBe("CONFIRM");
+    expect(store.savePolicy).not.toHaveBeenCalled();
+
+    const path = await outcomeOf(() =>
+      saveSettingsAction(TARGET, live({ acknowledged: refused.get("impacts") ?? "", proposalSeal: refused.get("proposalSeal") ?? "" })),
+    );
+
+    expect(path).toBe(`${SETTINGS}?outcome=SAVED`);
+    // Once. Three submissions reached this action and only the acknowledged one wrote anything.
+    expect(store.savePolicy).toHaveBeenCalledTimes(1);
+    expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({
+      whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT",
+      whatsappTemplateAutomationAllowlist: ["booking_reminder", "payment_due"],
+      expectedVersion: 4,
+    });
+  });
+
+  it("needs no acknowledgement to narrow or reorder an allowlist that is already live", async () => {
+    store.readPolicies.mockResolvedValue([
+      {
+        ...STORED,
+        whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT",
+        whatsappTemplateAutomationAllowlist: ["booking_reminder", "payment_due"],
+      },
+    ]);
+
+    const narrowed = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", allowlist: "booking_reminder" })),
+    );
+    const reordered = await outcomeOf(() =>
+      saveSettingsAction(TARGET, wholeForm({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", allowlist: "payment_due\nbooking_reminder" })),
+    );
+
+    // A confirmation an owner cannot avoid for a change that widens nothing is a confirmation they learn
+    // to click through, and then the one that matters is clicked through too.
+    expect(narrowed).toBe(`${SETTINGS}?outcome=SAVED`);
+    expect(reordered).toBe(`${SETTINGS}?outcome=SAVED`);
+  });
+
+  it("warns once when template autopilot is enabled and filled in the same submission", async () => {
+    const refused = queryOf(
+      await outcomeOf(() =>
+        saveSettingsAction(TARGET, wholeForm({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", allowlist: "booking_reminder" })),
+      ),
+    );
+
+    expect(refused.get("outcome")).toBe("CONFIRM");
+    expect(refused.get("impacts")).toBe("TEMPLATE_AUTOPILOT_ENABLED");
+  });
+
   it("needs no acknowledgement when it widens nothing", async () => {
     const path = await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ businessGoal: "Book consultations" })));
 

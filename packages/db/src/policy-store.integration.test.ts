@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { WorkspacePermissionError } from "./errors";
 import { listPolicyAudits, readPolicies, savePolicy, type PolicyEdit } from "./policy-store";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { authorizeBusinessProfileAccess } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { addTestMember, createTestUser, seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
@@ -32,15 +33,12 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
   });
 
   const db = () => database.db;
-  const scope = () => ({ workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId });
 
-  /** The Business Profile default, created if the seed did not make one. */
-  const ensureDefault = async () => {
-    const existing = await db().automationPolicy.findFirst({ where: { ...scope(), channelAccountId: null }, select: { id: true } });
-    if (existing === null) {
-      await db().automationPolicy.create({ data: { ...scope(), mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES] } });
-    }
-  };
+  // No `ensureDefault` here any more, and that is the point of Astra's second R5 blocker: this suite used
+  // to create the Business Profile default itself, which made every case below pass against a row that no
+  // production path ever wrote. `createBusinessProfile` now writes it, so the cases run against the policy
+  // a real profile actually has — and `settings-screen.integration.test.ts` proves it from the profile
+  // creation path upwards.
 
   const theDefault = async () => (await readPolicies(db(), profile.context)).find((policy) => policy.channelAccountId === null);
 
@@ -90,8 +88,6 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
     const current = (await readPolicies(db(), context)).find((policy) => policy.channelAccountId === null);
     return savePolicy(db(), context, null, { ...edit, expectedVersion: current?.version ?? 1 });
   };
-
-  beforeAll(ensureDefault, 60_000);
 
   describe("presets", () => {
     it("writes the values a preset name means, never values a caller sent", async () => {
@@ -265,13 +261,6 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
 
     it("never shows another Workspace's changes", async () => {
       const [theirProfile] = neighbour.profiles as [SeededProfile];
-      await db().automationPolicy.create({
-        data: {
-          workspaceId: theirProfile.context.workspaceId,
-          businessProfileId: theirProfile.businessProfileId,
-          mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES],
-        },
-      });
       await save({ businessGoal: "Their goal" }, theirProfile.context);
 
       const mine = (await listPolicyAudits(db(), profile.context)).entries;
@@ -323,6 +312,23 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
       // and does nothing.
       const [latest] = (await listPolicyAudits(db(), profile.context)).entries;
       expect(latest?.impacts).toContain("TEMPLATE_AUTOPILOT_WITHOUT_ALLOWLIST");
+    }, 180_000);
+
+    it("records widening the allowlist of an already-enabled template autopilot as material", async () => {
+      await save({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: ["booking_reminder"] });
+
+      await save({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: ["booking_reminder", "payment_due"] });
+
+      // The audit is what somebody reads months later to ask whether a widening was ever agreed to. This
+      // save was recorded as `impacts: []` before Astra's ruling, which made the audit say that letting a
+      // second template out unattended was not a material change.
+      const [widened] = (await listPolicyAudits(db(), profile.context)).entries;
+      expect(widened?.impacts).toEqual(["TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED"]);
+
+      // Narrowing it again is not a widening, and the audit must not claim it was.
+      await save({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: ["booking_reminder"] });
+      const [narrowed] = (await listPolicyAudits(db(), profile.context)).entries;
+      expect(narrowed?.impacts).toEqual([]);
     }, 180_000);
 
     it("refuses a blank allowlist entry, in the domain's own words", async () => {
@@ -491,13 +497,6 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
     it("reaches an entry past the first page, and stops", async () => {
       const fresh = await seedWorkspace(db(), `policy-history-${String(Date.now())}`);
       const [theirProfile] = fresh.profiles as [SeededProfile];
-      await db().automationPolicy.create({
-        data: {
-          workspaceId: theirProfile.context.workspaceId,
-          businessProfileId: theirProfile.businessProfileId,
-          mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES],
-        },
-      });
       for (let index = 0; index < 5; index += 1) {
         const current = (await readPolicies(db(), theirProfile.context)).find((policy) => policy.channelAccountId === null);
         const outcome = await savePolicy(db(), theirProfile.context, null, {
@@ -573,6 +572,92 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
         select: { mode: true },
       });
       expect(after?.mode).toBe(theirs?.mode);
+    }, 180_000);
+  });
+  describe("where the Business Profile default comes from", () => {
+    const defaults = (businessProfileId: string) =>
+      db().automationPolicy.findMany({
+        where: { workspaceId: workspace.workspaceId, businessProfileId, channelAccountId: null },
+      });
+
+    it("arrives with the profile, conservative, without anybody asking for it", async () => {
+      const created = await createBusinessProfile(db(), workspace.context, { name: "Default policy profile" });
+
+      const rows = await defaults(created.businessProfileId);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        mode: "OFF",
+        confidenceThreshold: 0.8,
+        debounceMinMs: 7_000,
+        debounceMaxMs: 12_000,
+        deliveryDelayMinMs: 30_000,
+        deliveryDelayMaxMs: 120_000,
+        takeoverPauseMs: 21_600_000,
+        instagramAfterWindowPolicy: "STANDARD_ONLY",
+        whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
+        whatsappTemplateAutomationAllowlist: [],
+        version: 1,
+      });
+      // The review floor, in full. A new profile holds everything the domain says must be held.
+      expect([...(rows[0]?.mandatoryReviewReasons ?? [])].sort()).toEqual([...MANDATORY_REVIEW_REASON_CODES].sort());
+    }, 180_000);
+
+    it("leaves neither row behind when the creating transaction rolls back", async () => {
+      class Abort extends Error {
+        constructor(readonly businessProfileId: string) {
+          super("abort");
+        }
+      }
+
+      // The two rows are one statement, so the question a separate call cannot answer is this one: if the
+      // work that created the profile fails, is there a profile left without settings? A profile that is
+      // listed, accepts a channel account and cannot be configured is precisely the state this blocker
+      // was about, and it must not be reachable by failing halfway.
+      const abandoned = await database.db
+        .$transaction(async (tx) => {
+          const created = await createBusinessProfile(tx, workspace.context, { name: "Abandoned profile" });
+          throw new Abort(created.businessProfileId);
+        })
+        .then(
+          () => {
+            throw new Error("the transaction was supposed to roll back");
+          },
+          (error: unknown) => {
+            if (!(error instanceof Abort)) {
+              throw error;
+            }
+            return error.businessProfileId;
+          },
+        );
+
+      expect(await db().businessProfile.findMany({ where: { workspaceId: workspace.workspaceId, id: abandoned } })).toEqual([]);
+      expect(await defaults(abandoned)).toEqual([]);
+    }, 180_000);
+
+    it("gives every profile exactly one, including profiles created at the same moment", async () => {
+      const created = await Promise.all(
+        [0, 1, 2, 3].map((index) => createBusinessProfile(db(), workspace.context, { name: `Concurrent profile ${String(index)}` })),
+      );
+
+      for (const profileSummary of created) {
+        expect(await defaults(profileSummary.businessProfileId)).toHaveLength(1);
+      }
+
+      // And the property this feature actually depends on, asked of the whole database rather than of the
+      // rows this case happens to know about: no Business Profile exists whose settings screen would
+      // render nothing. The partial unique index answers the other direction — a profile cannot have two.
+      const [unusable] = await db().$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "business_profiles" AS "profile"
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM "automation_policies" AS "policy"
+          WHERE "policy"."workspace_id" = "profile"."workspace_id"
+            AND "policy"."business_profile_id" = "profile"."id"
+            AND "policy"."channel_account_id" IS NULL
+        )`;
+      expect(unusable?.count, "a Business Profile with no automation settings has no settings screen").toBe(0n);
     }, 180_000);
   });
 });

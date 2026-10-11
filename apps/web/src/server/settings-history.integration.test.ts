@@ -10,7 +10,6 @@
  * So this walks the loop the browser walks — read a page, follow the href the screen produced, read the
  * next — and asserts the property a paging bug always violates: every change appears exactly once.
  */
-import { MANDATORY_REVIEW_REASON_CODES } from "@omnichannel/domain";
 import {
   authorizeBusinessProfileAccess,
   authorizeWorkspaceAccess,
@@ -61,15 +60,8 @@ describe.skipIf(!databaseTestsEnabled())("the settings change history", () => {
       [context, "ours"],
       [neighbour, "theirs"],
     ] as const) {
-      // Creating a Business Profile does not create its automation policy — the setup flow does that —
-      // and a save against a profile with no policy row is `GONE`, not a first save.
-      await db.automationPolicy.create({
-        data: {
-          workspaceId: target.workspaceId,
-          businessProfileId: target.businessProfileId,
-          mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES],
-        },
-      });
+      // No policy row created here: `createBusinessProfile` writes the profile default in the same
+      // statement as the profile, so these saves start from the policy a real profile has.
       for (let index = 0; index < CHANGES; index += 1) {
         // Through the real save, so each row is a change somebody actually made — and each carries the
         // version the previous one produced, which is the contract the screen's form obeys too.
