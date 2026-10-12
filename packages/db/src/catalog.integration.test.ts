@@ -9,6 +9,7 @@
  * Two properties are asserted about the catalogue *as published* rather than about the publishing code:
  * the accepted numbers are the accepted numbers, and no tier exposes an AI-reply allowance.
  */
+import { featureAllowed, NO_CAPABILITIES, withinLimit } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -16,7 +17,9 @@ import {
   ACCEPTED_CURRENCY,
   ACCEPTED_PLANS,
   ACCEPTED_TRIAL,
+  ensureWorkspaceTrial,
   publishAcceptedCatalog,
+  TRIAL_PLAN_CODE,
   type PublishedCatalog,
 } from "./accepted-catalog";
 import {
@@ -30,11 +33,16 @@ import {
 } from "./catalog-store";
 import { publishPlanVersion, readEntitlement, setWorkspaceSubscription } from "./entitlement-store";
 import { commitReservation, readUsage, reserveUsage } from "./usage-store";
+import { searchAuditEvents } from "./audit-store";
+import { connectChannelAccount } from "./repositories/channel-accounts";
+import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { seedWorkspace, type SeededWorkspace } from "./testing/fixtures";
+import { createTestUser, seedWorkspace, type SeededWorkspace } from "./testing/fixtures";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 const MINUTE = 60;
+const DAY_MS = 24 * 60 * 60 * 1_000;
 
 describe.skipIf(!databaseTestsEnabled())("the commercial catalogue", () => {
   let database: TestDatabase;
@@ -56,6 +64,218 @@ describe.skipIf(!databaseTestsEnabled())("the commercial catalogue", () => {
     sequence += 1;
     return seedWorkspace(db(), `catalog-${label}-${String(sequence)}`);
   };
+
+  /**
+   * The accepted no-card trial, from the act that starts it (#44, P6-07).
+   *
+   * These cases exist because of a defect with no failing test anywhere: `ACCEPTED_TRIAL` had been product
+   * configuration for two phases, no code read it, no plan version expressed its grants, and the only
+   * production writer of `workspace_subscriptions` was the settlement path — which pins `ACTIVE`. Two
+   * comments in `repositories/` already described connecting a profile as "the act which starts its
+   * trial". So a real workspace connected a channel, got no subscription at all, and `readEntitlement`
+   * answered `INACTIVE` with no grants: every paid capability off before anybody had been asked for money.
+   *
+   * Trial *expiry* was already well covered, which is exactly how the missing start stayed invisible — a
+   * suite can prove in detail what happens at the end of something that never begins.
+   *
+   * So these cases start where a business starts: a workspace, a profile, a channel connected. Nothing
+   * here hand-writes a subscription row.
+   */
+  describe("the accepted no-card trial", () => {
+    /** A business as far as the product makes one: a workspace, an owner, a profile. No subscription. */
+    const business = async (label: string) => {
+      sequence += 1;
+      const owner = await createTestUser(db(), `trial-${label}-${String(sequence)}`);
+      const { workspaceId } = await createWorkspaceWithOwner(db(), { name: `Trial ${label} ${String(sequence)}`, ownerUserId: owner });
+      const workspace = await authorizeWorkspaceAccess(db(), { userId: owner, workspaceId });
+      const created = await createBusinessProfile(db(), workspace, { name: "Main" });
+      const profile = await authorizeBusinessProfileAccess(db(), { userId: owner, workspaceId, businessProfileId: created.businessProfileId });
+      return { workspace, profile };
+    };
+
+    /** A stored credential envelope, because the account's reference to one is a foreign key. */
+    const credential = async (workspaceId: string) =>
+      (
+        await db().channelCredential.create({
+          data: {
+            workspaceId,
+            keyId: "trial-test-key",
+            algorithm: "aes-256-gcm",
+            ciphertext: Buffer.from("not a real token"),
+            nonce: Buffer.alloc(12, 1),
+            authTag: Buffer.alloc(16, 2),
+          },
+          select: { id: true },
+        })
+      ).id;
+
+    /** The production connect path: both Instagram and WhatsApp onboarding go through this function. */
+    const connect = async (profile: BusinessProfileContext, suffix: string, channel: "INSTAGRAM" | "WHATSAPP" = "INSTAGRAM", at = NOW) =>
+      connectChannelAccount(
+        db(),
+        profile,
+        {
+          channel,
+          externalAccountId: `${channel.toLowerCase()}-trial-${suffix}`,
+          displayName: `Trial ${suffix}`,
+          capabilities: { ...NO_CAPABILITIES, text: true },
+          credentialId: await credential(profile.workspaceId),
+        },
+        at,
+      );
+
+    it("is published as a real version nobody can buy", async () => {
+      // A plan version rather than a special case in the reader, so every capacity check and every usage
+      // reservation answers for it without knowing it is a trial. `PRIVATE`, because it is not for sale.
+      const version = await db().planVersion.findFirst({
+        where: { plan: { code: TRIAL_PLAN_CODE } },
+        orderBy: { version: "desc" },
+        select: { id: true, availability: true, prices: { select: { currency: true } } },
+      });
+
+      expect(version?.id).toBe(published.trial.planVersionId);
+      expect(version?.availability).toBe("PRIVATE");
+      expect(version?.prices).toEqual([]);
+      // And it is not among the plans the catalogue offers.
+      expect(published.plans.map((plan) => plan.code)).not.toContain(TRIAL_PLAN_CODE);
+    }, 120_000);
+
+    it("starts when a profile is first connected, and grants exactly what the accepted trial says", async () => {
+      const { workspace, profile } = await business("grants");
+
+      // Before: a business with nothing bought and nothing connected is entitled to nothing, and the
+      // capacity check can tell that from a plan that chose zero.
+      expect(await readEntitlement(db(), workspace.workspaceId, NOW)).toMatchObject({
+        state: "INACTIVE",
+        subscribed: false,
+        paidWorkAllowed: false,
+      });
+
+      await connect(profile, "grants");
+
+      const after = await readEntitlement(db(), workspace.workspaceId, NOW);
+      expect(after).toMatchObject({ state: "TRIALING", planCode: TRIAL_PLAN_CODE, subscribed: true, paidWorkAllowed: true });
+      // The accepted numbers, read back through the entitlement rather than from the constant.
+      expect(after.limits.BUSINESS_PROFILES).toBe(ACCEPTED_TRIAL.businessProfiles);
+      expect(after.limits.SEATS).toBe(ACCEPTED_TRIAL.seats);
+      expect(after.quotas.VOICE_TRANSCRIPTION_SECONDS).toBe(ACCEPTED_TRIAL.voiceTranscriptionMinutes * MINUTE);
+      // Core features, so a trial can actually be tried: drafting, autopilot, both channels, voice.
+      for (const feature of ["AI_DRAFTS", "AUTOPILOT", "INSTAGRAM", "WHATSAPP", "VOICE_TRANSCRIPTION"] as const) {
+        expect(featureAllowed(after, feature), feature).toBe(true);
+      }
+      // And the ceilings bite: one profile means the second is refused, by the same check a paid tier uses.
+      expect(withinLimit(after, "BUSINESS_PROFILES", 1)).toBe(false);
+      expect(withinLimit(after, "SEATS", 2)).toBe(true);
+    }, 120_000);
+
+    it("ends fourteen days later, to the hour it started", async () => {
+      const { workspace, profile } = await business("fourteen");
+
+      await connect(profile, "fourteen");
+
+      const subscription = await db().workspaceSubscription.findUnique({
+        where: { workspaceId: workspace.workspaceId },
+        select: { state: true, trialEndsAt: true, periodEndsAt: true, graceStartedAt: true, canceledAt: true },
+      });
+      expect(subscription?.trialEndsAt).toEqual(new Date(NOW.getTime() + ACCEPTED_TRIAL.days * DAY_MS));
+      // Nothing else is claimed: there is no paid period, no grace and no cancellation.
+      expect(subscription).toMatchObject({ state: "TRIALING", periodEndsAt: null, graceStartedAt: null, canceledAt: null });
+
+      // A minute before the end it still works; a minute after, paid work stops without anything being
+      // written — which is what makes a trial end on time rather than when a job gets round to it.
+      const endsAt = subscription?.trialEndsAt ?? NOW;
+      expect((await readEntitlement(db(), workspace.workspaceId, new Date(endsAt.getTime() - 60_000))).paidWorkAllowed).toBe(true);
+      expect((await readEntitlement(db(), workspace.workspaceId, new Date(endsAt.getTime() + 60_000))).paidWorkAllowed).toBe(false);
+    }, 120_000);
+
+    it("starts exactly once, however many channels a profile connects", async () => {
+      const { workspace, profile } = await business("once");
+
+      await connect(profile, "once");
+      const first = await db().workspaceSubscription.findUnique({
+        where: { workspaceId: workspace.workspaceId },
+        select: { id: true, trialEndsAt: true },
+      });
+
+      // A second channel, a day later — WhatsApp, because one profile speaks for one account per channel.
+      // A trial that restarted here would be a business getting fourteen fresh days for every channel.
+      await connect(profile, "once", "WHATSAPP", new Date(NOW.getTime() + DAY_MS));
+      const second = await db().workspaceSubscription.findUnique({
+        where: { workspaceId: workspace.workspaceId },
+        select: { id: true, trialEndsAt: true },
+      });
+
+      expect(second?.id).toBe(first?.id);
+      expect(second?.trialEndsAt).toEqual(first?.trialEndsAt);
+      expect(await db().workspaceSubscription.count({ where: { workspaceId: workspace.workspaceId } })).toBe(1);
+    }, 120_000);
+
+    it("cannot be started twice by two connections at the same moment", async () => {
+      const { workspace } = await business("race");
+
+      // Two concurrent calls, which is what two browser tabs finishing an onboarding flow look like. The
+      // guarantee is the unique workspace and `ON CONFLICT DO NOTHING`, so there is no read-then-write for
+      // the two to interleave inside — and neither call throws.
+      const [left, right] = await Promise.all([
+        ensureWorkspaceTrial(db(), workspace.workspaceId, NOW),
+        ensureWorkspaceTrial(db(), workspace.workspaceId, new Date(NOW.getTime() + 5_000)),
+      ]);
+
+      expect([left.started, right.started].filter(Boolean)).toHaveLength(1);
+      expect(await db().workspaceSubscription.count({ where: { workspaceId: workspace.workspaceId } })).toBe(1);
+    }, 120_000);
+
+    it("never restarts for a workspace that has moved on, whatever its state", async () => {
+      const growth = published.plans.find((plan) => plan.code === "growth");
+      if (growth === undefined) {
+        throw new Error("the accepted catalogue has no growth plan");
+      }
+      // Each state carries the dates its own CHECK requires: `GRACE` has a start, and a cancelled
+      // subscription has both a cancellation and the period it is running out.
+      const clock = (state: string) =>
+        state === "GRACE"
+          ? { graceStartedAt: NOW }
+          : state === "CANCELED_PENDING_END"
+            ? { canceledAt: NOW, periodEndsAt: new Date(NOW.getTime() + 7 * DAY_MS) }
+            : {};
+
+      for (const state of ["ACTIVE", "PAST_DUE", "GRACE", "CANCELED_PENDING_END", "INACTIVE"] as const) {
+        const { workspace } = await business(`moved-${state.toLowerCase()}`);
+        await setWorkspaceSubscription(db(), workspace, { planVersionId: growth.planVersionId, state, ...clock(state) });
+
+        const outcome = await ensureWorkspaceTrial(db(), workspace.workspaceId, NOW);
+
+        // Including `INACTIVE`: a workspace whose trial ran out and was never paid for must not be handed
+        // another one by reconnecting a channel.
+        expect(outcome.started, state).toBe(false);
+        const subscription = await db().workspaceSubscription.findUnique({
+          where: { workspaceId: workspace.workspaceId },
+          select: { state: true, trialEndsAt: true },
+        });
+        expect(subscription?.state, state).toBe(state);
+        expect(subscription?.trialEndsAt, state).toBeNull();
+      }
+    }, 180_000);
+
+    it("records the start once, in the product's own words", async () => {
+      const { workspace, profile } = await business("audited");
+
+      await connect(profile, "audited");
+      await connect(profile, "audited", "WHATSAPP");
+
+      const audits = (await searchAuditEvents(db(), workspace, { kinds: ["SUBSCRIPTION_CHANGED"] })).rows;
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ kind: "SUBSCRIPTION_CHANGED", subjectType: "Workspace", subjectId: workspace.workspaceId });
+      expect(audits[0]?.summary).toContain(String(ACCEPTED_TRIAL.days));
+      // No provider identifier and no amount: nothing was charged, and the trail stays readable after the
+      // provider is replaced.
+      const detail = JSON.stringify(audits[0]?.detail ?? {});
+      expect(detail).toContain("TRIALING");
+      expect(detail).toContain(TRIAL_PLAN_CODE);
+      expect(detail).not.toContain("price_");
+      expect(detail).not.toContain("cus_");
+    }, 120_000);
+  });
 
   describe("what was published", () => {
     it("offers the three accepted tiers, in order, on the public pricing page", async () => {

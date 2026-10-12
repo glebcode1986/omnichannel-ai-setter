@@ -289,11 +289,16 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       await setWorkspaceSubscription(db(), owner, { planVersionId: growthV1, state: "ACTIVE" });
 
       const audits = await searchAuditEvents(db(), owner, { kinds: ["SUBSCRIPTION_CHANGED"] });
-      expect(audits.rows[0]).toMatchObject({ kind: "SUBSCRIPTION_CHANGED" });
+      // The move this case made, found rather than assumed to be the newest. A trial now writes a
+      // `SUBSCRIPTION_CHANGED` of its own when a channel is connected (#44), so "the most recent one" is
+      // no longer the same question as "the one this test made" — and a case that reads `rows[0]` is one
+      // a later test can break by doing something entirely reasonable.
+      const moved = audits.rows.find((row) => JSON.stringify(row.detail).includes("growth-test"));
+      expect(moved).toMatchObject({ kind: "SUBSCRIPTION_CHANGED" });
       // "Moved to Growth" and "moved from Starter to Growth" are different sentences, and only the
       // second answers the question somebody is actually asking.
-      expect(JSON.stringify(audits.rows[0]?.detail)).toContain("starter-test");
-      expect(JSON.stringify(audits.rows[0]?.detail)).toContain("growth-test");
+      expect(JSON.stringify(moved?.detail)).toContain("starter-test");
+      expect(JSON.stringify(moved?.detail)).toContain("growth-test");
     });
   });
 
@@ -480,8 +485,11 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       expect(await db().channelAccount.count({ where: { workspaceId: fresh.workspaceId } })).toBe(0);
     }, 180_000);
 
-    it("lets a workspace with no plan connect its first channel", async () => {
-      // Same reasoning as the first Business Profile: this is the act that starts a trial.
+    it("lets a workspace with no plan connect its first channel, and starts no trial it has no version for", async () => {
+      // Same reasoning as the first Business Profile: this is the act that starts a trial (#44) — and
+      // this suite publishes synthetic plans rather than the accepted catalogue, so there is no trial
+      // version in this database. That is also what a deployment which has not published its catalogue
+      // looks like, and the connection must succeed anyway rather than failing over a plan nobody made.
       const fresh = await freshWorkspace("pretrial-channel");
       // A real credential row, because the account references one by foreign key. Its contents are
       // irrelevant here — what is under test is the gate in front of the connect, not the cipher.
@@ -516,6 +524,11 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
           NOW,
         ),
       ).resolves.toMatchObject({ channel: "INSTAGRAM" });
+
+      // No subscription was invented for it, and no grants: the conservative answer, and the one the
+      // capacity check can tell apart from a plan that chose zero.
+      expect(await db().workspaceSubscription.count({ where: { workspaceId: fresh.workspaceId } })).toBe(0);
+      expect((await readEntitlement(db(), fresh.workspaceId, NOW)).state).toBe("INACTIVE");
     }, 180_000);
   });
 });

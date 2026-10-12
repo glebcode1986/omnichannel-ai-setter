@@ -113,8 +113,9 @@ export async function createBusinessProfile(
   // succeed. The lock is transaction-scoped, so it is released however the transaction ends.
   //
   // A workspace with no subscription has no stated ceiling and may therefore create its first Business
-  // Profile — which is the act the accepted trial policy says *starts* the trial, so refusing it would
-  // make the product unreachable from its own front door.
+  // Profile. Creating one does not start the trial — connecting it to a channel does, in
+  // `createChannelAccount` — so refusing this would make the product unreachable from its own front door
+  // and the trial unstartable.
   await serializeCapacity(db, `workspace-profiles:${workspaceId}`);
   const verdict = capacityVerdict({
     snapshot: await readEntitlement(db as unknown as DbClient, workspaceId, at),
