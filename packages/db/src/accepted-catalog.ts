@@ -119,6 +119,25 @@ export interface PublishedCatalog {
 }
 
 /**
+ * Which provider price a published catalogue price corresponds to.
+ *
+ * Keyed by the product's own vocabulary — a plan or add-on code and an interval — and valued with the
+ * provider's opaque id. The map belongs to a deployment rather than to the catalogue: the accepted prices
+ * are the same everywhere, and the Stripe (or other provider) price objects that mirror them are created
+ * per account, so a deployment serving two sellers has two of them.
+ *
+ * It has to be given at publication because catalogue prices are **immutable**: a trigger refuses an
+ * `UPDATE` on `plan_prices`, with "catalogue prices are immutable: publish a new version instead". So a
+ * provider price id that is not supplied here can never be supplied at all, and `readCheckoutRouting`
+ * would find none — which means no provider checkout could be priced and the whole payment step would be
+ * unavailable in exactly the deployment that published its catalogue the normal way.
+ */
+export interface ProviderPriceMap {
+  /** `{ "growth": { "MONTH": "price_…", "YEAR": "price_…" } }`, by plan or add-on code. */
+  readonly [code: string]: Readonly<Partial<Record<"MONTH" | "YEAR" | "ONE_TIME", string>>> | undefined;
+}
+
+/**
  * Publishes the accepted catalogue, as `PUBLIC`.
  *
  * Idempotent in the only sense a versioned catalogue can be: calling it twice publishes a second version
@@ -129,8 +148,12 @@ export interface PublishedCatalog {
  * Voice allowances are stated in the spec as minutes and stored as seconds, because the metric is
  * `VOICE_TRANSCRIPTION_SECONDS` and the provider reports seconds. The conversion happens here, once,
  * rather than at every place that compares a reading against an allowance.
+ *
+ * `providerPrices` is optional, and omitting it publishes exactly what it published before: a
+ * provider-neutral catalogue. A deployment that intends to take payments supplies the map, because this
+ * is the only moment at which it can be stored.
  */
-export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCatalog> {
+export async function publishAcceptedCatalog(db: DbClient, providerPrices: ProviderPriceMap = {}): Promise<PublishedCatalog> {
   const plans: PlanVersionRecord[] = [];
   for (const plan of ACCEPTED_PLANS) {
     plans.push(
@@ -149,7 +172,7 @@ export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCat
           // No `AI_GENERATION_CYCLES`: core generation is unmetered customer-facing on every paid tier.
           quotas: { VOICE_TRANSCRIPTION_SECONDS: plan.voiceMinutes * MINUTE_SECONDS },
         },
-        prices: [monthly(plan.monthlyCents), annual(plan.annualCents)],
+        prices: [monthly(plan.monthlyCents, providerPrices[plan.code]?.MONTH), annual(plan.annualCents, providerPrices[plan.code]?.YEAR)],
       }),
     );
   }
@@ -165,7 +188,10 @@ export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCat
         availability: "PUBLIC",
         ...("limits" in addOn ? { limits: addOn.limits } : {}),
         ...("minutes" in addOn ? { quotas: { VOICE_TRANSCRIPTION_SECONDS: addOn.minutes * MINUTE_SECONDS } } : {}),
-        prices: "monthlyCents" in addOn ? [monthly(addOn.monthlyCents)] : [once(addOn.onceCents)],
+        prices:
+          "monthlyCents" in addOn
+            ? [monthly(addOn.monthlyCents, providerPrices[addOn.code]?.MONTH)]
+            : [once(addOn.onceCents, providerPrices[addOn.code]?.ONE_TIME)],
       }),
     );
   }
@@ -173,6 +199,15 @@ export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCat
   return { plans, addOns };
 }
 
-const monthly = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "MONTH", amountCents });
-const annual = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "YEAR", amountCents });
-const once = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "ONE_TIME", amountCents });
+// `providerPriceId` is omitted rather than set to `undefined`, because the store distinguishes the two:
+// absent leaves the column null, and the catalogue stays provider-neutral where a deployment has not
+// mapped it.
+const priced = (interval: CatalogPriceInput["interval"], amountCents: number, providerPriceId: string | undefined): CatalogPriceInput => ({
+  currency: ACCEPTED_CURRENCY,
+  interval,
+  amountCents,
+  ...(providerPriceId === undefined ? {} : { providerPriceId }),
+});
+const monthly = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("MONTH", amountCents, providerPriceId);
+const annual = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("YEAR", amountCents, providerPriceId);
+const once = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("ONE_TIME", amountCents, providerPriceId);

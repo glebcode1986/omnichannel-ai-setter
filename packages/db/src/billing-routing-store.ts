@@ -41,6 +41,7 @@ import {
   selectRoute,
   settlementModelCoherent,
   taxRemittedBy,
+  isArrangementKind,
   type ArrangementKind,
   type BillingCapability,
   type BillingRouteTerms,
@@ -982,21 +983,59 @@ async function write(
 }
 
 /**
- * The provider and account a checkout was routed to.
+ * Everything the provider's own session needs, read server-side from the contract.
  *
  * The one read in this file that returns provider vocabulary, and it exists for the composition root that
  * has to create the provider's session. Takes an id rather than a context because the caller is
  * server-side infrastructure with no session — and returns nothing a page would have any use for.
+ *
+ * `providerPriceRef` comes from the catalogue row the contract's own plan version, interval and base
+ * currency identify — never from a request. A client that could name a price could name a cheaper one,
+ * which is why the port's `priceReference` is documented as the catalogue's and why this read resolves it
+ * rather than accepting it. It is `null` where the catalogue has not been given the provider's price id,
+ * and a checkout then cannot be opened with that provider: a session priced by a default would be a
+ * session charging a number nobody published.
  */
 export async function readCheckoutRouting(
   db: DbExecutor,
   checkoutContractId: string,
-): Promise<{ readonly provider: string; readonly providerAccountRef: string | null; readonly routeCode: string } | null> {
+): Promise<{
+  readonly provider: string;
+  readonly providerAccountRef: string | null;
+  readonly routeCode: string;
+  readonly arrangementKind: ArrangementKind;
+  readonly charge: Money;
+  readonly providerPriceRef: string | null;
+} | null> {
   const row = await db.checkoutContract.findUnique({
     where: { id: checkoutContractId },
-    select: { billingRoute: { select: { provider: true, providerAccountRef: true, code: true } } },
+    select: {
+      planVersionId: true,
+      interval: true,
+      arrangementKind: true,
+      baseCurrency: true,
+      chargeAmountMinor: true,
+      chargeCurrency: true,
+      billingRoute: { select: { provider: true, providerAccountRef: true, code: true } },
+    },
   });
-  return row === null ? null : { provider: row.billingRoute.provider, providerAccountRef: row.billingRoute.providerAccountRef, routeCode: row.billingRoute.code };
+  if (row === null) {
+    return null;
+  }
+  // The base currency, not the charge currency: the catalogue prices a plan in what it published, and a
+  // route that quoted another asset quoted it *from* that price.
+  const price = await db.planPrice.findUnique({
+    where: { planVersionId_currency_interval: { planVersionId: row.planVersionId, currency: row.baseCurrency, interval: row.interval } },
+    select: { providerPriceId: true },
+  });
+  return {
+    provider: row.billingRoute.provider,
+    providerAccountRef: row.billingRoute.providerAccountRef,
+    routeCode: row.billingRoute.code,
+    arrangementKind: arrangementKindOf(row.arrangementKind),
+    charge: money(row.chargeAmountMinor, row.chargeCurrency),
+    providerPriceRef: price?.providerPriceId ?? null,
+  };
 }
 
 /**
@@ -1486,6 +1525,14 @@ export async function expireStaleCheckouts(db: DbClient, now = new Date(), ttlMs
 
 async function liveArrangement(db: DbExecutor, workspaceId: string): Promise<{ readonly id: string } | null> {
   return db.billingArrangement.findFirst({ where: { workspaceId, state: { in: ["PENDING", "ACTIVE"] } }, select: { id: true } });
+}
+
+/** A stored arrangement kind, narrowed. The column is an enum, so reaching the throw means the row lied. */
+function arrangementKindOf(value: string): ArrangementKind {
+  if (!isArrangementKind(value)) {
+    throw new DbInputError("arrangementKind", `not an arrangement kind: ${value}`);
+  }
+  return value;
 }
 
 /** A stored interval, narrowed. `ONE_TIME` is refused by a CHECK, so reaching the throw means the row lied. */

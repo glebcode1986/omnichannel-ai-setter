@@ -122,17 +122,29 @@ export {
 export {
   assertVerifiedBillingEvent,
   billingProviderCanCheckout,
+  billingProviderCanManage,
+  billingProviderCanSetRenewal,
   billingProviderRegistered,
   clearBillingProviders,
   openProviderCheckout,
+  openProviderManagementSession,
   reconcileProviderState,
+  setProviderRenewal,
   registerBillingProvider,
   verifyProviderDelivery,
   type BillingProviderAdapter,
+  type CheckoutHandoff,
   type NormalizedBillingEvent,
+  type ProviderAcknowledgement,
+  type ProviderCheckoutRequest,
+  type ProviderManagementRequest,
+  type ProviderRenewalRequest,
+  type ProviderRenewalState,
   type RawProviderDelivery,
   type ReconciliationQuery,
   type VerifiedBillingEvent,
+  type VerifiedDelivery,
+  type VerifiedProviderDelivery,
 } from "./billing-events";
 export {
   attachProviderCheckoutReference,
@@ -172,6 +184,7 @@ export {
   ACCEPTED_PLANS,
   ACCEPTED_TRIAL,
   publishAcceptedCatalog,
+  type ProviderPriceMap,
   type PublishedCatalog,
 } from "./accepted-catalog";
 export {

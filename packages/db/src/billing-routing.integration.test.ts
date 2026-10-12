@@ -47,6 +47,7 @@ import {
 } from "./billing-routing-store";
 import { publishPlanVersion, readEntitlement } from "./entitlement-store";
 import { DbInputError } from "./errors";
+import type { VerifiedDelivery } from "./billing-events";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createTestUser } from "./testing/fixtures";
 import { createWorkspaceWithOwner } from "./repositories/workspaces";
@@ -194,7 +195,14 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // And this one owes the provider a signed acknowledgement in the response body.
       verify: (delivery) => {
         const authentic = authenticated(delivery);
-        return authentic === null ? null : { ...authentic, acknowledgement: { body: `ack:${authentic.event.providerEventId}` } };
+        if (authentic === null) {
+          return null;
+        }
+        // Owed either way: the acknowledgement is for the delivery, not for the delivery being
+        // interesting, so an authentic event this provider has nothing to say about still gets one.
+        return authentic.kind === "EVENT"
+          ? { ...authentic, acknowledgement: { body: `ack:${authentic.event.providerEventId}` } }
+          : { ...authentic, acknowledgement: { body: "ack:ignored" } };
       },
       reconcile: (query) => Promise.resolve(deliveries.get(`reconcile:${query.providerReference}`) ?? null),
     });
@@ -253,12 +261,15 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
   }
 
   /** A signed delivery the stubs will accept, in the shape the port now expects. */
-  const authenticated = (delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string }) => {
+  const authenticated = (delivery: { readonly headers: Readonly<Record<string, string>>; readonly body: string }): VerifiedDelivery | null => {
     if (delivery.headers["x-signature"] !== "good") {
       return null;
     }
+    // A delivery this stub signed but has nothing registered for stands for the authentic event a
+    // provider sends that the product does not care about: `NO_EVENT`, never `null`, because the provider
+    // is owed an acknowledgement for it and a forgery is not.
     const event = deliveries.get(delivery.body);
-    return event === undefined ? null : { event };
+    return event === undefined ? { kind: "NO_EVENT" } : { kind: "EVENT", event };
   };
 
   /** Mints a verified event the way production does: through an adapter, from a signed delivery. */
@@ -270,8 +281,8 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       headers: { "x-signature": "good" },
       receivedAt: NOW,
     });
-    if (minted === null) {
-      throw new Error("the stub adapter refused its own delivery");
+    if (minted.kind !== "EVENT") {
+      throw new Error(`the stub adapter answered ${minted.kind} to its own delivery`);
     }
     return minted.event;
   }
@@ -400,7 +411,16 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       expect(opened.seller.legalName).toBe("Example SRL");
       const routing = await readCheckoutRouting(db(), opened.checkoutContractId);
-      expect(routing).toEqual({ provider: "test-psp", providerAccountRef: "acct_direct", routeCode: "direct-eu" });
+      // Every field the provider's own session is built from, resolved from the contract rather than from
+      // the request — including the price, which a client that could name one could name cheaper.
+      expect(routing).toEqual({
+        provider: "test-psp",
+        providerAccountRef: "acct_direct",
+        routeCode: "direct-eu",
+        arrangementKind: "RECURRING",
+        charge: { amountMinor: 4_900, currency: "EUR" },
+        providerPriceRef: null,
+      });
     });
 
     it("explains which route refused what when nothing admits the request", async () => {
@@ -504,13 +524,57 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("mints nothing from an unsigned delivery or an unknown provider", async () => {
       deliveries.set("unsigned", { routeCode: "direct-eu", providerEventId: "unsigned", kind: "PAYMENT_SETTLED", occurredAt: NOW });
 
-      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: {}, receivedAt: NOW })).toBeNull();
-      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "bad" }, receivedAt: NOW })).toBeNull();
-      expect(await verifyProviderDelivery({ provider: "nobody", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW })).toBeNull();
+      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: {}, receivedAt: NOW })).toEqual({ kind: "REFUSED" });
+      expect(await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "bad" }, receivedAt: NOW })).toEqual({
+        kind: "REFUSED",
+      });
+      expect(await verifyProviderDelivery({ provider: "nobody", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW })).toEqual({
+        kind: "REFUSED",
+      });
       // Signed, and then mutation is refused: a holder of a minted event cannot edit the amount in it.
       const minted = await verifyProviderDelivery({ provider: "test-psp", body: "unsigned", headers: { "x-signature": "good" }, receivedAt: NOW });
-      expect(minted).not.toBeNull();
-      expect(Object.isFrozen(minted?.event)).toBe(true);
+      expect(minted.kind).toBe("EVENT");
+      expect(Object.isFrozen(minted.kind === "EVENT" ? minted.event : undefined)).toBe(true);
+    });
+
+    it("tells an authentic event it has nothing to do with apart from a forgery", async () => {
+      // The distinction an adapter forces and the first shape of this port could not make. A provider
+      // sends every type its endpoint is subscribed to, and some are authentic and mean nothing here —
+      // collapsing those into "not authentic" would owe the provider a refusal, and a provider that is
+      // refused redelivers for days.
+      const ignored = await verifyProviderDelivery({
+        provider: "test-psp",
+        body: "an-event-nobody-registered",
+        headers: { "x-signature": "good" },
+        receivedAt: NOW,
+      });
+
+      expect(ignored).toEqual({ kind: "ACKNOWLEDGED" });
+      // Nothing was minted, so nothing can be recorded: `ACKNOWLEDGED` carries no event at all.
+      expect("event" in ignored).toBe(false);
+
+      // And the acknowledgement is owed either way, because it is owed for the delivery.
+      const owed = await verifyProviderDelivery({
+        provider: "test-crypto",
+        body: "another-event-nobody-registered",
+        headers: { "x-signature": "good" },
+        receivedAt: NOW,
+      });
+      expect(owed).toEqual({ kind: "ACKNOWLEDGED", acknowledgement: { body: "ack:ignored" } });
+    });
+
+    it("refuses an authentic delivery the adapter normalized into something the product cannot name", async () => {
+      // Not acknowledged. The adapter believed it had a product event, so answering "received and
+      // handled" would discard a payment nobody will ever look for again.
+      registerBillingProvider({
+        provider: "test-nonsense",
+        verify: () => ({
+          kind: "EVENT",
+          event: { routeCode: "direct-eu", providerEventId: "nonsense-1", kind: "SOMETHING_NEW", occurredAt: NOW } as unknown as NormalizedBillingEvent,
+        }),
+      });
+
+      expect(await verifyProviderDelivery({ provider: "test-nonsense", body: "x", headers: {}, receivedAt: NOW })).toEqual({ kind: "REFUSED" });
     });
 
     it("authenticates a provider whose verification is a round trip", async () => {
@@ -520,8 +584,10 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const minted = await verifyProviderDelivery({ provider: "test-mor", body: "async-1", headers: { "x-signature": "good" }, receivedAt: NOW });
 
-      expect(minted?.event.providerEventId).toBe("async-1");
-      expect(await verifyProviderDelivery({ provider: "test-mor", body: "async-1", headers: { "x-signature": "bad" }, receivedAt: NOW })).toBeNull();
+      expect(minted.kind === "EVENT" ? minted.event.providerEventId : undefined).toBe("async-1");
+      expect(await verifyProviderDelivery({ provider: "test-mor", body: "async-1", headers: { "x-signature": "bad" }, receivedAt: NOW })).toEqual({
+        kind: "REFUSED",
+      });
     });
 
     it("carries back the acknowledgement a provider is owed, and only the adapter can produce it", async () => {
@@ -531,11 +597,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const minted = await verifyProviderDelivery({ provider: "test-crypto", body: "ack-1", headers: { "x-signature": "good" }, receivedAt: NOW });
 
-      expect(minted?.acknowledgement?.body).toBe("ack:ack-1");
+      expect(minted.kind === "EVENT" ? minted.acknowledgement?.body : undefined).toBe("ack:ack-1");
       // And a provider that needs nothing back says so by omission rather than with an empty body.
       deliveries.set("no-ack", { routeCode: "direct-eu", providerEventId: "no-ack", kind: "PAYMENT_SETTLED", occurredAt: NOW });
       const plain = await verifyProviderDelivery({ provider: "test-psp", body: "no-ack", headers: { "x-signature": "good" }, receivedAt: NOW });
-      expect(plain?.acknowledgement).toBeUndefined();
+      expect(plain.kind === "EVENT" ? plain.acknowledgement : "missing").toBeUndefined();
     });
 
     it("hands a customer off the way the provider actually works, not always as a redirect", async () => {
@@ -635,8 +701,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       });
 
       // A verification that could not complete has not succeeded. Reporting an outage as an authenticated
-      // delivery is the one direction this must never fail in.
-      expect(await verifyProviderDelivery({ provider: "test-exploding", body: "any", headers: {}, receivedAt: NOW })).toBeNull();
+      // delivery is the one direction this must never fail in — and `REFUSED` rather than `ACKNOWLEDGED`,
+      // so the provider redelivers once the outage is over instead of being told the event was handled.
+      expect(await verifyProviderDelivery({ provider: "test-exploding", body: "any", headers: {}, receivedAt: NOW })).toEqual({
+        kind: "REFUSED",
+      });
     });
 
     it("mints from an authoritative reconciliation, which is the other way a payment becomes a fact", async () => {

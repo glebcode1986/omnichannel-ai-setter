@@ -16,7 +16,36 @@ each awaiting independent review in dependency order:
 The chain has grown to #102; `docs/handoff/CURRENT_HANDOFF.md` carries the current list. Nothing is
 merged to `main`.
 
-### Current work — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
+### Current work — P6-04 / Issue #41, the first concrete billing provider adapter
+
+**Branch `feat/p6-04-billing-provider-port`**, based on `feat/p7-02-launch-readiness`. The owner's
+decision of 2026-10-09 settled the blocked product choice: **Stripe** first, against the **Ukrainian-FOP**
+seller, **EUR**, **monthly**, with the Romanian company as a second seller route and WayForPay and
+Cryptomus as additional payment routes — all server-configured, none implemented here.
+
+Four things a supervisor should know without reading the diff.
+
+**No vendor SDK, argued from this repository rather than from taste, and recorded as ADR-020.** Zero
+vendor API SDKs exist here, seven third-party HTTP APIs are already integrated by hand, no new runtime
+dependency has entered since Phase 1, and `CORE_FORBIDDEN_THIRD_PARTY` has no payments entry — so taking
+`stripe` would turn a hard product rule into a review promise. No spec forbids an SDK, which is why this
+is an ADR.
+
+**The port moved to `application`** (ADR-017 says it belongs there), and `billing-stripe -> db` is a
+forbidden edge: an adapter that could reach the database could activate an entitlement without a verified
+event.
+
+**The port gained what only an adapter could reveal.** `verify` had two answers and needed three — a
+forgery and an authentic event the product does not map owe the provider opposite replies — plus optional
+`openManagementSession` and `setRenewal`, because the owner's decision requires the provider's portal and
+cancel-at-period-end where the provider has them.
+
+**The callers are in this PR.** Eight billing functions had no production caller. This registers the
+adapter from `STRIPE_ROUTES`, adds `/api/billing/webhooks/stripe`, and hands the customer off after the
+contract commits. One gap was found and closed on the way: catalogue prices are immutable by trigger and
+the accepted catalogue published no provider price ids, so no Stripe checkout could ever have been priced.
+
+### Earlier — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
 
 **Branch `feat/p7-02-launch-readiness`**, based on `feat/p7-01-admin-operations`. See
 `docs/specs/RELEASE_PROCESS.md` for the operational companion to `LAUNCH_READINESS.md`.

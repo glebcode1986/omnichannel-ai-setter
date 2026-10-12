@@ -1,0 +1,19 @@
+{
+  "name": "@omnichannel/billing-stripe",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@omnichannel/application": "workspace:*",
+    "@omnichannel/domain": "workspace:*",
+    "@omnichannel/observability": "workspace:*"
+  }
+}
