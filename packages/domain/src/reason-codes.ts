@@ -26,7 +26,16 @@ export const REASON_CODES = [
   "REVIEW_PENDING",
   "WINDOW_CLOSED",
   "HUMAN_AGENT_REVIEW_REQUIRED",
+  /** Outside the customer-service window an approved template is the only route; this send is not one. */
   "TEMPLATE_REQUIRED",
+  /**
+   * There is no approved template this account could send at all, so no person can act either.
+   *
+   * Distinct from `TEMPLATE_REQUIRED`, which asks for a human: this one ends the matter. A review item
+   * nobody can resolve is worse than an empty queue, and Meta pauses, disables and finally archives
+   * templates on its own, so a catalogue that offered a route yesterday may offer none today.
+   */
+  "NO_ELIGIBLE_TEMPLATE",
   "ACCOUNT_UNHEALTHY",
   "QUIET_HOURS",
   "RATE_LIMITED",
