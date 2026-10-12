@@ -15,6 +15,152 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
+### Current work — propagating the accepted P3-01 parent into P3-02 / PR #82
+
+`ANTIGRAVITY_REVIEW: PASS head=d9a34ffef120b7f0b171eb12f130d3848c9928cf` accepted PR #81, with a formal
+approving review. The directive on #82 merges that exact parent into `feat/p3-02-goals-followups`, **one
+branch only**: no rebase, no force-push, nothing to `main`, nothing into #83 or later, no Stage D.
+
+No conflicts. Four files were touched by both branches — both canonical documents, `schema.prisma` and
+`packages/db/src/index.ts` — and all four auto-merged. Verified rather than trusted: every line either
+side added since the merge base is present, every P3-01 and P5-07 file is byte-identical to the accepted
+parent, and P3-02's own goal, follow-up and human-task stores are untouched.
+
+**The reviewer is Astra again, temporarily, from 2026-10-13**, while the owner diagnoses the local
+Antigravity watcher. The two verdicts Antigravity already gave stand and are not to be re-reviewed to
+change a name; never launch both reviewer systems for one PR and SHA. **Claude remains the only
+authorized author.** This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>` and emits
+no verdict marker of its own.
+
+**A provenance note:** the owner's own workstation holds a local-only #82 merge commit
+(`2abb64117c2274adfbe6fc85ae7d552e23faf4b9`) from local reviewer activity. It is not in this repository
+and not a GitHub head; the propagation recorded here was performed from the remote heads in the
+programmer's environment, which is where the pushed SHA comes from.
+
+**#82 is now the current gate. #83 and everything below is frozen** and still carries the pre-repair #79.
+#104 and #105 sit off the chain, based on #103, and are unaffected.
+
+### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
+
+`ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` accepted PR #80. The directive on
+#81 merges that exact parent into `feat/p3-01-customer-identity-memory`, **one branch only**: no rebase,
+no force-push, nothing to `main`, nothing into #82 or later, and no P3-02/P5-08/Stage D work.
+
+**The independent reviewer is temporarily Antigravity (Gemini 3.8 Flash)**, at the owner's direction of
+2026-10-12. Prior Astra verdicts stand; the contracts are unchanged; the verdict marker is
+`ANTIGRAVITY_REVIEW: …`. This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which
+the owner accepted for backward compatibility, and emits neither reviewer's marker itself.
+
+No conflicts. Five files were touched by both branches — both canonical documents, `schema.prisma`,
+`packages/db/src/index.ts` and `constraints.integration.test.ts` — and all five auto-merged. Verified
+rather than trusted: every line either side added since the merge base is present in the result, and
+every P5-04 settings/policy and P5-07 leads file is byte-identical to the accepted parent.
+
+**#81 PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf`, by Antigravity.
+
+### Earlier — propagating the accepted P5-04 parent into P5-07 / PR #80
+
+`ASTRA_REVIEW: PASS head=a1b46cb7789091f7782f039fdbf148631a77e3ea` accepted PR #79. The directive on #80
+propagates that exact parent into `feat/p5-07-leads-pipeline` by ordinary merge commit, **one branch
+only**: no rebase, no force-push, nothing to `main`, nothing into #81 or later, and Stage D not started.
+
+One conflict, additive: both branches appended to `OUTCOMES` in `apps/web/src/ui/outcome-notice.tsx`, and
+the resolution keeps both sides. `catalogue.ts`, `schema.prisma` and `packages/db/src/index.ts` were the
+other three files both branches touched; all three auto-merged, and every line either side added is
+present in the result. Every P5-04 settings, policy and simulation file is byte-identical to the accepted
+head. `presenceMode`/`presenceTypingLeadMs`, which the directive named, do not exist at #80 — they arrive
+with P4-05 (`6ac04a3`), below #80 in the chain, so that collision is a later branch's problem and is
+recorded as such.
+
+**#80 PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c`, by Antigravity under the owner's temporary
+reviewer route.
+
+### Completed — P5-04 / Issue #30, the blockers on PR #79
+
+**Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
+persisted exact-head run was green and did not cover any of the seven cases.
+
+All seven are repaired on `feat/p5-04-ai-settings-simulation`:
+
+1. **role authorization** — `savePolicy` requires OWNER or ADMIN (`ONBOARDING_UX.md`: workspace roles
+   constrain policy changes), the screen shows the settings read-only to anybody else, and the action
+   reports the refusal as `FORBIDDEN` rather than crashing;
+2. **concurrent writes** — `automation_policies.version`, compared under `SELECT … FOR UPDATE` inside the
+   save's own transaction, with a typed `CONFLICT` carrying the stored values, and a barrier-based
+   regression that fails when the lock is removed;
+3. **the confirmation** — the acknowledgement carries the exact impact codes the server computed and
+   showed, the summary is rendered next to the refused proposal rather than next to stored values, and
+   the proposal travels with the version it was composed against;
+4. **custom timing** — four range inputs on the form, sent only for `CUSTOM`, in seconds on screen and
+   milliseconds in the store;
+5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
+   change is reachable;
+6. **the simulation** — channel, window, connection, the human-support exception, what would be sent and
+   which approved template are all explicit inputs; the chosen channel's own after-window policy is used,
+   and the screen states which inputs produced the answer. Every one of them is proved to move the
+   deterministic outcome, including the **template allowlist**: it reaches the engine as
+   `templateRoute.automatable`, computed where a catalogue would be rather than inside the engine
+   (ADR-016), so empty versus non-empty decides `SKIP` against `SCHEDULE` and the three WhatsApp modes are
+   distinguishable. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is what the gate keys on —
+   modelling it as an expired free-form window was why the modes had been indistinguishable;
+7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
+   defect finding 7 actually was.
+
+**The stale-proposal flow converges.** A refusal hands the owner's values back rebased onto the version
+stored now, with the impact summary recomputed against it and a seal minted for that exact pair — so after
+another admin's save the original operator reviews a refreshed proposal and completes it, instead of
+re-posting a stale version into the same refusal. A seal stops verifying as soon as the stored version
+moves, including when the change leaves the impact list identical; the store's conditional write remains
+the separate answer to "is this still the state you saw".
+
+**One predicate decides whether the acknowledgement is offered**, and the sentence that names the control
+asks the same one — `acknowledgementOffered`. Weighing a subset of its five facts somewhere else is how the
+page came to say "tick the box" with no box.
+
+**Closed — Astra's two R5-final blockers at `c4ebadb0…`.**
+
+8. **Widening an already-enabled allowlist is material.** With `TEMPLATE_AUTOPILOT` already stored, adding
+   a template used to emit `impacts: []`: no effect summary, no sealed acknowledgement, an audit row
+   claiming nothing material happened. `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is now its own impact code
+   in both catalogues, compared as a **set** — empty→non-empty and any addition are material, removal and
+   reorder are not, a repeated name is not a change, a one-for-one swap is — and it sits in an `else if`
+   beside the enablement arm, so enabling the mode and filling the list in one edit gets one warning
+   rather than the same consequence twice. The action needed no change: the gate already refuses any
+   proposal with impacts and no server-minted seal, and the store already recomputes impacts for the audit
+   inside the write's transaction.
+9. **A normally created Business Profile now has settings to render.** `createBusinessProfile` writes the
+   conservative default **in the same statement** as the profile, so the two rows arrive together or
+   neither does; the test-only `ensureDefault` that had been masking its absence is gone. Values come from
+   the domain's `defaultAutomationSettings`, not from the column defaults, and a domain test asserts the
+   two agree field by field. Migration `20261011090000_profile_default_policy` backfills older profiles
+   idempotently by `NOT EXISTS`. The regression starts at profile creation
+   (`apps/web/src/server/settings-screen.integration.test.ts`) and asks the page's own predicate,
+   `profileDefaultOf`, whether there is a form; the database side proves a rolled-back creating
+   transaction leaves neither row, that concurrent creations get exactly one default each, and that no
+   Business Profile exists without one.
+
+**The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
+and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
+impact codes is not proof, because the codes are in the URL, the page and the catalogue.
+
+**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79 PASSED at
+`a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
+`d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
+missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
+#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity); **#82 is the current gate**,
+carrying that accepted parent and awaiting independent review; #83 and everything below is frozen and
+**not ready for review**, because they still contain the pre-repair #79.
+
+**The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
+on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
+observably blocked on the holding transaction's own id. The review request issued against `ef8b0d4f…` is
+superseded by this test-only head, and #79 remains the current gate.
+
+**The #79 repairs are propagated exactly one step.** They exist on
+`feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
+#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
+down in turn once #80 passes.
+
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
 **Reviewed head:** `5c28dcd73c8f86dea4625326bc53747a0af320ce`.
@@ -68,7 +214,7 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
-### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
+### Previous work, now passed — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
 
 **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
 immutability and the per-example lifecycle pagination in full, and returned one blocking reachability

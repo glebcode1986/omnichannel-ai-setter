@@ -105,6 +105,31 @@ export async function createEndToEndInfrastructure(): Promise<EndToEndInfrastruc
   };
 }
 
+/**
+ * Sets the Business Profile's automation default to what a scenario needs.
+ *
+ * The row already exists: `createBusinessProfile` writes the conservative default in the same statement as
+ * the profile, so a worker scenario that wants AUTOPILOT is editing settings an owner could have edited,
+ * not inventing a policy no production path writes. Creating one here would collide with the partial
+ * unique index that keeps a profile to a single default.
+ *
+ * Insists on exactly one row, because a fixture that quietly matched none would leave the scenario running
+ * against OFF — and OFF sends nothing, so every assertion about sending would fail somewhere far from here.
+ */
+export async function setProfileDefaultPolicy(
+  db: DbClient,
+  scope: { readonly workspaceId: string; readonly businessProfileId: string },
+  data: Parameters<DbClient["automationPolicy"]["updateMany"]>[0]["data"],
+): Promise<void> {
+  const { count } = await db.automationPolicy.updateMany({
+    where: { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId, channelAccountId: null },
+    data,
+  });
+  if (count !== 1) {
+    throw new Error(`expected one Business Profile default policy to update, matched ${String(count)}`);
+  }
+}
+
 export async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 10_000, intervalMs = 25): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!(await check())) {

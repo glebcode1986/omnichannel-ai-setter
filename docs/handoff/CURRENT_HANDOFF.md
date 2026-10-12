@@ -245,6 +245,66 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+### Where the review gate actually stands
+
+One list, because two documents disagreeing about this is itself a defect Astra has blocked a release
+over — a note saying "awaiting re-review" next to a note saying "passed" leaves a reader no way to tell
+which is current.
+
+| PR | Branch | Status |
+| --- | --- | --- |
+| #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
+| #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
+| #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
+| #82 | `feat/p3-02-goals-followups` | **The current gate.** The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is the only branch below #81 it has been propagated into. Awaiting independent review. |
+| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. |
+| #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
+
+**The independent reviewer is Astra again, temporarily, from 2026-10-13.** The owner routed reviews to
+Antigravity (Gemini 3.8 Flash) on 2026-10-12 and has now put Astra back as primary for the next eligible
+exact head while he diagnoses the local Antigravity watcher's workspace-write and concurrent-run
+behaviour. Both verdicts already given stand — #80 and #81 were accepted by Antigravity at
+`bd1c039998fb…` and `d9a34ffef120…`, and neither is to be re-reviewed merely to change the reviewer's
+name. **Never launch both reviewer systems for the same PR and SHA.**
+
+What has not changed: the review contracts, every previously accepted verdict, and the fact that **Claude
+is the only authorized author** — no author-role substitution by any model without the owner's fresh
+approval. The readiness marker this side publishes keeps its spelling,
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which the owner accepted for backward compatibility and
+which routes to whoever is currently reviewing. A verdict marker — `ASTRA_REVIEW` or
+`ANTIGRAVITY_REVIEW` — is the reviewer's and is never emitted from this side.
+
+**One provenance note worth keeping.** The owner's own workstation has a separate clone and produced a
+local-only merge commit for #82 (`2abb64117c2274adfbe6fc85ae7d552e23faf4b9`) during local reviewer
+activity. It is not in this repository, it is not a GitHub head, and a `Co-Authored-By: Claude` line does
+not make a commit this process's work. The #82 propagation recorded below was performed here, from the
+remote heads, and its SHA is the one on the branch.
+
+The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
+and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
+parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
+merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
+started.
+
+**The propagation into #80 found no semantic collision, which is worth recording because the dry run had
+predicted where one would be.** Exactly four files were touched by both branches: `catalogue.ts`,
+`schema.prisma` and `packages/db/src/index.ts` auto-merged (both sides only added — keys, models, exports
+— and every added line from both sides is present in the result, checked line by line), and
+`apps/web/src/ui/outcome-notice.tsx` conflicted because both appended to one `OUTCOMES` array. Resolved by
+keeping both: P5-07's `MOVED`/`STALE_STAGE`/`UNCHANGED_STAGE` and P5-04's `FORBIDDEN`/`TOO_LONG`/the three
+`TIMING_*`/the two `TAKEOVER_*`. The `REFUSALS` set below it auto-merged and already held both. Every
+P5-04 settings, policy and simulation file is byte-identical to the accepted head.
+
+The directive asked specifically that no part of the policy proposal state be dropped, naming
+`presenceMode` and `presenceTypingLeadMs`. **Those two fields do not exist at #80**: they arrive with
+P4-05 (commit `6ac04a3`, `feat/p4-05-whatsapp-presence`), which is below #80 in the chain, so the
+collision the directive is guarding against becomes material when this parent reaches the P4-05 branches
+and not before. What #80 does carry is the complete proposal state the confirm/refuse flow uses, and it is
+built in exactly one place (`proposalFrom`) and converted to the store's edit in exactly one place
+(`editFrom`); both are unchanged from the accepted head.
+
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
 down the chain by ordinary merge, every branch from #79 to #103 carries them, and each was pushed with
@@ -256,8 +316,265 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
-   independent re-review.**
+1. **P5-04 / Issue #30 — thirteen blockers on PR #79 across three reviews and two directed repairs, all
+   repaired.**
+
+   **The stale-proposal dead end, directed at `e3210e88…`.** Two admins, one screen: A composes a change
+   that widens something against version N, B saves, A submits. The CONFIRM gate refuses *before*
+   `savePolicy`, so the CONFLICT path that re-stamps a proposal never ran — the refusal handed A's values
+   back still at version N, the page saw a stale proposal, withheld the acknowledgement and the seal, and
+   the form re-posted version N for ever. It failed closed, which is the right direction, and it never
+   converged, which is the defect: the screen promised a recovery that could not complete, and two pieces
+   of copy said so in as many words.
+
+   The fix is one idea: **the review is always a triple — the owner's values, the version stored now, and
+   the impacts those values have against that version.** The refusal mints that triple and the gate
+   verifies it, so a refusal is a usable review rather than a repetition. Three things follow:
+
+   - a refusal hands back the values rebased onto the current version, with the summary recomputed against
+     it, so submitting again completes instead of looping;
+   - a seal stops verifying the moment anybody else saves — **including a change that leaves the impact
+     list identical**, which a seal over the version the *form* carried could not tell apart and left to
+     the store's conditional write as the only guard;
+   - the two gates stay distinct questions. "Did you see this summary" is the seal; "is this still the
+     state you saw" is the store's versioned write. Neither stands in for the other, and the write is
+     still refused when a form names a version that is not the stored one.
+
+   The copy was wrong as well as the flow, and that is fixed with it: the "tick the box to save them"
+   sentence no longer renders when there is no box, and the button says *re-check these values against the
+   current settings* in the state where pressing it does that, rather than "Save anyway" for a save the
+   gate would refuse.
+
+   **A follow-up on that copy fix, because the first version of it was complete-looking rather than
+   complete.** The checkbox is withheld for five reasons and the sentence that names it weighed only one of
+   them, so a reader without permission to edit, a URL carrying impacts but no seal, and a profile with no
+   stored policy were each still told to tick a control that was not on the page — the worst of them
+   showing "You are seeing what is in use" and "Tick the box to save them" at the same time. The rule was
+   written in a comment beside the sentence, in those words, and was simply not the rule the code applied.
+   It is one predicate now, `acknowledgementOffered`, asked once for the control and for the sentence that
+   names it, and tested for each missing piece.
+
+   **Found in the same pass, reported rather than fixed at the time, and now closed as Astra's first
+   R5-final blocker:** `policyImpactsOf` modelled **no impact at all** for widening the WhatsApp template
+   allowlist once `TEMPLATE_AUTOPILOT` was already the stored policy — the allowlist sub-check sat inside
+   an arm guarded by `before.whatsappAfterWindowPolicy !== "TEMPLATE_AUTOPILOT"`, so it was unreachable in
+   exactly the state the screen itself produces and warns about. See blocker 8 below for the repair.
+
+   **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
+   and covered none of the seven cases, which is the usual shape of these findings: every one of them is
+   a gap *between* two correct pieces, and a gap has no failing test until somebody writes one.
+
+   **1. Policy changes had no role authorization.** `ONBOARDING_UX.md` says workspace roles constrain
+   policy changes, and connecting a channel already enforced that; changing the automation policy did not.
+   `requireBusinessProfileContext` proves membership and profile visibility, which is not permission, so
+   an AGENT holding a perfectly valid context could switch the workspace to AUTOPILOT and have it audited
+   as a legitimate change. `savePolicy` now requires `WORKSPACE_ADMIN_ROLES` **before it reads the row** —
+   deliberately before, because a store that checked the row first would answer `CONFLICT` for a wrong
+   version and `SAVED` for the right one, which tells a member without permission what the stored version
+   is. The screen renders the settings read-only for anybody else and the action reports `FORBIDDEN`.
+
+   **2. Two tabs silently overwrote each other.** The save read the current row and then wrote by `id`
+   alone, and neither the form nor `PolicyEdit` carried a version — so the second tab posted its whole
+   form from a snapshot predating the first save, succeeded, reverted fields its author had never seen,
+   and left two audit rows deriving `before` from the same stale state. There is now an
+   `automation_policies.version` column, `PolicyEdit.expectedVersion` is **required** rather than optional
+   (an optional guard is a guard the next caller forgets), and the comparison happens under a
+   `SELECT … FOR UPDATE` taken at the top of the save's own transaction. The lock is the part worth
+   keeping: without it both savers read the same version at READ COMMITTED, both find their expectation
+   satisfied, and the second write still lands on the first one's result — a lost update that no amount of
+   version *checking* catches, because the check itself was reading stale data. A `Promise.all` test does
+   not prove this; removing the lock leaves it passing, because the two transactions simply run in turn.
+   The regression is a barrier: one writer is held open across the other's read.
+
+   **3. The high-impact confirmation could be acknowledged before the summary existed.** The checkbox was
+   rendered on every load and the server only asked whether `confirm=on` had been posted, so "show the
+   effect summary before save" was skippable by ticking it first — and when the save *was* refused, the
+   redirect carried only impact codes, so the form was rebuilt from **stored** values and the summary
+   ended up describing a change that was no longer on screen. The acknowledgement is now the summary's own
+   checkbox, its value is the exact list of impact codes the server computed, and the server compares
+   sets: acknowledging fewer, more, or a different set is refused again. The refused proposal travels in
+   the URL and the form renders from it, so the summary and the values being confirmed are the same
+   thing. The proposal carries the version it was composed against, so an acknowledgement cannot be
+   carried across somebody else's change either.
+
+   **4. "Custom" timing could be selected and not configured.** The selector offered `CUSTOM` and the
+   form posted only `timingPreset`, so the store fell back to the previous ranges and selecting Custom
+   saved nothing custom. Four range inputs are now on the form — seconds on screen, milliseconds in the
+   store — posted only when the preset is `CUSTOM`, because a named preset carries its own ranges and
+   sending both is a contradiction the store refuses. They are rendered whichever preset is selected: only
+   rendering them for `CUSTOM` would mean a round trip before the inputs even appeared.
+
+   **5. The audit UI omitted the values and hid everything past twenty entries.** The store returned
+   `before` and `after` and the screen rendered actor, time and impact labels only; the read took the
+   newest twenty with no continuation, so the twenty-first change was unreachable from the screen for
+   ever. `listPolicyAudits` is now a keyset page over `(changedAt, id)` — both halves, because two saves
+   can share a millisecond and a cursor on an instant alone repeats or skips rows, which on a change log
+   reads as a change happening twice or not at all. The screen shows both sides of every field that
+   *moved*, from a named field list rather than `Object.keys`, so a column added later cannot reach this
+   screen with no label and no translation.
+
+   **6. The simulation could not test what it claimed to.** Channel, account health, capabilities and the
+   messaging window were constants: every run was Instagram, connected, inside an open free-form window.
+   So the WhatsApp selector and template allowlist could never affect the result, neither Instagram
+   after-window choice was ever exercised, and the screen still described the answer as the expected
+   send/review path for the saved configuration. A playground that silently tests one path of several is
+   more misleading than one that tests none, because its answer looks complete. All three are explicit
+   inputs now, the chosen channel's own after-window policy is used (the union is per channel precisely so
+   a WhatsApp conversation cannot be judged against an Instagram policy), and the result states which
+   inputs produced it. `AFTER` is modelled as an expired window rather than `NOT_ELIGIBLE`, which would
+   short-circuit the gates the run exists to exercise.
+
+   **The re-review at `d67da89e…` closed findings 1, 2, 5 and 7 and kept three.** All three are now fixed,
+   and the third one corrects a judgement of mine rather than only a defect.
+
+   **The acknowledgement needed a server-issued proof, not a comparison.** Comparing the posted impact
+   codes against the freshly computed ones is necessary and not sufficient: the codes are public — URL,
+   page, translation catalogue — so a first crafted POST naming the right code satisfied the comparison
+   with no summary ever rendered, and "the page only renders the checkbox after a refusal" is a statement
+   about one caller of a public endpoint. The refusal now mints an HMAC seal over the encoded proposal, the
+   version and the sorted impacts (`proposal-seal.ts`, `AUTH_SECRET`, compared with `timingSafeEqual`), and
+   the save accepts an acknowledgement only with a seal it minted. Stateless rather than a persisted
+   pending proposal: a table would need an owner, a lifetime, a cleanup policy and an answer for two tabs
+   proposing at once, and what is being authenticated already travels with the request.
+
+   **An invalid Custom submission was reported as a success, and a test of mine said that was correct.**
+   The permanent case read "sends nothing when a custom range is only half typed" — so a repair-directive
+   requirement was contradicted by a green suite, which is the trap of a test quoting a spec and asserting
+   its opposite. It refuses now, with three outcomes, and the bounds are shared with the form's own
+   `min`/`max`. The same hole sat three lines below the fieldset: `takeoverPauseHours` omitted a cleared
+   box, the store kept the stored hours, and a crafted `100000` was eleven years of silence accepted as a
+   deliberate choice.
+
+   **The allowlist: I argued a limitation where the mechanism already existed.** My previous note said
+   making the playground decide template routing would be a second implementation of a send rule. The
+   premise was right and the conclusion was wrong, because `templateRoute` — two settled booleans computed
+   where the catalogue is, never inside the engine — is this chain's own design for exactly this question.
+   It is implemented here: `TemplateRoute` and the optional `PolicyInput.templateRoute`, an
+   `evaluateTemplateGate` in which `TEMPLATE_REQUIRED` is a review item a person can resolve while
+   `NO_ELIGIBLE_TEMPLATE` is a dead end, the reason code itself, and a simulation that computes
+   `automatable` from the owner's **saved** allowlist. Empty versus non-empty now decides `SKIP` against
+   `SCHEDULE`, and the three WhatsApp modes are distinguishable — asserted in the engine's own suite, where
+   a policy rule belongs.
+
+   **The bug that was the real cause.** I had mapped "after the window" to an expired free-form window for
+   both channels. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is the state the template gate
+   keys on — so the gate never ran, and nothing done to the allowlist could have changed an answer.
+   Instagram's closed window stays an expired free-form one, because its after-window policy is about what
+   may still happen then.
+
+   **Six more came from my own adversarial pass before sending the evidence**, and two were as serious as
+   anything in the review: the playground's GET form replaced the whole query and so silently destroyed a
+   pending proposal — while the history link three hundred lines away obeyed the opposite rule *and had a
+   test saying why*, one rule with two implementations and the untested one losing state; and the audit
+   diff sorted every list and compared the *rendered* line, so a criteria reorder or a criterion split in
+   two wrote an audit row whose diff rendered empty — a history entry asserting a change and showing none.
+   The comparison is on a JSON encoding now, and only the two lists the store itself treats as unordered
+   are sorted. Also: the page held both versions and compared them nowhere; "show earlier changes" carried
+   the playground's question and so billed a model request per page of history; and the length bound
+   covered one of the three free-text fields that share the proposal parameter, which is a bound on
+   nothing.
+
+   That last pair needed a fifth input to be provable at all. `HUMAN_ASSISTED_EXTENDED` opens a human-only
+   review path only while a human-support exception is live, and the exception was hard-coded unavailable
+   — so both Instagram choices produced the same `WINDOW_CLOSED` and nothing selected on this screen could
+   change a single answer. It is an explicit input now, and the only one whose default is the conservative
+   value: an exception is something a business has to have been approved for, and assuming it would show
+   an owner a review path their account may not offer.
+
+   **The concurrency proof is deterministic, by directive.** The barrier in "does not lose a write that
+   commits between the read and the update" synchronised with `setTimeout(250)`, which is a guess about how
+   the host scheduled two connections rather than a fact about the database. Under the full parallel suite
+   the guess was sometimes wrong and the case then reported a lost update that was really a race inside the
+   test. Where that was observed matters, so it is recorded precisely: on the **propagation tree**, where
+   this branch is merged into the chain tip and the `@omnichannel/db` suite is 1,078 cases, one of three
+   identical runs failed. On this branch's own 460-case suite the race does not lose — six consecutive full
+   runs pass, and so does the timed version under two suites in parallel. So the repetition here is not
+   what makes the repair sound; the argument is structural, and the merged tree is what proves the
+   assumption can be false in this repository at all. In the one regression that distinguishes a real row lock
+   from a version check reading stale data, that is worse than having no case: a flake there teaches the
+   next person to re-run rather than look.
+
+   It now waits for the state it depends on: a backend observably blocked on the **holding transaction's
+   own id**, read from `pg_locks`. Keyed to that transaction rather than to "some lock is ungranted
+   somewhere", because the broad form is satisfied by an unrelated suite's contention and would reintroduce
+   the race it replaces. Bounded, and it throws if the barrier never forms, so the case cannot pass for the
+   wrong reason. Still load-bearing: deleting the `FOR UPDATE` from `savePolicy` fails it.
+
+   **Two defects found, measured, and deliberately not fixed here.** Both are reported on the PR rather
+   than repaired, because this repair is scoped to named blockers and widening it would make the diff
+   unreviewable against them.
+
+   - **Nothing in production created an `automation_policies` row.** Reported here, and now closed as
+     Astra's second R5-final blocker — see blocker 9 below. The measurement in this note was close: the
+     fixtures that collided with `automation_policies_profile_default_key` turned out to be **14 files**
+     (5 in `packages/db`, 5 in `apps/worker`, 1 in `apps/web`, plus the three suites whose own cases were
+     about the absent row), not the 20 + 8 estimated from the grep.
+   - **The send path still asks "has this policy changed?" with `updated_at`.**
+     `delivery-store.ts policyUnchanged` compares a `TIMESTAMP(3)`, which is the mechanism this branch's
+     own migration rejects for that exact question — two writes inside one millisecond compare equal.
+     `version` is now the precise answer, so this is one rule with two implementations and the weaker one
+     is in the send path. Harmless today, because every write moves both. Not changed here: it is a
+     reviewed send gate, and a send gate is not something to alter inside a repair about a settings
+     screen.
+
+   **7. The coordination documents contradicted each other.** See the table above; both files now say the
+   same thing, and the queue names #79 as current work rather than #78.
+
+   One thing worth carrying forward: the version rule now has **one** implementation. `expectedVersionOf`
+   moved to `apps/web/src/server/form-fields.ts`, which Knowledge, Style and AI settings all read from. It
+   is deliberately strict — `Number.parseInt` is happy to read `2` out of `"2; DROP"`, and a guard whose
+   refusals depend on the shape of the attacker's string is not a guard.
+
+   Every new guard was mutation-checked: removing the role check, the version comparison, the row lock,
+   the acknowledgement comparison, the version refusal in the action and the `CUSTOM`-only timing
+   condition each fails a named test.
+
+   **8. Widening an already-enabled WhatsApp template allowlist was not a material change.** Astra's
+   first R5-final blocker, and the finding this document had been carrying as reported-not-fixed. With
+   `TEMPLATE_AUTOPILOT` already stored, adding a template emitted `impacts: []`: no effect summary, no
+   sealed acknowledgement, and an audit row saying nothing material happened. ADR-016 makes an empty
+   allowlist permit no unattended template send at all, so the first entry is the dormant-to-live step and
+   every later one widens the same unattended authority.
+
+   `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is its own impact code, in both catalogues, compared as a
+   **set**: empty→non-empty and any addition are material, removal and reorder are not, a repeated name is
+   not a change, and a one-for-one swap *is* one — which is why a length comparison would have been
+   wrong. It is an `else if` beside the enablement arm, so enabling the mode and filling the list in one
+   edit is one decision with one warning rather than the same consequence stated twice. Nothing in the
+   action changed: the gate already refuses any proposal with impacts that carries no server-minted seal,
+   so emitting the code is what makes the existing confirmation apply, and the store already recomputes
+   impacts for the audit row inside the same transaction as the write.
+
+   **9. A production Business Profile had no automation settings, so this feature had no form.** Astra's
+   second R5-final blocker, and the other finding carried here. `createBusinessProfile` created the
+   profile and nothing else, `readPolicies` returned `[]`, the page set `stored` from that list, and `form`
+   was `undefined` — a profile that is listed, accepts a channel account and cannot be configured, with
+   automation stuck at OFF. The permanent policy suite passed because it created the row itself, in a
+   helper named `ensureDefault`.
+
+   The default is now written **in the same statement** as the profile, as a nested create, so the two
+   rows arrive together or neither does; `ensureDefault` is gone, and the suite runs against the policy a
+   real profile has. Not a second call afterwards, because two statements can be interrupted between them
+   and what is left behind is exactly the half-made profile; and not lazily on first read, because reading
+   settings is open to any member who may see the profile while writing them is OWNER/ADMIN only, so an
+   initialization hidden in a read would have to break that boundary. The values come from the domain
+   (`defaultAutomationSettings`), not from the column defaults, with a domain test asserting it agrees
+   with `createAutomationPolicy` field by field. Migration `20261011090000_profile_default_policy`
+   backfills profiles created before this, idempotently by `NOT EXISTS` rather than by an inferred
+   `ON CONFLICT` target, because the index that would catch a duplicate is partial.
+
+   The product-path regression starts where an owner starts:
+   `apps/web/src/server/settings-screen.integration.test.ts` creates the Workspace and the profile through
+   the production path, authorizes an owner, asks the screen's own predicate (`profileDefaultOf`, now
+   extracted from `page.tsx` so the test drives the page's rule rather than a restatement of it) whether
+   there is a form, asserts the conservative values, and completes the first save against the version the
+   form rendered. All four cases fail if the nested create is removed. On the database side,
+   `policy-store.integration.test.ts` proves the row is conservative, that a rolled-back creating
+   transaction leaves **neither** row, that four concurrent creations get exactly one default each, and —
+   asked of the whole database rather than of the rows the case knows about — that no Business Profile
+   exists without one.
+
+1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
 
    **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
    immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
