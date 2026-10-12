@@ -99,6 +99,49 @@ enum LeadValueSource {
   HUMAN_SET
 }
 
+/// What a business may remember about a customer (Issue #54).
+///
+/// There is deliberately no category for inferred wealth, vulnerability or psychological profile. Not a
+/// rule forbidding them — no value to put them in. Adding one would take a migration somebody writes on
+/// purpose, which is the only way a decision like that should be reachable.
+enum CustomerFactCategory {
+  CONTACT_PREFERENCE
+  SERVICE_HISTORY
+  STATED_REQUIREMENT
+  LOGISTICS
+  CONSENT
+}
+
+/// Who says so. A model proposing is a suggestion; the source of a suggestion is the model that made it.
+enum CustomerFactSource {
+  CUSTOMER_STATED
+  HUMAN_RECORDED
+  AI_SUGGESTED
+}
+
+enum CustomerFactStatus {
+  /// Proposed and not in use. A CHECK keeps an unconfirmed entry out of ACTIVE.
+  SUGGESTED
+  ACTIVE
+  /// Replaced by a newer entry for the same subject; kept, because how a fact changed is part of it.
+  SUPERSEDED
+  EXPIRED
+}
+
+enum ContactPointKind {
+  PHONE
+  EMAIL
+}
+
+/// How much a contact point is worth as identity evidence. Only PROVIDER_VERIFIED is strong enough to
+/// associate two identities automatically: a number somebody typed into a chat is worth recording and is
+/// not proof of anything.
+enum ContactPointVerification {
+  UNVERIFIED
+  CUSTOMER_STATED
+  PROVIDER_VERIFIED
+}
+
 enum TakeoverState {
   NONE
   REVIEW_REQUIRED
@@ -339,6 +382,9 @@ model User {
   composedDeliveries        DeliveryJobRecord[]   @relation("ComposedDeliveries")
   onboardingSkips           OnboardingSkip[]
   policyChangeAudits        PolicyChangeAudit[]
+  confirmedCustomerFacts    CustomerFact[]            @relation("CustomerFactConfirmer")
+  confirmedCustomerPreferences CustomerPreference[]   @relation("CustomerPreferenceConfirmer")
+  dismissedDuplicates      DuplicateContactCandidate[] @relation("DuplicateCandidateDismisser")
   assignedLeads             Conversation[]            @relation("LeadAssignee")
   leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
@@ -629,6 +675,12 @@ model Contact {
   businessProfile   BusinessProfile   @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
   channelIdentities ChannelIdentity[]
   conversations     Conversation[]
+  contactPoints     ContactPoint[]
+  externalIdentities ExternalIdentity[]
+  customerFacts      CustomerFact[]
+  customerPreferences CustomerPreference[]
+  duplicateCandidates DuplicateContactCandidate[] @relation("DuplicateCandidateContact")
+  duplicateCandidateOf DuplicateContactCandidate[] @relation("DuplicateCandidateOther")
 
   @@unique([workspaceId, businessProfileId, id])
   @@map("contacts")
@@ -706,6 +758,8 @@ model Conversation {
   leadQualificationAnswers LeadQualificationAnswer[]
   composedDeliveries DeliveryJobRecord[]
 
+  summary                  ConversationSummary?
+
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, channelAccountId, id])
   /// One thread per provider participant per channel account (platform DM threads are 1:1).
@@ -778,6 +832,150 @@ model LeadQualificationAnswer {
   @@map("lead_qualification_answers")
 }
 
+/// A phone number or an email address, belonging to one contact in one Business Profile (Issue #54).
+model ContactPoint {
+  id                String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String                   @map("workspace_id")
+  businessProfileId String                   @map("business_profile_id")
+  contactId         String                   @map("contact_id")
+  kind              ContactPointKind
+  /// Normalized for comparison, so two spellings of one number are one contact point.
+  normalizedValue   String                   @map("normalized_value")
+  /// Exactly as the customer gave it, because that is what an operator recognises on screen.
+  rawValue          String                   @map("raw_value")
+  verification      ContactPointVerification @default(UNVERIFIED)
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  contact Contact @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "contact_points_contact_fkey")
+
+  /// Scoped to the profile on purpose: the same number in another profile is another customer, and a
+  /// unique index across profiles would be the cross-business identity graph this task avoids.
+  @@unique([workspaceId, businessProfileId, kind, normalizedValue], map: "contact_points_value_key")
+  @@index([workspaceId, businessProfileId, contactId], map: "contact_points_contact_idx")
+  @@map("contact_points")
+}
+
+/// An id this customer has in a system outside the product: a booking tool, a CRM, a till.
+model ExternalIdentity {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String   @map("workspace_id")
+  businessProfileId String   @map("business_profile_id")
+  contactId         String   @map("contact_id")
+  system            String
+  externalId        String   @map("external_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  contact Contact @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "external_identities_contact_fkey")
+
+  @@unique([workspaceId, businessProfileId, system, externalId], map: "external_identities_value_key")
+  @@map("external_identities")
+}
+
+/// A durable thing the business knows about a customer. A CHECK requires a confirming member for ACTIVE,
+/// which is how "model output cannot become an authoritative customer fact" is enforced.
+model CustomerFact {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String               @map("workspace_id")
+  businessProfileId String               @map("business_profile_id")
+  contactId         String               @map("contact_id")
+  category          CustomerFactCategory
+  subject           String
+  value             String
+  source            CustomerFactSource
+  status            CustomerFactStatus   @default(SUGGESTED)
+  sourceMessageId   String?              @map("source_message_id")
+  sourceDraftId     String?              @map("source_draft_id")
+  confirmedByUserId String?              @map("confirmed_by_user_id")
+  confirmedAt       DateTime?            @map("confirmed_at")
+  /// When this stops being true by itself. NULL means it does not expire on its own.
+  expiresAt         DateTime?            @map("expires_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  contact       Contact  @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "customer_facts_contact_fkey")
+  sourceMessage Message? @relation(fields: [workspaceId, businessProfileId, sourceMessageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "customer_facts_message_fkey")
+  sourceDraft   AiDraft? @relation(fields: [workspaceId, businessProfileId, sourceDraftId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "customer_facts_draft_fkey")
+  confirmedBy   User?    @relation("CustomerFactConfirmer", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "customer_facts_confirmer_fkey")
+
+  /// At most one ACTIVE entry per subject: memory that contradicted itself would be worse than none.
+  @@unique([workspaceId, businessProfileId, contactId, category, subject], where: raw("status = 'ACTIVE'"), map: "customer_facts_active_subject_key")
+  @@index([workspaceId, businessProfileId, contactId, status], map: "customer_facts_contact_idx")
+  @@map("customer_facts")
+}
+
+/// What a customer would rather. Its own table because "prefers mornings" is not the same kind of claim
+/// as "booked on the 4th", and merging them would let a preference be cited as evidence.
+model CustomerPreference {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String             @map("workspace_id")
+  businessProfileId String             @map("business_profile_id")
+  contactId         String             @map("contact_id")
+  subject           String
+  value             String
+  source            CustomerFactSource
+  status            CustomerFactStatus @default(SUGGESTED)
+  sourceMessageId   String?            @map("source_message_id")
+  sourceDraftId     String?            @map("source_draft_id")
+  confirmedByUserId String?            @map("confirmed_by_user_id")
+  confirmedAt       DateTime?          @map("confirmed_at")
+  expiresAt         DateTime?          @map("expires_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  contact     Contact @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "customer_preferences_contact_fkey")
+  confirmedBy User?   @relation("CustomerPreferenceConfirmer", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "customer_preferences_confirmer_fkey")
+
+  @@unique([workspaceId, businessProfileId, contactId, subject], where: raw("status = 'ACTIVE'"), map: "customer_preferences_active_subject_key")
+  @@index([workspaceId, businessProfileId, contactId, status], map: "customer_preferences_contact_idx")
+  @@map("customer_preferences")
+}
+
+/// A model's reading of one conversation. Assistive only, and it has no confirmation column at all —
+/// there is nothing here for a person to make authoritative, which is the honest shape of that claim.
+model ConversationSummary {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id")
+  businessProfileId String    @map("business_profile_id")
+  conversationId    String    @map("conversation_id")
+  summary           String
+  modelProvider     String    @map("model_provider")
+  modelName         String    @map("model_name")
+  /// How far through the thread this reads, so a stale summary is recognisable rather than trusted.
+  coversMessageId   String?   @map("covers_message_id")
+  expiresAt         DateTime? @map("expires_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "conversation_summaries_conversation_fkey")
+
+  @@unique([workspaceId, businessProfileId, conversationId], map: "conversation_summaries_conversation_key")
+  @@map("conversation_summaries")
+}
+
+/// Two contacts that might be the same person. A suggestion, never a merge (Issue #54).
+model DuplicateContactCandidate {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String    @map("workspace_id")
+  businessProfileId String    @map("business_profile_id")
+  /// Ordered by id, so one pair cannot become two rows facing each other. A CHECK insists.
+  contactId         String    @map("contact_id")
+  otherContactId    String    @map("other_contact_id")
+  reason            String
+  dismissedByUserId String?   @map("dismissed_by_user_id")
+  dismissedAt       DateTime? @map("dismissed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  contact      Contact @relation("DuplicateCandidateContact", fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "duplicate_contact_candidates_contact_fkey")
+  otherContact Contact @relation("DuplicateCandidateOther", fields: [workspaceId, businessProfileId, otherContactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "duplicate_contact_candidates_other_fkey")
+  dismissedBy  User?   @relation("DuplicateCandidateDismisser", fields: [dismissedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "duplicate_contact_candidates_dismisser_fkey")
+
+  @@unique([workspaceId, businessProfileId, contactId, otherContactId], map: "duplicate_contact_candidates_pair_key")
+  @@map("duplicate_contact_candidates")
+}
+
 model Message {
   id                      String                 @id @default(uuid(7))
   workspaceId             String                 @map("workspace_id")
@@ -808,6 +1006,8 @@ model Message {
   sentByUser     User?          @relation(fields: [sentByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   anchoredDrafts AiDraft[]      @relation("DraftAnchor")
   styleExamples  StyleExample[]
+
+  customerFacts           CustomerFact[]
 
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, conversationId, id])
@@ -874,6 +1074,8 @@ model AiDraft {
   sentMessage   Message?           @relation("DraftSend")
   deliveryJob   DeliveryJobRecord?
   styleExamples StyleExample[]
+
+  customerFacts     CustomerFact[]
 
   @@unique([workspaceId, businessProfileId, id])
   /// One draft per logical generation, so a retried job is idempotent.

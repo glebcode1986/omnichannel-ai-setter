@@ -184,6 +184,35 @@ export {
 export * from "./repositories/channel-credentials";
 export * from "./repositories/channel-accounts";
 export * from "./repositories/contacts";
+export {
+  confirmFact,
+  confirmPreference,
+  dismissDuplicateCandidate,
+  expireStaleMemory,
+  forgetCustomer,
+  listContactPoints,
+  listDuplicateCandidates,
+  normalizeContactPoint,
+  proposeFact,
+  proposePreference,
+  readAuthoritativeMemory,
+  readConversationSummary,
+  readMemoryHistory,
+  recordContactPoint,
+  recordConversationSummary,
+  recordExternalIdentity,
+  searchCustomers,
+  searchLimit,
+  type ContactPointView,
+  type CustomerSearchHit,
+  type DuplicateCandidateView,
+  type FactCategory,
+  type MemoryEntry,
+  type MemoryOutcome,
+  type MemorySource,
+  type MemoryStatus,
+  type SummaryView,
+} from "./customer-memory-store";
 export * from "./repositories/conversations";
 export * from "./repositories/messages";
 export * from "./repositories/workspaces";
