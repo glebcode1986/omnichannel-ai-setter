@@ -235,14 +235,33 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **Still the current gate.** CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Every earlier review request is **superseded** by the head that closes those two blockers. Awaiting independent re-review. |
-| #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
+| #80 | `feat/p5-07-leads-pipeline` | **The current gate.** The accepted #79 parent `a1b46cb7789091f7782f039fdbf148631a77e3ea` is merged in by ordinary merge commit, and this is the only branch it has been propagated into. Awaiting independent review. |
+| #81 and below | `feat/p3-01-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. The propagation directive on #80 permits one step only, so nothing below #80 may receive this parent until #80 itself passes. |
 
-The #79 repairs are summarised under "P5-04" below. They live **only** on
-`feat/p5-04-ai-settings-simulation` and are deliberately **not propagated**: the repair directive on that
-PR forbids merging them into #80 or later until #79 has an independent PASS, so #80 and below still carry
-the pre-repair #79. Do not read the #78 propagation described in the next paragraph as covering these —
-that one is #78's and it is finished. No rebase, no force-push, no merge to `main`.
+The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
+and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
+parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
+merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
+started.
+
+**The propagation into #80 found no semantic collision, which is worth recording because the dry run had
+predicted where one would be.** Exactly four files were touched by both branches: `catalogue.ts`,
+`schema.prisma` and `packages/db/src/index.ts` auto-merged (both sides only added — keys, models, exports
+— and every added line from both sides is present in the result, checked line by line), and
+`apps/web/src/ui/outcome-notice.tsx` conflicted because both appended to one `OUTCOMES` array. Resolved by
+keeping both: P5-07's `MOVED`/`STALE_STAGE`/`UNCHANGED_STAGE` and P5-04's `FORBIDDEN`/`TOO_LONG`/the three
+`TIMING_*`/the two `TAKEOVER_*`. The `REFUSALS` set below it auto-merged and already held both. Every
+P5-04 settings, policy and simulation file is byte-identical to the accepted head.
+
+The directive asked specifically that no part of the policy proposal state be dropped, naming
+`presenceMode` and `presenceTypingLeadMs`. **Those two fields do not exist at #80**: they arrive with
+P4-05 (commit `6ac04a3`, `feat/p4-05-whatsapp-presence`), which is below #80 in the chain, so the
+collision the directive is guarding against becomes material when this parent reaches the P4-05 branches
+and not before. What #80 does carry is the complete proposal state the confirm/refuse flow uses, and it is
+built in exactly one place (`proposalFrom`) and converted to the store's edit in exactly one place
+(`editFrom`); both are unchanged from the accepted head.
 
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
