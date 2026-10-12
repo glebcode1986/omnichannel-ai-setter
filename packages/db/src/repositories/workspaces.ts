@@ -12,6 +12,7 @@ import {
 
 import type { DbClient, DbExecutor } from "../client";
 import { DbInputError, rethrowAsTenantNotFound, WorkspacePermissionError } from "../errors";
+import { profileDefaultPolicyWrite } from "../policy-store";
 import {
   authorizedBusinessProfileFilter,
   requireRole,
@@ -87,9 +88,21 @@ export async function listWorkspacesForUser(db: DbExecutor, userId: string): Pro
 }
 
 /**
- * Creates a Business Profile (status SETUP). Allowed for OWNER and for an ADMIN whose scope is ALL, because
- * a new profile is automatically visible to every ALL-scoped member. Provisional rule until team/billing
- * tasks define profile-slot permissions.
+ * Creates a Business Profile (status SETUP) together with its automation settings. Allowed for OWNER and
+ * for an ADMIN whose scope is ALL, because a new profile is automatically visible to every ALL-scoped
+ * member. Provisional rule until team/billing tasks define profile-slot permissions.
+ *
+ * The automation default is created **in the same statement**, and that is not a convenience. Settings are
+ * read by Business Profile and there is no "no settings" state anywhere above this line: the owner's
+ * settings screen renders the stored policy, so a profile without one renders no form, offers no first
+ * save, and leaves automation at OFF with no way to change it — a profile that exists, is listed, accepts a
+ * channel account and cannot be configured. Prisma writes a nested create inside the profile's own
+ * transaction, so the two rows arrive together or neither does, and nothing in between is observable.
+ *
+ * Not a separate call afterwards, for the same reason: two statements can be interrupted between them, and
+ * the thing left behind is exactly the half-made profile described above. Not lazily, on first read,
+ * either — reading settings is permitted to any member who may see the profile, writing them is OWNER/ADMIN
+ * only, and an initialization hidden inside a read would have to break that boundary to work.
  */
 export async function createBusinessProfile(
   db: DbExecutor,
@@ -102,7 +115,13 @@ export async function createBusinessProfile(
     throw new WorkspacePermissionError("creating Business Profiles");
   }
   const profile = await db.businessProfile.create({
-    data: { workspaceId, name: normalizeName("name", input.name) },
+    data: {
+      workspaceId,
+      name: normalizeName("name", input.name),
+      // `channelAccountId` left absent: this is the profile default, the policy every channel account of
+      // the profile inherits until one is given an override of its own.
+      automationPolicies: { create: profileDefaultPolicyWrite() },
+    },
     select: { id: true, name: true, status: true },
   });
   return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
