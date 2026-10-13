@@ -23,13 +23,15 @@ export {
   authorizeBusinessProfileAccess,
   authorizedBusinessProfileFilter,
   authorizeWorkspaceAccess,
+  type BusinessProfileAccessRequest,
+  type BusinessProfileContext,
+  type BusinessProfileScope,
+  canActOnBusinessProfile,
+  usersWhoCanActOnBusinessProfile,
   profileScopeOf,
   requireRole,
   scopeOf,
   WORKSPACE_ADMIN_ROLES,
-  type BusinessProfileAccessRequest,
-  type BusinessProfileContext,
-  type BusinessProfileScope,
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
@@ -213,6 +215,47 @@ export {
   type MemoryStatus,
   type SummaryView,
 } from "./customer-memory-store";
+export {
+  closeGoal,
+  readGoals,
+  setNextAction,
+  setPrimaryGoal,
+  suggestGoal,
+  type GoalOutcome,
+  type GoalView,
+} from "./goal-store";
+export {
+  cancelFollowUp,
+  cancelPendingFollowUps,
+  claimFollowUp,
+  dueFollowUps,
+  hourIn,
+  isSuppressed,
+  liftSuppression,
+  nextOpening,
+  planFollowUp,
+  readFollowUps,
+  recordFollowUpSent,
+  suppressFollowUps,
+  type DueFollowUp,
+  type FollowUpChannelPort,
+  type FollowUpChannelQuestion,
+  type FollowUpClaim,
+  type FollowUpClaimOptions,
+  type FollowUpOutcome,
+  type FollowUpView,
+} from "./followup-store";
+export {
+  assignTask,
+  completeTask,
+  createTask,
+  dismissTask,
+  listTasks,
+  suggestTask,
+  type TaskFilter,
+  type TaskOutcome,
+  type TaskView,
+} from "./human-task-store";
 export * from "./repositories/conversations";
 export * from "./repositories/messages";
 export * from "./repositories/workspaces";

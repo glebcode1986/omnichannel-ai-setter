@@ -16,6 +16,7 @@ import type { ConversationOperationStore } from "@omnichannel/application";
 
 import type { DbClient, DbExecutor } from "./client";
 import { deliveryOfConversation } from "./delivery-origin";
+import { cancelPendingFollowUps } from "./followup-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 /** The conversation belongs to this person from now on, with any earlier auto-resume deadline cleared. */
@@ -47,7 +48,13 @@ export function createConversationOperationStore(db: DbClient, context: Business
           return { status: "GONE" };
         }
         await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(context.userId, at) });
-        // Idempotent by construction: taking a conversation you already hold writes the same row.
+        // A person is handling this conversation now, so automation does not interrupt them — and a
+        // pending follow-up is automation with a timer on it (#55). Cancelled in the same transaction as
+        // the takeover, so there is no instant at which the conversation is held and a chase is still
+        // scheduled. `claimFollowUp` would refuse it too; this is the prompt path.
+        await cancelPendingFollowUps(tx, scope, conversationId, "HUMAN_TAKEOVER", at);
+        // Idempotent by construction: taking a conversation you already hold writes the same row, and
+        // cancelling follow-ups that are already cancelled changes nothing.
         return { status: "TAKEN_OVER" };
       });
     },

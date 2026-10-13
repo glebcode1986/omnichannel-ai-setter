@@ -36,6 +36,16 @@ import { createInstagramDeliverySender } from "./instagram-sender";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z");
+/**
+ * Anchored to the real clock, not to this file's frozen instant.
+ *
+ * `channel_credentials` stamps `created_at` itself and `channel_credentials_lifetime_check` requires the
+ * expiry to come after it. An expiry computed from a fixed date therefore holds only until the real clock
+ * passes it, and then every case here fails because of the date rather than because of a change — which is
+ * exactly how PR #90 sat red for five days. The frozen instant stays frozen for everything the database
+ * does not constrain; this value cannot be one of them.
+ */
+const CREDENTIAL_EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 /** Inside the human-support window (7 days) but outside the standard one (24 hours). */
 const LAST_INBOUND = new Date(NOW.getTime() - 48 * 60 * 60 * 1000);
 /** The same key the worker would be configured with, so the engine below decrypts what this file wrote. */
@@ -102,7 +112,7 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
       workspaceId,
       purpose: "INSTAGRAM_ACCESS_TOKEN",
       token: "ig-access-token",
-      expiresAt: new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000),
+      expiresAt: CREDENTIAL_EXPIRES,
     });
     // The account points at its credential, which is how onboarding links them and how the sender finds it.
     await infra.db.channelAccount.update({ where: { id: channelAccountId }, data: { credentialId } });
@@ -216,7 +226,7 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
       workspaceId: scope.workspaceId,
       purpose: "INSTAGRAM_ACCESS_TOKEN",
       token: "ig-token-for-the-other-account",
-      expiresAt: new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000),
+      expiresAt: CREDENTIAL_EXPIRES,
     });
     await infra.db.channelAccount.update({ where: { id: other.id }, data: { credentialId } });
 
