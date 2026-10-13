@@ -224,6 +224,8 @@ model PlanVersion {
   plan          PlanDefinition         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   subscriptions WorkspaceSubscription[]
   prices        PlanPrice[]
+  arrangements  BillingArrangement[]
+  checkoutContracts CheckoutContract[]
 
   @@unique([planId, version])
   @@map("plan_versions")
@@ -465,6 +467,358 @@ model BillingAccount {
 
   @@index([provider, providerCustomerId])
   @@map("billing_accounts")
+}
+
+/// Who the customer's money legally reaches, and who owes the tax on it (#46, ADR-019).
+///
+/// Not a provider name and not a jurisdiction — those are configuration. This is the one thing about a
+/// route the product itself reasons about, because it decides whose invoice the customer receives.
+enum SettlementModel {
+  /// A payment processor. We remain the seller of record and we remit the tax.
+  DIRECT_PSP
+  /// The provider is the seller to the customer and remits the tax. Its invoice, not ours.
+  MERCHANT_OF_RECORD
+  /// A crypto/prepaid processor: a time-bounded quote in an asset, settled or not.
+  CRYPTO_PROCESSOR
+}
+
+/// How service is paid for over time (#46, ADR-019).
+///
+/// A `PREPAID_TERM` buys service until a stated date and nothing more. No renewal is assumed, because
+/// assuming one is how a product keeps serving a customer who never agreed to pay again.
+enum BillingArrangementKind {
+  RECURRING
+  PREPAID_TERM
+}
+
+/// Where a charge path is in its life (#46).
+///
+/// `PENDING` is a charge path being opened; it counts as live, which is what the one-live-arrangement
+/// index is for. `SUPERSEDED` is the row a provider switch left behind, kept with its references for
+/// reconciliation.
+enum BillingArrangementState {
+  PENDING
+  ACTIVE
+  ENDED
+  SUPERSEDED
+}
+
+/// What became of a checkout attempt (#46).
+enum CheckoutState {
+  OPEN
+  SETTLED
+  /// The quote's window closed, or the provider reported the attempt expired.
+  EXPIRED
+  /// Nobody came back. Kept, because the acceptance snapshot it carries is still a record.
+  ABANDONED
+}
+
+/// The legal documents a checkout may have to be accepted against (#46, ADR-019).
+enum LegalDocumentKind {
+  TERMS_OF_SERVICE
+  PUBLIC_OFFER
+  PRIVACY_POLICY
+}
+
+/// A payment, as the product understands it after an adapter has normalized it (#46).
+enum BillingEventKind {
+  PAYMENT_SETTLED
+  PAYMENT_FAILED
+  PAYMENT_UNDERPAID
+  QUOTE_EXPIRED
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_CANCELED
+  REFUNDED
+  CHARGEBACK
+}
+
+/// The commercial seller/merchant entity a checkout is made with (#46, ADR-019).
+///
+/// Separate from the payment provider, because the market separates them: a direct processor leaves us
+/// the seller of record while a Merchant of Record *is* the seller to the customer. The same entity can
+/// be used through two providers and the same provider by two entities.
+///
+/// What is stored is what a checkout or a legal document has to display or name. Processor credentials,
+/// tax-provider configuration and registration documents are infrastructure: `legalConfigRef` is an
+/// opaque pointer into that configuration which nothing here parses.
+model SellerProfile {
+  id           String   @id @default(uuid(7))
+  /// Operator-facing code. Stable, so a route's configuration can be read by a human.
+  code         String   @unique
+  /// The registered name that appears on an invoice and in a public offer.
+  legalName    String   @map("legal_name")
+  /// The name a customer sees at checkout, where it differs from the registered one.
+  displayName  String   @map("display_name")
+  /// ISO 3166-1 alpha-2 of the entity's registration. A CHECK refuses anything else.
+  jurisdiction String
+  /// Where a customer writes to about an invoice. Required: a seller nobody can reach is not a seller.
+  supportEmail String   @map("support_email")
+  /// Opaque pointer into infrastructure configuration. Never a secret and never parsed here.
+  legalConfigRef String? @map("legal_config_ref")
+  /// Withdrawn entities stay: historical checkouts name them, and an invoice must stay interpretable.
+  retiredAt    DateTime? @map("retired_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  routes           BillingRoute[]
+  checkoutContracts CheckoutContract[]
+  legalDocuments   LegalDocument[]
+
+  @@map("seller_profiles")
+}
+
+/// One configured way to take money (#46, ADR-019).
+///
+/// A route is a provider *and* a provider account *and* a seller profile *and* the currencies, intervals
+/// and markets that combination may be used for. The client never names one: a checkout asks for a plan,
+/// an interval and a currency, and the server selects the route from this table.
+///
+/// `capabilities` is a normalized list in the product's own vocabulary rather than a provider's feature
+/// flags, because the product has to reason about what a route can do without knowing who the provider
+/// is. Tax calculation and tax remittance are separate entries on purpose.
+model BillingRoute {
+  id              String          @id @default(uuid(7))
+  code            String          @unique
+  /// Which adapter owns this route. Free text, never an enum: an enum of provider names in the product
+  /// is precisely the leak ADR-017 forbids.
+  provider        String
+  /// The provider's own account/configuration object. Opaque; nothing here parses or displays it.
+  providerAccountRef String?      @map("provider_account_ref")
+  sellerProfileId String          @map("seller_profile_id")
+  settlementModel SettlementModel @map("settlement_model")
+  /// The domain's `BillingCapability` names. A CHECK holds the coherence rules this product depends on.
+  capabilities    String[]        @default([])
+  /// The catalogue currencies this route can take a charge for — the base currency, not the settlement
+  /// asset. A route with `TIMED_QUOTES` may settle an EUR-priced charge in another asset, and which asset
+  /// that is belongs to the quote (#46, ADR-019). Never empty.
+  currencies      String[]        @default([])
+  /// The catalogue intervals this route charges on. `ONE_TIME` is a top-up, never an arrangement.
+  intervals       BillingInterval[] @default([])
+  /// ISO 3166-1 alpha-2 markets. Empty means unrestricted.
+  markets         String[]        @default([])
+  /// Whether the operator has turned this route on. A disabled route admits nothing.
+  enabled         Boolean         @default(false)
+  /// Order of preference among routes that all admit a request. Lower wins; ties break on `code`.
+  priority        Int             @default(0)
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  sellerProfile     SellerProfile       @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  arrangements      BillingArrangement[]
+  checkoutContracts CheckoutContract[]
+  events            BillingEvent[]
+
+  @@index([enabled, priority])
+  @@map("billing_routes")
+}
+
+/// A workspace's live charge path (#46, ADR-019).
+///
+/// At most one is live at a time — a partial unique index over `PENDING` and `ACTIVE` says so — which is
+/// what makes "one active commercial arrangement must not be double-charged across two providers" an
+/// impossibility rather than a rule somebody remembers. A provider switch ends the old row, records
+/// `supersededById` on it and opens the new one in the same transaction.
+///
+/// Bound to its route, so changing the operator's configuration cannot silently move a live subscription
+/// to another provider or another selling entity.
+model BillingArrangement {
+  id             String                  @id @default(uuid(7))
+  workspaceId    String                  @map("workspace_id")
+  billingRouteId String                  @map("billing_route_id")
+  planVersionId  String                  @map("plan_version_id")
+  kind           BillingArrangementKind
+  state          BillingArrangementState @default(PENDING)
+  interval       BillingInterval
+  /// What is charged, in minor units of `currency`. Never a float, never derived at read time.
+  amountMinor    Int                     @map("amount_minor")
+  currency       String
+  /// The provider's own subscription/charge object. Opaque, and kept after the arrangement ends so a
+  /// reconciliation years later can still find what this was.
+  providerReference String?              @map("provider_reference")
+  /// When the arrangement actually began paying for service. Set exactly when it became `ACTIVE`.
+  startedAt      DateTime?               @map("started_at")
+  /// When the paid period ends. Required while a prepaid term is active: a term with no end is a renewal
+  /// nobody agreed to.
+  currentPeriodEnd DateTime?             @map("current_period_end")
+  endedAt        DateTime?               @map("ended_at")
+  /// The arrangement that replaced this one, for a provider or seller migration.
+  supersededById String?                 @map("superseded_by_id")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  workspace    Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  billingRoute BillingRoute        @relation(fields: [billingRouteId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  planVersion  PlanVersion         @relation(fields: [planVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supersededBy BillingArrangement? @relation("ArrangementSuccession", fields: [supersededById], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  superseded   BillingArrangement[] @relation("ArrangementSuccession")
+  checkoutContracts CheckoutContract[]
+  events       BillingEvent[]
+
+  /// At most one live charge path per workspace (#46).
+  ///
+  /// `PENDING` counts as live, because a charge path being opened is a charge path: a second checkout
+  /// completing while the first was still open is exactly how a customer ends up on two providers. A
+  /// provider switch therefore ends the old arrangement and opens the new one in one transaction.
+  ///
+  /// Spelled as two inequalities rather than `state IN ('PENDING', 'ACTIVE')` because PostgreSQL rewrites
+  /// `IN` into `= ANY (ARRAY[...])` with casts, which `db:check-drift` then reports as a changed index on
+  /// every run. The consequence is that a state added later counts as live until somebody says otherwise —
+  /// the safe direction, and `billing-routing.integration.test.ts` asserts which states collide so that
+  /// the decision is made rather than inherited.
+  @@unique([workspaceId], where: raw("state <> 'ENDED' AND state <> 'SUPERSEDED'"), map: "billing_arrangements_one_live_key")
+  @@index([workspaceId, state])
+  @@map("billing_arrangements")
+}
+
+/// The immutable snapshot of what was offered, to whom, by whom, on what terms (#46, ADR-019).
+///
+/// Written before the customer is sent anywhere near a payment page, and never edited afterwards: a
+/// trigger freezes every column except the state, the provider's checkout reference (write-once) and the
+/// arrangement it produced. That is what makes it evidence rather than a cache.
+///
+/// The seller's registered name and jurisdiction are copied in rather than read through the foreign key.
+/// Changing a selling entity must not rewrite what a customer was told last March, and a snapshot is
+/// exactly what "historical checkouts remain tied to the seller profile that applied" means.
+model CheckoutContract {
+  id               String        @id @default(uuid(7))
+  workspaceId      String        @map("workspace_id")
+  /// The person who accepted the terms and opened the checkout.
+  actorUserId      String        @map("actor_user_id")
+  planVersionId    String        @map("plan_version_id")
+  billingRouteId   String        @map("billing_route_id")
+  sellerProfileId  String        @map("seller_profile_id")
+  /// The seller snapshot. Frozen with the rest of the row.
+  sellerLegalName  String        @map("seller_legal_name")
+  sellerJurisdiction String      @map("seller_jurisdiction")
+  arrangementKind  BillingArrangementKind @map("arrangement_kind")
+  interval         BillingInterval
+  /// The catalogue's own price for this plan version, in minor units of `baseCurrency`.
+  baseAmountMinor  Int           @map("base_amount_minor")
+  baseCurrency     String        @map("base_currency")
+  /// What this checkout asks the customer for. Equal to the base unless a route quoted another asset.
+  chargeAmountMinor Int          @map("charge_amount_minor")
+  chargeCurrency   String        @map("charge_currency")
+  /// Set only for a quoted charge. After it, the quoted rate is no longer an offer anybody made.
+  quoteExpiresAt   DateTime?     @map("quote_expires_at")
+  /// The provider's own checkout/session object, attached once after it is created. Opaque.
+  providerCheckoutRef String?    @map("provider_checkout_ref")
+  state            CheckoutState @default(OPEN)
+  /// The arrangement a verified settlement produced. Absent until one did.
+  arrangementId    String?       @map("arrangement_id")
+  openedAt         DateTime      @map("opened_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor         User                @relation("CheckoutActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  planVersion   PlanVersion         @relation(fields: [planVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  billingRoute  BillingRoute        @relation(fields: [billingRouteId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sellerProfile SellerProfile       @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  arrangement   BillingArrangement? @relation(fields: [arrangementId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  acceptances   LegalAcceptance[]
+  events        BillingEvent[]
+
+  @@index([workspaceId, state])
+  @@map("checkout_contracts")
+}
+
+/// One version of one legal document (#46, ADR-019).
+///
+/// The text itself is not here: `contentRef` points at wherever it is published, because a legal document
+/// is reviewed, translated and hosted outside this database and copying it in would create a second
+/// authority on what it says. What is here is the identity a person accepted, which is what an acceptance
+/// record has to name.
+///
+/// Immutable once written. A correction is a new version, and the old one stays readable because somebody
+/// accepted it.
+model LegalDocument {
+  id              String            @id @default(uuid(7))
+  kind            LegalDocumentKind
+  /// Monotonic per kind and locale.
+  version         Int
+  /// BCP-47. The same version of the same document exists in several languages.
+  locale          String
+  /// Set when this document belongs to one selling entity. NULL applies to every seller profile.
+  sellerProfileId String?           @map("seller_profile_id")
+  /// Where the published text lives. Opaque to the product.
+  contentRef      String            @map("content_ref")
+  /// Whether a checkout may not proceed without an acceptance of this kind. A deferred constraint
+  /// trigger on `checkout_contracts` enforces it.
+  requiredForCheckout Boolean       @default(true) @map("required_for_checkout")
+  effectiveFrom   DateTime          @map("effective_from")
+  createdAt       DateTime          @default(now()) @map("created_at")
+
+  sellerProfile SellerProfile?    @relation(fields: [sellerProfileId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  acceptances   LegalAcceptance[]
+
+  @@unique([kind, locale, version])
+  @@index([kind, effectiveFrom])
+  @@map("legal_documents")
+}
+
+/// That somebody accepted a named version of a named document, at a named instant (#46, ADR-019).
+///
+/// Append-only: triggers refuse an update and a delete. The product's evidence of consent is this row and
+/// not the later act of payment, which is why it is written before the customer is sent to a payment page
+/// — and why a checkout contract cannot commit without one for every required document kind.
+model LegalAcceptance {
+  id                 String   @id @default(uuid(7))
+  workspaceId        String   @map("workspace_id")
+  actorUserId        String   @map("actor_user_id")
+  legalDocumentId    String   @map("legal_document_id")
+  /// The checkout this acceptance was given for. Absent for an acceptance taken outside a checkout.
+  checkoutContractId String?  @map("checkout_contract_id")
+  acceptedAt         DateTime @map("accepted_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  actor            User              @relation("AcceptanceActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  legalDocument    LegalDocument     @relation(fields: [legalDocumentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  checkoutContract CheckoutContract? @relation(fields: [checkoutContractId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One acceptance of one document per checkout. A second click is the same consent, not a second one.
+  @@unique([checkoutContractId, legalDocumentId])
+  @@index([workspaceId, acceptedAt])
+  @@map("legal_acceptances")
+}
+
+/// A normalized provider event, recorded once (#46, ADR-019).
+///
+/// `(route, providerEventId)` is unique, so a replayed or redelivered webhook is refused by an index
+/// rather than by a check some caller might skip. The scope is the route and not the workspace because a
+/// provider's event identifier is unique within its own account, which is what a route names.
+///
+/// Append-only. Reconciliation may add a repairing event; it never rewrites one that arrived.
+model BillingEvent {
+  id                 String           @id @default(uuid(7))
+  /// Which workspace this was about, where the event could be attributed to one.
+  workspaceId        String?          @map("workspace_id")
+  billingRouteId     String           @map("billing_route_id")
+  arrangementId      String?          @map("arrangement_id")
+  checkoutContractId String?          @map("checkout_contract_id")
+  kind               BillingEventKind
+  /// The provider's own event identifier, opaque, and the thing idempotency is keyed on.
+  providerEventId    String           @map("provider_event_id")
+  /// How this became a fact: a verified delivery or an authoritative reconciliation. Never a redirect.
+  activationSource   String           @map("activation_source")
+  /// What the event says happened, in minor units of `currency`. Absent where no money moved.
+  amountMinor        Int?             @map("amount_minor")
+  currency           String?
+  occurredAt         DateTime         @map("occurred_at")
+  receivedAt         DateTime         @default(now()) @map("received_at")
+  /// What the store decided this event did. The product's own vocabulary, for the audit trail.
+  effect             String
+  /// Normalized detail only. No raw provider payload, no signature, no secret.
+  detail             Json             @default("{}")
+
+  workspace        Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  billingRoute     BillingRoute        @relation(fields: [billingRouteId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  arrangement      BillingArrangement? @relation(fields: [arrangementId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  checkoutContract CheckoutContract?   @relation(fields: [checkoutContractId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([billingRouteId, providerEventId])
+  @@index([workspaceId, occurredAt])
+  @@map("billing_events")
 }
 
 /// What a usage ledger row is a record of (#39, USAGE_METERING.md).
@@ -747,6 +1101,8 @@ enum AuditEventKind {
   /// What the workspace is paying for, and any deliberate departure from it (#38).
   SUBSCRIPTION_CHANGED
   ENTITLEMENT_OVERRIDDEN
+  CHECKOUT_OPENED
+  BILLING_ARRANGEMENT_CHANGED
 }
 
 /// Who acted. Reconciliation and the scheduler act without anybody asking, and recording those as a
@@ -1044,6 +1400,8 @@ model User {
   dismissedDuplicates      DuplicateContactCandidate[] @relation("DuplicateCandidateDismisser")
   assignedLeads             Conversation[]            @relation("LeadAssignee")
   leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
+  openedCheckouts           CheckoutContract[]        @relation("CheckoutActor")
+  legalAcceptances          LegalAcceptance[]         @relation("AcceptanceActor")
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
   styleExampleDecisions     StyleExample[]         @relation("StyleExampleDecider")
@@ -1136,6 +1494,10 @@ model Workspace {
   subscription         WorkspaceSubscription?
   entitlementOverride  EntitlementOverride?
   billingAccount       BillingAccount?
+  billingArrangements  BillingArrangement[]
+  checkoutContracts    CheckoutContract[]
+  legalAcceptances     LegalAcceptance[]
+  billingEvents        BillingEvent[]
   @@map("workspaces")
 }
 

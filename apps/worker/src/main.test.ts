@@ -178,6 +178,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       "reconciliation",
       "retention",
       "usage_reservations",
+      "checkout_expiry",
       "instagram_tokens",
       "backlog_guard",
       "health",
