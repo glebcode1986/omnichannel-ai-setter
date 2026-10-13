@@ -149,6 +149,44 @@ export async function authorizeBusinessProfileAccess(
   return context;
 }
 
+/**
+ * Whether **another** user may act on a Business Profile — the question an assignment asks.
+ *
+ * A predicate, deliberately, and not a context. `authorizeBusinessProfileAccess` answers the same
+ * question for the *requesting* user and mints a branded context as its answer; calling it for somebody
+ * else would hand out authority nobody granted, and the brand is what the rest of this package trusts.
+ * So the membership query and `hasBusinessProfileAccess` are reused and nothing is issued.
+ *
+ * It exists because assigning work to a person who cannot reach it is two failures at once: the task
+ * sits where its assignee cannot see it, and the assignee's name travels into a profile-scoped list that
+ * had no business knowing it (#55, Astra's second P1 on PR #82). Workspace membership alone is not the
+ * test — a member with `SELECTED` scope that does not include this profile is as unable to act as a
+ * stranger.
+ *
+ * `false` for an unknown user, a non-member, a member without this grant, and a malformed identifier.
+ * One answer for all of them, because an assignment form must not become a way to discover who exists.
+ */
+export async function canActOnBusinessProfile(
+  db: DbExecutor,
+  request: { readonly workspaceId: string; readonly userId: string; readonly businessProfileId: string },
+): Promise<boolean> {
+  if (!isValidIdentifier(request.businessProfileId)) {
+    return false;
+  }
+  const membership = await loadMembership(db, request);
+  if (membership === null) {
+    return false;
+  }
+  return hasBusinessProfileAccess(
+    {
+      role: membership.role,
+      businessProfileScope: membership.businessProfileScope,
+      grantedBusinessProfileIds: membership.businessProfileAccess.map((grant) => toBusinessProfileId(grant.businessProfileId)),
+    },
+    toBusinessProfileId(request.businessProfileId),
+  );
+}
+
 /** Workspace to scope queries by, rejecting contexts that did not come from authorization. */
 export function scopeOf(context: WorkspaceContext): WorkspaceId {
   if (typeof context !== "object" || context === null || !issuedWorkspaceContexts.has(context)) {

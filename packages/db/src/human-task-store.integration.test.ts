@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { assignTask, completeTask, createTask, dismissTask, listTasks, suggestTask } from "./human-task-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
+import { addTestMember, createTestUser, seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
 const AT = new Date("2026-10-05T10:00:00.000Z");
 
@@ -260,6 +260,93 @@ describe.skipIf(!databaseTestsEnabled())("human tasks", () => {
       expect(await assignTask(db(), profile.context, theirId, profile.context.userId)).toEqual({ status: "GONE" });
       // And it is still open where it belongs, so the refusal did not reach across and change it.
       expect((await listTasks(db(), theirProfile.context, { status: "OPEN" })).some((row) => row.id === theirId)).toBe(true);
+    }, 180_000);
+  });
+  describe("who a task may be given to", () => {
+    /**
+     * Astra's second P1 on PR #82. `human_tasks.assigned_user_id` references global `users(id)`, so every
+     * user id in the database is a valid foreign key and the schema cannot tell a colleague from a
+     * stranger. Assigning the wrong one fails twice over: the task sits in a queue its assignee cannot
+     * open, so nobody does it while the list shows it as somebody's work — and `listTasks` joins the
+     * assignee's name, so a profile-scoped read carries that person's name to whoever can read this
+     * profile.
+     *
+     * Membership alone is not the test, which is the half an obvious fix would get right and stop at: a
+     * member whose scope is `SELECTED` without this profile is exactly as unable to act as somebody from
+     * another company.
+     */
+    const taskFor = async (assignedUserId?: string) =>
+      createTask(db(), profile.context, {
+        kind: "CALL_CUSTOMER",
+        title: "Call the customer back",
+        ...(assignedUserId === undefined ? {} : { assignedUserId }),
+      });
+
+    it("refuses a user from another Workspace, at creation and at reassignment", async () => {
+      const stranger = neighbour.ownerUserId;
+
+      const created = await taskFor(stranger);
+
+      expect(created).toEqual({
+        status: "REFUSED",
+        reason: "a task can only be assigned to somebody who works on this Business Profile",
+      });
+      // Nothing was written, so nothing can leak: the name of a person in another workspace never
+      // reaches this profile's queue.
+      const open = await listTasks(db(), profile.context, { status: "OPEN" });
+      expect(open.some((row) => row.assignedUserId === stranger)).toBe(false);
+
+      // And the same refusal on the path that moves an existing task, because a guard on one of the two
+      // is a guard on neither.
+      const unassigned = await taskFor();
+      if (unassigned.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${unassigned.status}`);
+      }
+      expect(await assignTask(db(), profile.context, unassigned.id, stranger)).toMatchObject({ status: "REFUSED" });
+      const after = await listTasks(db(), profile.context, { status: "OPEN" });
+      expect(after.find((row) => row.id === unassigned.id)?.assignedUserId).toBeNull();
+    }, 180_000);
+
+    it("refuses a member of this Workspace who was not granted this Business Profile", async () => {
+      // The half that membership alone would pass. This person is a colleague; they simply cannot see
+      // this profile, so work parked on them is work nobody is doing.
+      const outsiderId = await createTestUser(db(), `task-ungranted-${String(Date.now())}`);
+      await addTestMember(db(), profile.context.workspaceId, outsiderId, "AGENT", []);
+
+      expect(await taskFor(outsiderId)).toMatchObject({ status: "REFUSED" });
+
+      const granted = await createTestUser(db(), `task-granted-${String(Date.now())}`);
+      await addTestMember(db(), profile.context.workspaceId, granted, "AGENT", [profile.businessProfileId]);
+
+      // And the same role, granted this profile, is accepted — so the refusal is about the grant rather
+      // than about being an agent.
+      const accepted = await taskFor(granted);
+      expect(accepted.status).toBe("CREATED");
+      if (accepted.status === "CREATED") {
+        expect((await listTasks(db(), profile.context, { status: "OPEN" })).find((row) => row.id === accepted.id)?.assignedUserId).toBe(granted);
+      }
+    }, 180_000);
+
+    it("accepts a member whose scope is every profile, and takes an assignment back", async () => {
+      const colleague = await createTestUser(db(), `task-all-scope-${String(Date.now())}`);
+      await addTestMember(db(), profile.context.workspaceId, colleague, "ADMIN", "ALL");
+
+      const created = await taskFor(colleague);
+      if (created.status !== "CREATED") {
+        throw new Error(`expected CREATED, got ${created.status}`);
+      }
+
+      // `null` is taking the task back rather than giving it to somebody, so it is not an assignee to
+      // validate — and refusing it would leave a task stuck on whoever happened to hold it.
+      expect(await assignTask(db(), profile.context, created.id, null)).toMatchObject({ status: "UPDATED" });
+      expect((await listTasks(db(), profile.context, { status: "OPEN" })).find((row) => row.id === created.id)?.assignedUserId).toBeNull();
+    }, 180_000);
+
+    it("refuses a user id that belongs to nobody, with the same answer as a stranger", async () => {
+      // One refusal for every reason. An assignment form that answered differently would be a way to
+      // find out which user ids exist.
+      expect(await taskFor("01999999-9999-7999-8999-999999999999")).toMatchObject({ status: "REFUSED" });
+      expect(await taskFor("not-an-identifier")).toMatchObject({ status: "REFUSED" });
     }, 180_000);
   });
 });

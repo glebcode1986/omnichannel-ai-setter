@@ -15,7 +15,7 @@
 import type { HumanTaskKind, HumanTaskStatus } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { canActOnBusinessProfile, profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export type TaskOutcome =
   | { readonly status: "CREATED"; readonly id: string }
@@ -114,6 +114,12 @@ export async function createTask(
     const conversation = await db.conversation.findFirst({ where: { ...scope, id: input.conversationId }, select: { id: true } });
     if (conversation === null) {
       return { status: "GONE" };
+    }
+  }
+  if (input.assignedUserId !== undefined) {
+    const refusal = await assigneeRefusal(db, context, input.assignedUserId);
+    if (refusal !== undefined) {
+      return refusal;
     }
   }
   const created = await db.humanTask.create({
@@ -215,8 +221,41 @@ export async function assignTask(
   assignedUserId: string | null,
 ): Promise<TaskOutcome> {
   const scope = profileScopeOf(context);
+  if (assignedUserId !== null) {
+    // Checked on the way in as well as at creation. A reassignment is the same decision made later, and a
+    // guard on only one of the two paths is a guard on neither: grants change, people leave the
+    // workspace, and the path that moves an existing task is the one somebody reaches for afterwards.
+    const refusal = await assigneeRefusal(db, context, assignedUserId);
+    if (refusal !== undefined) {
+      return refusal;
+    }
+  }
   const changed = await db.humanTask.updateMany({ where: { ...scope, id: taskId, status: "OPEN" }, data: { assignedUserId } });
   return changed.count === 0 ? { status: "GONE" } : { status: "UPDATED", id: taskId };
+}
+
+/**
+ * Refuses an assignee who cannot reach the Business Profile the task belongs to.
+ *
+ * Two failures at once, which is why this fails closed rather than warning. The task sits in a queue its
+ * assignee cannot open — so nobody does it, and the list shows it as somebody's work. And `listTasks`
+ * joins the assignee's name, so a profile-scoped read would carry the name of a person from another
+ * workspace to whoever can read this one: an identifier the reader had no business learning.
+ *
+ * Membership alone is not the test. A member whose scope is `SELECTED` without this profile is exactly as
+ * unable to act as somebody from another company, and the schema cannot tell them apart — `human_tasks`
+ * references global `users(id)`, so every foreign user id is a valid foreign key.
+ *
+ * One refusal for every reason: not a member, not granted this profile, no such user. An assignment form
+ * that answered differently would be a way to find out who exists.
+ */
+async function assigneeRefusal(db: DbExecutor, context: BusinessProfileContext, assignedUserId: string): Promise<TaskOutcome | undefined> {
+  const allowed = await canActOnBusinessProfile(db, {
+    workspaceId: context.workspaceId,
+    userId: assignedUserId,
+    businessProfileId: context.businessProfileId,
+  });
+  return allowed ? undefined : { status: "REFUSED", reason: "a task can only be assigned to somebody who works on this Business Profile" };
 }
 
 export interface TaskFilter {
