@@ -95,7 +95,7 @@ export async function listWorkspacesForUser(db: DbExecutor, userId: string): Pro
  * tasks define profile-slot permissions.
  */
 export async function createBusinessProfile(
-  db: DbExecutor,
+  db: DbClient,
   context: WorkspaceContext,
   input: { readonly name: string },
   /** When the entitlement is resolved. Explicit, because a plan's own validity is a question about a moment. */
@@ -108,29 +108,40 @@ export async function createBusinessProfile(
   }
   // Capacity, as capacity rather than as payment (#40).
   //
-  // Counted and written under one advisory lock: a count followed by an insert is not atomic, and no
-  // index caps a count, so two concurrent creates on a one-profile plan would both see zero and both
-  // succeed. The lock is transaction-scoped, so it is released however the transaction ends.
+  // Counted and written under one advisory lock **inside one transaction**, which is the whole mechanism:
+  // a count followed by an insert is not atomic and no index caps a count, so two concurrent creates on a
+  // one-profile plan would both see zero and both succeed.
+  //
+  // The transaction is opened here rather than left to the caller, and that is a correction. This took a
+  // `DbExecutor` — a type that deliberately omits `$transaction` — and so the lock could never outlive
+  // the statement that took it: PostgreSQL releases an `xact` lock when its transaction ends, and under
+  // autocommit that is the lock statement itself, after which `pg_locks` reports none held. The
+  // serialization this comment promised was therefore a no-op unless a caller happened to already be in
+  // a transaction, and nothing said one had to be. `addWorkspaceMember` takes a `DbClient` and opens one
+  // for the identical count-then-insert on seats; this now matches it, and
+  // `entitlements.integration.test.ts` pins the lock lifetime the argument rests on.
   //
   // A workspace with no subscription has no stated ceiling and may therefore create its first Business
   // Profile. Creating one does not start the trial — connecting it to a channel does, in
   // `createChannelAccount` — so refusing this would make the product unreachable from its own front door
   // and the trial unstartable.
-  await serializeCapacity(db, `workspace-profiles:${workspaceId}`);
-  const verdict = capacityVerdict({
-    snapshot: await readEntitlement(db as unknown as DbClient, workspaceId, at),
-    limit: "BUSINESS_PROFILES",
-    current: await db.businessProfile.count({ where: { workspaceId } }),
-  });
-  if (verdict.kind !== "ALLOWED") {
-    throw new PlanLimitError(verdict, "creating a Business Profile");
-  }
+  return db.$transaction(async (tx) => {
+    await serializeCapacity(tx, `workspace-profiles:${workspaceId}`);
+    const verdict = capacityVerdict({
+      snapshot: await readEntitlement(tx as unknown as DbClient, workspaceId, at),
+      limit: "BUSINESS_PROFILES",
+      current: await tx.businessProfile.count({ where: { workspaceId } }),
+    });
+    if (verdict.kind !== "ALLOWED") {
+      throw new PlanLimitError(verdict, "creating a Business Profile");
+    }
 
-  const profile = await db.businessProfile.create({
-    data: { workspaceId, name: normalizeName("name", input.name) },
-    select: { id: true, name: true, status: true },
+    const profile = await tx.businessProfile.create({
+      data: { workspaceId, name: normalizeName("name", input.name) },
+      select: { id: true, name: true, status: true },
+    });
+    return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
   });
-  return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
 }
 
 /**
