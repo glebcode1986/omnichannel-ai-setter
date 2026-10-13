@@ -157,7 +157,12 @@ describe.skipIf(!endToEndTestsEnabled())("the worker's WhatsApp media port", () 
       const first = portWith([located(), payload()]);
       expect(await first.media.fetch(input())).toMatchObject({ ok: true });
 
-      await infra.db.channelCredential.updateMany({ where: { workspaceId: scope.workspaceId, purpose: "WHATSAPP_BUSINESS_TOKEN" }, data: { revokedAt: NOW } });
+      // Real time, not the suite's frozen clock: `channel_credentials_lifetime_check` refuses a
+      // revocation earlier than the row's own `created_at`, and the row was created just now.
+      await infra.db.channelCredential.updateMany({
+        where: { workspaceId: scope.workspaceId, purpose: "WHATSAPP_BUSINESS_TOKEN" },
+        data: { revokedAt: new Date() },
+      });
       const second = portWith([located(), payload()]);
       const afterRevoke = await second.media.fetch(input());
       await infra.db.channelCredential.updateMany({ where: { workspaceId: scope.workspaceId, purpose: "WHATSAPP_BUSINESS_TOKEN" }, data: { revokedAt: null } });
