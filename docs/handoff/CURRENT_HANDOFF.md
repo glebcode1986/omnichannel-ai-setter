@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #99 plus the P6-08 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#99 are completed by Claude and awaiting review; **P6-08 / Issue
-#46 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #100 plus the P6-09 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#100 are completed by Claude and awaiting review; **P6-09 / Issue
+#47 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -55,12 +55,13 @@ Everything is one stacked chain of unmerged PRs, each branch based on its parent
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
 ` -> #85 -> #86 -> #87 -> #88 -> #89 -> #90 -> #91 -> #92 -> #93 -> #94 -> #95 -> #96 -> #97 -> #98 -> #99`
+` -> #100`
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
-#43), #99 (P6-05, #42) and the P6-08 branch above (#46). **#41 / P6-04 is blocked** on the owner's choice
+#43), #99 (P6-05, #42), #100 (P6-08, #46) and the P6-09 branch above (#47). **#41 / P6-04 is blocked** on the owner's choice
 of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
-implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, and #47
-(P6-09, terms/offer UX) is the next unblocked one.
+implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
+the only Phase 6 work left needs the owner's provider decision.
 
 **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer — *after*
 #77 had been cut from it, so #77 through #81 were all missing the human-composed send path. It was merged
@@ -266,6 +267,60 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
 1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
    independent re-review.**
+
+1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
+   `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:
+   `settings/billing/checkout`, with the seller's legal identity, the price, who remits the tax, and one
+   unticked checkbox per required document version.
+
+   **#46 left the store and the database disagreeing about what "accepted" means, and a probe proved it.**
+   `readLegalDocumentOffers` filtered documents by an *exact* locale, so a Russian-reading workspace was
+   offered **no documents at all** — `missingAcceptances([], [])` refused nothing, a contract with zero
+   acceptances was written, and the deferred coverage trigger killed it at COMMIT with a raw Postgres
+   exception. Not a refusal: a 500. The trigger was the only thing standing between that and a silent
+   bypass, which is the strongest argument for it the chain has produced.
+
+   The fix has two halves and they have to agree: locale negotiation in the store (exact tag → same
+   language, another region → the fallback the product publishes everything in), and
+   `legal_acceptances.locale` recording the language of the *page* somebody accepted on — which is not the
+   document's locale, and is the fact a dispute actually asks about.
+
+   **Specificity now dominates language, in both implementations.** Choosing the locale first handed a
+   Russian reader the platform's generic offer whenever the selling entity had published its own in
+   English alone — for a checkout whose contract names that entity. A kind the seller has published at all
+   is read only from the seller's own versions, in `readLegalDocumentOffers` and in
+   `current_legal_documents()`, and a test holds the two derivations against each other.
+
+   **`contentRef` had to become a URL.** Every value written under #46 was a path fragment, and as an
+   `href` on the checkout route a fragment resolves to a page that does not exist — a checkbox asking for
+   consent to something unreadable. Now `https` only, enforced in `publishLegalDocument` and by a CHECK.
+
+   **Two refusals that used to be one.** `TERMS_NOT_ACCEPTED` means a box was left unticked;
+   `DOCUMENT_SUPERSEDED` means the terms changed while the page was open — including a requirement that
+   *appeared* after it was drawn, which the form distinguishes by declaring the ticks it rendered in a
+   hidden `offered` field. Without it the store blames somebody for a control they never saw.
+   `PROVIDER_UNAVAILABLE` moved to **last**, after the acceptance checks: checked first, it refused every
+   checkout in every real process and made the terms enforcement unreachable — and would have made its
+   own test green for the wrong reason.
+
+   **`CHECKOUT_AVAILABLE = false` is gone.** It was a constant, so the entire acceptance surface was
+   unreachable however a deployment was configured, and somebody would have had to remember to edit a
+   file on the day an adapter landed. It is now derived — at least one enabled route whose provider has a
+   registered adapter — and `PlanOffers` links to the checkout exactly when that is true, asserted in both
+   directions.
+
+   Two traps worth remembering: a parameter named after a column is **silently** shadowed by it in a SQL
+   function (`d."seller_profile_id" = seller_profile_id` compared the column to itself and made every
+   seller's documents applicable to every seller — caught by #46's own suite), and `semantics.test.ts`
+   accepts `htmlFor` only as a double-quoted *literal*, so a dynamic checkbox group has to wrap each input
+   in its own `<label>`.
+
+   **A refused attempt deliberately writes nothing.** The contract id *is* the attempt reference, and an
+   attempt that was refused offered nothing to consent to; recording "they did not tick a box at 14:02"
+   would be surveillance rather than evidence. Stated in `BILLING_ROUTING.md` so it reads as a decision.
+
+   **Not in this issue:** no payment redirect — the step records the contract and stops, because where the
+   customer goes next is the adapter's, which is #41.
 
 1. **P6-08 / Issue #46 — seller profiles, payment routing and legal acceptance.** Branch
    `feat/p6-08-billing-routing-seller-profiles`, based on #99. `docs/adr/ADR-019` is brought into the

@@ -123,6 +123,18 @@ export function clearBillingProviders(): void {
 }
 
 /**
+ * Whether a provider has an adapter registered in this process.
+ *
+ * Asked before a checkout is opened (#47): a checkout nobody could settle would still consume the
+ * workspace's single live charge path, so the honest answer is to say "not yet" on the screen rather than
+ * to write a contract and leave a `PENDING` arrangement for the sweeper. Process-local, and that is the
+ * right scope — the process that will hand the customer to the provider is the one being asked.
+ */
+export function billingProviderRegistered(provider: string): boolean {
+  return adapters.has(provider);
+}
+
+/**
  * Authenticates a raw delivery and mints the verified event, or refuses.
  *
  * `null` for an unknown provider, for a delivery the adapter would not authenticate, and for a normalized

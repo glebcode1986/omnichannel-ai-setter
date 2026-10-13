@@ -58,6 +58,7 @@ export {
 } from "./billing-overview";
 export {
   assertVerifiedBillingEvent,
+  billingProviderRegistered,
   clearBillingProviders,
   reconcileProviderState,
   registerBillingProvider,
@@ -72,6 +73,7 @@ export {
   attachProviderCheckoutReference,
   CHECKOUT_REFUSALS,
   CHECKOUT_TTL_MS,
+  LEGAL_FALLBACK_LOCALE,
   expireStaleCheckouts,
   openCheckoutContract,
   publishLegalDocument,

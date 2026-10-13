@@ -30,6 +30,7 @@
  */
 import { literalGuard } from "./enum";
 import { DomainValidationError } from "./errors";
+import { canonicalLanguageTag } from "./language";
 
 /**
  * What a billing provider can actually do, in the product's own words.
@@ -544,13 +545,18 @@ export function entitlementEffectOf(input: {
 }
 
 /**
- * The legal documents a checkout may have to be accepted against (ADR-019).
+ * The legal documents a checkout may have to be accepted against (ADR-019, #47).
  *
  * Separate kinds rather than one "terms" blob because they are versioned and accepted separately in
  * practice, and because which of them a checkout requires is a product and jurisdiction decision that the
  * owner has not made yet. What is fixed here is that each is versioned and each acceptance is recorded.
+ *
+ * `REFUND_POLICY` is a kind rather than a paragraph inside the offer because #47 asks for it to be
+ * *linked* where product configuration requires it — which means it has to be a document with a version
+ * of its own, and a document that is linked rather than ticked is simply one whose
+ * `required_for_checkout` is false. Both behaviours therefore fall out of the same two columns.
  */
-export const LEGAL_DOCUMENT_KINDS = ["TERMS_OF_SERVICE", "PUBLIC_OFFER", "PRIVACY_POLICY"] as const;
+export const LEGAL_DOCUMENT_KINDS = ["TERMS_OF_SERVICE", "PUBLIC_OFFER", "PRIVACY_POLICY", "REFUND_POLICY"] as const;
 export type LegalDocumentKind = (typeof LEGAL_DOCUMENT_KINDS)[number];
 export const isLegalDocumentKind = literalGuard(LEGAL_DOCUMENT_KINDS);
 
@@ -567,4 +573,62 @@ export function missingAcceptances(
   accepted: readonly LegalDocumentKind[],
 ): readonly LegalDocumentKind[] {
   return LEGAL_DOCUMENT_KINDS.filter((kind) => required.includes(kind) && !accepted.includes(kind));
+}
+
+/**
+ * Which published locale of a document to show somebody who asked for another one (#47).
+ *
+ * This exists because the alternative is worse than it looks. Filtering documents by an exact locale
+ * means a workspace whose interface is in a language the offer has not been translated into is shown *no
+ * terms at all* — and a checkout screen with nothing to tick is not a stricter checkout, it is one whose
+ * acceptance control has silently disappeared. The database's own acceptance trigger does not filter by
+ * locale, so the two then disagree and the checkout dies on a constraint instead of saying anything.
+ *
+ * The order is the one a reader would want: the exact tag, then the same language in another region, then
+ * the fallback the product publishes everything in. `undefined` only when even the fallback is missing,
+ * which means nobody has published that document at all.
+ *
+ * Tags are canonicalized on both sides before they meet, for the reason `language.ts` gives: `en-us` and
+ * `EN-US` are the same tag, and an equality comparison between two spellings of it misses.
+ */
+export function negotiateDocumentLocale(requested: string, available: readonly string[], fallback: string): string | undefined {
+  const canonical = (tag: string): string | undefined => canonicalLanguageTag(tag) ?? undefined;
+  const published = available.flatMap((tag) => {
+    const value = canonical(tag);
+    return value === undefined ? [] : [{ original: tag, canonical: value, language: languageOf(value) }];
+  });
+  const wanted = canonical(requested);
+  if (wanted !== undefined) {
+    const exact = published.find((entry) => entry.canonical === wanted);
+    if (exact !== undefined) {
+      return exact.original;
+    }
+    const language = languageOf(wanted);
+    // Same language, another region: `ru-RU` reads `ru`, and a Brazilian reader reads Portuguese. Only
+    // after that does the fallback apply, because an untranslated tag is not the same as an unknown one.
+    const sameLanguage = published.find((entry) => entry.language === language);
+    if (sameLanguage !== undefined) {
+      return sameLanguage.original;
+    }
+  }
+  const fallbackLanguage = languageOf(canonical(fallback) ?? fallback);
+  return published.find((entry) => entry.language === fallbackLanguage)?.original;
+}
+
+function languageOf(tag: string): string {
+  return (tag.split("-")[0] ?? tag).toLowerCase();
+}
+
+/**
+ * Whether the person was shown the document in the language their interface was in (#47).
+ *
+ * Recorded on the acceptance rather than inferred, because the question a dispute actually asks is "was
+ * this person shown terms in a language they read?" — and the answer is not derivable from the document
+ * row, which only knows what language *it* is in. A `true` here and a `false` there are both acceptable
+ * states of the world; what is not acceptable is not knowing which happened.
+ */
+export function acceptedInOwnLanguage(viewerLocale: string, documentLocale: string): boolean {
+  const viewer = canonicalLanguageTag(viewerLocale) ?? viewerLocale;
+  const document = canonicalLanguageTag(documentLocale) ?? documentLocale;
+  return languageOf(viewer) === languageOf(document);
 }

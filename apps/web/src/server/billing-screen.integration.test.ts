@@ -21,7 +21,7 @@ import {
 } from "@omnichannel/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { assembleBillingScreen, CHECKOUT_AVAILABLE } from "./billing-screen";
+import { assembleBillingScreen, checkoutAvailable } from "./billing-screen";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createPaidWorkspace } from "./testing/paid-workspace";
 
@@ -109,8 +109,18 @@ describe.skipIf(!databaseTestsEnabled())("the billing screen", () => {
 
       // Honest rather than hopeful: an upgrade needs authoritative confirmation that money moved, and a
       // button that could not produce one would be a button that lies.
-      expect((await screen(made)).checkoutAvailable).toBe(CHECKOUT_AVAILABLE);
-      expect(CHECKOUT_AVAILABLE).toBe(false);
+      //
+      // Derived rather than a constant since #47: a hard-coded `false` made the whole acceptance surface
+      // unreachable however a deployment was configured, and left somebody to remember to edit a file on
+      // the day an adapter landed.
+      expect((await screen(made)).checkoutAvailable).toBe(false);
+      expect(await checkoutAvailable(database.db)).toBe(false);
+    }, 300_000);
+
+    it("offers the acceptance step at its own path, so the offers do not rebuild it", async () => {
+      const made = await workspace("checkout-path");
+
+      expect((await screen(made)).checkoutPath).toMatch(/\/settings\/billing\/checkout$/u);
     }, 300_000);
   });
 
