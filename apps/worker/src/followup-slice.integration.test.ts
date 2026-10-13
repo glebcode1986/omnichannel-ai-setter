@@ -44,7 +44,13 @@ import { createDraftDisposition } from "./draft-disposition";
 import { automatedRouteStillOpen } from "./followup-channel";
 import { startFollowUpSweeper } from "./followup-sweeper";
 import { createHandlers } from "./handlers";
-import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
+import {
+  createEndToEndInfrastructure,
+  endToEndTestsEnabled,
+  setProfileDefaultPolicy,
+  waitFor,
+  type EndToEndInfrastructure,
+} from "./testing/infrastructure";
 
 const NOW = new Date("2026-10-06T12:00:00.000Z");
 /** The silence being chased: an inbound message a day old, still inside Instagram's standard window. */
@@ -131,14 +137,26 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
     return { conversationId: conversation.id, anchorMessageId: anchor.id, followUpId: planned.id };
   };
 
-  /** One sweeper pass over the real store and the real queue, exactly as `main.ts` composes it. */
+  /**
+   * The real sweeper over the real store and the real queue, exactly as `main.ts` composes it, run until
+   * it has taken one pass over the due work.
+   *
+   * The loop keeps its own schedule and `close()` only waits for a pass already running, so "one pass" is
+   * made true here rather than assumed: the scan answers once and returns nothing afterwards. Fake timers
+   * would be the other way to do it and are not an option — Prisma and ioredis want real ones.
+   */
   const sweep = async (at: Date = NOW): Promise<void> => {
+    let scanned = false;
     const loop = startFollowUpSweeper({
-      // Fires immediately once and never again within a pass: `recovery-loop` schedules the first tick
-      // after one interval, and this pass is awaited through `close()`.
-      intervalMs: 1,
+      intervalMs: 5,
       limit: 50,
-      due: ({ now, limit }) => dueFollowUps(db, now, limit),
+      due: ({ now, limit }) => {
+        if (scanned) {
+          return Promise.resolve([]);
+        }
+        scanned = true;
+        return dueFollowUps(db, now, limit);
+      },
       // The real claim with the real window question, exactly as `main.ts` composes it.
       claim: (followUpId, now) => claimFollowUp(db, followUpId, now, { carries: automatedRouteStillOpen }),
       producer,
@@ -146,7 +164,7 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
       now: () => at,
       newCorrelationId: () => `corr-followup-${String(++seq)}`,
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await waitFor(() => scanned);
     await loop.close();
   };
 
