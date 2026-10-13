@@ -42,6 +42,16 @@ const EXTERNAL_ACCOUNT_ID = "17841400000000001";
 const OTHER_EXTERNAL_ACCOUNT_ID = "17841400000000002";
 const CUSTOMER_ID = "18000000000000002";
 const AT_MS = 1_789_000_000_000;
+/**
+ * Anchored to the real clock, not to this file's frozen instant.
+ *
+ * `channel_credentials` stamps `created_at` itself and `channel_credentials_lifetime_check` requires the
+ * expiry to come after it. An expiry computed from a fixed date therefore holds only until the real clock
+ * passes it, and then every case here fails because of the date rather than because of a change — which is
+ * exactly how PR #90 sat red for five days. The frozen instant stays frozen for everything the database
+ * does not constrain; this value cannot be one of them.
+ */
+const CREDENTIAL_EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
 interface Env {
   readonly INSTAGRAM_APP_SECRET: string;
@@ -122,7 +132,7 @@ describe.skipIf(!databaseTestsEnabled())("the production Instagram webhook ingre
       workspaceId,
       purpose: "INSTAGRAM_ACCESS_TOKEN",
       token: "token-for-the-account-under-test",
-      expiresAt: new Date(AT_MS + 60 * 24 * 60 * 60 * 1000),
+      expiresAt: CREDENTIAL_EXPIRES,
     });
     await database.db.channelAccount.update({ where: { id: channelAccountId }, data: { credentialId } });
   }, 180_000);
@@ -248,7 +258,7 @@ describe.skipIf(!databaseTestsEnabled())("the production Instagram webhook ingre
       workspaceId: scope.workspaceId,
       purpose: "INSTAGRAM_ACCESS_TOKEN",
       token: "token-for-the-other-account",
-      expiresAt: new Date(AT_MS + 60 * 24 * 60 * 60 * 1000),
+      expiresAt: CREDENTIAL_EXPIRES,
     });
     await database.db.channelAccount.update({ where: { id: other.id }, data: { credentialId } });
 

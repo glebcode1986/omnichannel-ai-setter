@@ -28,7 +28,16 @@ import { createWhatsAppOnboardingStore, type ConnectWhatsAppInput, type WhatsApp
 const TOKEN = "EAAtest-business-token-not-a-real-one";
 const PURPOSE = "WHATSAPP_BUSINESS_TOKEN" as const;
 const NOW = new Date("2026-10-04T12:00:00.000Z");
-const EXPIRES = new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000);
+/**
+ * Anchored to the real clock, not to this file's frozen instant.
+ *
+ * `channel_credentials` stamps `created_at` itself and `channel_credentials_lifetime_check` requires the
+ * expiry to come after it. An expiry computed from a fixed date therefore holds only until the real clock
+ * passes it, and then every case here fails because of the date rather than because of a change — which is
+ * exactly how PR #90 sat red for five days. The frozen instant stays frozen for everything the database
+ * does not constrain; this value cannot be one of them.
+ */
+const EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 const WABA_ID = "102290129340398";
 
 describe.skipIf(!databaseTestsEnabled())("whatsapp onboarding store (PostgreSQL)", () => {
