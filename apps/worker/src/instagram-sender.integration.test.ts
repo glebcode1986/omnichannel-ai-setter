@@ -372,7 +372,7 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
             credentialId,
             purpose: "INSTAGRAM_ACCESS_TOKEN",
             token: "ig-access-token-reconnected",
-            expiresAt: new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000),
+            expiresAt: CREDENTIAL_EXPIRES,
             refreshedAt: new Date(),
           });
         }),
