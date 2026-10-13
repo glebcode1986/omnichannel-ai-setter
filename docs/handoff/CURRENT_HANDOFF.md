@@ -452,7 +452,8 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    question answers, and the controls that keep a `false` from silencing a chase something could carry);
    `followup-store.integration.test.ts` (the crash window, concurrent claims, the lease, the claim asking
    the channel before spending an attempt and with the facts it read under the lock, and cancellation
-   driven through `appendInboundMessage` and `takeOver` rather than through the helper, because a
+   driven through the ingestion store's `recordActivity` and `startHumanTakeover` and through `takeOver`
+   rather than through the helper, because a
    cancellation helper with no caller is this same defect class); `human-task-store.integration.test.ts`
    (both paths that set an assignee, and the read withholding a foreign name through either column, after
    a revoked grant and for a row written past the store); and `followup-slice.integration.test.ts` on a

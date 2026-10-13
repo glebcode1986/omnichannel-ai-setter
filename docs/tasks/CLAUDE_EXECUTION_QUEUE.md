@@ -459,7 +459,10 @@ follow-up tables were a complete record of intentions nobody acted on. The repai
 
 - **A store with no caller passes its own tests.** Every follow-up case here calls the store, so none of
   them could notice. The regressions added for the repair deliberately start from the worker and from the
-  real event — the sweeper's pass, `appendInboundMessage`, `takeOver` — rather than from the helper.
+  real event — the sweeper's pass, the ingestion store's `recordActivity` and `startHumanTakeover`, and
+  `takeOver` — rather than from the helper. The first attempt hooked the inbound cancellation to
+  `appendInboundMessage`, which has no production caller, so it ran in one test and nowhere else: the same
+  defect one layer down, found by auditing for the class rather than by trusting the repair.
 - **Correct pieces can still not meet.** The provider's automated-response budget was right, the follow-up
   path was right, and together they made a feature that could never send: the budget is counted from the
   message being answered, and a follow-up answers none.

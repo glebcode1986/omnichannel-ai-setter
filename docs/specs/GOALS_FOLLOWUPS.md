@@ -169,6 +169,11 @@ half the cases.
 - The follow-up lock exists because reading first and locking second was a real bug: the attempt count
   came from a snapshot taken before the lock, so two workers racing for one follow-up both saw zero
   attempts spent, both passed the bound, and the customer got two messages.
+- The cancellation runs in the transaction that records the event, and there are three doors into it: the
+  ingestion store's `recordActivity` (an inbound through the webhook) and `startHumanTakeover` (a person
+  answering from the provider's own app), and the conversation-operations store's `takeOver` (the button in
+  our UI). The repositories layer's `appendInboundMessage` does it too and is not a production path — it has
+  no caller outside tests, and a cancellation hooked only there runs nowhere real.
 - The conversation lock is the same boundary `appendInboundMessage` and the delivery claim take. Without
   it the revalidation reads its own snapshot and serializes against nothing: a customer message committing
   after that snapshot would be invisible, and the follow-up would go out behind it.

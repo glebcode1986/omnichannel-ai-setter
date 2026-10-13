@@ -626,6 +626,13 @@ export async function recordFollowUpSent(db: DbExecutor, followUpId: string, ope
  * Called when an inbound message arrives or a person takes over, so the cancellation is a fact the moment
  * the thing that invalidated it happens — rather than something the next scan notices. `claimFollowUp`
  * checks the same conditions again anyway: this is the prompt path, and that is the correct one.
+ *
+ * Its callers, named because the first repair got this wrong: `ingestion-store`'s `recordActivity` for an
+ * inbound and `startHumanTakeover` for a person answering from the provider's own app — **the two paths a
+ * webhook actually takes** — and `conversation-operations-store`'s `takeOver` for the button in our own UI.
+ * `repositories/messages`'s `appendInboundMessage` also calls it and is correct to, but has no production
+ * caller: hooking the cancellation only there, as the first attempt did, meant it ran in that function's
+ * own test and nowhere else.
  */
 export async function cancelPendingFollowUps(
   db: DbExecutor,
