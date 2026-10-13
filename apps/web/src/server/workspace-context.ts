@@ -1,10 +1,12 @@
 import {
   authorizeBusinessProfileAccess,
+  authorizePlatformAccess,
   authorizeWorkspaceAccess,
   BusinessProfileAccessDeniedError,
   WorkspaceAccessDeniedError,
   type BusinessProfileContext,
   type DbExecutor,
+  type PlatformContext,
   type WorkspaceContext,
 } from "@omnichannel/db";
 
@@ -63,4 +65,21 @@ export async function resolveBusinessProfileContext(
     throw new BusinessProfileAccessDeniedError();
   }
   return authorizeBusinessProfileAccess(dependencies.db, { userId, workspaceId, businessProfileId });
+}
+
+/**
+ * Resolves the internal control plane's context for one server request (#59, ADMIN_OPERATIONS.md).
+ *
+ * The session proves who the user is, exactly as it does for a customer, and then a *different* lookup
+ * decides what they may do: `platform_members` rather than `workspace_members`. It names no workspace,
+ * because reading across tenants is the privilege — the workspace is a parameter of every read rather
+ * than a property of the caller.
+ *
+ * Deliberately no fallback to the customer path and no widening of it. A `PlatformContext` is refused by
+ * `scopeOf`, `profileScopeOf` and `requireRole`, and that refusal is the guarantee: an operator can never
+ * hold customer `OWNER` authority by holding this.
+ */
+export async function resolvePlatformContext(dependencies: WorkspaceContextDependencies): Promise<PlatformContext> {
+  const userId = await requireSessionUser(dependencies);
+  return authorizePlatformAccess(dependencies.db, userId);
 }

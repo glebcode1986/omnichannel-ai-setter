@@ -235,7 +235,16 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     const { conversationId, operationId } = await conversationWithDraft();
     const other = await infra.db.user.create({ data: { name: "Other", email: `other-${String(seq)}@example.test` } });
     const { workspaceId: otherWorkspaceId } = await createPaidWorkspace(infra.db, { name: "Other Workspace", ownerUserId: other.id });
-    await createSuspensionStore(infra.db).suspend({ scope: "WORKSPACE", workspaceId: otherWorkspaceId, reason: "OPERATOR", since: new Date(NOW.getTime() - 1_000) });
+    // The actor is required for an operator pause since #59: `activeSystemSuspension` identifies the
+    // system's own switch by the actor being absent, so an actorless operator pause would be one the
+    // backlog guard could close.
+    await createSuspensionStore(infra.db).suspend({
+      scope: "WORKSPACE",
+      workspaceId: otherWorkspaceId,
+      reason: "OPERATOR",
+      since: new Date(NOW.getTime() - 1_000),
+      byUserId: other.id,
+    });
 
     const attempt = deliver(conversationId, operationId);
     const outcome = await attempt.run();
@@ -285,7 +294,7 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     const suspensions = createSuspensionStore(infra.db);
     const second = await infra.db.user.create({ data: { name: "Second", email: `second-${String(seq)}@example.test` } });
     await infra.db.workspaceMember.create({ data: { workspaceId: scope.workspaceId, userId: second.id, role: "ADMIN" } });
-    const { id } = await suspensions.suspend({ scope: "GLOBAL", reason: "OPERATOR", since: new Date(NOW.getTime() - 1_000) });
+    const { id } = await suspensions.suspend({ scope: "GLOBAL", reason: "OPERATOR", since: new Date(NOW.getTime() - 1_000), byUserId: ownerUserId });
 
     await suspensions.lift(id, ownerUserId, new Date(NOW.getTime() + 1_000));
     await suspensions.lift(id, second.id, new Date(NOW.getTime() + 2_000));
@@ -301,15 +310,29 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     // would be a global stop wearing a contained-looking label.
     await expect(
       infra.db.automationSuspension.create({
-        data: { scope: "BUSINESS_PROFILE", workspaceId: scope.workspaceId, businessProfileId: null, reason: "OPERATOR", since: NOW },
+        data: { scope: "BUSINESS_PROFILE", workspaceId: scope.workspaceId, businessProfileId: null, reason: "OPERATOR", since: NOW, byUserId: ownerUserId },
       }),
     ).rejects.toThrow(/automation_suspensions_scope_check/);
+  }, 180_000);
+
+  it("refuses an operator pause that names no operator (#59)", async () => {
+    // Load-bearing rather than tidy. `activeSystemSuspension` identifies the system's own switch
+    // precisely by `byUserId IS NULL`, and every write it makes is restricted the same way so an
+    // automatic guard can never end a switch a person pulled — which an actorless operator pause would
+    // let it do.
+    await expect(
+      infra.db.automationSuspension.create({ data: { scope: "GLOBAL", reason: "OPERATOR", since: NOW, byUserId: null } }),
+    ).rejects.toThrow(/automation_suspensions_operator_check/);
+    // The machine reasons still need no actor: nobody decided them.
+    await expect(
+      infra.db.automationSuspension.create({ data: { scope: "GLOBAL", reason: "BACKLOG", since: NOW, byUserId: null } }),
+    ).resolves.toBeTruthy();
   }, 180_000);
 
   it("refuses a lift that records a time without a person", async () => {
     await expect(
       infra.db.automationSuspension.create({
-        data: { scope: "GLOBAL", reason: "OPERATOR", since: NOW, liftedAt: NOW, liftedByUserId: null },
+        data: { scope: "GLOBAL", reason: "OPERATOR", since: NOW, byUserId: ownerUserId, liftedAt: NOW, liftedByUserId: null },
       }),
     ).rejects.toThrow(/automation_suspensions_lifted_check/);
   }, 180_000);

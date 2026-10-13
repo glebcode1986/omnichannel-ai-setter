@@ -1412,6 +1412,7 @@ model User {
   assignedLeads             Conversation[]            @relation("LeadAssignee")
   leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
   openedCheckouts           CheckoutContract[]        @relation("CheckoutActor")
+  platformMembership        PlatformMember?           @relation("PlatformMemberUser")
   legalAcceptances          LegalAcceptance[]         @relation("AcceptanceActor")
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
@@ -1509,6 +1510,8 @@ model Workspace {
   checkoutContracts    CheckoutContract[]
   legalAcceptances     LegalAcceptance[]
   billingEvents        BillingEvent[]
+  supportAccessSessions SupportAccessSession[]
+  platformAuditEvents  PlatformAuditEvent[]
   @@map("workspaces")
 }
 
@@ -1558,6 +1561,8 @@ model BusinessProfile {
   auditEvents        AuditEvent[]
   humanTasks           HumanTask[]
   whatsappConnections WhatsAppConnection[]
+  supportAccessSessions SupportAccessSession[]
+  platformAuditEvents  PlatformAuditEvent[]
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("business_profiles")
@@ -2893,4 +2898,155 @@ model MessageTranscript {
   @@unique([workspaceId, id])
   @@index([workspaceId, state])
   @@map("message_transcripts")
+}
+
+/// An internal role, from `ADMIN_OPERATIONS.md` (#59).
+///
+/// Deliberately not `WorkspaceRole`. A customer's OWNER runs their own business; a platform SUPPORT
+/// engineer runs ours, and neither grants anything in the other's world. Keeping them in two enums is
+/// what makes a mistaken assignment a type error rather than a privilege.
+enum PlatformRole {
+  SUPPORT
+  BILLING
+  OPERATIONS
+  PLATFORM_ADMIN
+}
+
+/// How serious an operator action is (#59). Derived from the kind, never passed in.
+enum PlatformAuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+/// What the internal audit records (#59, ADMIN_OPERATIONS.md). Operator actions only.
+enum PlatformAuditKind {
+  PLATFORM_MEMBER_CHANGED
+  WORKSPACE_INSPECTED
+  SUPPORT_SESSION_OPENED
+  SUPPORT_SESSION_REVOKED
+  BREAK_GLASS_OPENED
+  CUSTOMER_CONTENT_READ
+  KILL_SWITCH_PULLED
+  KILL_SWITCH_LIFTED
+  RECONCILIATION_REQUESTED
+}
+
+/// A member of staff, with an internal role (#59).
+///
+/// Separate from `WorkspaceMember` and it has to be: a staff row in `workspace_members` would appear in
+/// that user's workspace list and in the workspace's seat count, so internal access would consume a
+/// customer's paid seat and be visible to them as a member they never invited.
+///
+/// One role per person, not a set. A person who needs two jobs' permissions is a question for the owner,
+/// not a row somebody adds quietly — and `PLATFORM_ADMIN` is deliberately not a superset.
+model PlatformMember {
+  id        String       @id @default(uuid(7))
+  userId    String       @unique @map("user_id")
+  role      PlatformRole
+  /// Why this person has this role: a team, a rota, a ticket. Required, like an override's reason.
+  note      String
+  /// Set when access was withdrawn. The row stays, because audit rows point at it.
+  revokedAt DateTime?    @map("revoked_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  user              User                  @relation("PlatformMemberUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  supportSessions   SupportAccessSession[] @relation("SupportSessionActor")
+  revokedSessions   SupportAccessSession[] @relation("SupportSessionRevoker")
+  auditEvents       PlatformAuditEvent[]
+
+  @@index([role, revokedAt])
+  @@map("platform_members")
+}
+
+/// An explicit, scoped, time-limited grant of access to one customer's data (#59, ADMIN_OPERATIONS.md).
+///
+/// Metadata needs no session: an operator sees identifiers, capability state and operational health
+/// without one. This exists for the step beyond that — reading somebody's correspondence — which the spec
+/// requires to be explicit, scoped, time-bounded and audited.
+///
+/// Expiry is *derived* at every read rather than enforced by a sweeper, so there is no window in which a
+/// lapsed row still reads as live. `supportScopeOf` in the domain is the only thing that decides.
+model SupportAccessSession {
+  id                 String   @id @default(uuid(7))
+  /// The staff member, through `platform_members` rather than `users`: a session can only belong to
+  /// somebody who held a platform role, and the role in force is recorded beside it.
+  platformMemberId   String   @map("platform_member_id")
+  /// The role at the moment it was opened. Kept, because a role can change and this row must not.
+  actorRole          PlatformRole @map("actor_role")
+  workspaceId        String   @map("workspace_id")
+  /// Present when the session was scoped to one Business Profile rather than the whole workspace.
+  businessProfileId  String?  @map("business_profile_id")
+  /// The domain's `SupportDataScope` names. Never includes metadata, which needs no session.
+  scopes             String[] @default([])
+  /// Why, in the operator's words. Required: access nobody can explain is access nobody dares revoke.
+  reason             String
+  /// The ticket or incident this belongs to, where there is one.
+  ticketRef          String?  @map("ticket_ref")
+  /// Break-glass: the same unlock with a fifteen-minute ceiling and a CRITICAL audit row.
+  breakGlass         Boolean  @default(false) @map("break_glass")
+  startedAt          DateTime @map("started_at")
+  expiresAt          DateTime @map("expires_at")
+  revokedAt          DateTime? @map("revoked_at")
+  revokedByMemberId  String?  @map("revoked_by_member_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  actor           PlatformMember   @relation("SupportSessionActor", fields: [platformMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  revokedBy       PlatformMember?  @relation("SupportSessionRevoker", fields: [revokedByMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  /// Composite, so a profile-scoped session cannot name a profile belonging to another tenant. The
+  /// single-column form would make that a runtime check somebody forgets.
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([platformMemberId, expiresAt])
+  @@index([workspaceId, expiresAt])
+  @@map("support_access_sessions")
+}
+
+/// The internal platform audit, deliberately not `audit_events` (#59).
+///
+/// Four independent reasons it cannot be that table, and the first two make it impossible rather than
+/// merely awkward. `audit_events.workspace_id` is `NOT NULL` with a foreign key, so an action naming no
+/// tenant — a global kill switch, a role grant — has no row shape. `audit_events_scope_check` is exact
+/// rather than permissive: a kind outside its workspace-scoped allowlist *must* name a Business Profile.
+/// `AuditEventKind` contains no operator kind. And `searchAuditEvents` authorizes through a customer's
+/// own `WorkspaceContext` and gates sensitivity on the customer's ADMIN role, so internal staff activity
+/// filed there would become readable by the customer's owner — the exact inversion the spec forbids.
+///
+/// What it *does* reuse, deliberately: the append-only trigger pattern, writing the row in the same
+/// transaction as the change it describes, and `RESTRICT` on the actor so attribution survives a
+/// departure.
+model PlatformAuditEvent {
+  id                String                @id @default(uuid(7))
+  platformMemberId  String                @map("platform_member_id")
+  /// The role in force when the action was taken, not the role the person holds now.
+  actorRole         PlatformRole          @map("actor_role")
+  kind              PlatformAuditKind
+  severity          PlatformAuditSeverity
+  /// The tenant this was about, where it was about one. NULL for a platform-level act.
+  workspaceId       String?               @map("workspace_id")
+  businessProfileId String?               @map("business_profile_id")
+  /// What the action was about, as a type and an id with no foreign key — the shape `AuditEvent` uses
+  /// for the same reason: the subject may be a row somebody later deletes, and an audit row must not
+  /// stop a deletion the customer asked for.
+  subjectType       String                @map("subject_type")
+  subjectId         String                @map("subject_id")
+  /// Why. Required for every kind, because an internal action without a stated reason is the thing this
+  /// table exists to make impossible.
+  reason            String
+  /// The session this action was taken under, where one was needed.
+  supportSessionId  String?               @map("support_session_id")
+  /// Normalized detail only. Never a token, a key, a signing secret or customer message text.
+  detail            Json                  @default("{}")
+  occurredAt        DateTime              @default(now()) @map("occurred_at")
+
+  actor           PlatformMember   @relation(fields: [platformMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  workspace       Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  businessProfile BusinessProfile? @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([occurredAt])
+  @@index([severity, occurredAt])
+  @@index([workspaceId, occurredAt])
+  @@map("platform_audit_events")
 }

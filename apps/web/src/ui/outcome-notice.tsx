@@ -54,6 +54,17 @@ const OUTCOMES = [
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // The internal console's own outcomes (#59). An operator reads these as closely as a customer reads
+  // theirs, and more carefully: the refusals say whether a role is missing or a request was impossible.
+  "PAUSED",
+  "RESUMED_OUTBOUND",
+  "ALREADY_LIFTED",
+  "SESSION_OPENED",
+  "SESSION_REVOKED",
+  "ALREADY_REVOKED",
+  "REEXAMINED",
+  "NOT_PERMITTED",
+  "ADMIN_REFUSED",
   "MOVED",
   "STALE_STAGE",
   "UNCHANGED_STAGE",
@@ -79,6 +90,10 @@ const REFUSALS = new Set<string>([
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // An operator who pressed a control and did not get it. `ALREADY_LIFTED` and `ALREADY_REVOKED` are not
+  // refusals: nothing was denied, the work was simply already done.
+  "NOT_PERMITTED",
+  "ADMIN_REFUSED",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {

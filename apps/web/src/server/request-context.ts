@@ -1,8 +1,8 @@
-import type { BusinessProfileContext, WorkspaceContext } from "@omnichannel/db";
+import type { BusinessProfileContext, PlatformContext, WorkspaceContext } from "@omnichannel/db";
 
 import { auth } from "../auth";
 import { getDb } from "./db";
-import { resolveBusinessProfileContext, resolveWorkspaceContext, type WorkspaceContextDependencies } from "./workspace-context";
+import { resolveBusinessProfileContext, resolvePlatformContext, resolveWorkspaceContext, type WorkspaceContextDependencies } from "./workspace-context";
 
 function dependencies(): WorkspaceContextDependencies {
   return {
@@ -22,4 +22,16 @@ export function requireBusinessProfileContext(
   businessProfileId: string | undefined,
 ): Promise<BusinessProfileContext> {
   return resolveBusinessProfileContext(dependencies(), workspaceId, businessProfileId);
+}
+
+/**
+ * The internal control plane's context for this request (#59).
+ *
+ * Every page and route under `/admin` calls this and nothing else. `route-authorization.test.ts` walks
+ * the route tree and fails the build for a page whose own source — or an ancestor layout's — does not
+ * call one of the three resolvers, because the app has no middleware and a forgotten call in one file
+ * would be an unauthenticated internal console page that nothing else notices.
+ */
+export function requirePlatformContext(): Promise<PlatformContext> {
+  return resolvePlatformContext(dependencies());
 }

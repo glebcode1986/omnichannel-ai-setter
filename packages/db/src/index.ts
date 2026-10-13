@@ -15,6 +15,8 @@ export {
   BusinessProfileAccessDeniedError,
   DbInputError,
   PlanLimitError,
+  PlatformAccessDeniedError,
+  PlatformPermissionError,
   isUniqueViolation,
   TenantRecordNotFoundError,
   WorkspaceAccessDeniedError,
@@ -36,6 +38,53 @@ export {
   type WorkspaceAccessRequest,
   type WorkspaceContext,
 } from "./tenancy";
+export {
+  authorizePlatformAccess,
+  platformActorOf,
+  platformCan,
+  requirePlatformPermission,
+  type PlatformContext,
+} from "./platform-tenancy";
+export {
+  PLATFORM_AUDIT_KIND_LIST,
+  recordPlatformAuditEvent,
+  searchPlatformAuditEvents,
+  type PlatformAuditInput,
+  type PlatformAuditPage,
+  type PlatformAuditRow,
+  type PlatformAuditSearch,
+} from "./platform-audit-store";
+export {
+  listSupportSessions,
+  openSupportAccessSession,
+  readSupportScope,
+  revokeSupportAccessSession,
+  setPlatformMember,
+  type OpenedSupportSession,
+  type OpenSupportSessionInput,
+  type SupportSessionRow,
+} from "./support-access-store";
+export {
+  findWorkspaces,
+  listReconciliations,
+  readConversationContent,
+  readSupportSnapshot,
+  type ChannelDiagnostic,
+  type ConversationContentLine,
+  type ProfileDiagnostic,
+  type ReconciliationRow,
+  type SupportSnapshot,
+  type WorkspaceHit,
+} from "./platform-read-store";
+export {
+  liftKillSwitch,
+  listKillSwitches,
+  pullKillSwitch,
+  requestReconciliation,
+  type KillSwitchRow,
+  type PulledKillSwitch,
+  type PullKillSwitchInput,
+} from "./platform-actions-store";
 export { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
@@ -150,6 +199,7 @@ export {
   openUsageCycle,
   openUsageCycleWithin,
   readUsage,
+  readUsageSnapshot,
   readUsageAnchorDay,
   recordUsage,
   recordUsageWithin,
