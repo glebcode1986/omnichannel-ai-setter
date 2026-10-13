@@ -282,8 +282,74 @@ describe.skipIf(!databaseTestsEnabled())("the lead pipeline", () => {
       // A name on a lead that nobody can act under would tell the next reader that person is working it.
       expect(await editLead(db(), profile.context, profile.conversationId, { assignedUserId: outsiderId })).toEqual({
         status: "REFUSED",
-        reason: "a lead can only be assigned to a member of this workspace",
+        reason: "a lead can only be assigned to somebody who works on this Business Profile",
       });
+    }, 180_000);
+
+    /**
+     * The half that Workspace membership alone lets through — and did.
+     *
+     * `editLead` checked membership and never the Business Profile grant, so a member whose scope is
+     * `SELECTED` without this profile could be given a lead inside it: parked where its assignee cannot
+     * open it, shown to everybody else as somebody's work, and their name carried into a profile-scoped
+     * read. The same asymmetry was a blocking finding on human tasks (#55); this is the leads half, found
+     * by looking for the class rather than waiting for it to be reported twice.
+     */
+    it("refuses a member of this Workspace who was not granted this Business Profile", async () => {
+      const ungranted = await db().user.create({ data: { name: "Lead Ungranted", email: `lead-ungranted-${String(Date.now())}@example.test` } });
+      const workspaceContext = await authorizeWorkspaceAccess(db(), { userId: workspace.ownerUserId, workspaceId: profile.context.workspaceId });
+      await addWorkspaceMember(db(), workspaceContext, { userId: ungranted.id, role: "AGENT", businessProfileScope: { selected: [] } });
+
+      expect(await editLead(db(), profile.context, profile.conversationId, { assignedUserId: ungranted.id })).toEqual({
+        status: "REFUSED",
+        reason: "a lead can only be assigned to somebody who works on this Business Profile",
+      });
+      // And the same refusal for a user id that belongs to nobody, so an assignment form cannot become a
+      // way to discover who exists.
+      expect(await editLead(db(), profile.context, profile.conversationId, { assignedUserId: "01999999-9999-7999-8999-999999999999" })).toMatchObject({
+        status: "REFUSED",
+      });
+    }, 180_000);
+
+    it("names nobody when a stored assignee is not somebody this profile may know", async () => {
+      const stranger = neighbour.ownerUserId;
+      // Written past the store, which is how a row from before the guard — or one a console session wrote
+      // — actually arrives. The foreign key permits it: it references global `users(id)`.
+      await db().conversation.updateMany({ where: { id: profile.conversationId }, data: { assignedUserId: stranger } });
+
+      const [lead] = (await listLeads(db(), profile.context)).filter((row) => row.conversationId === profile.conversationId);
+
+      // The id stays, because an operator needs to see that the lead is parked on somebody who cannot work
+      // it in order to take it back. The name does not: this profile has no business knowing it.
+      expect(lead?.assignedUserId).toBe(stranger);
+      expect(lead?.assignedUserName).toBeNull();
+      const strangerName = await db().user.findUniqueOrThrow({ where: { id: stranger }, select: { name: true } });
+      expect(JSON.stringify(lead)).not.toContain(strangerName.name);
+      await db().conversation.updateMany({ where: { id: profile.conversationId }, data: { assignedUserId: null } });
+    }, 180_000);
+
+    it("stops naming a colleague the moment their grant is taken away", async () => {
+      const revoked = await db().user.create({ data: { name: "Lead Revoked", email: `lead-revoked-${String(Date.now())}@example.test` } });
+      const workspaceContext = await authorizeWorkspaceAccess(db(), { userId: workspace.ownerUserId, workspaceId: profile.context.workspaceId });
+      await addWorkspaceMember(db(), workspaceContext, {
+        userId: revoked.id,
+        role: "AGENT",
+        businessProfileScope: { selected: [profile.businessProfileId] },
+      });
+      expect(await editLead(db(), profile.context, profile.conversationId, { assignedUserId: revoked.id })).toEqual({ status: "SAVED" });
+      const named = (await listLeads(db(), profile.context)).find((row) => row.conversationId === profile.conversationId);
+      // The positive control: while the grant stands the name is shown, so this case cannot pass by the
+      // list having stopped naming anybody at all.
+      expect(named?.assignedUserName).toBe("Lead Revoked");
+
+      await db().memberBusinessProfileAccess.deleteMany({
+        where: { businessProfileId: profile.businessProfileId, member: { userId: revoked.id } },
+      });
+
+      const after = (await listLeads(db(), profile.context)).find((row) => row.conversationId === profile.conversationId);
+      expect(after?.assignedUserId).toBe(revoked.id);
+      expect(after?.assignedUserName).toBeNull();
+      await db().conversation.updateMany({ where: { id: profile.conversationId }, data: { assignedUserId: null } });
     }, 180_000);
 
     it("clears an assignee, a note and a next action", async () => {
