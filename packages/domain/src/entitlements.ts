@@ -175,6 +175,14 @@ export interface ResolveEntitlementInput {
   readonly planVersion: number;
   readonly grants: PlanGrants;
   readonly override?: EntitlementOverrideInput;
+  /**
+   * Recurring capacity the workspace is paying for on top of its plan (#43).
+   *
+   * Added to the plan's ceilings rather than replacing them, and only where the plan states one: a plan
+   * that caps nothing is uncapped, and an add-on cannot make an uncapped thing capped at the size of the
+   * add-on. An override still wins over both, because an override is a deliberate departure.
+   */
+  readonly addOns?: readonly { readonly limits: Readonly<Partial<Record<PlanLimit, number>>>; readonly quantity: number }[];
   readonly periodEndsAt?: Date;
   /** When a trial ends. Read for the same reason the period end is: the state alone cannot say "now". */
   readonly trialEndsAt?: Date;
@@ -205,7 +213,12 @@ export function resolveEntitlement(input: ResolveEntitlementInput): EntitlementS
 
   const limits: Partial<Record<PlanLimit, number>> = {};
   for (const limit of PLAN_LIMITS) {
-    const value = override?.limits?.[limit] ?? input.grants.limits[limit];
+    const planned = input.grants.limits[limit];
+    // Add-ons raise a stated ceiling and leave an unstated one alone. A plan that caps nothing is
+    // genuinely uncapped, and letting one extra seat turn that into a cap of one would take capacity away
+    // from a business that bought more of it.
+    const purchased = planned === undefined ? undefined : planned + addedCapacity(input.addOns, limit);
+    const value = override?.limits?.[limit] ?? purchased;
     if (value !== undefined) {
       limits[limit] = value;
     }
@@ -237,6 +250,14 @@ export function resolveEntitlement(input: ResolveEntitlementInput): EntitlementS
     ...(input.periodEndsAt === undefined ? {} : { periodEndsAt: input.periodEndsAt }),
     resolvedAt: input.now,
   };
+}
+
+/** How much of one ceiling the workspace has bought, across every add-on that grants it. */
+function addedCapacity(
+  addOns: readonly { readonly limits: Readonly<Partial<Record<PlanLimit, number>>>; readonly quantity: number }[] | undefined,
+  limit: PlanLimit,
+): number {
+  return (addOns ?? []).reduce((total, addOn) => total + (addOn.limits[limit] ?? 0) * addOn.quantity, 0);
 }
 
 function expired(override: EntitlementOverrideInput, now: Date): boolean {

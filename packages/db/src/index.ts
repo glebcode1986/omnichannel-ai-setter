@@ -48,11 +48,39 @@ export {
 } from "./delivery-store";
 export { channelCapabilitiesOf } from "./channel-capabilities";
 export {
+  ACCEPTED_ADDONS,
+  ACCEPTED_CURRENCY,
+  ACCEPTED_PLANS,
+  ACCEPTED_TRIAL,
+  publishAcceptedCatalog,
+  type PublishedCatalog,
+} from "./accepted-catalog";
+export {
+  consumeTopUp,
+  endWorkspaceAddOn,
+  grantUsageTopUp,
+  publishAddOnVersion,
+  readCatalog,
+  readTopUpBalance,
+  setWorkspaceAddOn,
+  type AddOnKindValue,
+  type AddOnVersionInput,
+  type AddOnVersionRecord,
+  type Catalog,
+  type CatalogAddOn,
+  type CatalogPlan,
+  type CatalogPrice,
+  type TopUpBalance,
+} from "./catalog-store";
+export {
   publishPlanVersion,
   readEntitlement,
   setBillingAccount,
   setEntitlementOverride,
   setWorkspaceSubscription,
+  type BillingIntervalValue,
+  type CatalogAvailability,
+  type CatalogPriceInput,
   type PlanVersionInput,
   type PlanVersionRecord,
   type SubscribeInput,

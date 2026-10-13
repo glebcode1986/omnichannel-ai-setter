@@ -136,6 +136,14 @@ export interface ReservationRequest {
   readonly committed: number;
   /** Held by reservations that have not yet been committed or released. */
   readonly reserved: number;
+  /**
+   * Allowance the workspace bought on top of the plan's included amount (#43).
+   *
+   * Added to the plan's quota rather than counted separately, because the question here is only "is there
+   * room?". *Which* of the two a commit spends is the store's business, and the accepted policy is that
+   * the included allowance goes first — so a top-up cannot be spent while the plan's own is untouched.
+   */
+  readonly purchased?: number;
   readonly amount: number;
 }
 
@@ -158,12 +166,16 @@ export function reservationVerdict(request: ReservationRequest): ReservationVerd
   if (!request.snapshot.paidWorkAllowed) {
     return { kind: "NO_PAID_ACCESS" };
   }
-  const allowance = request.snapshot.quotas[request.metric];
-  if (allowance === undefined) {
+  const included = request.snapshot.quotas[request.metric];
+  if (included === undefined) {
     // Not the same as exhausted, and it reads differently to the person being told: "your plan does not
     // include this" is answered by changing plan, "you have used it all" by waiting or topping up.
+    //
+    // A top-up cannot rescue this. The allowance exists because a plan sells it, and a balance bought
+    // against a plan that no longer includes the resource is not a licence to use it.
     return { kind: "NOT_INCLUDED" };
   }
+  const allowance = included + (request.purchased ?? 0);
   const used = request.committed + request.reserved;
   const remaining = Math.max(0, allowance - used);
   if (used + request.amount > allowance) {
