@@ -11,7 +11,7 @@
  *   accidentally concatenate customer text into system instructions.
  */
 import type { ChannelType } from "@omnichannel/channel-core";
-import type { AiMode, ReasonCode, StyleProfile } from "@omnichannel/domain";
+import type { AiMode, CommercialAccess, ReasonCode, StyleProfile } from "@omnichannel/domain";
 
 import type { KnowledgeSegment, StyleSegment, SuppliedRetrieval } from "../retrieval/ports";
 
@@ -118,6 +118,14 @@ export interface DraftConversationSnapshot {
    * not work: the caller reads them at the same instant, so they are always equal.
    */
   readonly anchorSuperseded: boolean;
+  /**
+   * What this workspace's commercial state permits (#40).
+   *
+   * On the snapshot rather than on the command, with the mode and the takeover state, because it is a
+   * fact about the world read at the same instant as the rest — and because generation is the expensive
+   * half: a provider call is money, and refusing one before it happens is the only refusal that saves any.
+   */
+  readonly commercial: CommercialAccess;
 }
 
 export interface PersistedDraft {

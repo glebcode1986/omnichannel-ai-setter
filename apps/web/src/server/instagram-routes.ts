@@ -149,6 +149,8 @@ function failureStatus(reason: ConnectFailureReason): string {
       return "already_connected";
     case "different_account":
       return "different_account";
+    case "not_entitled":
+      return "not_entitled";
     case "provider_unavailable":
       return "unavailable";
     case "invalid_state":

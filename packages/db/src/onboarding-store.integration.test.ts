@@ -8,10 +8,10 @@ import { TenantRecordNotFoundError } from "./errors";
 import { createInstagramOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
 import { readChannelCredential, restoreChannelCredential } from "./repositories/channel-credentials";
 import { authorizeBusinessProfileAccess, type BusinessProfileContext } from "./tenancy";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { authorizeWorkspaceAccess } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { createTestUser } from "./testing/fixtures";
+import { createTestUser, createPaidWorkspace } from "./testing/fixtures";
 
 const TOKEN = "IGQVJlong-lived-token";
 const OTHER_TOKEN = "IGQVJrefreshed-token";
@@ -42,7 +42,7 @@ describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL
 
   const bareProfile = async (label: string): Promise<BusinessProfileContext> => {
     const ownerUserId = await createTestUser(database.db, label);
-    const { workspaceId } = await createWorkspaceWithOwner(database.db, { name: `Workspace ${label}`, ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(database.db, { name: `Workspace ${label}`, ownerUserId });
     const workspace = await authorizeWorkspaceAccess(database.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(database.db, workspace, { name: `Profile ${label}` });
     return authorizeBusinessProfileAccess(database.db, { userId: ownerUserId, workspaceId, businessProfileId });

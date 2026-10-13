@@ -20,13 +20,23 @@ import {
   createContactWithChannelIdentity,
   createConversation,
   createPendingTranscripts,
-  createWorkspaceWithOwner,
+  publishPlanVersion,
+  readEntitlement,
+  readUsage,
+  setWorkspaceSubscription,
 } from "@omnichannel/db";
-import { NO_CAPABILITIES } from "@omnichannel/domain";
+import { commercialAccessOf, NO_CAPABILITIES } from "@omnichannel/domain";
 import type { MediaTranscriptionJob } from "@omnichannel/queue";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createTranscriptionHandler, RetryableTranscriptionError, type MediaFetchPort, type MediaFetchResult } from "./transcription-handler";
+import {
+  createTranscriptionHandler,
+  RetryableTranscriptionError,
+  TRANSCRIPTION_RESERVE_SECONDS,
+  type MediaFetchPort,
+  type MediaFetchResult,
+} from "./transcription-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-10-05T12:00:00.000Z");
@@ -41,13 +51,17 @@ describe.skipIf(!endToEndTestsEnabled())("reading a customer's recording", () =>
   let channelAccountId: string;
   let conversationId: string;
   let foreignWorkspaceId: string;
+  let workspace: Awaited<ReturnType<typeof authorizeWorkspaceAccess>>;
+  let planVersionId: string;
   let seq = 0;
 
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Voice Owner", email: "voice-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Voice Workspace", ownerUserId: user.id });
-    const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
+    const paid = await createPaidWorkspace(infra.db, { name: "Voice Workspace", ownerUserId: user.id });
+    const workspaceId = paid.workspaceId;
+    planVersionId = paid.planVersionId;
+    workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Voice Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });
     scope = { workspaceId, businessProfileId };
@@ -67,7 +81,7 @@ describe.skipIf(!endToEndTestsEnabled())("reading a customer's recording", () =>
     conversationId = conversation.id;
 
     const other = await infra.db.user.create({ data: { name: "Other Owner", email: "voice-other@example.test" } });
-    foreignWorkspaceId = (await createWorkspaceWithOwner(infra.db, { name: "Other Workspace", ownerUserId: other.id })).workspaceId;
+    foreignWorkspaceId = (await createPaidWorkspace(infra.db, { name: "Other Workspace", ownerUserId: other.id })).workspaceId;
   }, 180_000);
 
   afterAll(async () => {
@@ -428,4 +442,174 @@ describe.skipIf(!endToEndTestsEnabled())("reading a customer's recording", () =>
       });
     });
   });
+
+  /**
+   * The allowance (#40, USAGE_METERING.md).
+   *
+   * Transcription is the one customer-facing metered resource in the initial plans, so this is where the
+   * reserve/commit/release machinery meets a real paid provider call. The cases worth writing are the
+   * three where a naive implementation leaks: a refusal that still downloads the bytes, a hold that is
+   * never given back when the reading fails, and a commit that records the estimate instead of the truth.
+   */
+  describe("the transcription allowance", () => {
+    const planWith = async (code: string, grants: Parameters<typeof publishPlanVersion>[1]["grants"]) =>
+      (await publishPlanVersion(infra.db, { code, name: code, grants })).planVersionId;
+
+    /**
+     * The counter for this cycle, read as a *delta* by every case below.
+     *
+     * The cycle is the workspace's and the earlier suites in this file consume it too, so an absolute
+     * assertion would be an assertion about the order the file happens to run in. The delta is what each
+     * case actually claims.
+     */
+    const usageFor = async () => {
+      const snapshot = await readUsage(infra.db, scope.workspaceId, new Date(NOW.getTime() + 5_000));
+      return snapshot.counters["VOICE_TRANSCRIPTION_SECONDS"] ?? { committed: 0, reserved: 0 };
+    };
+
+    const since = async (before: { readonly committed: number; readonly reserved: number }) => {
+      const after = await usageFor();
+      return { committed: after.committed - before.committed, reserved: after.reserved - before.reserved };
+    };
+
+    afterEach(async () => {
+      // Back to the uncapped test plan, so one case's allowance cannot decide the next one's outcome.
+      await setWorkspaceSubscription(infra.db, workspace, { planVersionId, state: "ACTIVE" });
+    });
+
+    it("commits what the reading actually took, not what it held", async () => {
+      const before = await usageFor();
+      const { messageId } = await voiceNote();
+      const media = scriptedMedia([downloaded()]);
+      const { transcriber } = scriptedTranscriber([read({ durationSeconds: 7.4 })]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      const usage = await since(before);
+      // Rounded to whole seconds, because the column counts seconds and a fractional one would truncate
+      // silently. Nothing is still held: the hold went back as the commit took its place.
+      expect(usage).toEqual({ committed: 7, reserved: 0 });
+    }, 180_000);
+
+    it("commits the estimate when the provider reports no duration, rather than zero", async () => {
+      const before = await usageFor();
+      const { messageId } = await voiceNote();
+      const media = scriptedMedia([downloaded()]);
+      const { transcriber } = scriptedTranscriber([read()]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      // The work happened and somebody paid for it. Recording zero would understate our own costs for
+      // every provider that does not measure — `gpt-transcribe` is one of them.
+      expect((await since(before)).committed).toBe(TRANSCRIPTION_RESERVE_SECONDS);
+    }, 180_000);
+
+    it("gives the hold back when the reading fails, so a failure costs no allowance", async () => {
+      const before = await usageFor();
+      const { messageId } = await voiceNote();
+      const media = scriptedMedia([downloaded()]);
+      const { transcriber } = scriptedTranscriber([{ ok: false, reason: "UNSUPPORTED_AUDIO" }]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      expect(await since(before)).toEqual({ committed: 0, reserved: 0 });
+    }, 180_000);
+
+    it("gives the hold back when the recording cannot even be downloaded", async () => {
+      const before = await usageFor();
+      const { messageId } = await voiceNote();
+      const media = scriptedMedia([{ ok: false, reason: "NOT_FOUND", retryable: false, permanent: true }]);
+      const { transcriber, requests } = scriptedTranscriber([read()]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      expect(await since(before)).toEqual({ committed: 0, reserved: 0 });
+      expect(requests).toEqual([]);
+    }, 180_000);
+
+    it("refuses to read anything once the allowance is spent, and never calls the provider", async () => {
+      const before = await usageFor();
+      // Sells AI and transcription, like every accepted plan does, and differs from them only in the size
+      // of the allowance. A plan selling transcription and nothing else would make the assertions below
+      // about *this plan's* narrowness rather than about exhaustion, which is the thing under test.
+      const tiny = await planWith("voice-tiny-allowance", {
+        features: ["AI_DRAFTS", "AUTOPILOT", "VOICE_TRANSCRIPTION"],
+        limits: {},
+        quotas: { VOICE_TRANSCRIPTION_SECONDS: 10 },
+      });
+      await setWorkspaceSubscription(infra.db, workspace, { planVersionId: tiny, state: "ACTIVE" });
+      const { messageId, mediaIds } = await voiceNote();
+      const media = scriptedMedia([downloaded()]);
+      const { transcriber, requests } = scriptedTranscriber([read()]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      // The estimate alone exceeds ten seconds, so the hold is refused before anything is spent.
+      expect(requests).toEqual([]);
+      const rows = await rowsOf(messageId);
+      expect(rows[0]).toMatchObject({ state: "FAILED", failureReason: "BILLING_LIMIT" });
+      // And a reply written as though the recording had been heard is what this prevents: the draft path
+      // turns the missing transcript into `AUDIO_NOT_TRANSCRIBED` and holds the reply for a person.
+      expect(rows[0]?.text).toBeNull();
+
+      // PRICING_PACKAGING.md §142-148 says what exhaustion may *not* touch, and until now only the
+      // transcription half of that was asserted. The word the spec uses is "only", and an "only" nothing
+      // checks is the kind of claim that stays true by luck: a later change coupling the voice counter to
+      // commercial access would pass every assertion above while silently switching off text replies for
+      // a workspace that merely ran out of minutes.
+
+      // "no automatic overage charge is enabled by default" — the refusal spends nothing, so a workspace
+      // cannot be billed past its allowance by a recording arriving.
+      expect(await since(before)).toEqual({ committed: 0, reserved: 0 });
+
+      // "the incoming voice message remains stored/visible in Inbox" — the recording is not what failed,
+      // and a message deleted or emptied to settle a billing limit would be data lost to a commercial
+      // rule, which the spec forbids outright.
+      const stored = await infra.db.message.findUniqueOrThrow({
+        where: { id: messageId },
+        select: { kind: true, direction: true, conversationId: true, media: true },
+      });
+      expect(stored).toMatchObject({ kind: "AUDIO", direction: "IN", conversationId });
+      expect(JSON.stringify(stored.media)).toContain(mediaIds[0] ?? "");
+
+      // "text conversations and normal AI behavior continue" — asserted at `commercialAccessOf`, which is
+      // the decision the draft path actually consults, rather than by driving a draft here: this file owns
+      // the recording's paths and the disposition's own suite owns that one. The three fields are the
+      // whole of what the draft path reads.
+      expect(commercialAccessOf(await readEntitlement(infra.db, scope.workspaceId, NOW))).toEqual({
+        paidWorkAllowed: true,
+        aiDrafts: true,
+        autopilot: true,
+      });
+    }, 180_000);
+
+    it("downloads nothing at all when the plan does not sell transcription", async () => {
+      const without = await planWith("voice-no-transcription", { features: ["AI_DRAFTS"], limits: {}, quotas: {} });
+      await setWorkspaceSubscription(infra.db, workspace, { planVersionId: without, state: "ACTIVE" });
+      const { messageId } = await voiceNote();
+      const media = scriptedMedia([downloaded()]);
+      const { transcriber, requests } = scriptedTranscriber([read()]);
+
+      await handler({ media: media.port, transcription: transcriber })(job(messageId));
+
+      // Our bandwidth as well as the provider's bill: a workspace that does not buy this should not have
+      // either spent on it.
+      expect(media.fetches).toEqual([]);
+      expect(requests).toEqual([]);
+      expect((await rowsOf(messageId))[0]).toMatchObject({ state: "FAILED", failureReason: "BILLING_FEATURE_OFF" });
+    }, 180_000);
+
+    it("keeps the recording in the Inbox either way, because the message was persisted long before", async () => {
+      const without = await planWith("voice-inbox-survives", { features: ["AI_DRAFTS"], limits: {}, quotas: {} });
+      await setWorkspaceSubscription(infra.db, workspace, { planVersionId: without, state: "ACTIVE" });
+      const { messageId } = await voiceNote();
+
+      await handler({ media: scriptedMedia([downloaded()]).port, transcription: scriptedTranscriber([read()]).transcriber })(job(messageId));
+
+      // The property the spec states outright: never drop inbound customer data because billing is
+      // unavailable. Ingestion does not consult an entitlement at all, and this is the evidence.
+      expect(await infra.db.message.count({ where: { id: messageId } })).toBe(1);
+    }, 180_000);
+  });
 });
+

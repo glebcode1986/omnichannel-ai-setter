@@ -6,6 +6,7 @@
  * engine's and the delivery coordinator's, neither of which this path can reach.
  */
 import {
+  draftGenerationBlockers,
   generateDraft,
   retrieveDraftContext,
   type DraftGenerationDependencies,
@@ -61,6 +62,25 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
     if (context === undefined) {
       // The conversation or anchor is gone or belongs elsewhere: retrying cannot fix that.
       throw new NonRetryableJobError("conversation or anchor message not found for draft generation");
+    }
+
+    // Asked here, before retrieval and before the model call, because this is the only place a refusal
+    // saves anything: `retrieveDraftContext` below spends a paid embedding call, and the generation after
+    // it spends a provider call. The engine asks the same question again when it runs — a gate that
+    // trusts an upstream layer to have already checked is not a gate — but by then the money is gone.
+    //
+    // Every blocker, not only the commercial ones: a conversation in OFF mode or already taken over was
+    // going to be declined anyway, and paying for its embeddings first was never anything but waste.
+    const blockers = draftGenerationBlockers(context.snapshot, job.trigger);
+    if (blockers.length > 0) {
+      dependencies.logger.info("worker.draft_declined", {
+        workspaceId: job.workspaceId,
+        businessProfileId: job.businessProfileId,
+        conversationId: job.conversationId,
+        correlationId: job.correlationId,
+        reasonCodes: blockers,
+      });
+      return;
     }
 
     // Workspace base, then this Business Profile's override, then the platform default underneath.

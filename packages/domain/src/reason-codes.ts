@@ -55,6 +55,35 @@ export const REASON_CODES = [
   "AUDIO_NOT_TRANSCRIBED",
   /** An operator, or the system on their behalf, stopped automated outbound for this scope. */
   "AUTOMATION_SUSPENDED",
+  // commercial access (#40, BILLING_ENTITLEMENTS.md)
+  //
+  // Three codes rather than one, because they call for three different actions from whoever reads them:
+  // pay, change plan, or wait. Collapsing them into a single "billing" reason would put an operator in
+  // front of a message that cannot tell them which of the three they are looking at.
+  /**
+   * This workspace may not do paid work right now: no subscription, or past trial and past grace.
+   *
+   * Answered by paying. Deliberately not a claim about the plan's contents — a workspace on the best plan
+   * in the catalogue carries this the day after its card fails.
+   */
+  "BILLING_INACTIVE",
+  /**
+   * The plan does not include the feature this send needs.
+   *
+   * Answered by changing plan, which is a different conversation from paying an overdue invoice. The
+   * server decides it: a business that set AUTOPILOT on a plan that does not sell it gets its replies
+   * held for a person rather than sent, however the screen looked when they chose.
+   */
+  "BILLING_FEATURE_OFF",
+  /**
+   * An explicitly metered allowance is spent.
+   *
+   * Answered by waiting for the cycle or by topping up, and never by inventing the thing that could not
+   * be paid for: a recording nobody could afford to transcribe does not become a reply written as though
+   * it had been heard. Core AI replies cannot produce this code, because the initial plans do not meter
+   * them (USAGE_METERING.md).
+   */
+  "BILLING_LIMIT",
 ] as const;
 export type ReasonCode = (typeof REASON_CODES)[number];
 export const isReasonCode = literalGuard(REASON_CODES);

@@ -20,13 +20,13 @@ import {
   createChannelAccount,
   createContactWithChannelIdentity,
   createConversation,
-  createWorkspaceWithOwner,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import type { HumanAgentApproval } from "@omnichannel/channel-instagram";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createDraftDisposition } from "./draft-disposition";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z");
@@ -45,7 +45,7 @@ describe.skipIf(!endToEndTestsEnabled())("what review is offered once the standa
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Window Owner", email: "window-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Window Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Window Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Window Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });

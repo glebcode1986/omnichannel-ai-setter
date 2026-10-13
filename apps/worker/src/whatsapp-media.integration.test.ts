@@ -16,7 +16,6 @@ import {
   createBusinessProfile,
   createChannelAccount,
   createCredentialCipher,
-  createWorkspaceWithOwner,
   writeChannelCredential,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
@@ -24,6 +23,7 @@ import type { WhatsAppHttpPort, WhatsAppHttpResult } from "@omnichannel/channel-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createWhatsAppMediaPort } from "./whatsapp-media";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-10-05T12:00:00.000Z");
@@ -61,7 +61,7 @@ describe.skipIf(!endToEndTestsEnabled())("the worker's WhatsApp media port", () 
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Media Owner", email: "media-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Media Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Media Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Media Profile" });
     const context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });
@@ -88,7 +88,7 @@ describe.skipIf(!endToEndTestsEnabled())("the worker's WhatsApp media port", () 
 
     // A second tenant, fully configured, so a forged fetch has somewhere real to point at.
     const otherUser = await infra.db.user.create({ data: { name: "Other Media", email: "media-other@example.test" } });
-    const other = await createWorkspaceWithOwner(infra.db, { name: "Other Media Workspace", ownerUserId: otherUser.id });
+    const other = await createPaidWorkspace(infra.db, { name: "Other Media Workspace", ownerUserId: otherUser.id });
     const otherWorkspace = await authorizeWorkspaceAccess(infra.db, { userId: otherUser.id, workspaceId: other.workspaceId });
     const otherProfile = await createBusinessProfile(infra.db, otherWorkspace, { name: "Other Media Profile" });
     const otherContext = await authorizeBusinessProfileAccess(infra.db, {

@@ -1,6 +1,7 @@
-import { isValidIdentifier, type AiMode, type ChannelCapabilities, type ChannelType } from "@omnichannel/domain";
+import { featureWithheld, isValidIdentifier, type AiMode, type ChannelCapabilities, type ChannelType } from "@omnichannel/domain";
 
-import type { DbExecutor } from "../client";
+import type { DbClient, DbExecutor } from "../client";
+import { readEntitlement } from "../entitlement-store";
 import { DbInputError, isUniqueViolation, rethrowAsTenantNotFound, TenantRecordNotFoundError } from "../errors";
 import type { ChannelAccountStatus, Prisma } from "../generated/prisma/client";
 
@@ -59,7 +60,17 @@ export async function createChannelAccount(
 }
 
 /** Why a connect attempt did not produce a connected account. Fixed vocabulary; never provider prose. */
-export type ChannelConnectFailure = "already_connected" | "different_account";
+export type ChannelConnectFailure =
+  | "already_connected"
+  | "different_account"
+  /**
+   * The plan does not sell this channel, or the workspace may not do paid work at all (#40).
+   *
+   * One token for both, because the refusal is the same at this surface: the connect does not happen. A
+   * screen that needs to tell "upgrade" from "pay" reads the entitlement, which is a question about the
+   * workspace rather than about this attempt.
+   */
+  | "not_entitled";
 
 export class ChannelConnectError extends Error {
   readonly reason: ChannelConnectFailure;
@@ -92,11 +103,31 @@ export async function connectChannelAccount(
   db: DbExecutor,
   context: BusinessProfileContext,
   input: ConnectChannelAccountInput,
+  /** When the plan's validity is judged. Explicit, like every other clock in this package. */
+  at = new Date(),
 ): Promise<ChannelAccountRecord> {
   const scope = profileScopeOf(context);
   requireRole(context, WORKSPACE_ADMIN_ROLES, "connecting channel accounts");
   if (!isValidIdentifier(input.externalAccountId)) {
     throw new DbInputError("externalAccountId", "must be a valid identifier");
+  }
+
+  // The plan's own answer, before anything is written (#40).
+  //
+  // Reconnecting is refused too, deliberately: a workspace whose plan no longer sells this channel keeps
+  // the account row and every conversation in it — nothing is disconnected and no webhook stops being
+  // persisted — but it does not get to re-establish the connection until the plan does.
+  //
+  // Only *this* connect is refused. Ingestion never consults an entitlement, which is what keeps an
+  // inbound customer message arriving on a channel the plan has stopped selling.
+  // `featureWithheld`, not `featureAllowed`: this asks whether the *plan* refuses the channel, not
+  // whether paid work is allowed. Connecting a channel is configuration — a business whose card failed may
+  // still reconnect one, and a workspace with no plan at all must be able to connect its first, because
+  // that is the act which starts its trial. What stops when a workspace is unpaid is sending, and that is
+  // gated where sending happens.
+  const entitlement = await readEntitlement(db as unknown as DbClient, scope.workspaceId, at);
+  if (featureWithheld(entitlement, input.channel === "WHATSAPP" ? "WHATSAPP" : "INSTAGRAM")) {
+    throw new ChannelConnectError("not_entitled");
   }
 
   // Only a *live* account owns the profile's channel slot, matching the partial unique index. A

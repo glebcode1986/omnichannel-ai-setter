@@ -18,13 +18,14 @@ import {
   createConversation,
   createDeliveryStore,
   createSuspensionStore,
-  createWorkspaceWithOwner,
+  setWorkspaceSubscription,
   scheduleAutomatedDelivery,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
@@ -35,6 +36,7 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
   let scope: { workspaceId: string; businessProfileId: string };
   let context: Awaited<ReturnType<typeof authorizeBusinessProfileAccess>>;
   let ownerUserId: string;
+  let planVersionId: string;
   let channelAccountId: string;
   let seq = 0;
 
@@ -42,7 +44,9 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Switch Owner", email: "switch-owner@example.test" } });
     ownerUserId = user.id;
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Switch Workspace", ownerUserId });
+    const paid = await createPaidWorkspace(infra.db, { name: "Switch Workspace", ownerUserId });
+    const workspaceId = paid.workspaceId;
+    planVersionId = paid.planVersionId;
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Switch Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: ownerUserId, workspaceId, businessProfileId });
@@ -166,6 +170,44 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
     expect(stored).toBe(2);
   }, 180_000);
 
+  /**
+   * The same property for a commercial block (#40).
+   *
+   * `BILLING_ENTITLEMENTS.md` states it outright: webhook ingestion and conversation persistence continue
+   * when a workspace is past trial, past grace or out of an allowance, and inbound customer messages are
+   * never dropped because billing is unavailable. Outbound stops; the conversation does not.
+   *
+   * Written here rather than beside the entitlement gate because this is the suite that owns the
+   * "outbound stops, inbound does not" property, and the two blocks must not be allowed to drift into
+   * different answers to it.
+   */
+  it("stops the send for an unpaid workspace while the conversation keeps working", async () => {
+    const { conversationId, operationId } = await conversationWithDraft();
+    const workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId: scope.workspaceId });
+    await setWorkspaceSubscription(infra.db, workspace, { planVersionId, state: "INACTIVE" });
+
+    const attempt = deliver(conversationId, operationId);
+    await attempt.run();
+
+    expect(attempt.sends()).toBe(0);
+    expect(await statusOf(operationId)).toBe("HELD_REVIEW");
+
+    // Ingestion never consults an entitlement — the store that persists a customer message has no path to
+    // one at all — and this is the evidence rather than the claim.
+    const message = await appendInboundMessage(infra.db, context, {
+      conversationId,
+      kind: "TEXT",
+      text: "did you get my message?",
+      occurredAt: new Date(NOW.getTime() + 60_000),
+    });
+    expect(message.id).toBeDefined();
+    expect(await infra.db.message.count({ where: { ...scope, conversationId, direction: "IN" } })).toBe(2);
+
+    // And it resumes from retained state once the bill is paid, which is what "held rather than cancelled"
+    // was for.
+    await setWorkspaceSubscription(infra.db, workspace, { planVersionId, state: "ACTIVE" });
+  }, 180_000);
+
   it("sends again once the switch is lifted, and keeps the record of who lifted it", async () => {
     const { conversationId, operationId } = await conversationWithDraft();
     const suspensions = createSuspensionStore(infra.db);
@@ -192,7 +234,7 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
   it("leaves another workspace's sends alone", async () => {
     const { conversationId, operationId } = await conversationWithDraft();
     const other = await infra.db.user.create({ data: { name: "Other", email: `other-${String(seq)}@example.test` } });
-    const { workspaceId: otherWorkspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Other Workspace", ownerUserId: other.id });
+    const { workspaceId: otherWorkspaceId } = await createPaidWorkspace(infra.db, { name: "Other Workspace", ownerUserId: other.id });
     await createSuspensionStore(infra.db).suspend({ scope: "WORKSPACE", workspaceId: otherWorkspaceId, reason: "OPERATOR", since: new Date(NOW.getTime() - 1_000) });
 
     const attempt = deliver(conversationId, operationId);

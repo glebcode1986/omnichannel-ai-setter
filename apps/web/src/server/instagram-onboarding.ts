@@ -42,7 +42,9 @@ export type ConnectFailureReason =
   | "provider_unavailable"
   | "missing_scope"
   | "already_connected"
-  | "different_account";
+  | "different_account"
+  /** The plan does not sell this channel, or the workspace may not do paid work at all (#40). */
+  | "not_entitled";
 
 export interface OnboardingDependencies {
   readonly store: InstagramOnboardingStore;

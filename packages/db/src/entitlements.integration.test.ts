@@ -6,14 +6,16 @@
  * workspace's commercial state is invisible to another, and that nothing a payment provider says ever
  * reaches a feature check.
  */
-import { featureAllowed, withinLimit, type PlanGrants } from "@omnichannel/domain";
+import { featureAllowed, NO_CAPABILITIES, withinLimit, type PlanGrants } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { publishPlanVersion, readEntitlement, setBillingAccount, setEntitlementOverride, setWorkspaceSubscription } from "./entitlement-store";
 import { searchAuditEvents } from "./audit-store";
 import { addTestMember, createTestUser, seedWorkspace } from "./testing/fixtures";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import type { authorizeWorkspaceAccess } from "./tenancy";
+import { addWorkspaceMember, createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { connectChannelAccount } from "./repositories/channel-accounts";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 
@@ -112,12 +114,17 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
   });
 
   describe("the normalized states", () => {
+    // The deadlines are in the future for the states that still permit work, and in the past for the two
+    // cases that exist to prove a deadline bites (#40). They used to be `NOW`, which meant the states
+    // "permitted" work at the very instant their own period ended — the gap `paidWorkPermitted` closes.
+    const LATER = new Date(NOW.getTime() + 86_400_000);
+    const EARLIER = new Date(NOW.getTime() - 1_000);
     const cases = [
-      { state: "TRIALING", paid: true, trialEndsAt: NOW },
+      { state: "TRIALING", paid: true, trialEndsAt: LATER },
       { state: "ACTIVE", paid: true },
       { state: "PAST_DUE", paid: true },
       { state: "GRACE", paid: true, graceStartedAt: NOW },
-      { state: "CANCELED_PENDING_END", paid: true, canceledAt: NOW, periodEndsAt: NOW },
+      { state: "CANCELED_PENDING_END", paid: true, canceledAt: NOW, periodEndsAt: LATER },
       { state: "INACTIVE", paid: false },
     ] as const;
 
@@ -138,6 +145,30 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       });
     }
 
+    /**
+     * The two states that carry their own end date, past it (#40).
+     *
+     * Nothing writes a row when a date passes, so a check that read only the state kept a cancelled
+     * workspace sending until a provider webhook happened to move it — and a trial working after it had
+     * expired. This is also what the delivery claim's re-resolution exists for: a reply waiting out its
+     * delay can cross either boundary with no row changing at all.
+     */
+    for (const scenario of [
+      { state: "TRIALING" as const, fields: { trialEndsAt: EARLIER } },
+      { state: "CANCELED_PENDING_END" as const, fields: { canceledAt: NOW, periodEndsAt: EARLIER } },
+    ]) {
+      it(`stops paid work for ${scenario.state} once its own deadline has passed`, async () => {
+        await setWorkspaceSubscription(db(), owner, { planVersionId: growthV1, state: scenario.state, ...scenario.fields });
+
+        const snapshot = await readEntitlement(db(), workspaceId, NOW);
+        expect(snapshot.paidWorkAllowed).toBe(false);
+        expect(featureAllowed(snapshot, "AUTOPILOT")).toBe(false);
+        // And the plan still says what it says: "your trial ended" and "your plan excludes this" are
+        // different sentences, and neither may be made to read like the other.
+        expect(snapshot.features.AUTOPILOT).toBe(true);
+      });
+    }
+
     it("refuses a state whose clock does not support it", async () => {
       const subscription = await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { id: true } });
 
@@ -153,7 +184,15 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
 
   describe("a workspace with no subscription at all", () => {
     it("is inactive on no plan, rather than an error nobody handled", async () => {
-      const snapshot = await readEntitlement(db(), otherWorkspaceId, NOW);
+      // Built here rather than taken from the fixture. Seeded workspaces are subscribed and paid up, so
+      // that every other suite in this package tests its own subject instead of the billing gate (#40) —
+      // which means the one test about having no subscription has to make that state itself.
+      const unsubscribedOwner = await createTestUser(db(), "entitlements-unsubscribed-owner");
+      const { workspaceId: unsubscribed } = await createWorkspaceWithOwner(db(), {
+        name: "Workspace entitlements-unsubscribed",
+        ownerUserId: unsubscribedOwner,
+      });
+      const snapshot = await readEntitlement(db(), unsubscribed, NOW);
 
       // The honest description of a workspace that has not started a trial, and also the safe one:
       // every feature check answers no.
@@ -257,4 +296,186 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       expect((await readEntitlement(db(), otherWorkspaceId, NOW)).limits["SEATS"]).toBe(42);
     });
   });
+
+  /**
+   * The gates a plan actually closes (#40).
+   *
+   * Capacity and configuration, kept apart from payment on purpose: the spec stops paid AI generation,
+   * automation and transcription, and insists the workspace itself stays usable while a payment is sorted
+   * out. The case that decides the shape of all of it is the pre-trial one — connecting the first channel
+   * is what *starts* a trial, so a gate that refused a workspace with no plan would shut the product's
+   * own front door.
+   */
+  describe("what a plan refuses", () => {
+    const planWith = async (code: string, grants: PlanGrants) =>
+      (await publishPlanVersion(db(), { code, name: code, grants })).planVersionId;
+
+    const freshWorkspace = async (label: string) => {
+      const ownerUserId = await createTestUser(db(), `capacity-${label}`);
+      const { workspaceId } = await createWorkspaceWithOwner(db(), { name: `Workspace ${label}`, ownerUserId });
+      return { ownerUserId, workspaceId, context: await authorizeWorkspaceAccess(db(), { userId: ownerUserId, workspaceId }) };
+    };
+
+    it("lets a workspace with no plan create its first Business Profile", async () => {
+      // The act that starts the trial. Refusing it would make the product unreachable from its own front
+      // door, and `withinLimit` — which folds payment in — refuses exactly this.
+      const fresh = await freshWorkspace("pretrial");
+
+      await expect(createBusinessProfile(db(), fresh.context, { name: "First" }, NOW)).resolves.toMatchObject({ name: "First" });
+    }, 180_000);
+
+    it("refuses one more Business Profile than the plan allows, and says which ceiling", async () => {
+      const fresh = await freshWorkspace("one-profile");
+      const planVersionId = await planWith("capacity-one-profile", { features: [], limits: { BUSINESS_PROFILES: 1 }, quotas: {} });
+      await setWorkspaceSubscription(db(), fresh.context, { planVersionId, state: "ACTIVE" });
+      await createBusinessProfile(db(), fresh.context, { name: "Only" }, NOW);
+
+      await expect(createBusinessProfile(db(), fresh.context, { name: "Second" }, NOW)).rejects.toThrow(/BUSINESS_PROFILES/u);
+      // And nothing was written: a refusal that left half a profile behind would be worse than none.
+      expect(await db().businessProfile.count({ where: { workspaceId: fresh.workspaceId } })).toBe(1);
+    }, 180_000);
+
+    it("holds a capacity lock only for as long as the transaction that took it", async () => {
+      // Pinned because the reason `createBusinessProfile` opens its own transaction is invisible at the
+      // call site, and the refusal above passes with or without it.
+      //
+      // Both capacity checks are a count followed by an insert, which no index can cap, so each holds one
+      // advisory lock across the pair. `createBusinessProfile` used to take a `DbExecutor` — a type that
+      // deliberately omits `$transaction` — and call `pg_advisory_xact_lock` on it, so under autocommit
+      // the lock was released by the end of the very statement that took it and the count and insert it
+      // was meant to serialize ran unprotected. `addWorkspaceMember` always opened its own transaction,
+      // which is why seats never had the problem and why profiles now match.
+      const key = "capacity-lock-lifetime";
+      const heldNow = async (): Promise<number> => {
+        const rows = await db().$queryRaw<{ n: number }[]>`
+          SELECT count(*)::int AS n
+          FROM pg_locks
+          WHERE locktype = 'advisory'
+            AND granted
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+        return rows[0]?.n ?? 0;
+      };
+
+      // Autocommit: the lock statement is its own transaction, so it is over before the next statement.
+      await db().$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+      expect(await heldNow()).toBe(0);
+
+      // Inside one, it survives every statement in the body and is released on commit.
+      let duringTransaction = -1;
+      await db().$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+        duringTransaction = await heldNow();
+      });
+
+      expect(duringTransaction).toBe(1);
+      expect(await heldNow()).toBe(0);
+    }, 180_000);
+
+    it("lets a workspace whose payment lapsed keep reorganizing what it already owns", async () => {
+      // Capacity is not payment. The spec keeps the workspace usable; what stops is sending.
+      const fresh = await freshWorkspace("lapsed-profile");
+      const planVersionId = await planWith("capacity-lapsed", { features: [], limits: { BUSINESS_PROFILES: 5 }, quotas: {} });
+      await setWorkspaceSubscription(db(), fresh.context, { planVersionId, state: "INACTIVE" });
+
+      await expect(createBusinessProfile(db(), fresh.context, { name: "Still allowed" }, NOW)).resolves.toMatchObject({ name: "Still allowed" });
+    }, 180_000);
+
+    it("refuses a second member on a plan that does not sell a team", async () => {
+      const fresh = await freshWorkspace("solo-plan");
+      const planVersionId = await planWith("capacity-solo", { features: ["AI_DRAFTS"], limits: {}, quotas: {} });
+      await setWorkspaceSubscription(db(), fresh.context, { planVersionId, state: "ACTIVE" });
+      const colleague = await createTestUser(db(), "capacity-solo-colleague");
+
+      // The ceiling is absent, which `capacityVerdict` treats as genuinely uncapped — so without the
+      // feature check this plan would admit an unlimited team.
+      await expect(
+        addWorkspaceMember(db(), fresh.context, { userId: colleague, role: "ADMIN", businessProfileScope: "ALL" }, NOW),
+      ).rejects.toThrow(/MULTI_MEMBER/u);
+    }, 180_000);
+
+    it("refuses the seat after the last one the plan sells", async () => {
+      const fresh = await freshWorkspace("two-seats");
+      const planVersionId = await planWith("capacity-two-seats", { features: ["MULTI_MEMBER"], limits: { SEATS: 2 }, quotas: {} });
+      await setWorkspaceSubscription(db(), fresh.context, { planVersionId, state: "ACTIVE" });
+      const second = await createTestUser(db(), "capacity-seat-second");
+      const third = await createTestUser(db(), "capacity-seat-third");
+
+      // The owner is the first seat, so the second member fits and the third does not.
+      await expect(
+        addWorkspaceMember(db(), fresh.context, { userId: second, role: "ADMIN", businessProfileScope: "ALL" }, NOW),
+      ).resolves.toMatchObject({ workspaceMemberId: expect.anything() as unknown });
+      await expect(
+        addWorkspaceMember(db(), fresh.context, { userId: third, role: "ADMIN", businessProfileScope: "ALL" }, NOW),
+      ).rejects.toThrow(/SEATS/u);
+      expect(await db().workspaceMember.count({ where: { workspaceId: fresh.workspaceId } })).toBe(2);
+    }, 180_000);
+
+    it("refuses connecting a channel the plan does not sell", async () => {
+      const fresh = await freshWorkspace("no-whatsapp");
+      const planVersionId = await planWith("capacity-instagram-only", { features: ["INSTAGRAM"], limits: {}, quotas: {} });
+      await setWorkspaceSubscription(db(), fresh.context, { planVersionId, state: "ACTIVE" });
+      const profile = await createBusinessProfile(db(), fresh.context, { name: "Channels" }, NOW);
+      const profileContext = await authorizeBusinessProfileAccess(db(), {
+        userId: fresh.ownerUserId,
+        workspaceId: fresh.workspaceId,
+        businessProfileId: profile.businessProfileId,
+      });
+
+      await expect(
+        connectChannelAccount(
+          db(),
+          profileContext,
+          {
+            channel: "WHATSAPP",
+            externalAccountId: "wa-account-unsold",
+            capabilities: { ...NO_CAPABILITIES, text: true },
+            credentialId: "cred-unsold",
+          },
+          NOW,
+        ),
+      ).rejects.toThrow(/not_entitled/u);
+      // The one it does sell is unaffected, which is what keeps the refusal about the channel rather than
+      // about the workspace.
+      expect(await db().channelAccount.count({ where: { workspaceId: fresh.workspaceId } })).toBe(0);
+    }, 180_000);
+
+    it("lets a workspace with no plan connect its first channel", async () => {
+      // Same reasoning as the first Business Profile: this is the act that starts a trial.
+      const fresh = await freshWorkspace("pretrial-channel");
+      // A real credential row, because the account references one by foreign key. Its contents are
+      // irrelevant here — what is under test is the gate in front of the connect, not the cipher.
+      const credential = await db().channelCredential.create({
+        data: {
+          workspaceId: fresh.workspaceId,
+          keyId: "test-key",
+          algorithm: "aes-256-gcm",
+          ciphertext: Buffer.from("not-a-real-token"),
+          nonce: Buffer.alloc(12, 1),
+          authTag: Buffer.alloc(16, 2),
+        },
+        select: { id: true },
+      });
+      const profile = await createBusinessProfile(db(), fresh.context, { name: "First" }, NOW);
+      const profileContext = await authorizeBusinessProfileAccess(db(), {
+        userId: fresh.ownerUserId,
+        workspaceId: fresh.workspaceId,
+        businessProfileId: profile.businessProfileId,
+      });
+
+      await expect(
+        connectChannelAccount(
+          db(),
+          profileContext,
+          {
+            channel: "INSTAGRAM",
+            externalAccountId: "ig-account-pretrial",
+            capabilities: { ...NO_CAPABILITIES, text: true },
+            credentialId: credential.id,
+          },
+          NOW,
+        ),
+      ).resolves.toMatchObject({ channel: "INSTAGRAM" });
+    }, 180_000);
+  });
 });
+

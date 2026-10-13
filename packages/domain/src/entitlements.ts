@@ -77,6 +77,44 @@ export function allowsPaidWork(state: SubscriptionState): boolean {
   return PAID_ACCESS_STATES.includes(state);
 }
 
+/**
+ * Whether paid work is permitted *now*, which the state alone cannot answer (#40).
+ *
+ * Two of the permitting states carry their own end date, and the spec says plainly what happens when it
+ * passes: at trial expiry without payment, and at the end of a cancelled subscription's paid period,
+ * "paid AI generation, automation and transcription stop". A check that read only the state would keep
+ * sending for a cancelled workspace until a provider webhook happened to move it — and a delayed reply
+ * waiting out its delay can cross either boundary with nothing written at all, which is why the delivery
+ * claim re-resolves this rather than comparing row versions.
+ *
+ * `GRACE` is deliberately left to its state. Its duration is product configuration and its mechanics are
+ * provider retry schedules, so the transition out of it belongs to the billing adapter that can see them;
+ * inventing an expiry here would guess at a number the spec keeps configurable.
+ */
+export function paidWorkPermitted(input: {
+  readonly state: SubscriptionState;
+  readonly periodEndsAt?: Date;
+  readonly trialEndsAt?: Date;
+  readonly now: Date;
+}): boolean {
+  if (!allowsPaidWork(input.state)) {
+    return false;
+  }
+  if (input.state === "CANCELED_PENDING_END" && elapsed(input.periodEndsAt, input.now)) {
+    // The period that was paid for is over and nothing replaced it.
+    return false;
+  }
+  if (input.state === "TRIALING" && elapsed(input.trialEndsAt, input.now)) {
+    return false;
+  }
+  return true;
+}
+
+/** A deadline that has arrived. An absent one has not arrived and never will. */
+function elapsed(deadline: Date | undefined, now: Date): boolean {
+  return deadline !== undefined && deadline.getTime() <= now.getTime();
+}
+
 /** An immutable description of what one plan version grants. */
 export interface PlanGrants {
   readonly features: readonly PlanFeature[];
@@ -108,6 +146,16 @@ export interface EntitlementSnapshot {
   /** Which plan version produced this, so a decision can be explained afterwards. */
   readonly planCode: string;
   readonly planVersion: number;
+  /**
+   * Whether a plan has ever been chosen for this workspace (#40).
+   *
+   * Not the same question as `paidWorkAllowed`, and the difference decides what a capacity check may
+   * enforce. A workspace that has not started a trial has no plan *stating* a ceiling or a feature, so
+   * there is nothing to enforce — which is what lets it create the first Business Profile, the act the
+   * accepted trial policy says starts the trial. A workspace whose card failed is a different thing
+   * entirely: its plan still states exactly what it states.
+   */
+  readonly subscribed: boolean;
   /** False when paid work must stop; capacity and features below are still reported honestly. */
   readonly paidWorkAllowed: boolean;
   readonly features: Readonly<Record<PlanFeature, boolean>>;
@@ -121,11 +169,15 @@ export interface EntitlementSnapshot {
 export interface ResolveEntitlementInput {
   readonly workspaceId: string;
   readonly state: SubscriptionState;
+  /** False only for a workspace with no subscription row at all. */
+  readonly subscribed?: boolean;
   readonly planCode: string;
   readonly planVersion: number;
   readonly grants: PlanGrants;
   readonly override?: EntitlementOverrideInput;
   readonly periodEndsAt?: Date;
+  /** When a trial ends. Read for the same reason the period end is: the state alone cannot say "now". */
+  readonly trialEndsAt?: Date;
   readonly now: Date;
 }
 
@@ -172,7 +224,13 @@ export function resolveEntitlement(input: ResolveEntitlementInput): EntitlementS
     state: input.state,
     planCode: input.planCode,
     planVersion: input.planVersion,
-    paidWorkAllowed: allowsPaidWork(input.state),
+    subscribed: input.subscribed ?? true,
+    paidWorkAllowed: paidWorkPermitted({
+      state: input.state,
+      ...(input.periodEndsAt === undefined ? {} : { periodEndsAt: input.periodEndsAt }),
+      ...(input.trialEndsAt === undefined ? {} : { trialEndsAt: input.trialEndsAt }),
+      now: input.now,
+    }),
     features,
     limits,
     quotas,
@@ -183,6 +241,124 @@ export function resolveEntitlement(input: ResolveEntitlementInput): EntitlementS
 
 function expired(override: EntitlementOverrideInput, now: Date): boolean {
   return override.expiresAt !== undefined && override.expiresAt.getTime() <= now.getTime();
+}
+
+/** Whether one more of something may be created, and why not when it may not. */
+export type CapacityVerdict =
+  | { readonly kind: "ALLOWED" }
+  /** The plan caps this and the cap is reached. */
+  | { readonly kind: "AT_LIMIT"; readonly limit: PlanLimit; readonly ceiling: number; readonly current: number }
+  /** The plan does not sell this capability at all, however much room the ceiling would allow. */
+  | { readonly kind: "FEATURE_OFF"; readonly feature: PlanFeature };
+
+/**
+ * Whether one more of something may be created, as *capacity* rather than as payment (#40).
+ *
+ * Three decisions are deliberately separated from `withinLimit`, which answers the combined question for
+ * callers that only need one yes or no.
+ *
+ * **Payment is not consulted.** Creating a Business Profile or adding a teammate is configuration, and the
+ * spec stops paid AI generation, automation and transcription — not a business reorganizing its own
+ * workspace. It also insists the workspace stays usable while a payment is sorted out, and `withinLimit`
+ * returning false for every unpaid workspace would make even the first Business Profile impossible.
+ *
+ * **An absent limit is uncapped**, which is a real answer rather than a missing one: a plan may genuinely
+ * not cap a thing. A workspace with no subscription therefore has no stated ceiling — which is what lets
+ * it create the first Business Profile, the act the accepted trial policy says *starts* the trial.
+ *
+ * **A feature and a ceiling are different refusals.** A plan that does not sell multi-member workspaces
+ * must not admit a second member merely because it states no seat ceiling.
+ */
+export function capacityVerdict(input: {
+  readonly snapshot: EntitlementSnapshot;
+  readonly limit: PlanLimit;
+  /** How many exist now, counted by the caller, because only the caller knows what it is counting. */
+  readonly current: number;
+  /** A feature this capability also requires, checked before the ceiling. */
+  readonly requires?: { readonly feature: PlanFeature; readonly from: number };
+}): CapacityVerdict {
+  if (!input.snapshot.subscribed) {
+    // No plan has been chosen yet, so no plan states a ceiling or withholds a feature, and there is
+    // nothing here to enforce. The gates that cost money — generation, sending, transcription — refuse
+    // this workspace anyway, through `paidWorkAllowed`; configuration is what it is still allowed to do,
+    // and connecting its first Business Profile is how it starts a trial at all.
+    return { kind: "ALLOWED" };
+  }
+  const gate = input.requires;
+  if (gate !== undefined && input.current >= gate.from && !input.snapshot.features[gate.feature]) {
+    return { kind: "FEATURE_OFF", feature: gate.feature };
+  }
+  const ceiling = input.snapshot.limits[input.limit];
+  if (ceiling !== undefined && input.current >= ceiling) {
+    return { kind: "AT_LIMIT", limit: input.limit, ceiling, current: input.current };
+  }
+  return { kind: "ALLOWED" };
+}
+
+/**
+ * What the commercial state permits, reduced to the facts a send decision may depend on (#40).
+ *
+ * A separate, tiny value rather than the whole snapshot, for the reason every other `PolicyInput` field is
+ * reduced: the policy engine must not be able to reach a plan code, a price or a provider reference, and a
+ * decision that could branch on `planCode` would be a commercial package leaking into send safety.
+ *
+ * Three booleans, because the three refusals are three different conversations with the business — pay,
+ * change plan, or wait — and a single "allowed" flag would make them one.
+ */
+export interface CommercialAccess {
+  /** False when paid work must stop: no subscription, or past trial and past grace. */
+  readonly paidWorkAllowed: boolean;
+  /** Whether the plan includes automated reply generation at all. */
+  readonly aiDrafts: boolean;
+  /** Whether the plan includes sending without a person looking first. */
+  readonly autopilot: boolean;
+}
+
+/**
+ * The commercial facts, read from a resolved snapshot.
+ *
+ * `paidWorkAllowed` is carried separately from the features rather than folded into them. A workspace
+ * whose card failed still *has* the features its plan grants, and the two answers are different: "your
+ * plan does not include this" is fixed by changing plan, "you have not paid" by paying. `featureAllowed`
+ * deliberately answers the combined question for callers that only need one yes or no; this keeps them
+ * apart for a caller that has to explain itself.
+ */
+export function commercialAccessOf(snapshot: EntitlementSnapshot): CommercialAccess {
+  return {
+    paidWorkAllowed: snapshot.paidWorkAllowed,
+    aiDrafts: snapshot.features.AI_DRAFTS,
+    autopilot: snapshot.features.AUTOPILOT,
+  };
+}
+
+/**
+ * The commercial access of a workspace nothing is known about.
+ *
+ * Every answer is no. Used where a caller genuinely has no snapshot — and named, rather than written out
+ * as three `false`s at each site, so that "we could not establish the entitlement" and "the plan says no"
+ * are the same refusal rather than two spellings of it that could drift apart.
+ */
+export const NO_COMMERCIAL_ACCESS: CommercialAccess = { paidWorkAllowed: false, aiDrafts: false, autopilot: false };
+
+/**
+ * Whether a plan positively withholds a capability from *configuration* (#40).
+ *
+ * The third of the three feature questions, and the distinctions are the point:
+ *
+ * - `featureAllowed` — may this be *used* right now? Plan **and** payment. This is what gates a provider
+ *   call: generation, transcription, an automated send.
+ * - `snapshot.features[f]` — does the plan list it? Payment ignored.
+ * - `featureWithheld` — does a chosen plan refuse it? Payment ignored, **and** a workspace with no plan
+ *   refuses nothing.
+ *
+ * That last clause is what keeps the product's front door open. Connecting the first channel is how a
+ * workspace starts its trial, so a gate that read "no plan, therefore no features" would refuse the one
+ * act that would have given it a plan. And a business whose card failed may still reconnect a channel or
+ * rename a profile: the spec stops paid AI generation, automation and transcription, and insists the
+ * workspace itself stays usable while the payment is sorted out.
+ */
+export function featureWithheld(snapshot: EntitlementSnapshot, feature: PlanFeature): boolean {
+  return snapshot.subscribed && !snapshot.features[feature];
 }
 
 /** Whether a feature may be used right now. Both halves: the plan grants it *and* paid work is allowed. */

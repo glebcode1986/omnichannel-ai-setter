@@ -1,4 +1,5 @@
 import {
+  capacityVerdict,
   isValidIdentifier,
   toBusinessProfileId,
   toWorkspaceId,
@@ -11,7 +12,8 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "../client";
-import { DbInputError, rethrowAsTenantNotFound, WorkspacePermissionError } from "../errors";
+import { DbInputError, PlanLimitError, rethrowAsTenantNotFound, WorkspacePermissionError } from "../errors";
+import { readEntitlement } from "../entitlement-store";
 import {
   authorizedBusinessProfileFilter,
   requireRole,
@@ -93,20 +95,67 @@ export async function listWorkspacesForUser(db: DbExecutor, userId: string): Pro
  * tasks define profile-slot permissions.
  */
 export async function createBusinessProfile(
-  db: DbExecutor,
+  db: DbClient,
   context: WorkspaceContext,
   input: { readonly name: string },
+  /** When the entitlement is resolved. Explicit, because a plan's own validity is a question about a moment. */
+  at = new Date(),
 ): Promise<BusinessProfileSummary> {
   const workspaceId = scopeOf(context);
   requireRole(context, WORKSPACE_ADMIN_ROLES, "creating Business Profiles");
   if (context.businessProfileScope.kind !== "ALL") {
     throw new WorkspacePermissionError("creating Business Profiles");
   }
-  const profile = await db.businessProfile.create({
-    data: { workspaceId, name: normalizeName("name", input.name) },
-    select: { id: true, name: true, status: true },
+  // Capacity, as capacity rather than as payment (#40).
+  //
+  // Counted and written under one advisory lock **inside one transaction**, which is the whole mechanism:
+  // a count followed by an insert is not atomic and no index caps a count, so two concurrent creates on a
+  // one-profile plan would both see zero and both succeed.
+  //
+  // The transaction is opened here rather than left to the caller, and that is a correction. This took a
+  // `DbExecutor` — a type that deliberately omits `$transaction` — and so the lock could never outlive
+  // the statement that took it: PostgreSQL releases an `xact` lock when its transaction ends, and under
+  // autocommit that is the lock statement itself, after which `pg_locks` reports none held. The
+  // serialization this comment promised was therefore a no-op unless a caller happened to already be in
+  // a transaction, and nothing said one had to be. `addWorkspaceMember` takes a `DbClient` and opens one
+  // for the identical count-then-insert on seats; this now matches it, and
+  // `entitlements.integration.test.ts` pins the lock lifetime the argument rests on.
+  //
+  // A workspace with no subscription has no stated ceiling and may therefore create its first Business
+  // Profile — which is the act the accepted trial policy says *starts* the trial, so refusing it would
+  // make the product unreachable from its own front door.
+  return db.$transaction(async (tx) => {
+    await serializeCapacity(tx, `workspace-profiles:${workspaceId}`);
+    const verdict = capacityVerdict({
+      snapshot: await readEntitlement(tx as unknown as DbClient, workspaceId, at),
+      limit: "BUSINESS_PROFILES",
+      current: await tx.businessProfile.count({ where: { workspaceId } }),
+    });
+    if (verdict.kind !== "ALLOWED") {
+      throw new PlanLimitError(verdict, "creating a Business Profile");
+    }
+
+    const profile = await tx.businessProfile.create({
+      data: { workspaceId, name: normalizeName("name", input.name) },
+      select: { id: true, name: true, status: true },
+    });
+    return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
   });
-  return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };
+}
+
+/**
+ * Serializes a count-then-insert on one name, for the transaction's lifetime.
+ *
+ * Nothing in the schema caps a count — the unique indexes cover identity, not quantity — so a capacity
+ * check is a read followed by a write, and two of those interleave. A transaction-scoped advisory lock is
+ * the mechanism the usage ledger already uses for the same shape, and it is released however the
+ * transaction ends, so there is nothing to leak.
+ *
+ * Called in `FROM` and given a column, because the lock function returns `void` and the client cannot
+ * deserialize a void column.
+ */
+async function serializeCapacity(db: DbExecutor, name: string): Promise<void> {
+  await db.$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${name}, 0))`;
 }
 
 /** Business Profiles the member may see; unauthorized profiles are not listed. */
@@ -134,6 +183,8 @@ export async function addWorkspaceMember(
   db: DbClient,
   context: WorkspaceContext,
   input: { readonly userId: string; readonly role: WorkspaceRole; readonly businessProfileScope: BusinessProfileScopeGrant },
+  /** As above: the plan's validity is a question about a moment, and the caller owns the clock. */
+  at = new Date(),
 ): Promise<{ readonly workspaceMemberId: WorkspaceMemberId }> {
   const workspaceId = scopeOf(context);
   requireRole(context, WORKSPACE_ADMIN_ROLES, "adding members");
@@ -159,6 +210,21 @@ export async function addWorkspaceMember(
 
   try {
     return await db.$transaction(async (tx) => {
+      // Capacity and the multi-member feature, under one lock for the reason the profile count is: two
+      // concurrent adds on a three-seat plan would both see two and both succeed.
+      //
+      // The feature is consulted only from the second member onwards. Every workspace has an owner, and a
+      // plan that does not sell a *team* has not thereby forbidden the person who owns the workspace.
+      await serializeCapacity(tx, `workspace-seats:${workspaceId}`);
+      const seats = capacityVerdict({
+        snapshot: await readEntitlement(tx as unknown as DbClient, workspaceId, at),
+        limit: "SEATS",
+        current: await tx.workspaceMember.count({ where: { workspaceId } }),
+        requires: { feature: "MULTI_MEMBER", from: 1 },
+      });
+      if (seats.kind !== "ALLOWED") {
+        throw new PlanLimitError(seats, "adding a member");
+      }
       const member = await tx.workspaceMember.create({
         data: { workspaceId, userId: input.userId, role: input.role, businessProfileScope: grantsAll ? "ALL" : "SELECTED" },
         select: { id: true },

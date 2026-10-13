@@ -31,13 +31,14 @@ import {
 import {
   createKnowledgeRetriever,
   createStyleRetriever,
+  readEntitlement,
   readPolicies,
   readStyleProfiles,
   recordUsage,
   type BusinessProfileContext,
   type PolicyView,
 } from "@omnichannel/db";
-import { NO_CAPABILITIES, resolveStyleProfile, type StyleProfileLayer } from "@omnichannel/domain";
+import { commercialAccessOf, NO_CAPABILITIES, resolveStyleProfile, type StyleProfileLayer } from "@omnichannel/domain";
 import type { KnowledgeHit, StyleHit } from "@omnichannel/application";
 
 import { loadWebEnv } from "../env";
@@ -147,6 +148,7 @@ export async function runSimulation(context: BusinessProfileContext, message: st
           mode: (policyUsed?.mode ?? "DRAFT") as "OFF" | "DRAFT" | "AUTOPILOT",
           stateVersion: 1,
           anchorSuperseded: false,
+          commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
         },
         // The saved voice, merged the way production merges it: base layer then override.
         styleProfile: resolveStyleProfile(layers.map((layer) => layerOf(layer))),
@@ -193,11 +195,18 @@ export async function runSimulation(context: BusinessProfileContext, message: st
     getLogger().warn("simulation.usage_not_recorded", { errorName: error instanceof Error ? error.name : typeof error });
   }
 
+  // Resolved before the policy call rather than inside it, because that expression is a conditional and
+  // this is an await.
+  const commercial = commercialAccessOf(await readEntitlement(getDb(), scope.workspaceId, now));
   const draft = saved[0];
   const policy =
     draft === undefined || policyUsed === undefined
       ? undefined
       : evaluatePolicy({
+          // The business's real commercial state (#40), because a simulation that assumed it previews a
+          // send the product would refuse — and an owner comparing the playground with production would
+          // be comparing two different products. The run still cannot send whatever this says.
+          commercial: commercial,
           mode: policyUsed.mode as "OFF" | "DRAFT" | "AUTOPILOT",
           aiEnabled: true,
           takeover: { state: "NONE" },

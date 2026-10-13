@@ -4,9 +4,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createCredentialCipher } from "./credentials";
 import { createInstagramOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { createTestUser } from "./testing/fixtures";
+import { createTestUser, createPaidWorkspace } from "./testing/fixtures";
 
 const NOW = new Date("2026-09-17T12:00:00.000Z");
 /**
@@ -27,7 +27,7 @@ describe.skipIf(!databaseTestsEnabled())("slot check after disconnect", () => {
 
   const bareProfile = async (label: string): Promise<BusinessProfileContext> => {
     const ownerUserId = await createTestUser(database.db, label);
-    const { workspaceId } = await createWorkspaceWithOwner(database.db, { name: `W ${label}`, ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(database.db, { name: `W ${label}`, ownerUserId });
     const workspace = await authorizeWorkspaceAccess(database.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(database.db, workspace, { name: `P ${label}` });
     return authorizeBusinessProfileAccess(database.db, { userId: ownerUserId, workspaceId, businessProfileId });

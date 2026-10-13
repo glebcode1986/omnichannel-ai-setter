@@ -99,6 +99,33 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
     // answer it. Making this one authority-aware would be building the path around the switch.
     reasons.add("AUTOMATION_SUSPENDED");
   }
+  // --- Commercial access (#40, BILLING_ENTITLEMENTS.md) ----------------------------------------------
+  //
+  // Three separate facts, because they are three different conversations with the business: pay, change
+  // plan, or wait. Each holds the reply for a person rather than ending it, so nothing is lost — the spec
+  // is explicit that a workspace resumes from retained state once it pays, and a cancelled reply would
+  // have nothing to resume.
+  //
+  // Authority-aware, unlike the kill switch above. What the spec stops is "paid AI generation, automation
+  // and transcription"; a colleague answering their own customer from the Inbox is none of those, and a
+  // failed card that silenced a business's own staff would contradict the same spec's insistence that the
+  // workspace stays usable and its conversations answerable. So an approval answers these gates, and the
+  // manual handling path is exactly what they leave open.
+  if (approved === undefined && !input.commercial.paidWorkAllowed) {
+    reasons.add("BILLING_INACTIVE");
+  }
+  if (approved === undefined && !input.commercial.aiDrafts) {
+    // Reached only by a draft that was generated before a downgrade — generation itself is refused
+    // earlier, where it costs a provider call. Checked anyway: a gate that trusts an upstream layer to
+    // have already checked is not a gate.
+    reasons.add("BILLING_FEATURE_OFF");
+  }
+  if (approved === undefined && input.mode === "AUTOPILOT" && !input.commercial.autopilot) {
+    // The business set AUTOPILOT on a plan that does not sell it. `MODE_NOT_AUTOPILOT` would be false
+    // here — the mode *is* autopilot — so the reason says what is actually true, and the reply waits for
+    // a person exactly as it would in DRAFT.
+    reasons.add("BILLING_FEATURE_OFF");
+  }
   // The four below are all the same kind of gate: "a person should look at this". A person has, so they
   // are not asked again. What the person could not have changed — the account, the kill switch, the
   // channel's capabilities, the window — is checked above and below regardless of who is sending.
