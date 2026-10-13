@@ -93,6 +93,32 @@ in the adapter's vocabulary and `SETTLED` means it arrived **in time and in full
 because refusing service to somebody who sent too much is absurd; a full payment that arrived after the
 window closed is `AMBIGUOUS`, which is the one case that looks like success and is not.
 
+### Where routes come from
+
+From **operator configuration**, in one environment variable: `BILLING_ROUTING`, a JSON document with
+`sellers` and `routes`, applied by `pnpm billing:publish-routes`. Before that command existed nothing wrote
+a route at all, so `selectRoute` answered `NO_ROUTE` for every checkout and `recordVerifiedBillingEvent`
+answered `UNKNOWN_ROUTE` for every webhook, in any deployment a test had not seeded.
+
+Sellers and routes travel in **one** document so a route cannot name a seller the configuration does not
+define — split across two variables, that mistake is found by the first customer who tries to pay rather
+than by whoever wrote the file.
+
+The document says what a route *is*; `STRIPE_ROUTES` says which credentials speak for it, and the two meet
+at `routeCode`. A route configured without credentials registers no adapter and therefore cannot be chosen,
+which is the safe direction: an unchosen route refuses a checkout, where a chosen one with no keys would
+accept a delivery it cannot authenticate.
+
+Both writes are upserts and re-running is normal — a company changes its support address, a route gains a
+currency. That is the difference between this and publishing a catalogue version, which cuts a new one every
+time. `--dry-run` reports and writes nothing.
+
+The command validates **shape** and that every route's seller exists; it does not check capability
+coherence, currency codes or settlement models. `upsertBillingRoute` does, against the same CHECK the table
+enforces, and it names which of the thirteen capabilities is wrong — a second opinion in the command would
+be a second place the rule lived. Neither the command nor its refusals ever echo a value from the document,
+because it carries provider account references.
+
 ## One live charge path
 
 `billing_arrangements_one_live_key` is a partial unique index over `workspace_id` where the state is
