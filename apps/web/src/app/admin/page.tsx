@@ -28,6 +28,9 @@ export default async function AdminHomePage({ searchParams }: { readonly searchP
     <div className="stack">
       <div className="page-header">
         <h1>{t.t("admin.title")}</h1>
+        <a className="button" href={`${ADMIN_BASE_PATH}/releases`} data-action="open-releases">
+          {t.t("admin.releases")}
+        </a>
         <a className="button" href={`${ADMIN_BASE_PATH}/audit`} data-action="open-audit">
           {t.t("admin.audit")}
         </a>

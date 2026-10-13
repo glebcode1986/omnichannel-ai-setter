@@ -29,6 +29,8 @@ import {
   presenceCapabilitiesOf,
   presenceSettingsOf,
   readEntitlement,
+  readRolloutAccess,
+  resolveEffectiveMode,
   requestHumanReview,
   scheduleAutomatedDelivery,
   type DbClient,
@@ -182,9 +184,19 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
     // generation, because a plan can change between the two — and read with `now`, so the gate and the
     // snapshot answer the question about the same instant.
     const commercial = commercialAccessOf(await readEntitlement(dependencies.db, input.workspaceId, now));
+    // And the staged rollout (#60), read here for the same reason: a release can be recorded between
+    // generation and disposition, and a draft judged against a stage that has since been pulled back
+    // would be scheduled for an unattended send the rollout no longer permits. The claim re-asserts it
+    // too, so this is the first of two reads rather than the only one.
+    const rollout = await readRolloutAccess(dependencies.db, { workspaceId: input.workspaceId, businessProfileId: input.businessProfileId }, now);
     const decision: PolicyDecision = evaluatePolicy({
       commercial,
-      mode: conversation.modeOverride ?? policy.mode,
+      rollout,
+      // Through the one rule, not an inline copy. This read was
+      // `conversation.modeOverride ?? policy.mode` with its own precedence pick above it — the same
+      // answer as `resolveEffectiveMode`, reached separately, on the other path that decides whether a
+      // reply goes out unattended.
+      mode: resolveEffectiveMode(conversation.modeOverride, conversation.channelAccountId, policies),
       aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
       takeover:
         conversation.takeoverState === "HUMAN_ACTIVE"

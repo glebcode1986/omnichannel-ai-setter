@@ -55,6 +55,10 @@ export function policyInputFor(
     // its delay, so this is the commercial state as of the read the claim binds rather than as of
     // scheduling.
     commercial: context.commercial,
+    // And the same again for the staged rollout: a release pulled back to an earlier stage while a reply
+    // waited out its delay has to stop that reply, which it can only do if the value the decision used is
+    // the one the claim re-asserts.
+    rollout: context.rollout,
     replyCycle: context.replyCycle,
     authority: context.authority,
     now: dependencies.now(),

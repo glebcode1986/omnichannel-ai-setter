@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #101 plus the P7-01 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#101 are completed by Claude and awaiting review; **P7-01 / Issue
-#59 is the current task**, and it stays open after this slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #102 plus the P7-02 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#102 are completed by Claude and awaiting review; **P7-02 / Issue
+#60 is the current task**. Issue #59 stays open after its slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -1162,6 +1162,47 @@ is satisfied; the owner asked for Stage E to begin while the Stage D chain is in
 11. No rebases, no force-pushes, and no merges to `main`.
 12. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
+
+## P7-02 / Issue #60 — launch readiness, staged rollout and release evidence
+
+`docs/specs/RELEASE_PROCESS.md` is the operational companion; `LAUNCH_READINESS.md` stays the contract.
+
+What a later session has to know about this slice:
+
+1. **A release can now actually be recorded.** `pnpm release:record` and `pnpm release:review`, both
+   requiring the new `OPERATE_RELEASE` platform permission, both audited. Before them the release tables,
+   the gate catalogue, the severity model and the §18 send gate were reachable only from tests — so the
+   stage in force was always "none", and "none" is the one state in which the rollout gate permits
+   everybody. A schema nobody can write to is not an implementation of §20.
+2. **The §18 gate fails closed when it cannot tell.** `readReleaseInForce` reports `NONE`, `IN_FORCE` or
+   `INDETERMINATE`, and only the first permits. The earlier version searched a window of ten candidates
+   and reported "no release" when it found nothing approved — so recording ten unreviewed proposals, the
+   most common state a candidate is in, would have switched unattended sending on platform-wide.
+3. **`HIGH` disables something.** `releaseDecision(...).disabledCapabilities` is carried into the rollout
+   posture, so a release whose autopilot gate returned `HIGH` keeps autopilot off whatever stage it names.
+   It was computed and read by nothing, which made the severity decoration.
+4. **The release catalogue has its own advisory key.** `release-lock.ts` plus a trigger on all three
+   tables, taken shared by the delivery claim — the `entitlement-lock.ts` pattern, for the same reason: a
+   candidate that would change the answer may not exist yet when the claim starts, so no row lock covers
+   it. The claim's existing "every read is locked" invariant test caught the unlocked version.
+5. **Evidence lives in `scripts/release/evidence.ts`, not in a test.** `suites` are test files and
+   `implementation` is source offered as evidence of itself — separate fields, because three production
+   files listed as suites is how §16's gate came to look covered.
+6. **CI does not run `pnpm evals`**, so §5's gate is settled by a person. The one-line fix is staged at
+   `docs/handoff/ci-evals-step.patch`; it is not applied because this repository's push credential cannot
+   write `.github/workflows`. **Someone with that scope should apply it.**
+7. Four limitations are stated in `RELEASE_PROCESS.md` rather than hidden: the CI gap above, no
+   per-feature rollout (§18's "repeat a staged rollout" has one global stage plus one allowlist), reviewer
+   independence being a process property rather than a constraint, and only `AUTOPILOT` being a capability
+   the send path can actually switch off.
+8. **Fixture clocks must be in the past.** A trigger refuses a review `submitted_at` in the future,
+   because `reviewerStatusOf` takes the newest matching verdict and these tables are append-only — a
+   `PASS` stamped 2099 could never be withdrawn. A suite stamping fixtures with tomorrow's date fails on
+   its own fixtures.
+9. **One commit may be proposed at several stages, once each** (`@@unique([sha, stage])`), and reviews are
+   keyed by `reviewed_sha` with no foreign key to a candidate. Advancing a stage is a new release decision
+   that inherits the verdict already given about that code. Pulling a rollout back during an incident is
+   the kill switch's job, not this table's.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.

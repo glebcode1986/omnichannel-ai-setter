@@ -201,8 +201,16 @@ export async function listKillSwitches(
     where: {
       liftedAt: null,
       since: { lte: at },
-      OR: [{ until: null }, { until: { gt: at } }],
-      ...(query.workspaceId === undefined ? {} : { OR: [{ scope: "GLOBAL" }, { workspaceId: query.workspaceId }] }),
+      // `AND` of two disjunctions, not two `OR` keys. Two bare `OR`s in one object literal is the second
+      // silently replacing the first — so with a workspace supplied, which is what the workspace screen
+      // always does, the expiry half was dropped and a switch whose `until` had already passed was listed
+      // as active. An incident console reading "outbound is stopped" while it is not is the wrong
+      // direction to be wrong in. `inbox-store.ts` documents this exact trap and defends against it the
+      // same way, which is where the shape here comes from.
+      AND: [
+        { OR: [{ until: null }, { until: { gt: at } }] },
+        ...(query.workspaceId === undefined ? [] : [{ OR: [{ scope: "GLOBAL" as const }, { workspaceId: query.workspaceId }] }]),
+      ],
     },
     orderBy: [{ since: "desc" }],
     take: 100,

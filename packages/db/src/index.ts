@@ -85,6 +85,22 @@ export {
   type PulledKillSwitch,
   type PullKillSwitchInput,
 } from "./platform-actions-store";
+export {
+  listReleases,
+  readRelease,
+  readReleaseInForce,
+  readRolloutAccess,
+  recordRelease,
+  recordReleaseReview,
+  rolloutAccessFrom,
+  setRolloutAutopilot,
+  type RecordedRelease,
+  type RecordReleaseInput,
+  type RecordReleaseReviewInput,
+  type ReleaseInForce,
+  type ReleaseView,
+} from "./release-store";
+export { releaseCatalogueLockKey, type ReleaseCatalogueLockKey } from "./release-lock";
 export { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";

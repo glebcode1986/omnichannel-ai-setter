@@ -1,4 +1,4 @@
-import { NO_CAPABILITIES, toQuietHours, toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
+import { NO_STAGED_ROLLOUT, NO_CAPABILITIES, toQuietHours, toUserId, type Actor, type ReasonCode, type SendAuthority } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
 
 import { evaluatePolicy } from "./evaluate";
@@ -20,6 +20,9 @@ const passing = (): PolicyInput => ({
   // A paid-up workspace on a plan that sells what it is using. Each case below that touches commerce
   // narrows exactly one of these.
   commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+  // No staged release is in force in a unit fixture, which is what a development
+  // checkout and a test database both are (#60).
+  rollout: NO_STAGED_ROLLOUT,
   limits: {
     confidenceThreshold: 0.8,
     mandatoryReviewReasons: ["MISSING_FACT", "PAYMENT_DISPUTE", "LEGAL_INTERPRETATION", "HIGH_VALUE_COMMITMENT"],
@@ -912,3 +915,71 @@ describe("outside WhatsApp's service window", () => {
     expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
   });
 });
+
+describe("the staged rollout", () => {
+  // §18 of LAUNCH_READINESS.md. One more reason a reply may not go out unattended while the product is
+  // mid-rollout, and the two properties that make it usable rather than merely careful.
+  it("holds an unattended reply for a person when the rollout has not released autopilot", () => {
+    const decision = evaluatePolicy({ ...passing(), rollout: { autopilot: false } });
+
+    // Held, not cancelled: nothing is lost, and the reply is exactly where a DRAFT-mode reply would be.
+    expect(decision.action).toBe("HOLD_REVIEW");
+    expect(decision.reasons).toContain("ROLLOUT_AUTOPILOT_NOT_RELEASED");
+  });
+
+  it("is answered by an approval, which still sends rather than merely losing the reason", () => {
+    // The property that makes the gate usable. An unconditional gate would block the very traffic the
+    // early stages consist of — "limited design partners, DRAFT-first" *is* people approving replies.
+    //
+    // The assertion is the whole decision, not the absence of one reason. A version of this gate that
+    // held every human-approved reply for ever would have satisfied `not.toContain`, because the reason it
+    // added would not have been this one.
+    const decision = evaluatePolicy({
+      ...passing(),
+      rollout: { autopilot: false },
+      authority: {
+        kind: "HUMAN_APPROVED",
+        approvedByUserId: toUserId("11111111-1111-4111-8111-111111111111"),
+        approvedAt: new Date("2026-10-01T11:59:00.000Z"),
+        reviewMode: "NORMAL",
+      },
+    });
+
+    expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("says nothing at all about a reply that was never going out unattended", () => {
+    // In DRAFT the mode already holds it, and a second reason would tell a business to go and look at a
+    // rollout when what they are seeing is their own setting. Asserted as the exact reason list, so a gate
+    // that added a reason here would fail rather than merely add noise nobody checked.
+    const held = evaluatePolicy({ ...passing(), mode: "DRAFT", rollout: { autopilot: false } });
+    const released = evaluatePolicy({ ...passing(), mode: "DRAFT", rollout: { autopilot: true } });
+
+    expect(held).toEqual(released);
+    expect(held.reasons).toEqual(["MODE_NOT_AUTOPILOT"]);
+  });
+
+  it("only ever subtracts: refusing adds exactly one reason, and releasing revives nothing", () => {
+    // Monotonicity, stated as a comparison rather than as two assertions that would both hold with the
+    // gate deleted. The unreleased decision's reasons must be the released one's plus this gate's, for
+    // every other state — which is what keeps it one gate among several rather than a second authority.
+    const states = [
+      { label: "clean", input: {} },
+      { label: "suspended", input: { outboundSuspended: { scope: "GLOBAL", reason: "OPERATOR" } as const } },
+      { label: "unpaid", input: { commercial: { paidWorkAllowed: false, aiDrafts: true, autopilot: true } } },
+      { label: "low confidence", input: { draft: { ...passing().draft, confidence: 0.1 } } },
+    ];
+
+    for (const state of states) {
+      const released = evaluatePolicy({ ...passing(), ...state.input, rollout: { autopilot: true } });
+      const unreleased = evaluatePolicy({ ...passing(), ...state.input, rollout: { autopilot: false } });
+
+      expect([...unreleased.reasons].toSorted(), state.label).toEqual([...released.reasons, "ROLLOUT_AUTOPILOT_NOT_RELEASED"].toSorted());
+      expect(unreleased.action === "SCHEDULE", state.label).toBe(false);
+    }
+    // The control: with the rollout released and nothing else wrong, the reply does go out. Without this
+    // the loop above would pass against an engine that refused everything.
+    expect(evaluatePolicy({ ...passing(), rollout: { autopilot: true } }).action).toBe("SCHEDULE");
+  });
+});
+

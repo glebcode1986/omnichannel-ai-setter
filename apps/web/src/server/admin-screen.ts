@@ -21,6 +21,8 @@
 import {
   findWorkspaces,
   listKillSwitches,
+  listReleases,
+  readReleaseInForce,
   listReconciliations,
   listSupportSessions,
   platformCan,
@@ -34,9 +36,12 @@ import {
   type PlatformAuditRow,
   type PlatformContext,
   type ReconciliationRow,
+  type ReleaseInForce,
+  type ReleaseView,
   type SupportSessionRow,
   type SupportSnapshot,
   type WorkspaceHit,
+  requirePlatformPermission,
 } from "@omnichannel/db";
 import { PLATFORM_PERMISSIONS, type PlatformPermission, type PlatformRole, type SupportScope } from "@omnichannel/domain";
 
@@ -201,6 +206,38 @@ export async function assembleAdminAudit(
     ...(workspaceId === undefined ? {} : { workspaceId }),
     basePath,
   };
+}
+
+export interface AdminReleasesData {
+  readonly role: PlatformRole;
+  readonly can: PlatformCapabilities;
+  /** What the §18 stage actually is right now, or why there is no answer. */
+  readonly inForce: ReleaseInForce;
+  /** Recent candidates, newest first, each with its decision and reviewer status recomputed. */
+  readonly candidates: readonly ReleaseView[];
+  readonly basePath: string;
+}
+
+/**
+ * The release record, read back (#60, LAUNCH_READINESS.md §20).
+ *
+ * This screen is why the record is worth keeping. Everything the release tables hold was previously
+ * reachable only from a test: no operator could see which stage was in force, which candidate was waiting
+ * on a reviewer, or which capability a `HIGH` had switched off — so a gate that governs unattended
+ * sending across the platform was invisible to the people responsible for it.
+ *
+ * `inForce` is read separately from the candidate list rather than derived from it in the page, because
+ * that question has its own answer and one of its answers is "cannot tell": a window full of unreviewed
+ * proposals is `INDETERMINATE`, and a screen that showed the newest approved row it happened to have
+ * would report a stage the send path is not using.
+ *
+ * Needs only `READ_METADATA`: a release is a fact about the product, not about a customer. Changing one
+ * needs `OPERATE_RELEASE`, which is what `can` is drawn from here and what the store enforces.
+ */
+export async function assembleAdminReleases(db: DbClient, context: PlatformContext, basePath: string, at = new Date()): Promise<AdminReleasesData> {
+  requirePlatformPermission(context, "READ_METADATA", "read the release record");
+  const [inForce, candidates] = await Promise.all([readReleaseInForce(db, at), listReleases(db, 20)]);
+  return { role: contextRole(context), can: capabilitiesOf(context), inForce, candidates, basePath };
 }
 
 /** The role, read through the validated context rather than off the object. */
