@@ -46,6 +46,16 @@ export {
   type AutomatedDeliveryInput,
 } from "./delivery-store";
 export { channelCapabilitiesOf } from "./channel-capabilities";
+export {
+  publishPlanVersion,
+  readEntitlement,
+  setBillingAccount,
+  setEntitlementOverride,
+  setWorkspaceSubscription,
+  type PlanVersionInput,
+  type PlanVersionRecord,
+  type SubscribeInput,
+} from "./entitlement-store";
 export { exportContact, EXPORT_MESSAGE_LIMIT, type ContactExport } from "./export-store";
 export {
   executeDeletion,

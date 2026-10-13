@@ -438,6 +438,37 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P6-01 / Issue #38 — plan, subscription and entitlement primitives.** Branch
+   `feat/p6-01-plan-entitlements`, based on #94. The first of Phase 6.
+
+   **The Phase 6 specs existed but were never in the chain.** `BILLING_ENTITLEMENTS.md`,
+   `PRICING_PACKAGING.md`, `PHASE6_COMMERCIALIZATION_PLAN.md` and the real ADR-017 (provider-neutral
+   billing — distinct from the ambiguous-send ADR-017 already in the chain) live on
+   `origin/docs/phase6-commercial-billing`. They are brought in here, because an issue cannot be
+   implemented against a spec the branch cannot see.
+
+   **A plan version is immutable, and the database says so.** Two triggers refuse an edit and a delete;
+   only withdrawal from sale is permitted. A workspace subscribes to a *version*, so editing one would
+   move the terms under every workspace on it — which is exactly what grandfathering exists to prevent,
+   and a rule that lived only in TypeScript is one a migration or a console session walks around.
+
+   **Nothing a payment provider says reaches a feature check.** Six normalized states, the product's own
+   feature/limit/quota names, and provider identifiers as opaque strings on `billing_accounts` that
+   nothing parses or branches on. A snapshot is asserted to contain no provider string at all.
+
+   **`PAST_DUE` and `GRACE` still permit paid work**, per the accepted policy: a renewal that failed on
+   Tuesday must not stop a business answering customers on Wednesday, and the spec allows three days.
+
+   **An expired override stops applying but is kept**, so a temporary concession does not become permanent
+   by nobody remembering to delete it, and an operator can still see what was granted.
+
+   Also fixed: `audit_events_scope_check` permitted only `MEMBER_CHANGED` to be workspace-scoped, so a
+   workspace-scoped deletion audit from #94 could not have been written at all. The constraint now names
+   every workspace-level kind.
+
+   **Not in this issue:** the Starter/Growth/Scale catalogue itself is #43, and no payment provider is
+   integrated — #38 is explicit that it comes "without integrating a payment provider yet".
+
 1. **P3-04 / Issue #57 — privacy, retention and deletion.** Branch
    `feat/p3-04-privacy-deletion`, based on #93.
 
