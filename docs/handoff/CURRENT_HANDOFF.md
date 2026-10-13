@@ -257,7 +257,7 @@ which is current.
 | #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
 | #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
 | #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
-| #82 | `feat/p3-02-goals-followups` | **The current gate.** The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is the only branch below #81 it has been propagated into. Awaiting independent review. |
+| #82 | `feat/p3-02-goals-followups` | **The current gate**, and **CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is still the only branch below #81 it has been propagated into. Awaiting independent review at the repaired head. |
 | #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. |
 | #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
 
@@ -315,6 +315,71 @@ and a customer's erasure has to empty it, so every deletion request ended `PARTI
 the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is permitted only while a
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
+
+1. **P3-02 / Issue #55 — two P1 blockers on PR #82, both repaired, plus a third gap found while proving
+   the first.**
+
+   **P1-1: the feature had no executable path.** `dueFollowUps`, `claimFollowUp` and `recordFollowUpSent`
+   were correct, tested and **called by nothing**. A planned follow-up sat in the table for ever, and the
+   store's own tests could not tell us, because they call the store. This is the defect class the
+   repository keeps producing — exported, tested, never reached — and the second time it has been the
+   blocker on a PR (cf. Issue #9's token refresh).
+
+   The path, now end to end: `apps/worker/src/followup-sweeper.ts` is a `startRecoveryLoop` that finds due
+   work and hands each `READY` claim to **the same AI-draft job an inbound message enqueues**. It decides
+   nothing — every gate is re-asked inside `claimFollowUp` under the conversation lock, because a second
+   copy of a rule is the copy nobody checks. Carrying it: a third `FOLLOW_UP` variant on the draft trigger
+   (`AiDraftTrigger` gained the enum value in its own migration, since PostgreSQL forbids using a value
+   added in the same transaction), `followUpGenerationKey` exported from `application` so the worker and
+   the store derive one key one way, the attempt in the queue `jobId` so a re-enqueued attempt is one job
+   and a second allowed attempt is two, `DueFollowUp` carrying the tenant scope the cross-tenant scan
+   knows and `FollowUpView` does not, and `recordFollowUpSent` called from the handler **only** on a
+   disposition that actually scheduled an operation — an attempt whose draft was held is settled by the
+   next claim, so what an unsent attempt means is decided in one place.
+
+   **P1-2: a task could be assigned to somebody who cannot see the Business Profile.** `createTask` and
+   `assignTask` checked Workspace membership and never the profile grant, so a scoped member could be
+   handed work on a profile they cannot open. Fixed with `canActOnBusinessProfile` in `tenancy.ts`, used by
+   both paths through one `assigneeRefusal` helper. Reported and deliberately **not** fixed:
+   `lead-store.editLead` has the same asymmetry, and it is #80's reviewed feature.
+
+   **The crash window, which is why the claim answers `ALREADY_SENT`.** A worker that scheduled an
+   attempt's delivery and died before recording it leaves a `PENDING` row whose lease lapses; the next
+   claim would spend a fresh attempt and schedule a *second* operation for one silence, and nothing
+   downstream can deduplicate two operations because their identities differ. So a claim first asks whether
+   the previous attempt already produced a draft — by that attempt's generation key, not the first's — and
+   settles the follow-up from what that draft actually did: an operation exists, so record it; a draft with
+   no operation means the policy held it, so settle `REVIEW_PENDING` rather than retry a question that has
+   an answer.
+
+   **The third gap, found by the end-to-end test rather than by reading.** With everything above wired
+   correctly, no follow-up could still be sent. Meta's automated-response budget —
+   `INSTAGRAM_ADAPTER.md`'s "no later than about 25 seconds after the latest **triggering inbound**" — was
+   applied to every automated send, and a follow-up's anchor is hours or days old *by design*. Every
+   follow-up reached `DEADLINE_MISSED`, asked a person to review a message nobody was waiting for, and was
+   then cancelled `REVIEW_PENDING` by the next claim. A send that answers no inbound message now declares
+   itself `proactive` and carries no dispatch deadline, at both gates that read one; the 24-hour standard
+   messaging window is untouched, still counted from the customer's own last message, and still refuses a
+   proactive send made outside it. The flag is set only where it is true, so a send that forgets to declare
+   itself keeps the deadline and is held rather than quietly losing a provider rule. Recorded in
+   `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`; it is a reading of the spec's own wording rather than a
+   new rule, and it is called out for the reviewer as the one send-path behaviour this repair changes.
+
+   **The regressions the directive asked for, and what each one owns.** `followup-sweeper.test.ts` (the
+   pass: what is enqueued, what is not, an `ALREADY_SENT` claim producing no job, a failed enqueue leaving
+   the claim claimed and logging the error's name only); `delivery-policy.test.ts` (the deadline is still
+   derived for a reply and absent for a proactive send — the negative control that proves the budget was
+   scoped, not deleted); `ai-draft-handler.test.ts` (a send is recorded under the disposition's own
+   operation id, and nothing is recorded for a held draft, a skipped one, an operation-less "scheduled"
+   one, or any trigger that is not a follow-up); `followup-store.integration.test.ts` (the crash window,
+   concurrent claims, the lease, and cancellation driven through `appendInboundMessage` and `takeOver`
+   rather than through the helper, because a cancellation helper with no caller is this same defect
+   class); and `followup-slice.integration.test.ts` on a real PostgreSQL and a real Redis (a due row
+   becoming exactly one queued job, the lease keeping the next pass off it, one draft and one scheduled
+   operation the follow-up names, a dead worker's operation recovered rather than a second one made, an
+   ordinary reply to the same old message still held, and no job at all once the customer replied or a
+   person took over). Ten mutations applied to the production code, each killed by the suite that owns the
+   behaviour.
 
 1. **P5-04 / Issue #30 — thirteen blockers on PR #79 across three reviews and two directed repairs, all
    repaired.**
@@ -857,9 +922,14 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 1. **#55 / P3-02 is the current work**, as PR #82 on `feat/p3-02-goals-followups`, stacked on P3-01's
    accepted head `13212612bb0ac73b2468c1adc99b1c5e48008c16`. Conversation goals, bounded follow-ups and
    human tasks, with no UI; see `docs/specs/GOALS_FOLLOWUPS.md`, which the issue referenced and the
-   repository did not have.
+   repository did not have. **It was reviewed CHANGES_REQUESTED and both P1 blockers are now repaired** —
+   the missing executable path and the assignee who cannot reach the profile — plus the provider-deadline
+   gap the end-to-end test exposed; see the P3-02 entry above for all three.
    - Every follow-up is revalidated at execution rather than at planning, and a `READY` claim goes to the
      **shared delivery coordinator**. There is no second send path.
+   - What makes one happen is `apps/worker/src/followup-sweeper.ts`, which enqueues the same AI-draft job
+     an inbound message does. Without it the whole feature was unreachable, which is what the first
+     blocker was. A claim it cannot enqueue is left claimed: the lease is what makes that safe.
    - Attempts are bounded by CHECK constraints (1–5), so "no unlimited chasing" survives a careless
      caller, a migration and a console session.
    - `human_tasks` has no draft, operation or delivery column at all, which is how "completing a task

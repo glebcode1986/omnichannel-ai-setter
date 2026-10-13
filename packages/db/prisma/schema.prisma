@@ -295,6 +295,8 @@ enum ChannelEventType {
 enum AiDraftTrigger {
   AUTOMATIC
   HUMAN_REQUEST
+  /// A scheduled follow-up attempt asked for this draft (#55). Neither a reply nor a person's request.
+  FOLLOW_UP
 }
 
 enum AiDraftStatus {

@@ -25,6 +25,7 @@
  * settles it with a named reason. This is the difference between a scheduler and a chaser: a scheduler
  * asks again.
  */
+import { followUpGenerationKey } from "@omnichannel/application";
 import { boundedMaxAttempts, isWithinDaypart, type FollowUpStopReason } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
@@ -193,14 +194,30 @@ export async function planFollowUp(
  * promptness, and this exists so that a queue which lost its contents does not lose the intent. The
  * acceptance criteria put it plainly — the queue is not the source of truth.
  */
-export async function dueFollowUps(db: DbExecutor, now: Date, limit = 100): Promise<readonly FollowUpView[]> {
+export async function dueFollowUps(db: DbExecutor, now: Date, limit = 100): Promise<readonly DueFollowUp[]> {
   const rows = await db.followUp.findMany({
     where: { status: "PENDING", dueAt: { lte: now } },
     orderBy: [{ dueAt: "asc" }, { id: "asc" }],
     take: Math.min(Math.max(Math.trunc(limit), 1), 500),
-    select: followUpSelect,
+    // The scope comes back with the row, which `FollowUpView` does not carry: a profile-scoped read
+    // already knows whose profile it asked about, and this scan does not — it crosses every tenant by
+    // design, because due work is due whoever it belongs to. Returning rows without their scope made
+    // this function unusable by the only caller it exists for, which is why it had none.
+    select: { ...followUpSelect, workspaceId: true, businessProfileId: true },
   });
   return rows;
+}
+
+/**
+ * A follow-up that is due, with the tenant it belongs to.
+ *
+ * Separate from `FollowUpView` rather than widening it: every other read of a follow-up is already inside
+ * a Business Profile context, and adding two fields a scoped caller cannot use would invite somebody to
+ * trust them instead of the context they were given.
+ */
+export interface DueFollowUp extends FollowUpView {
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
 }
 
 /** What `claimFollowUp` decided, and what the caller should do about it. */
@@ -220,6 +237,17 @@ export type FollowUpClaim =
   | { readonly status: "STOPPED"; readonly followUpId: string; readonly reason: FollowUpStopReason }
   /** Outside the business's own sending hours. Still pending, moved to the next hour that is inside them. */
   | { readonly status: "DEFERRED"; readonly followUpId: string; readonly dueAt: Date }
+  /**
+   * This attempt's outbound already exists, and the claim recorded it rather than making another.
+   *
+   * The crash window Astra's first P1 on PR #82 named: a worker that scheduled an attempt's delivery and
+   * died before recording it leaves a `PENDING` row whose lease lapses, and the next claim would
+   * otherwise spend a fresh attempt and schedule a *second* operation for the same silence. Two
+   * operations are two sends, and nothing downstream can deduplicate them because their identities
+   * differ. So a claim first asks whether the previous attempt already produced a draft, and settles the
+   * follow-up from what that draft actually did.
+   */
+  | { readonly status: "ALREADY_SENT"; readonly followUpId: string; readonly attempt: number; readonly operationId: string }
   /** Somebody else took it, or it is gone. */
   | { readonly status: "MISSED"; readonly followUpId: string };
 
@@ -316,6 +344,50 @@ export async function claimFollowUp(
       await tx.followUp.update({ where: { id: followUp.id }, data: { status, stopReason: reason, settledAt: now, lastAttemptAt: now } });
       return { status: "STOPPED", followUpId: followUp.id, reason };
     };
+
+    // Recovery, asked **before** the gates and before an attempt is spent.
+    //
+    // Before the gates on purpose: if this attempt's message already went out, the customer has it, and a
+    // gate that then answered `SUPERSEDED` because they replied to it would record a decision the world
+    // has already overtaken. What is left to do is to write down what happened.
+    //
+    // The attempt's draft is the durable record of the attempt having got that far, and the generation key
+    // is derived the same way the worker derives it — one format, exported from `application`, because two
+    // spellings of it would differ one day and the symptom would be a second follow-up about one silence.
+    if (followUp.attemptCount > 0) {
+      const previous = await tx.aiDraft.findFirst({
+        where: {
+          ...scope,
+          generationKey: followUpGenerationKey({
+            conversationId: followUp.conversationId,
+            anchorMessageId: followUp.anchorMessageId,
+            followUpId: followUp.id,
+            attempt: followUp.attemptCount,
+          }),
+        },
+        select: { id: true },
+      });
+      if (previous !== null) {
+        // The delivery record is the authority rather than the draft's status: `scheduleAutomatedDelivery`
+        // writes the record and moves the draft in one transaction, so a record is what "an operation
+        // exists for this attempt" means, and it carries the identity to record.
+        const scheduled = await tx.deliveryJobRecord.findUnique({
+          where: { workspaceId_businessProfileId_draftId: { ...scope, draftId: previous.id } },
+          select: { operationId: true },
+        });
+        if (scheduled !== null) {
+          await tx.followUp.update({
+            where: { id: followUp.id },
+            data: { status: "SENT", deliveryOperationId: scheduled.operationId, settledAt: now, lastAttemptAt: now },
+          });
+          return { status: "ALREADY_SENT", followUpId: followUp.id, attempt: followUp.attemptCount, operationId: scheduled.operationId };
+        }
+        // A draft with no delivery: the policy held it, so somebody has to decide and no send is coming
+        // for this attempt. Settled rather than retried — a retry would re-ask a question that has an
+        // answer, and retrying an attempt whose draft keeps being held is how a follow-up loops for ever.
+        return stop("REVIEW_PENDING", "CANCELLED");
+      }
+    }
 
     const conversation = await tx.conversation.findFirst({
       where: { ...scope, id: followUp.conversationId },

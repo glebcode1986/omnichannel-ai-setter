@@ -236,6 +236,7 @@ export {
   readFollowUps,
   recordFollowUpSent,
   suppressFollowUps,
+  type DueFollowUp,
   type FollowUpClaim,
   type FollowUpOutcome,
   type FollowUpView,

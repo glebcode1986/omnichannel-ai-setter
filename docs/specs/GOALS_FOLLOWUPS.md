@@ -77,6 +77,25 @@ send path.** Nothing in `followup-store.ts` touches a provider; `claimFollowUp` 
 composition root hands a `READY` claim to the shared delivery coordinator, which applies the policy gates
 exactly as it does for any other automated send.
 
+### It answers nothing, so the automated-response budget does not apply to it
+
+One gate needs saying out loud, because "exactly as for any other automated send" reads the wrong way for
+it. Meta's automated-response budget — `INSTAGRAM_ADAPTER.md`'s "no later than about 25 seconds after the
+latest **triggering inbound**" — is a rule about answering a person promptly, and it is counted from their
+message. A follow-up exists precisely because they stopped writing: its anchor is hours or days old by
+design, so a budget measured from it is always already spent.
+
+Applied anyway, it sent every follow-up to `DEADLINE_MISSED`, which asked a person to review a message
+nobody is waiting for and left the attempt to be settled `REVIEW_PENDING` by the next claim. The feature
+could be wired up correctly end to end and still never send anything.
+
+So a send that answers no inbound message declares itself `proactive` and carries no dispatch deadline.
+The rule that *does* govern it is the provider's standard messaging window, still computed from the
+customer's own last message — a follow-up outside the 24-hour window is refused by the window gate exactly
+as any other send would be, and every other gate is untouched. The flag is set only where it is true, so a
+send that forgets to declare itself keeps the deadline and is held rather than quietly losing a provider
+rule.
+
 ### Attempts are bounded in the database
 
 ```sql

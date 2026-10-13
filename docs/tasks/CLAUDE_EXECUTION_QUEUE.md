@@ -15,7 +15,40 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — propagating the accepted P3-01 parent into P3-02 / PR #82
+### Current work — repairing PR #82 / P3-02 after CHANGES_REQUESTED
+
+Two P1 blockers, both closed on `feat/p3-02-goals-followups`. No rebase, no force-push, nothing to `main`,
+nothing into #83 or later, no Stage D. **The reviewer is Astra, temporarily, from 2026-10-13**; Antigravity
+is paused; Claude remains the only authorized author; this side publishes only
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=P3-02` and emits no verdict marker.
+
+**P1-1 — the follow-up feature had no executable path.** `dueFollowUps`, `claimFollowUp` and
+`recordFollowUpSent` were correct, tested and called by nothing, so a planned follow-up sat in the table
+for ever. `apps/worker/src/followup-sweeper.ts` is what makes one happen: a `startRecoveryLoop` that finds
+due work and hands each `READY` claim to **the same AI-draft job an inbound message enqueues**. It decides
+nothing — every gate is re-asked inside the claim, under the conversation lock. Carrying it: the
+`FOLLOW_UP` draft trigger (its own migration, because PostgreSQL will not use an enum value added in the
+same transaction), `followUpGenerationKey` exported from `application` so one key is derived one way, the
+attempt inside the queue `jobId` so a re-enqueued attempt is one job and a second allowed attempt is two,
+the tenant scope on `DueFollowUp`, and `recordFollowUpSent` called only on a disposition that actually
+scheduled — a held attempt is settled by the next claim, in one place.
+
+**P1-2 — a task could be assigned to somebody who cannot reach the Business Profile.** `createTask` and
+`assignTask` checked Workspace membership and not the profile grant. Closed with
+`canActOnBusinessProfile`, used by both paths through one refusal helper. Reported and not fixed:
+`lead-store.editLead` has the same asymmetry and belongs to #80.
+
+**A third gap, found by the end-to-end test.** With all of the above correct, nothing could still be sent:
+Meta's automated-response budget — "about 25 seconds after the latest **triggering inbound**" — was applied
+to a send that answers nothing, and a follow-up's anchor is hours or days old by design. A proactive send
+now carries no dispatch deadline at either gate that reads one; the 24-hour messaging window is untouched
+and still refuses a follow-up outside it. Recorded in `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`, and
+flagged for the reviewer as the one send-path behaviour this repair changes.
+
+**#82 is still the current gate. #83 and everything below stays frozen**, still carrying the pre-repair
+#79. #104 and #105 sit off the chain, based on #103, and are unaffected.
+
+### Earlier — propagating the accepted P3-01 parent into P3-02 / PR #82
 
 `ANTIGRAVITY_REVIEW: PASS head=d9a34ffef120b7f0b171eb12f130d3848c9928cf` accepted PR #81, with a formal
 approving review. The directive on #82 merges that exact parent into `feat/p3-02-goals-followups`, **one
@@ -376,6 +409,18 @@ for the actions this task introduces and says so. Same precedent as `MVP_RELEASE
 work already added, rather than a new table. A lead's "what happens next" and a conversation's are the same
 question, and a second place to answer it would give two answers depending on which screen an operator
 opened. It also avoids changing core entity semantics, which needs an ADR.
+
+**What the first review found, and what it changed.** The stores above were all correct and the feature was
+unreachable: nothing called `dueFollowUps`, `claimFollowUp` or `recordFollowUpSent`, so the goal and
+follow-up tables were a complete record of intentions nobody acted on. The repair is described under
+"Current work" at the top of this file. Two details are worth carrying forward because they are general:
+
+- **A store with no caller passes its own tests.** Every follow-up case here calls the store, so none of
+  them could notice. The regressions added for the repair deliberately start from the worker and from the
+  real event — the sweeper's pass, `appendInboundMessage`, `takeOver` — rather than from the helper.
+- **Correct pieces can still not meet.** The provider's automated-response budget was right, the follow-up
+  path was right, and together they made a feature that could never send: the budget is counted from the
+  message being answered, and a follow-up answers none.
 
 **P5-08 / Issue #34 is next**, per the owner's directive on PR #81 — and not before. Its work is committed
 on a local `feat/p5-08-analytics-audit` branch and deliberately unpushed.

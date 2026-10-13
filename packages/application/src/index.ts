@@ -34,6 +34,7 @@ export { isEligibleForInboundDebounce, nextDeliveryStatus, outboxRetryDelayMs, s
 export {
   draftGenerationBlockers,
   generateDraft,
+  followUpGenerationKey,
   generationKey,
   type DraftGenerationCommand,
   type DraftGenerationDependencies,
