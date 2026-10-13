@@ -43,7 +43,7 @@ import {
   type OpenCheckoutInput,
   type OpenedCheckout,
 } from "./billing-routing-store";
-import { publishPlanVersion, readEntitlement } from "./entitlement-store";
+import { publishPlanVersion, readEntitlement, requestCancellation, resumeSubscription } from "./entitlement-store";
 import { DbInputError } from "./errors";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createTestUser } from "./testing/fixtures";
@@ -562,6 +562,87 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // shorten the period the customer paid for.
       expect(extended?.currentPeriodEnd?.toISOString()).toBe(periodEndFor("MONTH", periodEndFor("MONTH", NOW)).toISOString());
       expect((await readEntitlement(db(), workspaceId, NOW)).periodEndsAt?.toISOString()).toBe(extended?.currentPeriodEnd?.toISOString());
+    });
+
+    it("does not let a renewal undo a cancellation the customer asked for", async () => {
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request({}));
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `cancel-then-renew-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+      const cancelled = await requestCancellation(db(), context, NOW);
+      expect(cancelled).toMatchObject({ status: "CANCELING" });
+      const periodEnd = (await readArrangement(db(), workspaceId))?.currentPeriodEnd;
+
+      // The provider renews anyway — which it will, because nothing tells it to stop: the cancellation is
+      // recorded locally and `setProviderRenewal` has no caller. That gap is reported separately; what is
+      // proved here is that the renewal cannot flip the customer's decision back.
+      const renewal = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `cancel-then-renew-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: NOW,
+          arrangementId: opened.arrangementId,
+        }),
+        NOW,
+      );
+
+      // Recorded, never resurrected — the rule `ACTIVATE` already applies to an ended arrangement.
+      expect(renewal).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(await readEntitlement(db(), workspaceId, NOW)).toMatchObject({ state: "CANCELED_PENDING_END" });
+      // The arrangement is left alone too: a moved period end would read like a live renewal underneath a
+      // subscription that is ending.
+      expect((await readArrangement(db(), workspaceId))?.currentPeriodEnd?.toISOString()).toBe(periodEnd?.toISOString());
+      // And the event is still written and audited, which is what makes the divergence findable.
+      const audits = await searchAuditEvents(db(), context, { kinds: ["BILLING_ARRANGEMENT_CHANGED"] });
+      expect(audits.rows.some((row) => row.summary.includes("SUBSCRIPTION_RENEWED") && row.summary.includes("NONE"))).toBe(true);
+    });
+
+    it("extends again once the customer withdraws the cancellation themselves", async () => {
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request({}));
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `resume-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+      await requestCancellation(db(), context, NOW);
+      expect(await resumeSubscription(db(), context, NOW)).toMatchObject({ status: "RESUMED" });
+
+      const renewal = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `resume-renewed-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: NOW,
+          arrangementId: opened.arrangementId,
+        }),
+        NOW,
+      );
+
+      // The positive control. Without it the guard above would pass just as happily if renewals had
+      // stopped working altogether, which is the failure this whole class is made of.
+      expect(renewal).toMatchObject({ outcome: "APPLIED", effect: "EXTEND" });
+      expect(await readEntitlement(db(), workspaceId, NOW)).toMatchObject({ state: "ACTIVE" });
     });
 
     it("requires a stated end for an active prepaid term, and assumes no renewal", async () => {
