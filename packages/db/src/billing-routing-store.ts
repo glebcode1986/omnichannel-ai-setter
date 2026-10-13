@@ -1058,6 +1058,20 @@ async function apply(
   if (input.effect === "SUSPEND") {
     // Grace, not deletion. The spec is explicit that a commercial limit never removes customer data, and
     // grace's length is product policy rather than a provider's retry schedule.
+    //
+    // The guard is the rule `ACTIVATE` and `END` already state, and the one this branch was missing: a
+    // failed charge is only this workspace's problem if it concerns the path the workspace is actually
+    // paying on. A superseded or ended arrangement belongs to a provider the workspace has been moved
+    // off, and an identifier the event's route does not own resolves to nothing at all — while the
+    // workspace id still arrives from the contract, which was enough to write `GRACE`. Either way the
+    // live path is paying, so suspending it would take away access that was bought. The old provider
+    // retrying a subscription it should no longer have is the ordinary case, not an exotic one.
+    //
+    // Recorded with `NONE` and audited rather than silently dropped: that row is what makes a provider
+    // still charging a dead path visible, and resolving it is `reconcileProviderState`'s job.
+    if (arrangement === null || arrangement.state === "ENDED" || arrangement.state === "SUPERSEDED") {
+      return "NONE";
+    }
     const existing = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true, graceStartedAt: true } });
     if (existing === null) {
       return "NONE";

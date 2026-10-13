@@ -999,6 +999,116 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect((await readEntitlement(db(), workspaceId, NOW)).subscribed).toBe(false);
     });
 
+    it("will not put the live path into grace when the old provider's payment fails afterwards", async () => {
+      // The twin of the case above, and the one that was wrong. `ACTIVATE` refuses a superseded
+      // arrangement and `END` refuses one too, but `SUSPEND` did not look at the arrangement at all: it
+      // read the subscription and wrote `GRACE`. So a failed charge on the path a workspace had already
+      // been moved off suspended the path it is actually paying on, and the customer lost paid access
+      // because of a provider they no longer use. The old provider retrying a dead subscription is the
+      // ordinary case, not an exotic one.
+      const { context, workspaceId } = await freshWorkspace();
+      const first = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `superseded-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: first.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          providerReference: "sub_old_provider",
+        }),
+        NOW,
+      );
+
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: false } });
+      const second = await openFor(context, request({ supersedeCurrent: true }));
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: true } });
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-mor", {
+          routeCode: "mor-global",
+          providerEventId: `superseded-migrated-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: second.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          providerReference: "sub_new_provider",
+        }),
+        NOW,
+      );
+
+      // Asserted before the failure arrives. A fixture that never reached a paying state would make the
+      // assertion afterwards pass without the guard existing, which is the way this kind of test lies.
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: first.arrangementId }, select: { state: true } })).toEqual({
+        state: "SUPERSEDED",
+      });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "ACTIVE" });
+
+      const failed = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `superseded-failed-${workspaceId}`,
+          kind: "PAYMENT_FAILED",
+          occurredAt: NOW,
+          checkoutContractId: first.checkoutContractId,
+        }),
+        NOW,
+      );
+
+      expect(failed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(
+        await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, graceStartedAt: true } }),
+      ).toEqual({ state: "ACTIVE", graceStartedAt: null });
+      expect((await readEntitlement(db(), workspaceId, NOW)).paidWorkAllowed).toBe(true);
+    });
+
+    it("will not put a workspace into grace for a failure naming an arrangement its route does not own", async () => {
+      // The same hole reached the other way. The arrangement is looked up with the event's route in the
+      // predicate, so an identifier belonging to another route resolves to nothing — and the workspace
+      // still came back from the contract, which was enough for the unguarded branch to write `GRACE`.
+      // `END` refuses an absent arrangement already; this makes the two agree.
+      const { context: paying, workspaceId } = await freshWorkspace();
+      const elsewhere = await freshWorkspace();
+      const opened = await openFor(paying, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `foreign-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: false } });
+      const foreign = await openFor(elsewhere.context, request());
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: true } });
+
+      const failed = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `foreign-failed-${workspaceId}`,
+          kind: "PAYMENT_FAILED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          // An arrangement on `mor-global`, so it cannot be found under `direct-eu`.
+          arrangementId: foreign.arrangementId,
+        }),
+        NOW,
+      );
+
+      expect(failed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(
+        await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, graceStartedAt: true } }),
+      ).toEqual({ state: "ACTIVE", graceStartedAt: null });
+    });
+
     it("refuses a second live arrangement written by raw SQL, and says which states count as live", async () => {
       // The index is what makes one-live structural. Asserted per state, because the predicate is spelled
       // as "not ended and not superseded" and a state added later would inherit that classification.
@@ -1096,6 +1206,69 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(entitlement.state).toBe("CANCELED_PENDING_END");
       // Still paying for what it bought until the term ends; that is the accepted default.
       expect(entitlement.paidWorkAllowed).toBe(true);
+    });
+
+    it("will not pull a subscription cancelled at period end into grace when the last charge fails", async () => {
+      // The third shape of the same hole, and the most expensive one. A cancellation leaves the
+      // arrangement `ENDED` and the subscription paid through to the end of its term — the accepted
+      // default. The provider then retries a charge it should no longer be making, and an unguarded
+      // suspension overwrote `CANCELED_PENDING_END` with `GRACE`: that both takes away the term the
+      // customer had already paid for and loses the date saying when it ends, so nothing afterwards
+      // can tell what they were owed.
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `ended-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `ended-canceled-${workspaceId}`,
+          kind: "SUBSCRIPTION_CANCELED",
+          occurredAt: NOW,
+          arrangementId: opened.arrangementId,
+        }),
+        NOW,
+      );
+      const cancelled = await db().workspaceSubscription.findUniqueOrThrow({
+        where: { workspaceId },
+        select: { state: true, periodEndsAt: true },
+      });
+
+      expect(cancelled.state).toBe("CANCELED_PENDING_END");
+
+      const failed = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `ended-failed-${workspaceId}`,
+          kind: "PAYMENT_FAILED",
+          occurredAt: NOW,
+          arrangementId: opened.arrangementId,
+        }),
+        NOW,
+      );
+
+      expect(failed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      const after = await db().workspaceSubscription.findUniqueOrThrow({
+        where: { workspaceId },
+        select: { state: true, graceStartedAt: true, periodEndsAt: true },
+      });
+      expect(after.state).toBe("CANCELED_PENDING_END");
+      expect(after.graceStartedAt).toBeNull();
+      expect(after.periodEndsAt?.toISOString()).toBe(cancelled.periodEndsAt?.toISOString());
+      // The whole point of cancel-at-period-end: they keep what they bought.
+      expect((await readEntitlement(db(), workspaceId, NOW)).paidWorkAllowed).toBe(true);
     });
 
     it("suspends into grace on a failed payment rather than ending anything", async () => {
