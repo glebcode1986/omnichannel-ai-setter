@@ -13,18 +13,27 @@
  * so a hand-made POST from an admin's session is refused by the store rather than by this file hiding a
  * button. The screen's `canManage` decides what is *offered*; the server decides what is permitted.
  *
- * There is deliberately no redirect to a provider here. Until #41 chooses one there is nothing to redirect
- * to, and `openCheckoutContract` refuses a route whose provider has no adapter — so the honest end of this
- * action is a contract with its acceptance snapshot and a sentence saying the payment step is next.
+ * The provider hand-off happens *after* the contract commits (#41). That order is forced rather than
+ * chosen: the contract is the record of what was agreed and by whom, and a provider session opened before
+ * it would leave a paid session with nothing to attribute the settlement to. Where this deployment cannot
+ * open one — no adapter, no return URL, no published provider price — the action ends exactly as it did
+ * before: a contract with its acceptance snapshot, and a sentence saying the payment step is next.
+ *
+ * The redirect grants nothing. It is a page; the only thing that activates a paid entitlement is a
+ * verified provider event or an authoritative reconciliation.
  */
 import { openCheckoutContract, WorkspacePermissionError, type CheckoutRefusalReason } from "@omnichannel/db";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
+import { loadWebEnv } from "../env";
 import { requestLocale } from "@/i18n/request-locale";
+import { ensureBillingAdapters } from "./billing-adapters";
 import { acceptedDocumentIdsFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
 import { checkoutSelectionFrom } from "./checkout-screen";
 import { getDb } from "./db";
+import { getLogger } from "./logger";
+import { requestProviderCheckout } from "./provider-checkout";
 import { requireWorkspaceContext } from "./request-context";
 
 /**
@@ -35,7 +44,14 @@ import { requireWorkspaceContext } from "./request-context";
  * "you did not tick the box" and "the terms changed while you were reading" — need different sentences
  * and different next steps.
  */
-export type CheckoutOutcome = "ACCEPTED" | "TERMS_NOT_ACCEPTED" | "TERMS_CHANGED" | "CHECKOUT_UNAVAILABLE" | "REFUSED";
+export type CheckoutOutcome =
+  | "ACCEPTED"
+  | "TERMS_NOT_ACCEPTED"
+  | "TERMS_CHANGED"
+  | "CHECKOUT_UNAVAILABLE"
+  | "REFUSED"
+  /** The provider's page was opened and could not be reached, or answered something unusable. */
+  | "PROVIDER_UNREACHABLE";
 
 export interface CheckoutTarget {
   readonly workspaceId: string;
@@ -74,6 +90,7 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
   const selection = checkoutSelectionFrom({ plan: field(formData, "plan"), interval: field(formData, "interval") });
   const locale = await requestLocale();
 
+  let handoff: Awaited<ReturnType<typeof requestProviderCheckout>>;
   try {
     const opened = await openCheckoutContract(getDb(), context, {
       ...selection,
@@ -81,11 +98,38 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
       acceptedDocumentIds: acceptedDocumentIdsFrom(formData),
       offeredDocumentIds: offeredDocumentIdsFrom(formData),
     });
-    finish(target, opened.available ? "ACCEPTED" : outcomeOf(opened.reason));
+    if (!opened.available) {
+      finish(target, outcomeOf(opened.reason));
+    }
+    handoff = await requestProviderCheckout({
+      db: getDb(),
+      logger: getLogger(),
+      checkoutContractId: opened.checkoutContractId,
+      returnBaseUrl: loadWebEnv().BILLING_RETURN_BASE_URL,
+      returnPath: billingPath(target),
+      ensureAdapters: ensureBillingAdapters,
+    });
   } catch (error) {
     if (error instanceof WorkspacePermissionError) {
       finish(target, "REFUSED");
     }
-    throw error;
+    // The contract committed and the provider could not be reached. Said as its own outcome rather than
+    // as a failure: the acceptance is recorded, nothing was charged, and pressing the button again opens
+    // a session against the same contract — which is why the idempotency key is the contract's id.
+    getLogger().error("billing.checkout_handoff_failed", { errorName: error instanceof Error ? error.name : typeof error });
+    finish(target, "PROVIDER_UNREACHABLE");
   }
+
+  if (handoff === undefined) {
+    // Nothing to redirect to, and the contract stands. The billing page says the payment step is next.
+    finish(target, "ACCEPTED");
+  }
+  if (handoff.kind === "REDIRECT") {
+    revalidatePath(billingPath(target));
+    redirect(handoff.url);
+  }
+  // A provider whose hand-off is a signed form cannot be completed by a redirect, and this screen has no
+  // form to post it from yet. Reported as unavailable rather than half-done: the contract is written, and
+  // nothing pretends a customer was handed anywhere.
+  finish(target, "CHECKOUT_UNAVAILABLE");
 }
