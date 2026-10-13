@@ -781,7 +781,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request({}));
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-then-renew-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -800,11 +800,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // proved here is that the renewal cannot flip the customer's decision back.
       const renewal = await recordVerifiedBillingEvent(
         db(),
-      // Not awaited: `verified` is synchronous on this branch, and `await` on a non-Thenable is an
-      // eslint error under `--max-warnings=0`. It becomes asynchronous from #104, where the provider port
-      // gains its three-way `VerifiedDelivery`, and the merge into that branch adds the `await` there —
-      // each branch carrying the form its own helper requires, rather than a wart that suits neither.
-        verified("test-psp", {
+      // Awaited here, and not on the branches above: this is where the provider port's three-way
+      // `VerifiedDelivery` made `verified` asynchronous. Upstream it is synchronous and an `await` on a
+      // non-Thenable is a fatal eslint error there, so the form belongs to whichever branch owns the
+      // helper rather than being a compromise that fails both.
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-then-renew-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
@@ -830,7 +830,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request({}));
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `resume-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -845,11 +845,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const renewal = await recordVerifiedBillingEvent(
         db(),
-      // Not awaited: `verified` is synchronous on this branch, and `await` on a non-Thenable is an
-      // eslint error under `--max-warnings=0`. It becomes asynchronous from #104, where the provider port
-      // gains its three-way `VerifiedDelivery`, and the merge into that branch adds the `await` there —
-      // each branch carrying the form its own helper requires, rather than a wart that suits neither.
-        verified("test-psp", {
+      // Awaited here, and not on the branches above: this is where the provider port's three-way
+      // `VerifiedDelivery` made `verified` asynchronous. Upstream it is synchronous and an `await` on a
+      // non-Thenable is a fatal eslint error there, so the form belongs to whichever branch owns the
+      // helper rather than being a compromise that fails both.
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `resume-renewed-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
