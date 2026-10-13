@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
 const MAX_PAGE = 100;
@@ -314,6 +314,14 @@ export async function createKnowledge(
   input: NewKnowledge,
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
+  if (input.scope === "WORKSPACE") {
+    // A Workspace-scoped source is read by *every* Business Profile, so writing one from a single
+    // profile's screen is a cross-profile write. Until this check existed, any member who could open the
+    // page could make one — including an agent granted a single profile (#57). Role only: a profile
+    // context deliberately carries no Business Profile scope, so the "must hold ALL profiles" half of
+    // the rule is applied by the caller that holds a Workspace context.
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "writing Workspace-wide knowledge");
+  }
   const chunks = input.chunks.map((content) => content.trim()).filter((content) => content !== "");
   if (input.title.trim() === "") {
     return { status: "REJECTED", reason: "a knowledge source needs a title" };

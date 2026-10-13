@@ -92,6 +92,73 @@ enum PresenceMode {
   READ_AND_TYPING
 }
 
+/// What a deletion request covers (#57).
+///
+/// Four scopes because four different things can be asked for, and collapsing them would make the
+/// narrowest request — "forget me" — indistinguishable from the widest. A scope is chosen when the
+/// request is made and never widened afterwards.
+enum DeletionScope {
+  /// One customer and everything derived from them, across every conversation they had.
+  CONTACT
+  /// One thread. The contact survives, and so does everything learned from their other conversations.
+  CONVERSATION
+  /// A Business Profile and every customer in it. Distinct from deactivation, which keeps the data.
+  BUSINESS_PROFILE
+  /// A whole tenant. Records a regulator or a payment provider requires are not customer data and are
+  /// retained separately; nothing in this product writes any yet.
+  WORKSPACE
+}
+
+/// How far a deletion has got, and whether it finished (#57).
+///
+/// `PARTIAL_FAILURE` is a terminal state of its own rather than a retry: a deletion that removed some
+/// things and not others must not read as "done", and must not silently try again on a different
+/// schedule — somebody has to look at what was left.
+enum DeletionState {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  PARTIAL_FAILURE
+}
+
+/// A request to delete customer data, and the durable record of what it actually removed (#57).
+///
+/// It exists as a row rather than as a function call because a deletion is a promise with a deadline.
+/// A process that crashes mid-way must leave evidence of how far it got, an operator must be able to
+/// answer "was this done, and when", and a partial failure must be visible rather than retried into
+/// silence. The counts are per table and written as the work proceeds.
+model DeletionRequest {
+  id                String        @id @default(uuid(7))
+  workspaceId       String        @map("workspace_id")
+  /// Absent for a WORKSPACE-scoped request; set for every narrower one.
+  businessProfileId String?       @map("business_profile_id")
+  scope             DeletionScope
+  /// The contact or conversation the request names. Absent for profile- and workspace-wide requests.
+  /// Deliberately not a foreign key: the row it names is the row this request is about to delete.
+  targetId          String?       @map("target_id")
+  state             DeletionState @default(REQUESTED)
+  /// Who asked. A deletion is always somebody's decision, so there is no system-actor variant.
+  requestedByUserId String        @map("requested_by_user_id")
+  /// Why, in the requester's words. Shown to whoever reviews a partial failure.
+  reason            String?
+  /// Rows removed per table, written as the work proceeds so a crash leaves evidence of how far it got.
+  removed           Json          @default("{}")
+  /// Steps that did not complete, by name, with a fixed reason code. Never a provider's prose.
+  failures          Json          @default("[]")
+  requestedAt       DateTime      @default(now()) @map("requested_at")
+  startedAt         DateTime?     @map("started_at")
+  completedAt       DateTime?     @map("completed_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  requestedByUser User             @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([workspaceId, state, requestedAt])
+  @@unique([workspaceId, id])
+  @@map("deletion_requests")
+}
+
 enum WhatsAppOnboardingMode {
   NEW_OR_MIGRATED_CLOUD_NUMBER
   COEXISTENCE_EXISTING_BUSINESS_APP
@@ -216,6 +283,11 @@ enum AuditEventKind {
   TEMPLATE_POLICY_CHANGED
   AMBIGUOUS_SEND_RESOLVED
   MEMBER_CHANGED
+  /// Somebody read a customer's data out of the product; the read itself is the event (#57).
+  DATA_EXPORTED
+  /// Somebody asked for data to be deleted, and what the deletion actually removed.
+  DELETION_REQUESTED
+  DELETION_COMPLETED
 }
 
 /// Who acted. Reconciliation and the scheduler act without anybody asking, and recording those as a
@@ -527,6 +599,7 @@ model User {
   suppressionsRecorded FollowUpSuppression[] @relation("SuppressionRecorder")
   suppressionsLifted   FollowUpSuppression[] @relation("SuppressionLifter")
   @@map("users")
+  deletionRequests DeletionRequest[]
 }
 
 model Account {
@@ -593,6 +666,7 @@ model Workspace {
   followUps            FollowUp[]
   humanTasks           HumanTask[]
   followUpSuppressions FollowUpSuppression[]
+  deletionRequests     DeletionRequest[]
   @@map("workspaces")
 }
 

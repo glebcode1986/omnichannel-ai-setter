@@ -92,6 +92,25 @@ export async function recordWorkspaceAuditEvent(
   return writeAuditEvent(db, scopeOf(context), null, input);
 }
 
+/**
+ * The variant for work that runs without anybody asking in that moment (#57).
+ *
+ * A deletion is requested by a person and carried out later by a process, so the completion has no
+ * session behind it — and recording it as nobody's action would lose the one fact that matters, which is
+ * that it finished. The caller supplies the scope it already holds on the durable request, and the actor
+ * is the person who asked rather than the process that ran.
+ *
+ * Scope is a parameter rather than a context because there is no context to have: inventing one so this
+ * would type-check is how a background path acquires authority nobody granted.
+ */
+export async function recordSystemAuditEvent(
+  db: DbExecutor,
+  scope: { readonly workspaceId: string; readonly businessProfileId?: string },
+  input: AuditEventInput,
+): Promise<{ readonly id: string }> {
+  return writeAuditEvent(db, scope.workspaceId, scope.businessProfileId ?? null, input);
+}
+
 async function writeAuditEvent(
   db: DbExecutor,
   workspaceId: string,
