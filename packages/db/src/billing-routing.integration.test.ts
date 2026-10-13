@@ -1065,6 +1065,72 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect((await readEntitlement(db(), workspaceId, NOW)).paidWorkAllowed).toBe(true);
     });
 
+    it("will not let a refund of the superseded term revoke the term that replaced it", async () => {
+      // #44 requires this one by name: a reversal of an older paid term cannot revoke a newer valid
+      // arrangement. The guard is the same one `ACTIVATE` and `SUSPEND` use, and `END` already had it —
+      // what was missing is any case saying so, and a refund arriving months late for a provider the
+      // workspace has left is exactly when nobody is watching. Ending the live path here would cut off a
+      // paying customer on the strength of money being returned for something else.
+      const { context, workspaceId } = await freshWorkspace();
+      const first = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reversal-old-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: first.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: false } });
+      const second = await openFor(context, request({ supersedeCurrent: true }));
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: true } });
+      await recordVerifiedBillingEvent(
+        db(),
+        verified("test-mor", {
+          routeCode: "mor-global",
+          providerEventId: `reversal-new-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: second.checkoutContractId,
+          settled: money(4_900, "EUR"),
+        }),
+        NOW,
+      );
+
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "ACTIVE" });
+
+      // Both reversal kinds, because they are two rows in the mapping and only one of them would have to
+      // be wrong for a refund to end a subscription somebody is paying for.
+      for (const kind of ["REFUNDED", "CHARGEBACK"] as const) {
+        const reversed = await recordVerifiedBillingEvent(
+          db(),
+          verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `reversal-${kind}-${workspaceId}`,
+            kind,
+            occurredAt: NOW,
+            arrangementId: first.arrangementId,
+          }),
+          NOW,
+        );
+
+        expect(reversed, kind).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      }
+
+      // The new arrangement is still the live one and still the only live one.
+      const live = await db().billingArrangement.findMany({ where: { workspaceId, state: { in: ["PENDING", "ACTIVE"] } }, select: { id: true } });
+      expect(live).toEqual([{ id: second.arrangementId }]);
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, canceledAt: true } })).toEqual({
+        state: "ACTIVE",
+        canceledAt: null,
+      });
+      expect((await readEntitlement(db(), workspaceId, NOW)).paidWorkAllowed).toBe(true);
+    });
+
     it("will not put a workspace into grace for a failure naming an arrangement its route does not own", async () => {
       // The same hole reached the other way. The arrangement is looked up with the event's route in the
       // predicate, so an identifier belonging to another route resolves to nothing — and the workspace
