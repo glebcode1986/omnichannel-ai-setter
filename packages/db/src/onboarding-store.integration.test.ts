@@ -17,7 +17,16 @@ const TOKEN = "IGQVJlong-lived-token";
 const OTHER_TOKEN = "IGQVJrefreshed-token";
 const PURPOSE = "INSTAGRAM_ACCESS_TOKEN" as const;
 const NOW = new Date("2026-09-17T12:00:00.000Z");
-const EXPIRES = new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000);
+/**
+ * Anchored to the real clock, not to this file's frozen instant.
+ *
+ * `channel_credentials` stamps `created_at` itself and `channel_credentials_lifetime_check` requires the
+ * expiry to come after it. An expiry computed from a fixed date therefore holds only until the real clock
+ * passes it, and then every case here fails because of the date rather than because of a change — which is
+ * exactly how PR #90 sat red for five days. The frozen instant stays frozen for everything the database
+ * does not constrain; this value cannot be one of them.
+ */
+const EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
 describe.skipIf(!databaseTestsEnabled())("instagram onboarding store (PostgreSQL)", () => {
   let database: TestDatabase;
