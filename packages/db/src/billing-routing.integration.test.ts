@@ -45,6 +45,7 @@ import {
   type OpenCheckoutInput,
   type OpenedCheckout,
 } from "./billing-routing-store";
+import { ACCEPTED_PLANS, publishAcceptedCatalog } from "./accepted-catalog";
 import { publishPlanVersion, readEntitlement, requestCancellation, resumeSubscription } from "./entitlement-store";
 import { DbInputError } from "./errors";
 import type { VerifiedDelivery } from "./billing-events";
@@ -2358,6 +2359,73 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         acceptedDocumentIds: before.map((row) => row.legalDocumentId),
       });
       expect(staleRefusal).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+    });
+  });
+
+  describe("the accepted tiers", () => {
+    it("each reach ACTIVE through a verified event, carrying the capacity the accepted table publishes", async () => {
+      // #44 asks for Starter/Growth/Scale activation against immutable accepted plan versions, and every
+      // other case in this file buys a plan this file published for itself. That is the gap: a tier can be
+      // in the accepted catalogue, priced, and still not be buyable — twice already something was
+      // published here that nothing could use (the provider price ids no checkout could read, and the
+      // add-ons no path can name). So this buys all three from the catalogue a deployment actually
+      // publishes, through the same checkout and the same verified settlement as a customer.
+      const catalog = await publishAcceptedCatalog(db());
+
+      for (const tier of ACCEPTED_PLANS) {
+        const { context, workspaceId } = await freshWorkspace();
+        const planVersionId = catalog.plans.find((plan) => plan.code === tier.code)?.planVersionId;
+        expect(planVersionId, tier.code).toBeDefined();
+
+        const opened = await openFor(context, request({ planVersionId }));
+        // The amount is the tier's own published monthly price. A settlement for the wrong figure is
+        // judged against the quote and would come back `NONE`, so this also says the price the catalogue
+        // published is the price a charge can settle against.
+        expect(opened.base, tier.code).toEqual(money(tier.monthlyCents, "EUR"));
+
+        const settled = await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `accepted-${tier.code}-${workspaceId}`,
+            kind: "PAYMENT_SETTLED",
+            occurredAt: NOW,
+            checkoutContractId: opened.checkoutContractId,
+            settled: money(tier.monthlyCents, "EUR"),
+            providerReference: `sub_${tier.code}_${workspaceId}`,
+          }),
+          NOW,
+        );
+
+        expect(settled, tier.code).toMatchObject({ outcome: "APPLIED", effect: "ACTIVATE" });
+
+        // What the customer bought, read back through the entitlement every gate consults. The numbers are
+        // the accepted table's own, taken from the constant rather than retyped, so this says the
+        // published version carries them end to end rather than restating the table a third time.
+        const entitlement = await readEntitlement(db(), workspaceId, NOW);
+        expect(entitlement, tier.code).toMatchObject({ state: "ACTIVE", planCode: tier.code, paidWorkAllowed: true, subscribed: true });
+        expect(entitlement.limits, tier.code).toEqual({
+          BUSINESS_PROFILES: tier.businessProfiles,
+          SEATS: tier.seats,
+          ANALYTICS_RETENTION_DAYS: tier.analyticsRetentionDays,
+        });
+        expect(entitlement.quotas["VOICE_TRANSCRIPTION_SECONDS"], tier.code).toBe(tier.voiceMinutes * 60);
+      }
+    });
+
+    it("prices the annual term from the accepted book rather than deriving it", async () => {
+      // "Pay ten months, receive twelve" is stated outright in the catalogue and the spec, and a product
+      // that recomputed it would be free to disagree with an invoice a customer already holds. Asserted
+      // through a real checkout because the annual price is the one a test plan never exercises.
+      const catalog = await publishAcceptedCatalog(db());
+      const growth = ACCEPTED_PLANS.find((plan) => plan.code === "growth");
+      const planVersionId = catalog.plans.find((plan) => plan.code === "growth")?.planVersionId;
+      const { context } = await freshWorkspace();
+
+      const opened = await openFor(context, request({ planVersionId, interval: "YEAR" }));
+
+      expect(opened.base).toEqual(money(growth?.annualCents ?? 0, "EUR"));
+      expect(growth?.annualCents).toBe((growth?.monthlyCents ?? 0) * 10);
     });
   });
 
