@@ -21,6 +21,16 @@ import { applyTemplateStatusUpdate, readTemplateCatalogue } from "./whatsapp-tem
 import { createWhatsAppOnboardingStore, type ConnectWhatsAppInput, type WhatsAppOnboardingStore } from "./whatsapp-onboarding-store";
 
 const NOW = new Date("2026-10-04T12:00:00.000Z");
+/**
+ * Anchored to the real clock, not to this file's frozen instant.
+ *
+ * `channel_credentials` stamps `created_at` itself and `channel_credentials_lifetime_check` requires the
+ * expiry to come after it. An expiry computed from a fixed date therefore holds only until the real clock
+ * passes it, and then every case here fails because of the date rather than because of a change — which is
+ * exactly how PR #90 sat red for five days. The frozen instant stays frozen for everything the database
+ * does not constrain; this value cannot be one of them.
+ */
+const CREDENTIAL_EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 const WABA_ID = "102290129340398";
 
 describe.skipIf(!databaseTestsEnabled())("whatsapp template catalogue (PostgreSQL)", () => {
@@ -76,7 +86,7 @@ describe.skipIf(!databaseTestsEnabled())("whatsapp template catalogue (PostgreSQ
       capabilities: { ...NO_CAPABILITIES, text: true, templates: true },
       purpose: "WHATSAPP_BUSINESS_TOKEN",
       token: `EAAtest-${phoneNumberId}`,
-      expiresAt: new Date(NOW.getTime() + 60 * 24 * 60 * 60 * 1000),
+      expiresAt: CREDENTIAL_EXPIRES,
       webhookSubscribedAt: NOW,
       phoneRegisteredAt: NOW,
       templates: overrides.templates ?? {
