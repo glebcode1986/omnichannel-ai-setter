@@ -22,6 +22,7 @@
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings=0 && pnpm lint:boundaries",
     "lint:boundaries": "tsx scripts/architecture/cli.ts",
+    "billing:publish-routes": "tsx scripts/billing/publish-routes.ts",
     "catalog:publish": "tsx scripts/catalog/publish.ts",
     "test": "vitest run",
     "test:watch": "vitest",
