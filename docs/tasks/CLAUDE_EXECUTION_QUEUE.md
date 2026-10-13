@@ -56,8 +56,39 @@ now carries no dispatch deadline at either gate that reads one; the 24-hour mess
 and still refuses a follow-up outside it. Recorded in `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`, and
 flagged for the reviewer as the one send-path behaviour this repair changes.
 
+**Two repairs landed the same day that belong to no feature, and one structural correction.**
+
+**The chain is two live segments, not one.** `git merge-base --is-ancestor origin/feat/p3-02-goals-followups
+origin/feat/p5-08-analytics-audit` answers **no**: #83 forks from `c098c18`, an older state of #82, and the
+second segment carries neither the accepted #79/#80/#81 parents nor the P3-02 repair. A repo-wide fix must
+therefore be applied in **both** segments. Its branch order is also not PR-number order — #85 is
+`fix/instagram-token-lifecycle`, #86 is `fix/dead-suspension-resolver`. Measure the graph; PR numbers and
+bases both lie about it.
+
+**PR #90 had been red since 2026-10-08** — a fixture clock overtaken by the real one against
+`channel_credentials_lifetime_check` — with the repair already present on #91 and below, applied downstream
+and never returned to the branch that owns the test. Fixed at #90 and merged down its 15 descendants, every
+link content-neutral.
+
+**Then nine more fuses of the same class**, the earliest due 2026-11-09. Six went to the branch that owns
+them (#85, #88, #89, #90, #91, #93); four belong to PASSed #64/#71 and went to the earliest *live* branch
+instead (#82 and #83, byte-identically), as a recorded exception because a PASSed branch is terminal and its
+CI never re-runs. All 24 heads green afterwards.
+
+**Actions was unavailable for ~45 minutes** that day: every run failed in 3 seconds with zero steps, which
+is the private repo's allowance rather than anything in the code. It cleared on making the repository
+public. Judge a run by its `steps` count, not only its conclusion. Sixteen heads were verified locally
+while it lasted, and every result matched the later CI run.
+
 **#82 is still the current gate. #83 and everything below stays frozen**, still carrying the pre-repair
-#79. #104 and #105 sit off the chain, based on #103, and are unaffected.
+#79. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
+repairs and their markers were re-published at the new SHAs.
+
+**#26 and #49 have no workflow run and never had one:** `.github/workflows/verify.yml` first appears on
+#50, so they predate CI. Both were verified locally at their exact PASSed heads instead — `pnpm verify`
+green, 148 and 213 tests — and the evidence posted on each. Giving them real CI needs a `verify`-only
+workflow, because the `infrastructure suites` job runs `test:db`/`test:redis`/`test:e2e`, scripts those
+branches do not have; and it needs a credential with the `workflow` scope, which this one lacks.
 
 ### Earlier — propagating the accepted P3-01 parent into P3-02 / PR #82
 

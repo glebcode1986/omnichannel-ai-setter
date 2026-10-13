@@ -51,10 +51,31 @@ head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, *
 `4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
 `fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. Nothing is merged to `main`.
 
-Everything is one stacked chain of unmerged PRs, each branch based on its parent:
+Everything is unmerged PRs stacked by base — but **not one chain. Two live segments**, which was measured
+on 2026-10-13 and had been assumed otherwise until then:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+
+`#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
+
+```
+$ git merge-base --is-ancestor origin/feat/p3-02-goals-followups origin/feat/p5-08-analytics-audit
+  → no
+$ git merge-base  …p3-02-goals-followups  …p5-08-analytics-audit
+  c098c18   (an older state of #82)
+```
+
+**#83 forks from `c098c18`, an older state of #82**, so the second segment contains neither the accepted
+#79/#80/#81 parents nor the P3-02 repair. Two consequences, both of which have already cost real work:
+
+- A repo-wide repair must be applied **in both segments**, or one of them keeps the defect until the
+  propagation arrives — which can be weeks. The nine fixture-clock repairs below were done that way for
+  exactly this reason.
+- The second segment's branch order is **not PR-number order**: #85 is `fix/instagram-token-lifecycle` and
+  #86 is `fix/dead-suspension-resolver`, two fix branches sitting between the Stage D work and Phase 4.
+
+Measure the graph before acting on it. PR numbers and PR bases both lie about it.
 
 **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer — *after*
 #77 had been cut from it, so #77 through #81 were all missing the human-composed send path. It was merged
@@ -258,7 +279,7 @@ which is current.
 | #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
 | #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
 | #82 | `feat/p3-02-goals-followups` | **The current gate**, and **CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is still the only branch below #81 it has been propagated into. Awaiting independent review at the repaired head. |
-| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. |
+| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They are the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
 | #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
 
 **The independent reviewer is Astra again, temporarily, from 2026-10-13.** The owner routed reviews to
@@ -315,6 +336,42 @@ and a customer's erasure has to empty it, so every deletion request ended `PARTI
 the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is permitted only while a
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
+
+1. **Two repairs on 2026-10-13 that belonged to no feature, and the structural fact behind them.**
+
+   **PR #90's head had been red since 2026-10-08 and nobody noticed**, because its own descendants were
+   green. A fixture revoked a credential at a frozen `2026-10-05` on a row PostgreSQL stamps `created_at`
+   on, and `channel_credentials_lifetime_check` requires `revoked_at >= created_at`, so it failed on the
+   day the real clock passed the fixture's. The repair already existed on #91 and below — applied
+   downstream and never brought back to the branch that owns the test. Fixed at #90 and merged down all 15
+   descendants, every link content-neutral (`git diff <old> <new>` empty).
+
+   **Then nine more of the same class, found by looking for it rather than waiting.** All wrote
+   `channel_credentials.expires_at` as a frozen instant plus sixty days; the earliest would have turned CI
+   red on **2026-11-09**, the rest through 2026-12-04. Proved by simulation in both directions: shifting a
+   fixture's instant so its fuse sat in the past produced 15 failures naming the constraint, and with the
+   expiry anchored to the real clock the same shift passes.
+
+   Six of the ten sites went to the branch that owns them (#85, #88, #89, #90, #91, #93). **Four could
+   not**: they belong to #64 and #71, which hold an exact-head PASS, and repairing there would move an
+   accepted head. They went to the earliest *live* branch carrying them instead — #82 and #83, byte-
+   identically so the eventual propagation merges one change rather than a conflict. That is a recorded
+   decision, not an oversight: a PASSed branch is terminal, nothing is pushed to it again, so its CI never
+   re-runs and its fuse never lights. Mechanically it is the same shape as the mistake that hid #90, and
+   the only difference is that those ancestors are frozen. Say so in writing or it becomes the bug again.
+
+   **The lasting lesson is the fixture clock itself.** A constant with a date in it is a timer. Where a
+   CHECK compares a column against a `created_at` the database stamps, the test must anchor that column to
+   the real clock or pin both ends; `packages/db/src/token-lifecycle.integration.test.ts` had the rationale
+   written out before any of this and four neighbouring files still had the bug.
+
+   **Operational note worth keeping.** For about 45 minutes that day every workflow run in the repository
+   failed in ~3 seconds with **zero steps** — runs created and killed, one push creating no run at all.
+   Nothing in the repository executed, so no code could be responsible; it was the private repo's Actions
+   allowance, and it cleared when the repository was made public. When a run fails, read `steps`: a real
+   job has 9 (`pnpm verify`) and 15 (`infrastructure suites`), a refused one has none. While it lasted,
+   sixteen heads were verified locally instead — typecheck, lint, the full suite with real PostgreSQL and
+   Redis, drift — and every one matched the CI result that came later.
 
 1. **P3-02 / Issue #55 — two P1 blockers on PR #82, both repaired, plus a third gap found while proving
    the first.**
