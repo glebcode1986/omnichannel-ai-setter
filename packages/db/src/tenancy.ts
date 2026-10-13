@@ -149,6 +149,87 @@ export async function authorizeBusinessProfileAccess(
   return context;
 }
 
+/**
+ * Whether **another** user may act on a Business Profile — the question an assignment asks.
+ *
+ * A predicate, deliberately, and not a context. `authorizeBusinessProfileAccess` answers the same
+ * question for the *requesting* user and mints a branded context as its answer; calling it for somebody
+ * else would hand out authority nobody granted, and the brand is what the rest of this package trusts.
+ * So the membership query and `hasBusinessProfileAccess` are reused and nothing is issued.
+ *
+ * It exists because assigning work to a person who cannot reach it is two failures at once: the task
+ * sits where its assignee cannot see it, and the assignee's name travels into a profile-scoped list that
+ * had no business knowing it (#55, Astra's second P1 on PR #82). Workspace membership alone is not the
+ * test — a member with `SELECTED` scope that does not include this profile is as unable to act as a
+ * stranger.
+ *
+ * `false` for an unknown user, a non-member, a member without this grant, and a malformed identifier.
+ * One answer for all of them, because an assignment form must not become a way to discover who exists.
+ */
+export async function canActOnBusinessProfile(
+  db: DbExecutor,
+  request: { readonly workspaceId: string; readonly userId: string; readonly businessProfileId: string },
+): Promise<boolean> {
+  if (!isValidIdentifier(request.businessProfileId)) {
+    return false;
+  }
+  const membership = await loadMembership(db, request);
+  if (membership === null) {
+    return false;
+  }
+  return hasBusinessProfileAccess(
+    {
+      role: membership.role,
+      businessProfileScope: membership.businessProfileScope,
+      grantedBusinessProfileIds: membership.businessProfileAccess.map((grant) => toBusinessProfileId(grant.businessProfileId)),
+    },
+    toBusinessProfileId(request.businessProfileId),
+  );
+}
+
+/**
+ * Which of these users may act on a Business Profile — the same question, asked about many people at once.
+ *
+ * It exists for the read side of the assignment defect. Refusing the assignment closes the door, but a row
+ * written before the fix, or one whose assignee's grant was revoked afterwards, still names somebody this
+ * profile has no business knowing — and "the grants changed" is not an event a stored name hears about.
+ * So a profile-scoped task list resolves an assignee's identity through this predicate, every time it is
+ * read, rather than trusting what was authorized when the row was written.
+ *
+ * One query rather than one per user: a list of 500 tasks must not become 500 membership lookups. The
+ * empty-candidate branch is only to skip a pointless round trip for a page that names nobody; Prisma's
+ * `in: []` already matches nothing, so no guarantee rests on it.
+ */
+export async function usersWhoCanActOnBusinessProfile(
+  db: DbExecutor,
+  request: { readonly workspaceId: string; readonly businessProfileId: string },
+  userIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const candidates = [...new Set(userIds.filter((userId) => isValidIdentifier(userId)))];
+  if (candidates.length === 0 || !isValidIdentifier(request.workspaceId) || !isValidIdentifier(request.businessProfileId)) {
+    return new Set();
+  }
+  const members = await db.workspaceMember.findMany({
+    where: { workspaceId: request.workspaceId, userId: { in: candidates } },
+    select: { userId: true, role: true, businessProfileScope: true, businessProfileAccess: { select: { businessProfileId: true } } },
+  });
+  const businessProfileId = toBusinessProfileId(request.businessProfileId);
+  return new Set(
+    members
+      .filter((member) =>
+        hasBusinessProfileAccess(
+          {
+            role: member.role,
+            businessProfileScope: member.businessProfileScope,
+            grantedBusinessProfileIds: member.businessProfileAccess.map((grant) => toBusinessProfileId(grant.businessProfileId)),
+          },
+          businessProfileId,
+        ),
+      )
+      .map((member) => member.userId),
+  );
+}
+
 /** Workspace to scope queries by, rejecting contexts that did not come from authorization. */
 export function scopeOf(context: WorkspaceContext): WorkspaceId {
   if (typeof context !== "object" || context === null || !issuedWorkspaceContexts.has(context)) {
