@@ -123,6 +123,59 @@ export async function upsertSellerProfile(db: DbClient, input: SellerProfileInpu
   return { sellerProfileId: row.id, code: row.code };
 }
 
+/**
+ * A deployment's whole selling configuration: who sells, and through which provider accounts.
+ *
+ * One document rather than two lists so a route cannot name a seller the same configuration does not
+ * define — a route pointing at a missing seller is a refusal at the first charge, discovered by the first
+ * customer rather than by whoever wrote the configuration.
+ */
+export interface BillingRoutingConfig {
+  readonly sellers: readonly SellerProfileInput[];
+  readonly routes: readonly BillingRouteInput[];
+}
+
+export interface BillingRoutingApplied {
+  readonly sellerCodes: readonly string[];
+  readonly routeCodes: readonly string[];
+}
+
+/**
+ * Applies a deployment's selling configuration, sellers first.
+ *
+ * The producer `BILLING_ROUTING.md` asks for: routes come "from operator configuration", and before this
+ * existed nothing wrote one — so `selectRoute` answered `NO_ROUTE` for every checkout and
+ * `recordVerifiedBillingEvent` answered `UNKNOWN_ROUTE` for every webhook, in any deployment that had not
+ * been seeded by a test.
+ *
+ * Takes a configuration object, never the environment: a core package that read `process.env` would make
+ * every caller's configuration invisible to the type system, and `packages/env`'s own note says apps
+ * validate once at startup and pass typed configuration inward. The parsing lives in the command.
+ *
+ * Sellers before routes because `upsertBillingRoute` resolves its seller by code and refuses an unknown
+ * one. Both are upserts, so this is safe to re-run — a deployment that changes a support address or adds a
+ * currency to a route runs it again, which is the difference between this and publishing a catalogue
+ * version.
+ *
+ * Not transactional across the whole document, deliberately: each upsert is one coherent row, and a
+ * partial application leaves routes that work rather than none. A route that failed its own coherence
+ * check throws with the capability it got wrong, which is more use than rolling back the four that were
+ * right.
+ */
+export async function applyBillingRouting(db: DbClient, config: BillingRoutingConfig): Promise<BillingRoutingApplied> {
+  const sellerCodes: string[] = [];
+  for (const seller of config.sellers) {
+    const record = await upsertSellerProfile(db, seller);
+    sellerCodes.push(record.code);
+  }
+  const routeCodes: string[] = [];
+  for (const route of config.routes) {
+    const record = await upsertBillingRoute(db, route);
+    routeCodes.push(record.code);
+  }
+  return { sellerCodes, routeCodes };
+}
+
 export interface BillingRouteInput {
   readonly code: string;
   /** Which adapter owns this route. Free text; an enum of provider names is the leak ADR-017 forbids. */
