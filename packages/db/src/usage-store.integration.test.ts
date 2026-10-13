@@ -312,6 +312,69 @@ describe.skipIf(!databaseTestsEnabled())("the usage ledger", () => {
       expect(await counterFor(w, "VOICE_TRANSCRIPTION_SECONDS")).toEqual({ committed: 0, reserved: 0 });
     }, 300_000);
 
+    it("settles one hold once when two duplicate workers finish at the same moment", async () => {
+      // The concurrent twin of the retried-commit case above, and a different claim. Sequentially the
+      // second caller reads a row that is already `COMMITTED`, so the state check alone is enough. Run at
+      // the same time, both transactions would read it as `RESERVED` — and the only thing standing between
+      // that and the counter being bumped twice is `SELECT ... FOR UPDATE` in `settle`. #44 asks for this
+      // directly: duplicate workers must not double-consume the allowance.
+      //
+      // The two commits name different amounts on purpose. Identical ones would make a double bump look
+      // like a correct single one at twice the value, and both readings would be consistent with a passing
+      // assertion about replay flags alone — so the counter is asserted against whichever amount won.
+      const w = await freshWorkspace("settles-one-hold-once-under-");
+      const usageOperationId = operation("duplicate-workers");
+      await reserveUsage(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, amount: 40, at: NOW });
+
+      const outcomes = await Promise.all([
+        commitReservation(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, amount: 11, at: NOW }),
+        commitReservation(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, amount: 29, at: NOW }),
+      ]);
+
+      // One decision, reported twice: exactly one caller performed it and both learn the same figure.
+      const performed = outcomes.filter((outcome) => outcome.status === "COMMITTED" && !outcome.replayed);
+      const replayed = outcomes.filter((outcome) => outcome.status === "COMMITTED" && outcome.replayed);
+      expect(performed).toHaveLength(1);
+      expect(replayed).toHaveLength(1);
+      const committed = performed[0]?.status === "COMMITTED" ? performed[0].committed : -1;
+      expect([11, 29]).toContain(committed);
+      expect(replayed[0]).toEqual({ status: "COMMITTED", committed, replayed: true });
+
+      // The ledger counted it once and the hold went back once. A second bump would show here as a
+      // committed total of forty with nothing held, which is the shape of a double-consumed allowance.
+      expect(await counterFor(w, "VOICE_TRANSCRIPTION_SECONDS")).toEqual({ committed, reserved: 0 });
+    }, 300_000);
+
+    it("lets a commit and a release race for one hold, and only one of them lands", async () => {
+      // The disagreement, which is worse than the duplicate: one worker believes the work happened and
+      // another believes it did not. Whichever settles first decides, and the loser must be told
+      // `ALREADY_SETTLED` naming what actually became of the hold rather than being allowed to overwrite
+      // it — a release landing on top of a commit gives back allowance that was spent, and a commit on top
+      // of a release counts allowance nobody was holding.
+      const w = await freshWorkspace("lets-a-commit-and-a-release-");
+      const usageOperationId = operation("commit-versus-release");
+      await reserveUsage(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, amount: 25, at: NOW });
+
+      const [committed, released] = await Promise.all([
+        commitReservation(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, amount: 25, at: NOW }),
+        releaseReservation(db(), { workspaceId: w, metric: "VOICE_TRANSCRIPTION_SECONDS", usageOperationId, at: NOW }),
+      ]);
+
+      const settled = [committed, released].filter((outcome) => outcome.status === "COMMITTED" || outcome.status === "RELEASED");
+      const refused = [committed, released].filter((outcome) => outcome.status === "ALREADY_SETTLED");
+      expect(settled).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+
+      // Asserted together rather than separately: the refusal has to name the state the hold is actually
+      // in, or a caller acting on it would act on the wrong one.
+      const winner = settled[0]?.status === "COMMITTED" ? "COMMITTED" : "RELEASED";
+      expect(refused[0]).toEqual({ status: "ALREADY_SETTLED", state: winner });
+      expect(await counterFor(w, "VOICE_TRANSCRIPTION_SECONDS")).toEqual({
+        committed: winner === "COMMITTED" ? 25 : 0,
+        reserved: 0,
+      });
+    }, 300_000);
+
     it("reports a settlement for a hold that never existed rather than inventing one", async () => {
       const w = await freshWorkspace("reports-a-settlement-for-a-h");
       expect(
