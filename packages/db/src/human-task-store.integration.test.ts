@@ -348,5 +348,78 @@ describe.skipIf(!databaseTestsEnabled())("human tasks", () => {
       expect(await taskFor("01999999-9999-7999-8999-999999999999")).toMatchObject({ status: "REFUSED" });
       expect(await taskFor("not-an-identifier")).toMatchObject({ status: "REFUSED" });
     }, 180_000);
+
+    /**
+     * The other half of the same blocker: refusing the assignment closes the door, and these rows are the
+     * ones already inside.
+     *
+     * Astra asked for both — "apply validation in BOTH create and reassign paths, **including when users
+     * or grants change**" and "ensure scoped task reads cannot reveal foreign identity". A stored name
+     * does not hear about a revoked grant, and a row written before the gate existed was never asked. So
+     * the read resolves an assignee's identity through the grant as it stands now, every time.
+     */
+    it("names nobody when a stored assignee is not somebody this profile may know", async () => {
+      const stranger = neighbour.ownerUserId;
+      const created = await taskFor();
+      if (created.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${created.status}`);
+      }
+      // Written past the store, which is how a row from before the gate existed — or one a console
+      // session wrote — actually arrives. The foreign key permits it: it references global `users(id)`.
+      await db().humanTask.update({ where: { id: created.id }, data: { assignedUserId: stranger } });
+
+      const row = (await listTasks(db(), profile.context, { status: "OPEN" })).find((candidate) => candidate.id === created.id);
+
+      // The id stays, because an operator needs to see that the task is parked on somebody who cannot do
+      // it in order to take it back. The name does not: this profile has no business knowing it.
+      expect(row?.assignedUserId).toBe(stranger);
+      expect(row?.assignedName).toBeNull();
+      const strangerName = await db().user.findUniqueOrThrow({ where: { id: stranger }, select: { name: true } });
+      expect(JSON.stringify(row)).not.toContain(strangerName.name);
+    }, 180_000);
+
+    it("withholds a foreign name whichever column it arrived through", async () => {
+      const stranger = neighbour.ownerUserId;
+      const created = await taskFor();
+      if (created.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${created.status}`);
+      }
+      // Closed by somebody this profile cannot see. `completeTask` can only ever write the requester, who
+      // is authorized by construction — so this is the pre-gate row again, and the point is that the read
+      // applies one rule to every identity it carries rather than only to the one Astra happened to name.
+      await db().humanTask.update({
+        where: { id: created.id },
+        data: { status: "DONE", completedByUserId: stranger, completedAt: AT },
+      });
+
+      const row = (await listTasks(db(), profile.context, { status: "DONE" })).find((candidate) => candidate.id === created.id);
+
+      expect(row?.completedByName).toBeNull();
+      const strangerName = await db().user.findUniqueOrThrow({ where: { id: stranger }, select: { name: true } });
+      expect(JSON.stringify(row)).not.toContain(strangerName.name);
+    }, 180_000);
+
+    it("stops naming a colleague the moment their grant is taken away", async () => {
+      const colleague = await createTestUser(db(), `task-revoked-${String(Date.now())}`);
+      await addTestMember(db(), profile.context.workspaceId, colleague, "AGENT", [profile.businessProfileId]);
+      const created = await taskFor(colleague);
+      if (created.status !== "CREATED") {
+        throw new Error(`the fixture expected CREATED, got ${created.status}`);
+      }
+      const named = (await listTasks(db(), profile.context, { status: "OPEN" })).find((candidate) => candidate.id === created.id);
+      // The positive control: while the grant stands, the name is shown. Without it this case would pass
+      // just as happily if the list never named anybody.
+      expect(named?.assignedName).not.toBeNull();
+
+      // The grant is revoked. The assignment was legitimate when it was made, and nothing rewrites the
+      // row — the question is only what a scoped read says about it afterwards.
+      await db().memberBusinessProfileAccess.deleteMany({
+        where: { businessProfileId: profile.businessProfileId, member: { userId: colleague } },
+      });
+
+      const after = (await listTasks(db(), profile.context, { status: "OPEN" })).find((candidate) => candidate.id === created.id);
+      expect(after?.assignedUserId).toBe(colleague);
+      expect(after?.assignedName).toBeNull();
+    }, 180_000);
   });
 });

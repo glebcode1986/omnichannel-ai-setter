@@ -35,8 +35,19 @@ scheduled — a held attempt is settled by the next claim, in one place.
 
 **P1-2 — a task could be assigned to somebody who cannot reach the Business Profile.** `createTask` and
 `assignTask` checked Workspace membership and not the profile grant. Closed with
-`canActOnBusinessProfile`, used by both paths through one refusal helper. Reported and not fixed:
+`canActOnBusinessProfile`, used by both paths through one refusal helper. The read side too, which the
+directive asked for in the same breath — "including when users or grants change": `listTasks` resolves an
+assignee's (and the completer's) identity through the grant **as it stands now**, on every read, in one
+query per page, so a revoked grant and a row written before the gate both stop naming a stranger while
+keeping the id an operator needs in order to take the task back. Reported and not fixed:
 `lead-store.editLead` has the same asymmetry and belongs to #80.
+
+**The recheck list's "window/template", which the claim did not ask.** `CHANNEL_INELIGIBLE` has always
+been documented as "window closed, template required, account unhealthy" and only the last was asked. The
+claim now asks an injected port, inside its transaction, with the facts read under the lock. The port
+cannot permit a send — the engine still decides twice downstream — so it answers `false` only where there
+is provably no route (outside the window on `STANDARD_ONLY`, or a conversation the customer never started)
+and leaves `HUMAN_ASSISTED_EXTENDED`, and WhatsApp, to the engine.
 
 **A third gap, found by the end-to-end test.** With all of the above correct, nothing could still be sent:
 Meta's automated-response budget — "about 25 seconds after the latest **triggering inbound**" — was applied

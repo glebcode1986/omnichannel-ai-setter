@@ -20,8 +20,8 @@
  * is here. `dueFollowUps` rebuilds the work from the table, so a lost queue rebuilds itself.
  *
  * **Everything is revalidated at execution, not at planning.** `claimFollowUp` re-reads the conversation,
- * the goal, the suppression list, the takeover state, the pending review and the channel's health inside
- * one transaction, with the conversation row locked. Anything that changed since the follow-up was planned
+ * the goal, the suppression list, the takeover state, the pending review, the channel's health and whether
+ * any route could still carry the message, inside one transaction, with the conversation row locked. Anything that changed since the follow-up was planned
  * settles it with a named reason. This is the difference between a scheduler and a chaser: a scheduler
  * asks again.
  */
@@ -275,13 +275,43 @@ export type FollowUpClaim =
  */
 export const FOLLOW_UP_CLAIM_LEASE_MS = 5 * 60_000;
 
-export async function claimFollowUp(
-  db: DbClient,
-  followUpId: string,
-  now: Date,
-  entitlement: { readonly mayAutomate: boolean } = { mayAutomate: true },
-  leaseMs = FOLLOW_UP_CLAIM_LEASE_MS,
-): Promise<FollowUpClaim> {
+/** What the claim knows about the conversation when it asks whether anything could carry a message now. */
+export interface FollowUpChannelQuestion {
+  readonly channel: string;
+  /** The customer's own last message: where every provider's messaging window starts counting. */
+  readonly lastInboundAt: Date | null;
+  readonly at: Date;
+  /** The profile's own after-window choice for each channel, as configured (ADR-014, ADR-016). */
+  readonly instagramAfterWindowPolicy: string;
+  readonly whatsappAfterWindowPolicy: string;
+}
+
+/**
+ * Whether any route at all could carry this follow-up now — the provider's messaging window and, where a
+ * channel has one, its template requirement.
+ *
+ * Injected rather than computed here: a messaging window is a provider fact, and this package does not
+ * import a channel adapter. Default: yes, so a caller that supplies nothing behaves exactly as before.
+ *
+ * **It can never permit a send.** The policy engine still decides every send twice downstream — at the
+ * disposition and again at the final pre-send gate — so this port only decides whether to *bother*: a
+ * `false` saves an attempt and a model call on a follow-up that could not have gone out anyway, and a
+ * wrong `true` costs one wasted attempt and changes nothing about what reaches a customer. That asymmetry
+ * is why it may fail open for a channel it has nothing to say about.
+ */
+export type FollowUpChannelPort = (question: FollowUpChannelQuestion) => boolean;
+
+export interface FollowUpClaimOptions {
+  /** Whether the Workspace may still automate at all. Not this table's fact to know, so it is passed in. */
+  readonly entitlement?: { readonly mayAutomate: boolean };
+  readonly carries?: FollowUpChannelPort;
+  readonly leaseMs?: number;
+}
+
+export async function claimFollowUp(db: DbClient, followUpId: string, now: Date, options: FollowUpClaimOptions = {}): Promise<FollowUpClaim> {
+  const entitlement = options.entitlement ?? { mayAutomate: true };
+  const leaseMs = options.leaseMs ?? FOLLOW_UP_CLAIM_LEASE_MS;
+  const carries = options.carries ?? (() => true);
   return db.$transaction(async (tx) => {
     // The follow-up row, locked *before* anything is read from it.
     //
@@ -398,8 +428,10 @@ export async function claimFollowUp(
         contactId: true,
         channelAccountId: true,
         aiEnabled: true,
+        // The customer's own last message, for the window question below.
+        lastInboundAt: true,
         // Through the identity, which is where the account hangs off a conversation.
-        channelIdentity: { select: { channelAccount: { select: { status: true } } } },
+        channelIdentity: { select: { channelAccount: { select: { id: true, channel: true, status: true } } } },
       },
     });
     if (conversation === null) {
@@ -455,6 +487,30 @@ export async function claimFollowUp(
     if (conversation.channelIdentity.channelAccount.status !== "CONNECTED") {
       // Needs re-authorization or disconnected. A follow-up that tried anyway would fail at the provider
       // and spend an attempt on a problem the business has to fix first.
+      return stop("CHANNEL_INELIGIBLE", "BLOCKED");
+    }
+
+    // The other half of what `CHANNEL_INELIGIBLE` has always promised — "window closed, template
+    // required, account unhealthy" — and the half that was never asked. A follow-up whose window has
+    // closed with no after-window route configured cannot be delivered by anything, so generating for it
+    // spends an attempt and a model call to produce a review item the policy engine then declines. Asked
+    // inside this transaction, under the same lock, because a window is read from a timestamp another
+    // transaction may be writing. The port fails open by design: see `FollowUpChannelPort`.
+    const policies = await tx.automationPolicy.findMany({
+      where: { ...scope, OR: [{ channelAccountId: conversation.channelAccountId }, { channelAccountId: null }] },
+      select: { channelAccountId: true, instagramAfterWindowPolicy: true, whatsappAfterWindowPolicy: true },
+    });
+    const policy =
+      policies.find((row) => row.channelAccountId === conversation.channelAccountId) ?? policies.find((row) => row.channelAccountId === null);
+    if (
+      !carries({
+        channel: conversation.channelIdentity.channelAccount.channel,
+        lastInboundAt: conversation.lastInboundAt,
+        at: now,
+        instagramAfterWindowPolicy: policy?.instagramAfterWindowPolicy ?? "STANDARD_ONLY",
+        whatsappAfterWindowPolicy: policy?.whatsappAfterWindowPolicy ?? "SERVICE_WINDOW_ONLY",
+      })
+    ) {
       return stop("CHANNEL_INELIGIBLE", "BLOCKED");
     }
 

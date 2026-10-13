@@ -27,6 +27,7 @@ export {
   type BusinessProfileContext,
   type BusinessProfileScope,
   canActOnBusinessProfile,
+  usersWhoCanActOnBusinessProfile,
   profileScopeOf,
   requireRole,
   scopeOf,
@@ -237,7 +238,10 @@ export {
   recordFollowUpSent,
   suppressFollowUps,
   type DueFollowUp,
+  type FollowUpChannelPort,
+  type FollowUpChannelQuestion,
   type FollowUpClaim,
+  type FollowUpClaimOptions,
   type FollowUpOutcome,
   type FollowUpView,
 } from "./followup-store";

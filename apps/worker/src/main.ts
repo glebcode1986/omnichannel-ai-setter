@@ -43,6 +43,7 @@ import { createDraftDisposition } from "./draft-disposition";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
+import { automatedRouteStillOpen } from "./followup-channel";
 import { startFollowUpSweeper } from "./followup-sweeper";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
@@ -248,7 +249,9 @@ function main(): void {
         intervalMs: FOLLOW_UP_SWEEP_INTERVAL_MS,
         limit: FOLLOW_UP_BATCH,
         due: ({ now, limit }) => dueFollowUps(db, now, limit),
-        claim: (followUpId, now) => claimFollowUp(db, followUpId, now),
+        // The window question, asked inside the claim's own transaction with the facts it read under the
+        // lock. It can only decline to generate, never permit a send: see `followup-channel.ts`.
+        claim: (followUpId, now) => claimFollowUp(db, followUpId, now, { carries: automatedRouteStillOpen }),
         producer,
         logger,
         now: () => new Date(),

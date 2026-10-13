@@ -484,7 +484,7 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
     it("stops when the entitlement is gone", async () => {
       const { followUpId } = await scenario();
 
-      const claim = await claimFollowUp(db(), followUpId, DUE, { mayAutomate: false });
+      const claim = await claimFollowUp(db(), followUpId, DUE, { entitlement: { mayAutomate: false } });
 
       expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "ENTITLEMENT_LOST" });
     }, 180_000);
@@ -508,6 +508,47 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
       // would say it will never happen, which is a different thing to show an operator.
       expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "CHANNEL_INELIGIBLE" });
       expect((await readFollowUps(db(), profile.context, profile.conversationId))[0]?.status).toBe("BLOCKED");
+    }, 180_000);
+
+    it("blocks rather than generating when nothing could carry the message now", async () => {
+      const { followUpId, profile } = await scenario();
+
+      // The port is injected, so this is the claim's own behaviour under test and not a provider rule:
+      // a `false` must stop the claim *before* an attempt is spent, because the whole point of asking is
+      // to avoid spending one on a message nothing can deliver.
+      const claim = await claimFollowUp(db(), followUpId, DUE, { carries: () => false });
+
+      expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "CHANNEL_INELIGIBLE" });
+      const row = (await readFollowUps(db(), profile.context, profile.conversationId))[0];
+      expect(row).toMatchObject({ status: "BLOCKED", stopReason: "CHANNEL_INELIGIBLE", attemptCount: 0 });
+    }, 180_000);
+
+    it("tells the port what it read under the lock, not what planning assumed", async () => {
+      const { followUpId, profile } = await scenario();
+      await db().automationPolicy.updateMany({
+        where: { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId, channelAccountId: null },
+        data: { instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      });
+      const asked: unknown[] = [];
+
+      await claimFollowUp(db(), followUpId, DUE, {
+        carries: (question) => {
+          asked.push(question);
+          return true;
+        },
+      });
+
+      // The conversation's own channel and last inbound, and the profile's configured after-window
+      // choice — the facts a window question needs, read inside the transaction that holds the lock.
+      // A port given stale facts would answer a question about a world that has moved on.
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toMatchObject({
+        channel: "INSTAGRAM",
+        at: DUE,
+        instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED",
+        whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
+      });
+      expect((asked[0] as { lastInboundAt: Date | null }).lastInboundAt).toBeInstanceOf(Date);
     }, 180_000);
 
     it("stops on a stale anchor even with no new inbound message", async () => {

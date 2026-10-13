@@ -18,8 +18,11 @@
  * second implementation of the rule, and the second one is always the one nobody checks.
  *
  * **A claim that cannot be enqueued is left claimed.** The lease is what makes that safe: the follow-up
- * becomes claimable again when it lapses, and the next claim settles it from the draft it finds, so a
- * Redis outage between the claim and the enqueue costs one lease rather than a lost or doubled follow-up.
+ * becomes claimable again once it lapses, and the next claim finds no draft for the attempt that failed —
+ * so it retries, spending another of the bounded attempts. A Redis outage between the claim and the
+ * enqueue therefore costs one attempt out of three rather than a lost or a doubled follow-up, and the
+ * bound is what stops that from becoming a loop. Deliberately not undone here: rolling the attempt back
+ * would mean deciding, outside the claim's transaction and without its lock, that no message went out.
  */
 import type { DueFollowUp, FollowUpClaim } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";

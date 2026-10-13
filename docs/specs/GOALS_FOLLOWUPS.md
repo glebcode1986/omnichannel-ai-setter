@@ -77,6 +77,24 @@ send path.** Nothing in `followup-store.ts` touches a provider; `claimFollowUp` 
 composition root hands a `READY` claim to the shared delivery coordinator, which applies the policy gates
 exactly as it does for any other automated send.
 
+### What the claim asks the channel
+
+`CHANNEL_INELIGIBLE` has always been documented as "window closed, template required, account unhealthy",
+and for a while only the last of those was asked. So the claim now also asks whether **any** route could
+carry the message at all: the provider's messaging window, and the profile's own after-window choice.
+
+It asks through an injected port, because a messaging window is a provider fact and `packages/db` imports
+no channel adapter — and it asks inside the claim's transaction, with the facts read under the conversation
+lock, because a window is computed from a timestamp another transaction may be writing.
+
+**The port can never permit a send.** Every send is still decided twice downstream, at the disposition and
+again at the final pre-send gate, so a `false` only declines to spend an attempt and a model call on a
+follow-up nothing could have delivered, and a `true` means no more than "ask the engine". That asymmetry is
+what lets it fail open for a channel it has nothing to say about, and it is why it answers `false` only
+where there is provably no route: outside the window on `STANDARD_ONLY`, or in a conversation the customer
+never started. Outside the window on `HUMAN_ASSISTED_EXTENDED` it answers `true`, because that route ends
+in a person's decision and taking that decision away from them is not this gate's business.
+
 ### It answers nothing, so the automated-response budget does not apply to it
 
 One gate needs saying out loud, because "exactly as for any other automated send" reads the wrong way for
@@ -193,6 +211,20 @@ asked us to stop.
 ## Human tasks
 
 `human_tasks`: work for a person.
+
+### A task names only people its Business Profile may know about
+
+An assignee must be a current Workspace member authorized for *this* Business Profile — checked on both
+paths that set one, because a guard on one of the two is a guard on neither. Membership alone is not the
+test: a member whose scope is `SELECTED` without this profile is as unable to act as a stranger.
+
+That closes the door; the read closes the window. A grant can be revoked after an assignment was made, and
+a row can predate the gate, so a profile-scoped task list resolves an assignee's identity **through the
+grant as it stands now**, every time it is read, rather than trusting what was authorized when the row was
+written. A name outside the profile is withheld while the id is kept: an operator still sees that the task
+is parked on somebody who cannot do it, which is what they need in order to take it back, and they learn no
+stranger's name doing so. The same rule covers whoever closed the task — one rule for every identity a
+scoped read carries, not just the one the review happened to name.
 
 **Completing or dismissing a task never sends a customer a message.** That is not enforced by a check in
 `completeTask`, because a check can be moved. It holds because the table has **no** `draft_id`, no

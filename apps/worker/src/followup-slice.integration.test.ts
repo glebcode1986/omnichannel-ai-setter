@@ -41,6 +41,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
 import { createDraftDisposition } from "./draft-disposition";
+import { automatedRouteStillOpen } from "./followup-channel";
 import { startFollowUpSweeper } from "./followup-sweeper";
 import { createHandlers } from "./handlers";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
@@ -138,7 +139,8 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
       intervalMs: 1,
       limit: 50,
       due: ({ now, limit }) => dueFollowUps(db, now, limit),
-      claim: (followUpId, now) => claimFollowUp(db, followUpId, now),
+      // The real claim with the real window question, exactly as `main.ts` composes it.
+      claim: (followUpId, now) => claimFollowUp(db, followUpId, now, { carries: automatedRouteStillOpen }),
       producer,
       logger: infra.logger,
       now: () => at,
@@ -348,6 +350,23 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
       where: { workspaceId_businessProfileId_id: { ...scope, id: planned.conversationId } },
       select: { takeoverState: true },
     })).toMatchObject({ takeoverState: "REVIEW_REQUIRED" });
+  }, 180_000);
+
+  it("queues nothing, and asks no model, once the messaging window has closed with no route left", async () => {
+    const planned = await scenario();
+
+    // Two days of silence: outside Instagram's 24-hour window, and this profile is on the conservative
+    // `STANDARD_ONLY` default, so nothing could carry the message. The claim says so before spending an
+    // attempt, which is the difference between declining and paying for a draft to be declined.
+    await sweep(new Date(LAST_INBOUND.getTime() + 48 * 60 * 60 * 1000));
+
+    expect(await followUpRow(planned.followUpId)).toMatchObject({
+      status: "BLOCKED",
+      stopReason: "CHANNEL_INELIGIBLE",
+      attemptCount: 0,
+    });
+    expect(await queuedFor(planned, 1)).toBeUndefined();
+    expect(await db.aiDraft.count({ where: { ...scope, conversationId: planned.conversationId } })).toBe(0);
   }, 180_000);
 
   it("queues nothing at all once the customer has written back", async () => {

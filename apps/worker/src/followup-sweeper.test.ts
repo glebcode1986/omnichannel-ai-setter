@@ -181,9 +181,9 @@ describe("sweeping due follow-ups", () => {
   it("leaves a claim claimed when the enqueue fails, and reports the failure without the connection string", async () => {
     const swept = await sweep([due("fu_1")], { fu_1: ready("fu_1") }, { enqueueFails: true });
 
-    // The lease is what makes this safe: the follow-up becomes claimable again when it lapses, and the
-    // next claim settles it from the draft it finds — one lost lease rather than a lost or doubled
-    // follow-up. The failure is reported by the error's name only.
+    // The lease is what makes this safe: the follow-up becomes claimable again once it lapses and the
+    // next claim retries the attempt, because no draft exists for the one that failed — one of three
+    // attempts spent rather than a lost or a doubled follow-up. The failure is reported by name only.
     expect(swept.failed).toMatchObject({ errorName: "Error" });
     expect(swept.swept).toBeUndefined();
     expect(JSON.stringify(swept.lines)).not.toContain("hunter2");

@@ -343,6 +343,26 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    both paths through one `assigneeRefusal` helper. Reported and deliberately **not** fixed:
    `lead-store.editLead` has the same asymmetry, and it is #80's reviewed feature.
 
+   The review asked for both halves — "including when users or grants change", and "ensure scoped task
+   reads cannot reveal foreign identity" — and refusing the assignment only closes the door. A grant can be
+   revoked after a legitimate assignment, and a row can predate the gate, so `listTasks` now resolves an
+   assignee's identity through `usersWhoCanActOnBusinessProfile` as it stands *now*, on every read, in one
+   query for the whole page. The name is withheld and the id kept, so an operator can see that a task is
+   parked on somebody who cannot do it and take it back without learning a stranger's name. The same rule
+   covers whoever closed the task: one rule for every identity a scoped read carries, which is the half an
+   obvious fix stops short of.
+
+   **And the other half of `CHANNEL_INELIGIBLE`.** The directive's recheck list named "window/template" and
+   the claim asked neither, though the reason code has always been documented as "window closed, template
+   required, account unhealthy". The claim now asks an injected port whether any route could carry the
+   message, inside its own transaction with the facts read under the lock. The port **cannot permit a
+   send** — every send is still decided twice downstream — so a `false` only declines to spend an attempt
+   and a model call on something nothing could deliver, and it answers `false` only where there is provably
+   no route: outside the window on `STANDARD_ONLY`, or in a conversation the customer never started.
+   Outside the window on `HUMAN_ASSISTED_EXTENDED` it answers `true`, because that route ends in a person's
+   decision. WhatsApp is answered `true` and left to the engine: its adapter is Phase 4 and not on this
+   branch, and guessing a provider rule from here would be a second implementation of it.
+
    **The crash window, which is why the claim answers `ALREADY_SENT`.** A worker that scheduled an
    attempt's delivery and died before recording it leaves a `PENDING` row whose lease lapses; the next
    claim would spend a fresh attempt and schedule a *second* operation for one silence, and nothing
@@ -371,15 +391,21 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    derived for a reply and absent for a proactive send — the negative control that proves the budget was
    scoped, not deleted); `ai-draft-handler.test.ts` (a send is recorded under the disposition's own
    operation id, and nothing is recorded for a held draft, a skipped one, an operation-less "scheduled"
-   one, or any trigger that is not a follow-up); `followup-store.integration.test.ts` (the crash window,
-   concurrent claims, the lease, and cancellation driven through `appendInboundMessage` and `takeOver`
-   rather than through the helper, because a cancellation helper with no caller is this same defect
-   class); and `followup-slice.integration.test.ts` on a real PostgreSQL and a real Redis (a due row
-   becoming exactly one queued job, the lease keeping the next pass off it, one draft and one scheduled
-   operation the follow-up names, a dead worker's operation recovered rather than a second one made, an
-   ordinary reply to the same old message still held, and no job at all once the customer replied or a
-   person took over). Ten mutations applied to the production code, each killed by the suite that owns the
-   behaviour.
+   one, or any trigger that is not a follow-up); `followup-channel.test.ts` (what the window
+   question answers, and the controls that keep a `false` from silencing a chase something could carry);
+   `followup-store.integration.test.ts` (the crash window, concurrent claims, the lease, the claim asking
+   the channel before spending an attempt and with the facts it read under the lock, and cancellation
+   driven through `appendInboundMessage` and `takeOver` rather than through the helper, because a
+   cancellation helper with no caller is this same defect class); `human-task-store.integration.test.ts`
+   (both paths that set an assignee, and the read withholding a foreign name through either column, after
+   a revoked grant and for a row written past the store); and `followup-slice.integration.test.ts` on a
+   real PostgreSQL and a real Redis (a due row becoming exactly one queued job, the lease keeping the next
+   pass off it, one draft and one scheduled operation the follow-up names, a dead worker's operation
+   recovered rather than a second one made, an ordinary reply to the same old message still held, nothing
+   queued and no model asked once the window closed with no route left, and no job at all once the customer
+   replied or a person took over). Eighteen mutations applied to the production code; seventeen killed by
+   the suite that owns the behaviour, and the one survivor is an empty-`IN` short circuit that no guarantee
+   rests on, documented as the optimisation it is.
 
 1. **P5-04 / Issue #30 — thirteen blockers on PR #79 across three reviews and two directed repairs, all
    repaired.**

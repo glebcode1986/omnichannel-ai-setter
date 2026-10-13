@@ -15,7 +15,7 @@
 import type { HumanTaskKind, HumanTaskStatus } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
-import { canActOnBusinessProfile, profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { canActOnBusinessProfile, profileScopeOf, usersWhoCanActOnBusinessProfile, type BusinessProfileContext } from "./tenancy";
 
 export type TaskOutcome =
   | { readonly status: "CREATED"; readonly id: string }
@@ -52,6 +52,7 @@ const taskSelect = {
   conversationId: true,
   assignedUserId: true,
   sourceDraftId: true,
+  completedByUserId: true,
   completedAt: true,
   dismissedReason: true,
   createdAt: true,
@@ -59,6 +60,15 @@ const taskSelect = {
   completedByUser: { select: { name: true } },
 } as const;
 
+/**
+ * Turns a row into a view, naming only the people this profile may know about.
+ *
+ * `authorized` is the set of users who may act on this Business Profile *now*. A name outside it is
+ * dropped while the id it belongs to is kept: the operator still sees that the task is assigned and to
+ * whom it is not available, which is the fact they need in order to reassign it, and they learn no
+ * stranger's name doing so. A row written before the assignment gate existed, and a row whose assignee's
+ * grant was later revoked, are the same case from this side (#55, Astra's second P1 on PR #82).
+ */
 function toView(row: {
   id: string;
   kind: HumanTaskKind;
@@ -74,7 +84,10 @@ function toView(row: {
   createdAt: Date;
   assignedUser: { name: string | null } | null;
   completedByUser: { name: string | null } | null;
-}): TaskView {
+  completedByUserId?: string | null;
+}, authorized: ReadonlySet<string>): TaskView {
+  const nameOf = (userId: string | null | undefined, user: { name: string | null } | null): string | null =>
+    userId !== null && userId !== undefined && authorized.has(userId) ? (user?.name ?? null) : null;
   return {
     id: row.id,
     kind: row.kind,
@@ -84,9 +97,11 @@ function toView(row: {
     dueAt: row.dueAt,
     conversationId: row.conversationId,
     assignedUserId: row.assignedUserId,
-    assignedName: row.assignedUser?.name ?? null,
+    assignedName: nameOf(row.assignedUserId, row.assignedUser),
     sourceDraftId: row.sourceDraftId,
-    completedByName: row.completedByUser?.name ?? null,
+    // The same rule for whoever closed it: a scoped read reveals no identity from outside its own profile,
+    // whichever column the identity reached it through.
+    completedByName: nameOf(row.completedByUserId, row.completedByUser),
     completedAt: row.completedAt,
     dismissedReason: row.dismissedReason,
     createdAt: row.createdAt,
@@ -286,5 +301,12 @@ export async function listTasks(
     take: Math.min(Math.max(Math.trunc(limit), 1), 500),
     select: taskSelect,
   });
-  return rows.map(toView);
+  // Asked once for the whole page, about everyone it names, and asked *now* rather than trusted from when
+  // each row was written — grants change, and a stored name does not hear about it.
+  const authorized = await usersWhoCanActOnBusinessProfile(
+    db,
+    { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId },
+    rows.flatMap((row) => [row.assignedUserId, row.completedByUserId].filter((userId): userId is string => userId !== null)),
+  );
+  return rows.map((row) => toView(row, authorized));
 }
