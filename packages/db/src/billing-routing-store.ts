@@ -1456,6 +1456,78 @@ export interface ArrangementView {
 }
 
 /** The workspace's live charge path, as a screen may see it. Null when there is none. */
+/** What a renewal change needs to name: the adapter, its route, and the provider's own handle. */
+export interface RenewalTarget {
+  readonly provider: string;
+  readonly routeCode: string;
+  readonly providerReference: string;
+}
+
+/**
+ * The live arrangement a renewal change would act on, or nothing.
+ *
+ * `null` when there is no active arrangement, or when the provider never gave us a reference for it: a
+ * renewal request naming no object is one the provider cannot answer, and guessing a reference is how a
+ * request ends up changing somebody else's subscription.
+ *
+ * Deliberately not folded into `readArrangement`, which is a screen's view of the charge path and should
+ * not carry an opaque provider handle to a page that must never display it (#41's "provider references
+ * opaque and workspace-scoped").
+ */
+export async function readRenewalTarget(db: DbExecutor, workspaceId: string): Promise<RenewalTarget | null> {
+  const row = await db.billingArrangement.findFirst({
+    where: { workspaceId, state: "ACTIVE" },
+    select: { providerReference: true, billingRoute: { select: { provider: true, code: true } } },
+  });
+  if (row === null || row.providerReference === null) {
+    return null;
+  }
+  return { provider: row.billingRoute.provider, routeCode: row.billingRoute.code, providerReference: row.providerReference };
+}
+
+/**
+ * Records what the provider said when asked to stop renewing — including that it was never asked.
+ *
+ * The cancellation itself is already committed by the time this is called, and deliberately: a customer's
+ * decision must not depend on a third party being reachable. What this writes is the evidence of whether
+ * the provider knows about it, which is the difference between a cancellation that will take effect by
+ * itself and one that still needs somebody to intervene before the next charge.
+ *
+ * Audited rather than stored as state, because there is no state here that the product may act on: only a
+ * verified event ends an entitlement, and a failed request to stop renewing changes nothing about what
+ * the workspace is entitled to today.
+ */
+export async function recordRenewalStopOutcome(
+  db: DbExecutor,
+  context: WorkspaceContext,
+  outcome:
+    | { readonly status: "STOPPED"; readonly routeCode: string; readonly renews: boolean }
+    | { readonly status: "UNSUPPORTED"; readonly routeCode: string }
+    | { readonly status: "NO_ARRANGEMENT" }
+    | { readonly status: "FAILED"; readonly routeCode: string; readonly errorName: string },
+): Promise<void> {
+  const workspaceId = scopeOf(context);
+  const summary =
+    outcome.status === "STOPPED"
+      ? `Asked the provider to stop renewing on route ${outcome.routeCode}; it reports renews=${String(outcome.renews)}`
+      : outcome.status === "UNSUPPORTED"
+        ? `This provider cannot be asked to stop renewing (route ${outcome.routeCode}); the cancellation stands locally and the provider may charge again`
+        : outcome.status === "NO_ARRANGEMENT"
+          ? "No active provider arrangement to stop renewing; the cancellation stands locally"
+          : `Asking the provider to stop renewing failed on route ${outcome.routeCode} (${outcome.errorName}); the cancellation stands locally and the provider may charge again`;
+
+  await recordWorkspaceAuditEvent(db, context, {
+    kind: "BILLING_ARRANGEMENT_CHANGED",
+    summary,
+    subjectType: "Workspace",
+    subjectId: workspaceId,
+    actorUserId: context.userId,
+    // The provider's own reference is not in here on purpose: an audit row is read by people, and #41's
+    // decision keeps provider handles out of anything a screen or an export carries.
+    detail: { ...outcome },
+  });
+}
+
 export async function readArrangement(db: DbExecutor, workspaceId: string): Promise<ArrangementView | null> {
   const row = await db.billingArrangement.findFirst({
     where: { workspaceId, state: { in: ["PENDING", "ACTIVE"] } },
