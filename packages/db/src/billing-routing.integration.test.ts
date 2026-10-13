@@ -569,7 +569,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request({}));
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-then-renew-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -588,7 +588,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // proved here is that the renewal cannot flip the customer's decision back.
       const renewal = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-then-renew-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
@@ -614,7 +614,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openFor(context, request({}));
       await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `resume-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
@@ -629,7 +629,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const renewal = await recordVerifiedBillingEvent(
         db(),
-        verified("test-psp", {
+        await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `resume-renewed-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
