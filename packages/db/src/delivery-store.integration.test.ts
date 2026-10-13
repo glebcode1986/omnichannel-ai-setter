@@ -13,9 +13,11 @@ import {
   type DeliverySettlement,
   type DeliveryStore,
 } from "@omnichannel/application";
+import { PLAN_FEATURES } from "@omnichannel/domain";
+
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -24,6 +26,7 @@ import { appendInboundMessage } from "./repositories/messages";
 import { createDbClient, type DbClient } from "./client";
 import { PrismaClient } from "./generated/prisma/client";
 import { createDeliveryStore, recoverStaleSendingDeliveries } from "./delivery-store";
+import { publishPlanVersion, setWorkspaceSubscription } from "./entitlement-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
 
@@ -34,6 +37,9 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
   let profile: SeededProfile;
   let rival: DbClient;
   let ownerUserId: string;
+  /** The owner's Workspace context and the plan behind it, so a case can narrow the commercial state. */
+  let workspaceContext: Awaited<ReturnType<typeof seedWorkspace>>["context"];
+  let paidPlanVersionId: string;
   let operationSeq = 0;
 
   beforeAll(async () => {
@@ -41,6 +47,8 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     const seeded = await seedWorkspace(database.db, "delivery");
     [profile] = seeded.profiles as [SeededProfile];
     ownerUserId = seeded.ownerUserId;
+    workspaceContext = seeded.context;
+    paidPlanVersionId = seeded.planVersionId;
     // A second client, so two claims can genuinely be in flight at once.
     rival = createDbClient({ connectionString: database.url });
   }, 120_000);
@@ -101,6 +109,54 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     }
     return store.claim(context, claimedAt);
   };
+
+  /**
+   * A delivery that would genuinely be sent: automation on for this conversation, no takeover, and its
+   * draft anchored on a message of its own.
+   *
+   * Hoisted to the whole file rather than one describe, because the invariant it carries belongs to every
+   * case that expects a claim to succeed: these tests share one conversation, so a customer message
+   * committed by an earlier case is newer than a draft anchored on `profile.messageId` and the claim
+   * rightly refuses it. A case written without this passes while asserting nothing — which is exactly
+   * what happened when the commercial-narrowing cases below were first written against the shared anchor.
+   */
+  const sendable = async () => {
+    anchorSeq += 1;
+    const anchor = await database.db.message.create({
+      data: {
+        ...scope(),
+        channelAccountId: profile.channelAccount.id,
+        conversationId: profile.conversationId,
+        direction: "IN",
+        source: "PARTICIPANT",
+        kind: "TEXT",
+        text: "when do you open?",
+        occurredAt: new Date(NOW.getTime() + anchorSeq * 60_000),
+      },
+    });
+    const scheduled = await scheduleDelivery(anchor.id);
+    // These tests share one account and one conversation, and several of them leave state behind on
+    // purpose. Starting from a known-sendable row is what keeps each case about its own change.
+    await database.db.channelAccount.update({ where: { id: profile.channelAccount.id }, data: { status: "CONNECTED" } });
+    await database.db.conversation.update({
+      where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
+      data: {
+        modeOverride: "AUTOPILOT",
+        aiEnabled: true,
+        status: "OPEN",
+        // Cleared together: the takeover columns are constrained as one fact, not five.
+        takeoverState: "NONE",
+        takeoverReason: null,
+        takeoverReviewMode: null,
+        humanTakeoverAt: null,
+        takeoverPausedUntil: null,
+        takeoverActorKind: null,
+        takeoverActorUserId: null,
+      },
+    });
+    return { ...scheduled, anchoredAt: anchor.occurredAt };
+  };
+  let anchorSeq = 0;
 
   it("lets exactly one of two racing workers claim the same delivery", async () => {
     const { operationId } = await scheduleDelivery();
@@ -427,6 +483,85 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     }, 120_000);
   });
 
+  describe("a commercial state that narrows while the reply waits", () => {
+    /**
+     * #44 asks for this by name: an entitlement revoked while a delayed AUTOPILOT send waits must be
+     * caught by the final revalidation. Two things already proved halves of it and neither proved the
+     * path. The suite below counts the SQL the claim issues and shows the entitlement *is* re-read under
+     * its advisory key; `entitlements.integration.test.ts` shows the entitlement narrowing correctly on
+     * its own. Nothing drove a revocation through a waiting send, which is the only thing a customer
+     * would notice — and `seedWorkspace` exposes `planVersionId` for exactly this, with a comment saying
+     * a test about a billing refusal changes the subscription. That test did not exist.
+     *
+     * The narrowing lands between `loadForSend` and `claim` on purpose. That is the window the spec cares
+     * about: the decision has been judged and the delay has not elapsed, so no row the claim could bind
+     * with a predicate has changed — only the answer has.
+     */
+    afterEach(async () => {
+      // Restored unconditionally, including after a failure: one workspace is shared by every case in
+      // this file, so a subscription left narrowed here would decide somebody else's outcome.
+      await setWorkspaceSubscription(database.db, workspaceContext, { planVersionId: paidPlanVersionId, state: "ACTIVE" });
+    });
+
+    const loadThen = async (change: () => Promise<unknown>): Promise<{ readonly claimed: ClaimOutcome; readonly operationId: string }> => {
+      const store = createDeliveryStore(database.db);
+      // `sendable()`, not `scheduleDelivery()`: a case that cannot claim when nothing changed proves
+      // nothing when something does, and that is the mistake these three were first written with.
+      const { operationId } = await sendable();
+      const context = await store.loadForSend(operationId, NOW);
+      if (context === undefined) {
+        throw new Error(`no delivery context for ${operationId}`);
+      }
+      await change();
+      return { claimed: await store.claim(context, NOW), operationId };
+    };
+
+    it("claims when nothing changed, which is what makes the two cases below mean anything", async () => {
+      // Kept permanently rather than used once and deleted. Both refusals below passed against a stale
+      // shared anchor, where the claim was refusing for a reason neither case had set up — and the only
+      // thing that exposed it was asking whether the same sequence succeeds when nothing narrows.
+      const { claimed, operationId } = await loadThen(() => Promise.resolve());
+
+      expect(claimed.kind).toBe("CLAIMED");
+      expect(await statusOf(operationId)).toBe("SENDING");
+    });
+
+    it("refuses the send when the subscription was revoked after the reply was judged", async () => {
+      const { claimed, operationId } = await loadThen(() =>
+        setWorkspaceSubscription(database.db, workspaceContext, { planVersionId: paidPlanVersionId, state: "INACTIVE" }),
+      );
+
+      expect(claimed).toEqual({ kind: "STATE_CHANGED" });
+      // Not sent, and not consumed either: the coordinator re-reads and re-judges, and the policy engine
+      // turns it into a held delivery with a named reason. A claim that had gone through here would have
+      // sent an automated message for a workspace that is no longer paying for one.
+      expect(await statusOf(operationId)).toBe("SCHEDULED");
+    });
+
+    it("refuses it when only autopilot was withdrawn, which is the narrowing a plan change makes", async () => {
+      // The subscription stays `ACTIVE` and drafting stays on, so exactly one of the three compared
+      // fields moves. Without this case the comparison could drop two of its three clauses and the
+      // revocation above would still pass — `AUTOPILOT` is also the one capability a staged rollout can
+      // switch off on the send path, so it is the field most likely to move on its own.
+      const withoutAutopilot = await publishPlanVersion(database.db, {
+        code: "delivery-drafts-without-autopilot",
+        name: "Drafts without autopilot",
+        grants: {
+          features: PLAN_FEATURES.filter((feature) => feature !== "AUTOPILOT"),
+          limits: {},
+          quotas: { VOICE_TRANSCRIPTION_SECONDS: 100_000 },
+        },
+      });
+
+      const { claimed, operationId } = await loadThen(() =>
+        setWorkspaceSubscription(database.db, workspaceContext, { planVersionId: withoutAutopilot.planVersionId, state: "ACTIVE" }),
+      );
+
+      expect(claimed).toEqual({ kind: "STATE_CHANGED" });
+      expect(await statusOf(operationId)).toBe("SCHEDULED");
+    });
+  });
+
   describe("a conversation that moves after the send was judged", () => {
     /**
      * A delivery that would genuinely be sent: automation on for this conversation, no takeover, and its
@@ -436,43 +571,6 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
      * earlier test is older than this anchor and so is not a newer inbound for this one. Without that, the
      * suite would pass for the wrong reason from the second test onwards.
      */
-    const sendable = async () => {
-      anchorSeq += 1;
-      const anchor = await database.db.message.create({
-        data: {
-          ...scope(),
-          channelAccountId: profile.channelAccount.id,
-          conversationId: profile.conversationId,
-          direction: "IN",
-          source: "PARTICIPANT",
-          kind: "TEXT",
-          text: "when do you open?",
-          occurredAt: new Date(NOW.getTime() + anchorSeq * 60_000),
-        },
-      });
-      const scheduled = await scheduleDelivery(anchor.id);
-      // These tests share one account and one conversation, and several of them leave state behind on
-      // purpose. Starting from a known-sendable row is what keeps each case about its own change.
-      await database.db.channelAccount.update({ where: { id: profile.channelAccount.id }, data: { status: "CONNECTED" } });
-      await database.db.conversation.update({
-        where: { workspaceId_businessProfileId_id: { ...scope(), id: profile.conversationId } },
-        data: {
-          modeOverride: "AUTOPILOT",
-          aiEnabled: true,
-          status: "OPEN",
-          // Cleared together: the takeover columns are constrained as one fact, not five.
-          takeoverState: "NONE",
-          takeoverReason: null,
-          takeoverReviewMode: null,
-          humanTakeoverAt: null,
-          takeoverPausedUntil: null,
-          takeoverActorKind: null,
-          takeoverActorUserId: null,
-        },
-      });
-      return { ...scheduled, anchoredAt: anchor.occurredAt };
-    };
-    let anchorSeq = 0;
 
     const command = (operationId: string): DeliveryCommand => ({
       operationId,
