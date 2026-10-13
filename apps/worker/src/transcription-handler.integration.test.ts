@@ -21,10 +21,11 @@ import {
   createConversation,
   createPendingTranscripts,
   publishPlanVersion,
+  readEntitlement,
   readUsage,
   setWorkspaceSubscription,
 } from "@omnichannel/db";
-import { NO_CAPABILITIES } from "@omnichannel/domain";
+import { commercialAccessOf, NO_CAPABILITIES } from "@omnichannel/domain";
 import type { MediaTranscriptionJob } from "@omnichannel/queue";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -527,13 +528,17 @@ describe.skipIf(!endToEndTestsEnabled())("reading a customer's recording", () =>
     }, 180_000);
 
     it("refuses to read anything once the allowance is spent, and never calls the provider", async () => {
+      const before = await usageFor();
+      // Sells AI and transcription, like every accepted plan does, and differs from them only in the size
+      // of the allowance. A plan selling transcription and nothing else would make the assertions below
+      // about *this plan's* narrowness rather than about exhaustion, which is the thing under test.
       const tiny = await planWith("voice-tiny-allowance", {
-        features: ["VOICE_TRANSCRIPTION"],
+        features: ["AI_DRAFTS", "AUTOPILOT", "VOICE_TRANSCRIPTION"],
         limits: {},
         quotas: { VOICE_TRANSCRIPTION_SECONDS: 10 },
       });
       await setWorkspaceSubscription(infra.db, workspace, { planVersionId: tiny, state: "ACTIVE" });
-      const { messageId } = await voiceNote();
+      const { messageId, mediaIds } = await voiceNote();
       const media = scriptedMedia([downloaded()]);
       const { transcriber, requests } = scriptedTranscriber([read()]);
 
@@ -546,6 +551,36 @@ describe.skipIf(!endToEndTestsEnabled())("reading a customer's recording", () =>
       // And a reply written as though the recording had been heard is what this prevents: the draft path
       // turns the missing transcript into `AUDIO_NOT_TRANSCRIBED` and holds the reply for a person.
       expect(rows[0]?.text).toBeNull();
+
+      // PRICING_PACKAGING.md §142-148 says what exhaustion may *not* touch, and until now only the
+      // transcription half of that was asserted. The word the spec uses is "only", and an "only" nothing
+      // checks is the kind of claim that stays true by luck: a later change coupling the voice counter to
+      // commercial access would pass every assertion above while silently switching off text replies for
+      // a workspace that merely ran out of minutes.
+
+      // "no automatic overage charge is enabled by default" — the refusal spends nothing, so a workspace
+      // cannot be billed past its allowance by a recording arriving.
+      expect(await since(before)).toEqual({ committed: 0, reserved: 0 });
+
+      // "the incoming voice message remains stored/visible in Inbox" — the recording is not what failed,
+      // and a message deleted or emptied to settle a billing limit would be data lost to a commercial
+      // rule, which the spec forbids outright.
+      const stored = await infra.db.message.findUniqueOrThrow({
+        where: { id: messageId },
+        select: { kind: true, direction: true, conversationId: true, media: true },
+      });
+      expect(stored).toMatchObject({ kind: "AUDIO", direction: "IN", conversationId });
+      expect(JSON.stringify(stored.media)).toContain(mediaIds[0] ?? "");
+
+      // "text conversations and normal AI behavior continue" — asserted at `commercialAccessOf`, which is
+      // the decision the draft path actually consults, rather than by driving a draft here: this file owns
+      // the recording's paths and the disposition's own suite owns that one. The three fields are the
+      // whole of what the draft path reads.
+      expect(commercialAccessOf(await readEntitlement(infra.db, scope.workspaceId, NOW))).toEqual({
+        paidWorkAllowed: true,
+        aiDrafts: true,
+        autopilot: true,
+      });
     }, 180_000);
 
     it("downloads nothing at all when the plan does not sell transcription", async () => {
