@@ -82,6 +82,7 @@ export {
   readCheckoutOffer,
   readCheckoutRouting,
   recordVerifiedBillingEvent,
+  applyBillingRouting,
   upsertBillingRoute,
   upsertSellerProfile,
   type ArrangementView,
@@ -100,6 +101,8 @@ export {
   type OpenedCheckout,
   type SellerProfileInput,
   type SellerProfileRecord,
+  type BillingRoutingApplied,
+  type BillingRoutingConfig,
 } from "./billing-routing-store";
 export {
   ACCEPTED_ADDONS,
