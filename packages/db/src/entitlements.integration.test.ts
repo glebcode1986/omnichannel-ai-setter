@@ -9,7 +9,16 @@
 import { featureAllowed, NO_CAPABILITIES, withinLimit, type PlanGrants } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { publishPlanVersion, readEntitlement, setBillingAccount, setEntitlementOverride, setWorkspaceSubscription } from "./entitlement-store";
+import {
+  publishPlanVersion,
+  readEntitlement,
+  requestCancellation,
+  resumeSubscription,
+  setBillingAccount,
+  setEntitlementOverride,
+  setWorkspaceSubscription,
+} from "./entitlement-store";
+import { grantUsageTopUp, setWorkspaceAddOn } from "./catalog-store";
 import { searchAuditEvents } from "./audit-store";
 import { addTestMember, createTestUser, seedWorkspace } from "./testing/fixtures";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
@@ -265,6 +274,12 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       await expect(setWorkspaceSubscription(db(), admin, { planVersionId: growthV1, state: "ACTIVE" })).rejects.toThrow();
       await expect(setEntitlementOverride(db(), admin, { override: { limits: { SEATS: 99 } }, reason: "nope" })).rejects.toThrow();
       await expect(setBillingAccount(db(), admin, { provider: "example", providerCustomerId: "cus_1" })).rejects.toThrow();
+      // Cancelling and resuming are the two a customer performs themselves (#42), so the restriction has
+      // to hold on them too — a screen that offered an admin a cancel button would be offering a refusal.
+      await expect(requestCancellation(db(), admin, NOW)).rejects.toThrow();
+      await expect(resumeSubscription(db(), admin, NOW)).rejects.toThrow();
+      await expect(setWorkspaceAddOn(db(), admin, { addOnVersionId: "whatever", quantity: 1 })).rejects.toThrow();
+      await expect(grantUsageTopUp(db(), admin, { metric: "VOICE_TRANSCRIPTION_SECONDS", amount: 1, expiresAt: NOW })).rejects.toThrow();
     });
   });
 
@@ -322,6 +337,52 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
    * is what *starts* a trial, so a gate that refused a workspace with no plan would shut the product's
    * own front door.
    */
+  describe("cancelling", () => {
+    it("refuses a subscription with no period end to cancel at", async () => {
+      // A cancellation has to be dated to something. Without a period or a trial end there is nothing to
+      // date it to, and one with no end is indistinguishable from an immediate one — which is not the
+      // accepted default.
+      await setWorkspaceSubscription(db(), owner, { planVersionId: growthV1, state: "ACTIVE" });
+
+      expect(await requestCancellation(db(), owner, NOW)).toMatchObject({ status: "REFUSED" });
+    });
+
+    it("refuses to cancel twice, and to resume what is not ending", async () => {
+      const endsAt = new Date(NOW.getTime() + 86_400_000);
+      await setWorkspaceSubscription(db(), owner, { planVersionId: growthV1, state: "ACTIVE", periodEndsAt: endsAt });
+
+      expect(await requestCancellation(db(), owner, NOW)).toEqual({ status: "CANCELING", endsAt });
+      expect(await requestCancellation(db(), owner, NOW)).toMatchObject({ status: "REFUSED" });
+      expect(await resumeSubscription(db(), owner, NOW)).toEqual({ status: "RESUMED" });
+      expect(await resumeSubscription(db(), owner, NOW)).toMatchObject({ status: "REFUSED" });
+    });
+
+    it("refuses to resume a term that has already ended", async () => {
+      const ended = new Date(NOW.getTime() - 1_000);
+      await setWorkspaceSubscription(db(), owner, {
+        planVersionId: growthV1,
+        state: "CANCELED_PENDING_END",
+        canceledAt: new Date(NOW.getTime() - 2_000),
+        periodEndsAt: ended,
+      });
+
+      // What would be resumed has expired, and restoring it would grant a term nobody paid for.
+      expect(await resumeSubscription(db(), owner, NOW)).toMatchObject({ status: "REFUSED" });
+    });
+
+    it("does not move the plan, so a cancellation cannot be a disguised downgrade", async () => {
+      const endsAt = new Date(NOW.getTime() + 86_400_000);
+      await setWorkspaceSubscription(db(), owner, { planVersionId: growthV1, state: "ACTIVE", periodEndsAt: endsAt });
+
+      await requestCancellation(db(), owner, NOW);
+
+      const after = await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { planVersionId: true } });
+      expect(after.planVersionId).toBe(growthV1);
+      // And the period already paid for still permits paid work, which is what cancel-at-period-end means.
+      expect((await readEntitlement(db(), workspaceId, NOW)).paidWorkAllowed).toBe(true);
+    });
+  });
+
   describe("what a plan refuses", () => {
     const planWith = async (code: string, grants: PlanGrants) =>
       (await publishPlanVersion(db(), { code, name: code, grants })).planVersionId;

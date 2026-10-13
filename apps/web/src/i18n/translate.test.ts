@@ -62,10 +62,24 @@ describe("the catalogues", () => {
     const identical = (Object.keys(catalogues.en) as MessageKey[]).filter((key) => catalogues.en[key] === catalogues.ru[key]);
 
     // Two kinds of key may legitimately match. Proper nouns — two platform names and the product's own —
-    // and a pure format string with no words in it. `leads.stageColumn` is `{label} ({count})`: it stays
-    // in the catalogue because a locale could want different brackets or spacing, and it is identical
-    // today because neither language wants anything different yet.
-    expect(identical).toEqual(["channel.INSTAGRAM", "channel.WHATSAPP", "leads.stageColumn", "landing.title"]);
+    // and a pure format string with no words in it. `leads.stageColumn` is `{label} ({count})` and
+    // `billing.addOnQuantity` is `{name} × {quantity}`: both stay in the catalogue because a locale could
+    // want different separators or spacing, and both are identical today because neither language wants
+    // anything different yet.
+    // The platform names appear twice over, as channels and as the plan features that sell them. They are
+    // deliberately not shared: a component that mapped a feature onto a channel key would be branching on
+    // a channel name, which `no-provider-payloads.test.ts` forbids in a pane for good reasons of its own.
+    expect(identical.toSorted()).toEqual(
+      [
+        "billing.addOnQuantity",
+        "channel.INSTAGRAM",
+        "channel.WHATSAPP",
+        "feature.INSTAGRAM",
+        "feature.WHATSAPP",
+        "landing.title",
+        "leads.stageColumn",
+      ].toSorted(),
+    );
   });
 
   it("names every workspace role in every locale", () => {
