@@ -74,6 +74,20 @@ is unique within its own account, which is what a route names.
 silent `NONE`. A settlement activates, a renewal extends, a failure suspends into grace, and a
 cancellation, refund or chargeback ends. Underpayment and an expired quote do nothing.
 
+**An effect the map allows is still refused against settled state: recorded, never resurrected.** A
+settlement for an arrangement already `ENDED` or `SUPERSEDED` does not revive it — that would put the
+workspace back on a provider it had been moved off. A renewal for a subscription the customer has
+cancelled, or one already `INACTIVE`, does not revive that either: `CANCELED_PENDING_END` is the customer's
+decision and `INACTIVE` is that decision carried out, and the only way back from the first is the
+customer's own `resumeSubscription`, which checks a billing role, refuses once the paid period has passed,
+and names itself in the audit trail. A webhook writing `ACTIVE` would bypass all three and charge somebody
+who had cancelled.
+
+In that case the arrangement is left alone as well. Moving its period end would leave a row reading like a
+live renewal underneath a subscription that is ending, and provider state and application state are never
+summed. The event is still written with `effect: NONE` and audited, which is what makes the divergence
+findable; resolving it belongs to provider reconciliation.
+
 The quote is judged by the product, not taken from the provider: `PAYMENT_SETTLED` means the money arrived
 in the adapter's vocabulary and `SETTLED` means it arrived **in time and in full**. An overpayment settles,
 because refusing service to somebody who sent too much is absurd; a full payment that arrived after the
