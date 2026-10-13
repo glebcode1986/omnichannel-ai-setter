@@ -82,12 +82,12 @@ function toView(row: {
   completedAt: Date | null;
   dismissedReason: string | null;
   createdAt: Date;
+  completedByUserId: string | null;
   assignedUser: { name: string | null } | null;
   completedByUser: { name: string | null } | null;
-  completedByUserId?: string | null;
 }, authorized: ReadonlySet<string>): TaskView {
-  const nameOf = (userId: string | null | undefined, user: { name: string | null } | null): string | null =>
-    userId !== null && userId !== undefined && authorized.has(userId) ? (user?.name ?? null) : null;
+  const nameOf = (userId: string | null, user: { name: string | null } | null): string | null =>
+    userId !== null && authorized.has(userId) ? (user?.name ?? null) : null;
   return {
     id: row.id,
     kind: row.kind,

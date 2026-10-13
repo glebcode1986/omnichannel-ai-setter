@@ -21,9 +21,9 @@
  *
  * **Everything is revalidated at execution, not at planning.** `claimFollowUp` re-reads the conversation,
  * the goal, the suppression list, the takeover state, the pending review, the channel's health and whether
- * any route could still carry the message, inside one transaction, with the conversation row locked. Anything that changed since the follow-up was planned
- * settles it with a named reason. This is the difference between a scheduler and a chaser: a scheduler
- * asks again.
+ * any route could still carry the message — all inside one transaction, with the conversation row locked.
+ * Anything that changed since the follow-up was planned settles it with a named reason. This is the
+ * difference between a scheduler and a chaser: a scheduler asks again.
  */
 import { followUpGenerationKey } from "@omnichannel/application";
 import { boundedMaxAttempts, isWithinDaypart, type FollowUpStopReason } from "@omnichannel/domain";
@@ -431,7 +431,7 @@ export async function claimFollowUp(db: DbClient, followUpId: string, now: Date,
         // The customer's own last message, for the window question below.
         lastInboundAt: true,
         // Through the identity, which is where the account hangs off a conversation.
-        channelIdentity: { select: { channelAccount: { select: { id: true, channel: true, status: true } } } },
+        channelIdentity: { select: { channelAccount: { select: { channel: true, status: true } } } },
       },
     });
     if (conversation === null) {
