@@ -351,6 +351,42 @@ describe.skipIf(!databaseTestsEnabled())("plans, subscriptions and entitlements 
       expect(await db().businessProfile.count({ where: { workspaceId: fresh.workspaceId } })).toBe(1);
     }, 180_000);
 
+    it("holds a capacity lock only for as long as the transaction that took it", async () => {
+      // Pinned because the reason `createBusinessProfile` opens its own transaction is invisible at the
+      // call site, and the refusal above passes with or without it.
+      //
+      // Both capacity checks are a count followed by an insert, which no index can cap, so each holds one
+      // advisory lock across the pair. `createBusinessProfile` used to take a `DbExecutor` — a type that
+      // deliberately omits `$transaction` — and call `pg_advisory_xact_lock` on it, so under autocommit
+      // the lock was released by the end of the very statement that took it and the count and insert it
+      // was meant to serialize ran unprotected. `addWorkspaceMember` always opened its own transaction,
+      // which is why seats never had the problem and why profiles now match.
+      const key = "capacity-lock-lifetime";
+      const heldNow = async (): Promise<number> => {
+        const rows = await db().$queryRaw<{ n: number }[]>`
+          SELECT count(*)::int AS n
+          FROM pg_locks
+          WHERE locktype = 'advisory'
+            AND granted
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+        return rows[0]?.n ?? 0;
+      };
+
+      // Autocommit: the lock statement is its own transaction, so it is over before the next statement.
+      await db().$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+      expect(await heldNow()).toBe(0);
+
+      // Inside one, it survives every statement in the body and is released on commit.
+      let duringTransaction = -1;
+      await db().$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT true AS locked FROM pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+        duringTransaction = await heldNow();
+      });
+
+      expect(duringTransaction).toBe(1);
+      expect(await heldNow()).toBe(0);
+    }, 180_000);
+
     it("lets a workspace whose payment lapsed keep reorganizing what it already owns", async () => {
       // Capacity is not payment. The spec keeps the workspace usable; what stops is sending.
       const fresh = await freshWorkspace("lapsed-profile");
