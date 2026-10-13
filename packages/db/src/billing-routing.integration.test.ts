@@ -800,6 +800,10 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // proved here is that the renewal cannot flip the customer's decision back.
       const renewal = await recordVerifiedBillingEvent(
         db(),
+      // Awaited here, and not on the branches above: this is where the provider port's three-way
+      // `VerifiedDelivery` made `verified` asynchronous. Upstream it is synchronous and an `await` on a
+      // non-Thenable is a fatal eslint error there, so the form belongs to whichever branch owns the
+      // helper rather than being a compromise that fails both.
         await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `cancel-then-renew-${workspaceId}`,
@@ -841,6 +845,10 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       const renewal = await recordVerifiedBillingEvent(
         db(),
+      // Awaited here, and not on the branches above: this is where the provider port's three-way
+      // `VerifiedDelivery` made `verified` asynchronous. Upstream it is synchronous and an `await` on a
+      // non-Thenable is a fatal eslint error there, so the form belongs to whichever branch owns the
+      // helper rather than being a compromise that fails both.
         await verified("test-psp", {
           routeCode: "direct-eu",
           providerEventId: `resume-renewed-${workspaceId}`,
