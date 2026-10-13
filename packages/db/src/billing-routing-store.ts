@@ -1321,6 +1321,25 @@ async function apply(
     if (arrangement === null || arrangement.state !== "ACTIVE") {
       return "NONE";
     }
+    // The same rule `ACTIVATE` applies to an ended arrangement, applied to a settled subscription:
+    // recorded, never resurrected.
+    //
+    // A renewal must not undo a cancellation. `CANCELED_PENDING_END` is the customer's own decision and
+    // `INACTIVE` is that decision carried out, and the only way back from the first is
+    // `resumeSubscription` — which checks a billing role, refuses once the paid period has passed, and
+    // writes "Cancellation withdrawn" to the audit trail. A webhook writing `ACTIVE` here bypasses all
+    // three, so a customer who cancelled would be charged by the provider and then shown an active
+    // subscription again, with nothing in the audit trail to say who revived it. There is no way back
+    // from `INACTIVE` at all, so reviving one would hand back paid access that was never bought.
+    //
+    // The arrangement is deliberately left alone too. Moving its period end would leave a row that reads
+    // like a live renewal under a subscription that is ending — provider state and application state are
+    // never summed. The event is still written with `effect: NONE` and audited, which is what makes the
+    // divergence visible; resolving it is `reconcileProviderState`'s job.
+    const settled = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true } });
+    if (settled !== null && (settled.state === "CANCELED_PENDING_END" || settled.state === "INACTIVE")) {
+      return "NONE";
+    }
     const interval = chargeIntervalOf(arrangement.interval);
     const from = arrangement.currentPeriodEnd !== null && arrangement.currentPeriodEnd.getTime() > now.getTime() ? arrangement.currentPeriodEnd : now;
     const periodEndsAt = event.periodEndsAt ?? periodEndFor(interval, from);
