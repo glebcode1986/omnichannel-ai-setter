@@ -101,6 +101,19 @@ function expectGracefulShutdown(result: ProcessResult, expected: readonly string
   expect(events(result.stdout)).toEqual(expected);
 }
 
+/** The fields on the one `worker.started` line, so a test can assert on what the process reported. */
+function startedFields(stdout: string): { readonly loops?: readonly string[] } {
+  const line = stdout
+    .split("\n")
+    .filter((entry) => entry.trim().length > 0)
+    .map((entry) => JSON.parse(entry) as { event: string; loops?: readonly string[] })
+    .find((entry) => entry.event === "worker.started");
+  if (line === undefined) {
+    throw new Error("the worker never reported that it started");
+  }
+  return line;
+}
+
 function events(output: string): string[] {
   return output
     .split("\n")
@@ -133,6 +146,52 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     });
 
     expectGracefulShutdown(result);
+  }, 30_000);
+
+  it("says which background loops are running, so a loop wired to nothing is visible (#9)", async () => {
+    // The defect this guards: the Instagram token refresh existed, was tested, and was called by nothing.
+    // No unit test can catch that — the policy passes its own tests either way — so the entrypoint reports
+    // what it actually started and this reads the real process's boot log.
+    const configured = { ...VALID_ENV, CHANNEL_CREDENTIAL_KEY_ID: "test-key", CHANNEL_CREDENTIAL_KEY: Buffer.alloc(32, 7).toString("base64") };
+    let signalled = false;
+    const result = await runWorker(configured, (stdout, child) => {
+      if (!signalled && stdout.includes('"event":"worker.started"')) {
+        signalled = true;
+        child.kill("SIGTERM");
+      }
+    });
+
+    expectGracefulShutdown(result);
+    // `follow_ups` joins the list with the accepted P3-02 head, which starts the sweeper that gave
+    // `dueFollowUps` and `claimFollowUp` their first caller — the same defect this case guards, in a
+    // second loop. Asserted as the whole list rather than by `toContain`, because the point is that
+    // nothing is missing from it.
+    expect(startedFields(result.stdout).loops).toEqual([
+      "outbox",
+      "reconciliation",
+      "instagram_tokens",
+      "follow_ups",
+      "backlog_guard",
+      "health",
+    ]);
+  }, 30_000);
+
+  it("leaves the token refresh out of that list when it cannot read the stored tokens", async () => {
+    // Without the credential-encryption key there is nothing to decrypt, so the loop does not run — and
+    // the boot log has to say so rather than listing work that is not happening.
+    let signalled = false;
+    const result = await runWorker({ ...VALID_ENV }, (stdout, child) => {
+      if (!signalled && stdout.includes('"event":"worker.started"')) {
+        signalled = true;
+        child.kill("SIGTERM");
+      }
+    });
+
+    expectGracefulShutdown(result);
+    expect(startedFields(result.stdout).loops).not.toContain("instagram_tokens");
+    // And the unconditional loop is still reported, which is the whole difference between the two: the
+    // sweeper always starts, so its absence would be a defect rather than a configuration.
+    expect(startedFields(result.stdout).loops).toContain("follow_ups");
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {

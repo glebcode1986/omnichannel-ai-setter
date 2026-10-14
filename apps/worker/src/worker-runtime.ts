@@ -3,6 +3,15 @@ import type { Logger } from "@omnichannel/observability";
 /** Long-running background processors (BullMQ workers) owned by the runtime. */
 export interface Processors {
   readonly queueNames: readonly string[];
+  /**
+   * The periodic loops that are running, by name.
+   *
+   * Reported at boot so an operator reading the log from the top can see which background work this
+   * process is doing — and so a loop that exists in the codebase but is wired to nothing is visible as an
+   * absence rather than as silence. That has happened: the Instagram token refresh was written, tested and
+   * never called, and the first symptom would have been expired connections.
+   */
+  readonly loops: readonly string[];
   /** Resolves once running jobs have finished. */
   close(): Promise<void>;
 }
@@ -55,6 +64,7 @@ export function createWorkerRuntime({ logger, startProcessors }: WorkerRuntimeOp
         pid: process.pid,
         nodeVersion: process.version,
         queues: processors?.queueNames ?? [],
+        loops: processors?.loops ?? [],
       });
     },
 

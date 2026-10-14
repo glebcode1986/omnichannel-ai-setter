@@ -23,7 +23,49 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #83, propagated into #84 and nowhere else
+### Current work — the accepted #84, propagated into #85 and nowhere else
+
+**PR #84 / P5-09 is accepted.** Gemini/Antigravity published a formal exact-head GitHub review on
+2026-10-14T13:27:18Z — state `APPROVED`, commit `ca86e7d7877b8ab2deb1fb280956d2306224e898`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ca86e7d7877b8ab2deb1fb280956d2306224e898`.
+
+**Reviewer routing unchanged:** Gemini/Antigravity temporary **primary**, Astra **advisory-only**. Claude
+remains the sole author; the readiness marker keeps its legacy spelling for parser compatibility.
+
+**#85 / FIX-ISSUE-9 is the sole propagation and review gate; #86 onwards are frozen** — no broader Phase 4
+propagation, no Stage E, no unrelated feature work until #85 has its own exact-head PASS.
+
+**The ancestry repair.** #85 named #84 as its base while its live base SHA was the pre-acceptance #84 head
+`82f9f3fbe6cbc67966f8ba4d1a34569cff544501`, which was also the merge base — GitHub compared them as
+12 ahead / 22 behind. Joined by an **ordinary non-rebase merge**;
+`git merge-base --is-ancestor ca86e7d… HEAD` succeeds.
+
+**One conflict, and it is the one worth describing: `apps/worker/src/main.ts`.** Both sides of it are a
+fix for the same class of defect — *a loop nobody starts*. This branch adds the Instagram token refresh
+(FIX #9, "every part of the token lifecycle is implemented and none of it runs"); the accepted parent adds
+the follow-up sweeper (#55, "`dueFollowUps` and `claimFollowUp` had no caller at all"). Keeping either
+side alone would silently re-create the defect the other was written to fix.
+
+**It took five edits, and the two conflict markers showed two of them:**
+
+1. both `const` declarations, token refresh then sweeper, in start order;
+2. both `.close()` calls;
+3. **the startup `loops` report** — merged cleanly and would have stopped naming the sweeper. `follow_ups`
+   is added **unconditionally** and `instagram_tokens` stays conditional on the refresh runner's own
+   `running` state: that difference is information, not an inconsistency, because the sweeper always
+   starts and the refresh only runs where it is configured;
+4. **the shutdown commentary's own count** — both sides read "five independent closes" above five entries;
+   there are now six, and the sentence merged without a conflict and became wrong;
+5. **`main.test.ts`'s expected loop list**, which a probe could not predict and the real run found: the
+   case named "says which background loops are running, so a loop wired to nothing is visible (#9)"
+   asserts the whole list, so it now names `follow_ups` too. Its sibling case — the one that proves the
+   token refresh drops out without a credential key — now also asserts `follow_ups` is still present,
+   which is what pins the unconditional half of the distinction above.
+
+Items 3 and 4 fail no typecheck, lint or test. Item 5 is why the directive's instruction to inspect the
+merged code rather than trust a probe was right.
+
+### Superseded — the accepted #83, propagated into #84 and nowhere else
 
 **PR #83 / P5-08 is accepted.** Gemini (Google Antigravity) published a formal exact-head GitHub review on
 2026-10-14T12:07:55Z — state `APPROVED`, commit `c7b02267e183b58a54814c0b4663ee69d5608612`, carrying
@@ -541,7 +583,22 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — P5-09 / Issue #35
+### Current work — Issue #9, the Instagram token lifecycle had no caller
+
+Found while auditing the repository's open work after Stage D, and reported on Issue #9 before being
+fixed, because the PR that owns the defect is accepted.
+
+`refreshInstagramCredential` was correct, tested eight ways, and called by nothing — no route, no action,
+no loop. The lifecycle the issue asked for was therefore implemented and unreachable: a 60-day token
+expired with `channel_accounts.status` still `CONNECTED`, every reply failed with Meta's code 190, and no
+part of the product said to reconnect.
+
+Branched from the Stage D tip rather than from #64, which owns the defect and is PASSED — a commit there
+would have moved the head that twenty-one accepted PRs stand on. The policy now lives in the worker beside
+the other recovery loops, the send path marks a credential Meta refused, and `worker.started` lists the
+loops that are actually running so a loop wired to nothing is visible as an absence rather than as silence.
+
+### Previous — P5-09 / Issue #35
 
 **Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
 repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.

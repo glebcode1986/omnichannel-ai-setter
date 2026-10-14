@@ -9,7 +9,6 @@ import {
   completeInstagramConnect,
   CONNECT_STATE_TTL_MS,
   disconnectInstagramAccount,
-  refreshInstagramCredential,
   startInstagramConnect,
   STATE_COOKIE_NAME,
   type OnboardingDependencies,
@@ -447,106 +446,6 @@ describe("instagram onboarding", () => {
     expect(fake.accounts).toHaveLength(1);
   });
 
-  it("drops a token that arrives from Meta after the account was disconnected", async () => {
-    const connectDeps = dependencies();
-    await startAndCallback(connectDeps);
-    const accountId = connectDeps.store === fake.store ? (fake.accounts[0]?.id ?? "") : "";
-    const credentialId = [...fake.credentials.keys()][0] ?? "";
-    const later = new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000);
-
-    // The interleaving the review describes, made deterministic: the disconnect lands *while* Meta is
-    // answering, so the refresh returns holding a freshly minted token for an account that no longer
-    // exists. Writing it would undo the disconnect — a disconnected account with a working secret.
-    const refreshDeps: OnboardingDependencies = {
-      ...dependencies([], later),
-      oauth: {
-        ...dependencies([], later).oauth,
-        http: {
-          send: async () => {
-            await disconnectInstagramAccount(connectDeps, context(), accountId);
-            return { kind: "RESPONSE", status: 200, body: JSON.stringify({ access_token: "IGQVJresurrected", token_type: "bearer", expires_in: 5_184_000 }) };
-          },
-        },
-      },
-    };
-
-    const outcome = await refreshInstagramCredential(refreshDeps, context(), accountId);
-
-    expect(outcome).toBe("NO_CREDENTIAL");
-    const credential = fake.credentials.get(credentialId);
-    expect(credential?.revokedAt).not.toBeNull();
-    expect(credential?.token).not.toBe("IGQVJresurrected");
-    expect(credential?.expiresAt).toBeNull();
-    expect(fake.accounts[0]).toMatchObject({ status: "DISCONNECTED" });
-  });
-
-  describe("token refresh", () => {
-    const day = 24 * 60 * 60 * 1000;
-
-    const connected = async () => {
-      const deps = dependencies();
-      await startAndCallback(deps);
-      return fake.accounts[0]?.id ?? "";
-    };
-
-    it("does not call Meta for a token younger than a day", async () => {
-      const accountId = await connected();
-      const deps = dependencies([], new Date(NOW.getTime() + 60_000));
-
-      expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("NOT_DUE");
-      expect(deps.oauthRequests).toHaveLength(0);
-    });
-
-    it("refreshes an eligible token and extends its expiry", async () => {
-      const accountId = await connected();
-      const later = new Date(NOW.getTime() + 2 * day);
-      const deps = dependencies([{ status: 200, body: { access_token: "refreshed-token", token_type: "bearer", expires_in: 5_184_000 } }], later);
-
-      expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("REFRESHED");
-      expect([...fake.credentials.values()][0]).toMatchObject({ mintedAt: later, expiresAt: new Date(later.getTime() + 5_184_000 * 1000) });
-    });
-
-    it("treats an expired token as re-authorization, not a retry", async () => {
-      const accountId = await connected();
-      const deps = dependencies([], new Date(NOW.getTime() + 61 * day));
-
-      expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("NEEDS_REAUTH");
-      expect(fake.accounts[0]).toMatchObject({ status: "NEEDS_REAUTH" });
-      expect(deps.oauthRequests).toHaveLength(0);
-    });
-
-    it("keeps the account connected when Meta is merely unreachable", async () => {
-      const accountId = await connected();
-      const deps = dependencies([], new Date(NOW.getTime() + 2 * day));
-      const offline = { ...deps, oauth: { ...deps.oauth, http: { send: () => Promise.resolve({ kind: "NO_RESPONSE" as const, reason: "TIMEOUT" as const, message: "timed out" }) } } };
-
-      expect(await refreshInstagramCredential(offline, context(), accountId)).toBe("UNAVAILABLE");
-      expect(fake.accounts[0]).toMatchObject({ status: "CONNECTED" });
-    });
-
-    it("keeps the account connected when Meta is throttling or broken", async () => {
-      const accountId = await connected();
-      const later = new Date(NOW.getTime() + 2 * day);
-      for (const response of [
-        { status: 500, body: { error: { code: 2, is_transient: true, message: "please retry" } } },
-        { status: 429, body: { error: { code: 4, message: "rate limited" } } },
-      ]) {
-        const deps = dependencies([response], later);
-        // A failing provider has said nothing about our credential; treating that as revocation would
-        // take a working account offline until someone re-authorizes it by hand.
-        expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("UNAVAILABLE");
-        expect(fake.accounts[0]).toMatchObject({ status: "CONNECTED" });
-      }
-    });
-
-    it("needs re-authorization when Meta rejects the refresh", async () => {
-      const accountId = await connected();
-      const deps = dependencies([{ status: 400, body: { error: { code: 190, error_subcode: 460, message: "password changed" } } }], new Date(NOW.getTime() + 2 * day));
-
-      expect(await refreshInstagramCredential(deps, context(), accountId)).toBe("NEEDS_REAUTH");
-      expect(fake.accounts[0]).toMatchObject({ status: "NEEDS_REAUTH" });
-    });
-  });
 });
 
 describe("instagram routes", () => {

@@ -223,6 +223,98 @@ export async function getChannelAccountCredentialId(
   return account?.credentialId ?? undefined;
 }
 
+/** One Instagram connection whose stored token is close enough to expiry to be worth refreshing. */
+export interface InstagramTokenRefreshTarget {
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  readonly channelAccountId: string;
+  readonly credentialId: string;
+  /** When the stored token was minted. Meta refuses to refresh one younger than 24 hours. */
+  readonly mintedAt: Date;
+  readonly expiresAt: Date;
+}
+
+/**
+ * Connections whose token expires before `dueBefore`, oldest expiry first.
+ *
+ * Unscoped on purpose, like the reconciliation queries: a token expires on Meta's clock and not on anyone's
+ * visit to a dashboard, so the process that keeps connections alive runs across every workspace and has no
+ * member to be authorized as. Nothing is decrypted here — a refresh needs to know *which* credential and
+ * *when* it was minted, and the secret is read one row at a time by the caller that is about to use it.
+ *
+ * Only `CONNECTED` accounts: a disconnected one has no connection to keep, and one already marked
+ * `NEEDS_REAUTH` is waiting for a person, not for us.
+ */
+export async function findInstagramTokensDueForRefresh(
+  db: DbExecutor,
+  options: { readonly dueBefore: Date; readonly limit: number },
+): Promise<readonly InstagramTokenRefreshTarget[]> {
+  const rows = await db.channelAccount.findMany({
+    where: {
+      channel: "INSTAGRAM",
+      status: "CONNECTED",
+      credential: { purpose: "INSTAGRAM_ACCESS_TOKEN", revokedAt: null, expiresAt: { not: null, lte: options.dueBefore } },
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      businessProfileId: true,
+      credentialId: true,
+      credential: { select: { expiresAt: true, refreshedAt: true, createdAt: true } },
+    },
+    orderBy: { credential: { expiresAt: "asc" } },
+    take: options.limit,
+  });
+  return rows.flatMap((row) => {
+    // The query already requires both, so this narrows rather than filters. Written as a `flatMap` so a
+    // schema change that made either nullable in practice drops the row instead of asserting over it.
+    if (row.credentialId === null || row.credential === null || row.credential.expiresAt === null) {
+      return [];
+    }
+    return [
+      {
+        workspaceId: row.workspaceId,
+        businessProfileId: row.businessProfileId,
+        channelAccountId: row.id,
+        credentialId: row.credentialId,
+        mintedAt: row.credential.refreshedAt ?? row.credential.createdAt,
+        expiresAt: row.credential.expiresAt,
+      },
+    ];
+  });
+}
+
+/**
+ * Marks a connection as needing re-authorization — but only if the credential that failed is still the one
+ * the account is using.
+ *
+ * The condition is the same one `rotateChannelCredential` applies, and for the same reason. Between a
+ * provider refusing a token and this write, somebody may have re-authorized the account; marking it then
+ * would tell an operator to reconnect something they just reconnected, and the account would refuse to
+ * send until they did it again. Matching the mint time makes that case a no-op.
+ *
+ * Returns whether this call changed the row. `false` also covers the account that was already marked, or
+ * disconnected: both are states a person owns, and neither is ours to overwrite.
+ */
+export async function markChannelAccountNeedsReauthorization(
+  db: DbExecutor,
+  input: { readonly workspaceId: string; readonly channelAccountId: string; readonly mintedAt: Date },
+): Promise<boolean> {
+  if (!isValidIdentifier(input.channelAccountId)) {
+    return false;
+  }
+  const marked = await db.channelAccount.updateMany({
+    where: {
+      workspaceId: input.workspaceId,
+      id: input.channelAccountId,
+      status: "CONNECTED",
+      credential: { OR: [{ refreshedAt: input.mintedAt }, { refreshedAt: null, createdAt: input.mintedAt }] },
+    },
+    data: { status: "NEEDS_REAUTH" },
+  });
+  return marked.count === 1;
+}
+
 export async function getChannelAccount(
   db: DbExecutor,
   context: BusinessProfileContext,

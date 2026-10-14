@@ -34,6 +34,7 @@ import { startHealthReporter } from "./health-reporter";
 import { createIncidentReporter } from "./incident-reporter";
 import { createOperationEvidencePort } from "./operation-evidence";
 import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handler";
+import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
@@ -242,6 +243,10 @@ function main(): void {
         logger,
         now: () => new Date(),
       });
+      // Without this, every part of the Instagram token lifecycle is implemented and none of it runs: a
+      // 60-day token expires, the account still reads CONNECTED, and every reply fails with a provider
+      // error nobody was warned about.
+      const tokenRefresh = startInstagramTokenRefresh(env, db, logger);
       // What makes a planned follow-up happen (#55). Without it `dueFollowUps` and `claimFollowUp` had no
       // caller at all, so the feature existed and never ran. It enqueues the same AI-draft job an inbound
       // message would: there is no second send path, and every gate is re-asked inside the claim.
@@ -292,14 +297,29 @@ function main(): void {
       });
       return {
         queueNames: workers.queueNames,
+        // Built from what actually started, not from a list written by hand: a loop that is wired to
+        // nothing has to be visible as an absence here. The Instagram token refresh was written, tested
+        // and never called, and this is where that would have shown.
+        // `follow_ups` unconditionally and `instagram_tokens` conditionally, which is the difference
+        // between the two loops rather than an inconsistency: the sweeper always starts, and the token
+        // refresh only runs where it is configured, so its absence here is information.
+        loops: [
+          "outbox",
+          "reconciliation",
+          ...(tokenRefresh.running ? ["instagram_tokens"] : []),
+          "follow_ups",
+          "backlog_guard",
+          "health",
+        ],
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: five independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: six independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
           const stopped = await Promise.allSettled([
             sweeper.close(),
             reconciliationSweeper.close(),
+            tokenRefresh.close(),
             followUpSweeper.close(),
             backlogGuard.close(),
             health.close(),
