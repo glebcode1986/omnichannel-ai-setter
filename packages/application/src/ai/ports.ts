@@ -136,8 +136,14 @@ export interface AiDraftStore {
 export interface SaveDraftInput {
   readonly scope: GenerationScope;
   readonly generationKey: string;
-  /** Whether automation or a person asked for this generation. */
-  readonly trigger: "AUTOMATIC" | "HUMAN_REQUEST";
+  /**
+   * What asked for this generation: an inbound message, a person, or a scheduled follow-up (#55).
+   *
+   * Three values rather than a boolean, because afterwards a reader needs to tell a reply from a chase as
+   * much as they need to tell automation from a person — and a draft that recorded a follow-up as
+   * `AUTOMATIC` would make the audit trail unable to answer "why did we message them?".
+   */
+  readonly trigger: "AUTOMATIC" | "HUMAN_REQUEST" | "FOLLOW_UP";
   /** The workspace member who asked; present only for a human request. */
   readonly requestedByUserId?: string;
   readonly anchorMessageId: string;
