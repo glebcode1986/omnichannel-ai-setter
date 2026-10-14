@@ -23,7 +23,45 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #82, propagated into #83 and nowhere else
+### Current work — the accepted #83, propagated into #84 and nowhere else
+
+**PR #83 / P5-08 is accepted.** Gemini (Google Antigravity) published a formal exact-head GitHub review on
+2026-10-14T12:07:55Z — state `APPROVED`, commit `c7b02267e183b58a54814c0b4663ee69d5608612`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=c7b02267e183b58a54814c0b4663ee69d5608612`. That SHA is the accepted head
+and the only one the acceptance covers.
+
+**Reviewer routing is unchanged:** Gemini/Antigravity temporary **primary**, Astra **secondary and
+advisory-only** until it has its own working PostgreSQL/Redis/Linux runner and the owner re-routes. Claude
+remains the sole author; the readiness marker keeps its `CLAUDE_READY_FOR_ASTRA` spelling for parser
+compatibility.
+
+**#84 / P5-09 is now the sole propagation and review gate, and #85 onwards are frozen** — no Phase 4
+propagation, no Stage E, no new feature work until #84 has its own genuine exact-head independent PASS.
+
+**The ancestry repair, measured rather than assumed.** #84 named #83 as its base while its live base SHA
+was the *pre-acceptance* #83 head `8f84deebf92c1ee204cacb80654a9a228759db07`, which was also the two
+branches' merge base — GitHub compared them as 16 ahead / 21 behind, so #84 contained none of the accepted
+#83 work. Joined by an **ordinary non-rebase merge**; `git merge-base --is-ancestor c7b02267… HEAD` now
+succeeds. This is the second link of the same shape as #82→#83, and it was probed in advance: the probe
+predicted zero conflicts and three typecheck errors in one file, and that is exactly what happened.
+
+**Zero merge conflicts. Three pieces of integration fallout, all in `operator-journey.integration.test.ts`:**
+
+- `savePolicy` requires `expectedVersion` from the accepted parent, so the journey reads the profile
+  default's live version and posts it back — the same thing the real screen does.
+- `listPolicyAudits` answers a `PolicyAuditPage` rather than an array from the accepted parent onwards, so
+  `audits[0]` became `audits.entries[0]`. The history is paged because the spec wants old and new values
+  kept rather than capped.
+- The journey no longer creates the profile default by hand. `createBusinessProfile` writes it alongside
+  the profile from `profileDefaultPolicyWrite()`, so creating one again violated
+  `automation_policies_profile_default_key` — the same fallout #83's audit suite had, in a second place.
+
+**Accepted #83 behaviour preserved and re-verified on this head:** the native human takeover still retains
+both the `TAKEOVER_STARTED` audit row and `cancelPendingFollowUps` in one transaction, the policy
+`expectedVersion` concurrency enforcement and default-policy creation are intact, and the analytics/audit
+tenant-isolation, append-only and sensitive-event invariants pass in full.
+
+### Superseded — the accepted #82, propagated into #83 and nowhere else
 
 **PR #82 / P3-02 is accepted.** Gemini (Google Antigravity) published a formal exact-head review on
 2026-10-13T21:07:24Z — GitHub review state `APPROVED`, commit
@@ -503,7 +541,31 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — P5-08 / Issue #34
+### Current work — P5-09 / Issue #35
+
+**Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
+repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.
+
+**`docs/specs/UX_VERIFICATION.md` is written by this task** and is as explicit about what the suite does
+*not* prove as about what it does, because an unbounded coverage claim is the kind that gets cited in a
+review and turns out hollow.
+
+**There is no browser driver in this repository, and the contract says what it wants instead:** "E2E must
+exercise server authorization and stale-state behavior, not only happy-path DOM interactions." So each
+journey enters through `resolveBusinessProfileContext` and drives the same stores the server actions
+drive, against a migrated database, with an authorization probe and a stale-state probe per scenario.
+
+**Two things these tests found that nothing else had.** `--border-strong` failed WCAG SC 1.4.11 at 1.91:1
+light and 1.86:1 dark against the surface a `.button` actually sits on — a button whose edge a reader with
+low contrast sensitivity could not find. And P5-08 shipped the analytics and audit screens with **no CSS
+at all**, so an eight-column table pushed the whole document sideways at 375px.
+
+**What is not claimed.** jsdom evaluates no media queries and lays nothing out, so nothing here asserts a
+page looks right at a given width; the responsive tests hold that the rules exist and still name what the
+components render. Contrast is computed from tokens rather than sampled from pixels, which is strictly
+more than a browser-based auditor gives in jsdom — it needs paint and would report nothing.
+
+### Previous — P5-08 / Issue #34
 
 **Branch `feat/p5-08-analytics-audit`**, stacked on P3-02. Operational analytics and a searchable,
 append-only audit log. The owner's directive on PR #81 placed this after P3-02, and it was held back until

@@ -15,7 +15,7 @@
   --surface-sunken: #f5f6f8;
   --surface-raised: #ffffff;
   --border: #d9dde3;
-  --border-strong: #b6bcc6;
+  --border-strong: #888f9c;
   --text: #16191d;
   --text-muted: #5b6472;
   --accent: #1c4ed8;
@@ -34,7 +34,7 @@
     --surface-sunken: #0e1013;
     --surface-raised: #1c2026;
     --border: #2c333c;
-    --border-strong: #3d4551;
+    --border-strong: #666f80;
     --text: #eef1f5;
     --text-muted: #a6b0bd;
     --accent: #7aa2ff;
@@ -1104,4 +1104,144 @@ a {
   flex-direction: column;
   gap: var(--gap);
   min-height: 0;
+}
+
+/* ---- analytics and audit ------------------------------------------------------------------------ */
+
+/*
+ * P5-08 shipped these two surfaces with no styles at all, which at 375px means an eight-column table
+ * pushing the whole document sideways and taking every other surface with it. The panels below reflow
+ * from a grid to a single column, and every table is allowed to scroll inside its own panel rather than
+ * widening the page.
+ */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--gap);
+  margin-bottom: var(--gap);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.filter-bar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.filter-bar select,
+.filter-bar input {
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--gap);
+  align-items: start;
+}
+
+.metric-panel {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* A panel is the scroll boundary. Without this the widest table decides the page's width. */
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.metric-panel h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.metric-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.metric-panel th,
+.metric-panel td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.metric-panel dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.metric-panel dt {
+  color: var(--text-muted);
+}
+
+.metric-panel dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-figure {
+  margin: 0;
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The provider's own numbers are a separate claim from ours, and the boundary is visible. */
+.metric-panel[data-panel="provider-state"] {
+  border-color: var(--border-strong);
+}
+
+.audit-log table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.audit-log {
+  overflow-x: auto;
+}
+
+.audit-log th,
+.audit-log td {
+  text-align: left;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.audit-log td:first-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-older {
+  display: inline-block;
+  margin-top: var(--gap);
+}
+
+@media (max-width: 900px) {
+  /* One panel at a time. `auto-fit` would already give a single column at this width, but saying so
+     explicitly keeps the narrow layout from depending on a minmax value somebody tunes for looks. */
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-bar label {
+    flex: 1 1 10rem;
+  }
 }
