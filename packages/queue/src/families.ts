@@ -67,8 +67,16 @@ export const AI_DRAFT_GENERATION: JobFamily<AiDraftGenerationJob> = {
       job.conversationId,
       job.anchorMessageId,
       // A person asking twice for the same anchor wants two drafts, so each explicit request is its own
-      // job; automation for one anchor is always the same job, however many times it is retried.
-      ...(job.trigger.kind === "HUMAN_REQUEST" ? [job.trigger.kind, job.trigger.requestId] : [job.trigger.kind]),
+      // job; automation for one anchor is always the same job, however many times it is retried. A
+      // follow-up attempt is its own job for the same reason a person's request is — and it must be,
+      // because every attempt of one follow-up shares the anchor, so without the attempt in the id a
+      // second allowed attempt would be silently dropped as a duplicate of the first. Which also makes a
+      // re-enqueued attempt exactly one job: the duplicate-queue-job case.
+      ...(job.trigger.kind === "HUMAN_REQUEST"
+        ? [job.trigger.kind, job.trigger.requestId]
+        : job.trigger.kind === "FOLLOW_UP"
+          ? [job.trigger.kind, job.trigger.followUpId, String(job.trigger.attempt)]
+          : [job.trigger.kind]),
     ),
   // Safe to retry: generation produces a draft, never a customer-visible send.
   jobOptions: { ...RETENTION, attempts: 3, backoff: { type: "exponential", delay: 5_000 } },

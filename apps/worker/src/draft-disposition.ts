@@ -104,7 +104,9 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
 
     const draft = await dependencies.db.aiDraft.findUnique({
       where: { workspaceId_businessProfileId_id: { ...scope, id: input.draftId } },
-      select: { text: true, confidence: true, reasonCodes: true, factualSourceIds: true, needsReview: true, status: true, retrieval: true },
+      // `trigger` because a follow-up attempt answers no message of the customer's, and the provider's
+      // automated-response budget below is counted from the message being answered (#55).
+      select: { text: true, confidence: true, reasonCodes: true, factualSourceIds: true, needsReview: true, status: true, retrieval: true, trigger: true },
     });
     const conversation = await dependencies.db.conversation.findUnique({
       where: { workspaceId_businessProfileId_id: { ...scope, id: input.conversationId } },
@@ -132,7 +134,23 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
     }
 
     const timing = instagramTimingPolicy();
-    const remainingMs = conversation.lastInboundAt === null ? undefined : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
+    /**
+     * How long the provider's automated-response budget still allows, or `undefined` when it does not apply.
+     *
+     * It does not apply to a planned follow-up. The budget is Meta's rule about answering a person
+     * promptly and it starts at *their* message; a follow-up exists precisely because they stopped
+     * writing, so its anchor is hours or days old by design and a budget measured from it is always
+     * already spent. Applying it anyway sent every follow-up to `DEADLINE_MISSED`, which asked a person to
+     * review a message nobody is waiting for and left the attempt to be cancelled as `REVIEW_PENDING` —
+     * so the feature could be wired up correctly end to end and still never send anything.
+     *
+     * Nothing else is relaxed: the 24-hour messaging window is still computed from the customer's last
+     * message and still refuses a follow-up outside it, and every other gate is untouched.
+     */
+    const remainingMs =
+      conversation.lastInboundAt === null || draft.trigger === "FOLLOW_UP"
+        ? undefined
+        : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
     const decision: PolicyDecision = evaluatePolicy({
       mode: conversation.modeOverride ?? policy.mode,
       aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",

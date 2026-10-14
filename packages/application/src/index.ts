@@ -34,6 +34,7 @@ export { isEligibleForInboundDebounce, nextDeliveryStatus, outboxRetryDelayMs, s
 export {
   draftGenerationBlockers,
   generateDraft,
+  followUpGenerationKey,
   generationKey,
   type DraftGenerationCommand,
   type DraftGenerationDependencies,
@@ -107,6 +108,7 @@ export type {
   PolicyLimits,
   PolicyRetrieval,
   ReplyCycleState,
+  TemplateRoute,
 } from "./policy/inputs";
 export { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies, type DeliveryOutcome } from "./delivery/coordinate-delivery";
 export { NATURAL_MODE_FRACTION, selectDeliveryDelayMs, type DeliveryDelay, type DeliveryDelayInput } from "./delivery/schedule";

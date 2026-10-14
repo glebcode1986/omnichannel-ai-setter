@@ -36,6 +36,8 @@ Artificial delay is shortened or removed when necessary. The old generic 30–12
 
 If the compliant automated-response deadline has already been missed, hold/review/re-evaluate rather than knowingly sending as ordinary AUTOPILOT under stale timing assumptions.
 
+The budget is counted from a triggering inbound message, so a send that has none does not have one. A scheduled follow-up (#55) is the case: it chases a silence, its anchor is hours or days old by design, and a deadline measured from that anchor is always already spent. Such a send is marked proactive and carries no dispatch deadline; the 24-hour standard messaging window is unaffected, still counted from the customer's own last message, and still refuses a proactive send made outside it. See `GOALS_FOLLOWUPS.md`.
+
 ## Adapter responsibilities
 
 Implement the frozen `ChannelAdapter` contract in `packages/channel-instagram`:

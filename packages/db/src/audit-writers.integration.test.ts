@@ -14,9 +14,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { searchAuditEvents } from "./audit-store";
 import { createConversationOperationStore } from "./conversation-operations-store";
 import { createKnowledge, editKnowledge } from "./knowledge-store";
-import { MANDATORY_REVIEW_REASON_CODES } from "@omnichannel/domain";
 
-import { savePolicy } from "./policy-store";
+import { readPolicies, savePolicy, type PolicyEdit } from "./policy-store";
 import { addWorkspaceMember } from "./repositories/workspaces";
 import { saveStyleProfile } from "./style-store";
 import { authorizeWorkspaceAccess } from "./tenancy";
@@ -36,12 +35,11 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
     workspace = await seedWorkspace(database.db, "audit-writers");
     [profile] = workspace.profiles as [SeededProfile];
     ownerContext = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: workspace.workspaceId });
-    // The profile default, which onboarding creates in the real flow. `savePolicy` edits; it does not
-    // invent a policy, and that is the right shape — a settings save should not be able to conjure the
-    // settings it is saving.
-    await database.db.automationPolicy.create({
-      data: { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId, mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES] },
-    });
+    // No profile default is created here any more. `savePolicy` edits and does not invent a policy —
+    // still the right shape — but the accepted P3-02 head makes `createBusinessProfile` write the default
+    // alongside the profile itself, from the domain's own `profileDefaultPolicyWrite()`. So the comment
+    // this fixture used to carry ("which onboarding creates in the real flow") is now literally true in
+    // code, and creating it by hand violates `automation_policies_profile_default_key`.
   }, 180_000);
 
   afterAll(async () => {
@@ -77,8 +75,21 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
     expect(paused?.detail).toMatchObject({ pausedUntil: until.toISOString() });
   }, 180_000);
 
+  /**
+   * Saves against the profile default's current version, which `savePolicy` requires.
+   *
+   * The same helper `policy-store.integration.test.ts` uses, and for the same reason: the real caller
+   * renders a version and posts it back, so spelling that out in each case below would bury the audit
+   * behaviour each case is actually about. Added when the accepted P3-02 head merged in, which made
+   * `expectedVersion` required so that no caller can decide not to care.
+   */
+  const save = async (edit: Omit<PolicyEdit, "expectedVersion">) => {
+    const current = (await readPolicies(db(), profile.context)).find((policy) => policy.channelAccountId === null);
+    return savePolicy(db(), profile.context, null, { ...edit, expectedVersion: current?.version ?? 1 });
+  };
+
   it("a settings change, pointing at the typed before/after rather than copying it", async () => {
-    const outcome = await savePolicy(db(), profile.context, null, { businessGoal: "Book more consultations" });
+    const outcome = await save({ businessGoal: "Book more consultations" });
 
     expect(outcome.status).toBe("SAVED");
     const changed = await events("POLICY_CHANGED");
@@ -89,7 +100,7 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
   }, 180_000);
 
   it("turning the mode up, as its own event as well as the settings one", async () => {
-    await savePolicy(db(), profile.context, null, { mode: "DRAFT" });
+    await save({ mode: "DRAFT" });
 
     const modes = await events("MODE_CHANGED");
     expect(modes[0]?.summary).toBe("Changed the mode from OFF to DRAFT");
@@ -102,7 +113,7 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
   it("nothing, when a settings save changed no mode", async () => {
     const before = (await events("MODE_CHANGED")).length;
 
-    await savePolicy(db(), profile.context, null, { businessGoal: "Something else entirely" });
+    await save({ businessGoal: "Something else entirely" });
 
     // A mode event for a save that did not touch the mode would make the log useless for the one
     // question it answers best.
@@ -110,7 +121,7 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
   }, 180_000);
 
   it("widening what goes out unattended, as its own kind", async () => {
-    await savePolicy(db(), profile.context, null, { whatsappTemplateAutomationAllowlist: ["appointment_reminder"] });
+    await save({ whatsappTemplateAutomationAllowlist: ["appointment_reminder"] });
 
     const template = await events("TEMPLATE_POLICY_CHANGED");
     expect(template).toHaveLength(1);
@@ -178,13 +189,16 @@ describe.skipIf(!databaseTestsEnabled())("the audit log is written by", () => {
 
     it("records nothing when the transaction it is in throws afterwards", async () => {
       const before = (await events("MODE_CHANGED")).length;
+      // Read outside the transaction rather than through the helper, because this case has to write
+      // through `tx` itself — that is the whole point of it.
+      const current = (await readPolicies(db(), profile.context)).find((policy) => policy.channelAccountId === null);
 
       // The audit write and the change are in one transaction, so a failure after the audit row is
       // written takes it with it. Without that, a crash would leave a mode change nobody appears to have
       // made — or a record of one that never happened, which is worse.
       await expect(
         db().$transaction(async (tx) => {
-          await savePolicy(tx as never, profile.context, null, { mode: "AUTOPILOT" });
+          await savePolicy(tx as never, profile.context, null, { mode: "AUTOPILOT", expectedVersion: current?.version ?? 1 });
           throw new Error("something failed after the audit row was written");
         }),
       ).rejects.toThrow(/something failed/u);
