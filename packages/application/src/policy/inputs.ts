@@ -85,6 +85,35 @@ export type AfterWindowPolicy =
   | { readonly channel: "INSTAGRAM"; readonly policy: InstagramAfterWindowPolicy }
   | { readonly channel: "WHATSAPP"; readonly policy: WhatsAppAfterWindowPolicy };
 
+/**
+ * What the outside-window template route can offer, as deterministic facts (ADR-016, Issue #20).
+ *
+ * Two booleans rather than a template, deliberately. The engine must not choose which template a customer
+ * receives — ADR-016 says deterministic policy, not model preference, decides eligibility, and a *policy
+ * engine* holding a catalogue would be the place a model's ranking quietly became a send. Selection and
+ * validation happen before this: by the time the engine sees it, the question is only whether this send
+ * may go out unattended, may go to a person, or has nowhere to go.
+ *
+ * The distinction between the two is the difference between a review item and a dead end.
+ */
+export interface TemplateRoute {
+  /**
+   * Whether any approved template exists that a person could send.
+   *
+   * False is terminal: Meta pauses, disables and eventually archives templates on its own, so an account
+   * can be left with none — and a review item nobody can resolve is worse than an empty queue.
+   */
+  readonly approvedTemplateAvailable: boolean;
+  /**
+   * True when *this* send's template is approved right now, its values match the approved shape, and the
+   * business allowlisted it for unattended automation.
+   *
+   * All three, because any one of them failing is a different conversation with the operator and none of
+   * them may be assumed from the other two.
+   */
+  readonly automatable: boolean;
+}
+
 export interface PolicyLimits {
   readonly confidenceThreshold: number;
   readonly mandatoryReviewReasons: readonly ReasonCode[];
@@ -104,6 +133,11 @@ export interface PolicyInput {
   readonly capabilities: ChannelCapabilities;
   readonly window: WindowDecision;
   readonly humanAgent: HumanAgentAvailability;
+  /**
+   * The outside-window template route, when the channel has one. Absent on a channel whose policy
+   * vocabulary has no templates, and absent is not a weaker form of "available".
+   */
+  readonly templateRoute?: TemplateRoute;
   /**
    * The latest instant an automated reply may still be dispatched — the provider's own budget, not our
    * preference (Issue #13). Absent means the channel imposes no deadline. Quiet hours may defer only
