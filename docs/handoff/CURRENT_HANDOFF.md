@@ -50,10 +50,31 @@ head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, *
 `4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
 `fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. Nothing is merged to `main`.
 
-Everything is one stacked chain of unmerged PRs, each branch based on its parent:
+Everything is unmerged PRs stacked by base — but **not one chain. Two live segments**, which was measured
+on 2026-10-13 and had been assumed otherwise until then:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
+
+`#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
+
+```
+$ git merge-base --is-ancestor origin/feat/p3-02-goals-followups origin/feat/p5-08-analytics-audit
+  → no
+$ git merge-base  …p3-02-goals-followups  …p5-08-analytics-audit
+  c098c18   (an older state of #82)
+```
+
+**#83 forks from `c098c18`, an older state of #82**, so the second segment contains neither the accepted
+#79/#80/#81 parents nor the P3-02 repair. Two consequences, both of which have already cost real work:
+
+- A repo-wide repair must be applied **in both segments**, or one of them keeps the defect until the
+  propagation arrives — which can be weeks. The nine fixture-clock repairs below were done that way for
+  exactly this reason.
+- The second segment's branch order is **not PR-number order**: #85 is `fix/instagram-token-lifecycle` and
+  #86 is `fix/dead-suspension-resolver`, two fix branches sitting between the Stage D work and Phase 4.
+
+Measure the graph before acting on it. PR numbers and PR bases both lie about it.
 
 **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer — *after*
 #77 had been cut from it, so #77 through #81 were all missing the human-composed send path. It was merged
@@ -246,6 +267,66 @@ Idempotency is the same decision digest the review path uses.
 
 ## Immediate next actions
 
+### Where the review gate actually stands
+
+One list, because two documents disagreeing about this is itself a defect Astra has blocked a release
+over — a note saying "awaiting re-review" next to a note saying "passed" leaves a reader no way to tell
+which is current.
+
+| PR | Branch | Status |
+| --- | --- | --- |
+| #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
+| #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
+| #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
+| #82 | `feat/p3-02-goals-followups` | **The current gate**, and **CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is still the only branch below #81 it has been propagated into. Awaiting independent review at the repaired head. |
+| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They are the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
+| #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
+
+**The independent reviewer is Astra again, temporarily, from 2026-10-13.** The owner routed reviews to
+Antigravity (Gemini 3.8 Flash) on 2026-10-12 and has now put Astra back as primary for the next eligible
+exact head while he diagnoses the local Antigravity watcher's workspace-write and concurrent-run
+behaviour. Both verdicts already given stand — #80 and #81 were accepted by Antigravity at
+`bd1c039998fb…` and `d9a34ffef120…`, and neither is to be re-reviewed merely to change the reviewer's
+name. **Never launch both reviewer systems for the same PR and SHA.**
+
+What has not changed: the review contracts, every previously accepted verdict, and the fact that **Claude
+is the only authorized author** — no author-role substitution by any model without the owner's fresh
+approval. The readiness marker this side publishes keeps its spelling,
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which the owner accepted for backward compatibility and
+which routes to whoever is currently reviewing. A verdict marker — `ASTRA_REVIEW` or
+`ANTIGRAVITY_REVIEW` — is the reviewer's and is never emitted from this side.
+
+**One provenance note worth keeping.** The owner's own workstation has a separate clone and produced a
+local-only merge commit for #82 (`2abb64117c2274adfbe6fc85ae7d552e23faf4b9`) during local reviewer
+activity. It is not in this repository, it is not a GitHub head, and a `Co-Authored-By: Claude` line does
+not make a commit this process's work. The #82 propagation recorded below was performed here, from the
+remote heads, and its SHA is the one on the branch.
+
+The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
+and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
+parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
+merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
+started.
+
+**The propagation into #80 found no semantic collision, which is worth recording because the dry run had
+predicted where one would be.** Exactly four files were touched by both branches: `catalogue.ts`,
+`schema.prisma` and `packages/db/src/index.ts` auto-merged (both sides only added — keys, models, exports
+— and every added line from both sides is present in the result, checked line by line), and
+`apps/web/src/ui/outcome-notice.tsx` conflicted because both appended to one `OUTCOMES` array. Resolved by
+keeping both: P5-07's `MOVED`/`STALE_STAGE`/`UNCHANGED_STAGE` and P5-04's `FORBIDDEN`/`TOO_LONG`/the three
+`TIMING_*`/the two `TAKEOVER_*`. The `REFUSALS` set below it auto-merged and already held both. Every
+P5-04 settings, policy and simulation file is byte-identical to the accepted head.
+
+The directive asked specifically that no part of the policy proposal state be dropped, naming
+`presenceMode` and `presenceTypingLeadMs`. **Those two fields do not exist at #80**: they arrive with
+P4-05 (commit `6ac04a3`, `feat/p4-05-whatsapp-presence`), which is below #80 in the chain, so the
+collision the directive is guarding against becomes material when this parent reaches the P4-05 branches
+and not before. What #80 does carry is the complete proposal state the confirm/refuse flow uses, and it is
+built in exactly one place (`proposalFrom`) and converted to the store's edit in exactly one place
+(`editFrom`); both are unchanged from the accepted head.
+
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
 down the chain by ordinary merge, every branch from #79 to #103 carries them, and each was pushed with
@@ -257,8 +338,393 @@ the two branches met. Fixed at `feat/p3-04-privacy-deletion` — a `DELETE` is p
 transaction has declared itself a customer erasure with `SET LOCAL`, and `UPDATE` stays refused either
 way. See that branch's own commit for why the guarantee is about rewriting rather than about erasure.
 
-1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and awaiting
-   independent re-review.**
+1. **Two repairs on 2026-10-13 that belonged to no feature, and the structural fact behind them.**
+
+   **PR #90's head had been red since 2026-10-08 and nobody noticed**, because its own descendants were
+   green. A fixture revoked a credential at a frozen `2026-10-05` on a row PostgreSQL stamps `created_at`
+   on, and `channel_credentials_lifetime_check` requires `revoked_at >= created_at`, so it failed on the
+   day the real clock passed the fixture's. The repair already existed on #91 and below — applied
+   downstream and never brought back to the branch that owns the test. Fixed at #90 and merged down all 15
+   descendants, every link content-neutral (`git diff <old> <new>` empty).
+
+   **Then nine more of the same class, found by looking for it rather than waiting.** All wrote
+   `channel_credentials.expires_at` as a frozen instant plus sixty days; the earliest would have turned CI
+   red on **2026-11-09**, the rest through 2026-12-04. Proved by simulation in both directions: shifting a
+   fixture's instant so its fuse sat in the past produced 15 failures naming the constraint, and with the
+   expiry anchored to the real clock the same shift passes.
+
+   Six of the ten sites went to the branch that owns them (#85, #88, #89, #90, #91, #93). **Four could
+   not**: they belong to #64 and #71, which hold an exact-head PASS, and repairing there would move an
+   accepted head. They went to the earliest *live* branch carrying them instead — #82 and #83, byte-
+   identically so the eventual propagation merges one change rather than a conflict. That is a recorded
+   decision, not an oversight: a PASSed branch is terminal, nothing is pushed to it again, so its CI never
+   re-runs and its fuse never lights. Mechanically it is the same shape as the mistake that hid #90, and
+   the only difference is that those ancestors are frozen. Say so in writing or it becomes the bug again.
+
+   **The lasting lesson is the fixture clock itself.** A constant with a date in it is a timer. Where a
+   CHECK compares a column against a `created_at` the database stamps, the test must anchor that column to
+   the real clock or pin both ends; `packages/db/src/token-lifecycle.integration.test.ts` had the rationale
+   written out before any of this and four neighbouring files still had the bug.
+
+   **Operational note worth keeping.** For about 45 minutes that day every workflow run in the repository
+   failed in ~3 seconds with **zero steps** — runs created and killed, one push creating no run at all.
+   Nothing in the repository executed, so no code could be responsible; it was the private repo's Actions
+   allowance, and it cleared when the repository was made public. When a run fails, read `steps`: a real
+   job has 9 (`pnpm verify`) and 15 (`infrastructure suites`), a refused one has none. While it lasted,
+   sixteen heads were verified locally instead — typecheck, lint, the full suite with real PostgreSQL and
+   Redis, drift — and every one matched the CI result that came later.
+
+1. **P3-02 / Issue #55 — two P1 blockers on PR #82, both repaired, plus a third gap found while proving
+   the first.**
+
+   **P1-1: the feature had no executable path.** `dueFollowUps`, `claimFollowUp` and `recordFollowUpSent`
+   were correct, tested and **called by nothing**. A planned follow-up sat in the table for ever, and the
+   store's own tests could not tell us, because they call the store. This is the defect class the
+   repository keeps producing — exported, tested, never reached — and the second time it has been the
+   blocker on a PR (cf. Issue #9's token refresh).
+
+   The path, now end to end: `apps/worker/src/followup-sweeper.ts` is a `startRecoveryLoop` that finds due
+   work and hands each `READY` claim to **the same AI-draft job an inbound message enqueues**. It decides
+   nothing — every gate is re-asked inside `claimFollowUp` under the conversation lock, because a second
+   copy of a rule is the copy nobody checks. Carrying it: a third `FOLLOW_UP` variant on the draft trigger
+   (`AiDraftTrigger` gained the enum value in its own migration, since PostgreSQL forbids using a value
+   added in the same transaction), `followUpGenerationKey` exported from `application` so the worker and
+   the store derive one key one way, the attempt in the queue `jobId` so a re-enqueued attempt is one job
+   and a second allowed attempt is two, `DueFollowUp` carrying the tenant scope the cross-tenant scan
+   knows and `FollowUpView` does not, and `recordFollowUpSent` called from the handler **only** on a
+   disposition that actually scheduled an operation — an attempt whose draft was held is settled by the
+   next claim, so what an unsent attempt means is decided in one place.
+
+   **P1-2: a task could be assigned to somebody who cannot see the Business Profile.** `createTask` and
+   `assignTask` checked Workspace membership and never the profile grant, so a scoped member could be
+   handed work on a profile they cannot open. Fixed with `canActOnBusinessProfile` in `tenancy.ts`, used by
+   both paths through one `assigneeRefusal` helper. Reported and deliberately **not** fixed:
+   `lead-store.editLead` has the same asymmetry, and it is #80's reviewed feature.
+
+   The review asked for both halves — "including when users or grants change", and "ensure scoped task
+   reads cannot reveal foreign identity" — and refusing the assignment only closes the door. A grant can be
+   revoked after a legitimate assignment, and a row can predate the gate, so `listTasks` now resolves an
+   assignee's identity through `usersWhoCanActOnBusinessProfile` as it stands *now*, on every read, in one
+   query for the whole page. The name is withheld and the id kept, so an operator can see that a task is
+   parked on somebody who cannot do it and take it back without learning a stranger's name. The same rule
+   covers whoever closed the task: one rule for every identity a scoped read carries, which is the half an
+   obvious fix stops short of.
+
+   **And the other half of `CHANNEL_INELIGIBLE`.** The directive's recheck list named "window/template" and
+   the claim asked neither, though the reason code has always been documented as "window closed, template
+   required, account unhealthy". The claim now asks an injected port whether any route could carry the
+   message, inside its own transaction with the facts read under the lock. The port **cannot permit a
+   send** — every send is still decided twice downstream — so a `false` only declines to spend an attempt
+   and a model call on something nothing could deliver, and it answers `false` only where there is provably
+   no route: outside the window on `STANDARD_ONLY`, or in a conversation the customer never started.
+   Outside the window on `HUMAN_ASSISTED_EXTENDED` it answers `true`, because that route ends in a person's
+   decision. WhatsApp is answered `true` and left to the engine: its adapter is Phase 4 and not on this
+   branch, and guessing a provider rule from here would be a second implementation of it.
+
+   **The crash window, which is why the claim answers `ALREADY_SENT`.** A worker that scheduled an
+   attempt's delivery and died before recording it leaves a `PENDING` row whose lease lapses; the next
+   claim would spend a fresh attempt and schedule a *second* operation for one silence, and nothing
+   downstream can deduplicate two operations because their identities differ. So a claim first asks whether
+   the previous attempt already produced a draft — by that attempt's generation key, not the first's — and
+   settles the follow-up from what that draft actually did: an operation exists, so record it; a draft with
+   no operation means the policy held it, so settle `REVIEW_PENDING` rather than retry a question that has
+   an answer.
+
+   **The third gap, found by the end-to-end test rather than by reading.** With everything above wired
+   correctly, no follow-up could still be sent. Meta's automated-response budget —
+   `INSTAGRAM_ADAPTER.md`'s "no later than about 25 seconds after the latest **triggering inbound**" — was
+   applied to every automated send, and a follow-up's anchor is hours or days old *by design*. Every
+   follow-up reached `DEADLINE_MISSED`, asked a person to review a message nobody was waiting for, and was
+   then cancelled `REVIEW_PENDING` by the next claim. A send that answers no inbound message now declares
+   itself `proactive` and carries no dispatch deadline, at both gates that read one; the 24-hour standard
+   messaging window is untouched, still counted from the customer's own last message, and still refuses a
+   proactive send made outside it. The flag is set only where it is true, so a send that forgets to declare
+   itself keeps the deadline and is held rather than quietly losing a provider rule. Recorded in
+   `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`; it is a reading of the spec's own wording rather than a
+   new rule, and it is called out for the reviewer as the one send-path behaviour this repair changes.
+
+   **The regressions the directive asked for, and what each one owns.** `followup-sweeper.test.ts` (the
+   pass: what is enqueued, what is not, an `ALREADY_SENT` claim producing no job, a failed enqueue leaving
+   the claim claimed and logging the error's name only); `delivery-policy.test.ts` (the deadline is still
+   derived for a reply and absent for a proactive send — the negative control that proves the budget was
+   scoped, not deleted); `ai-draft-handler.test.ts` (a send is recorded under the disposition's own
+   operation id, and nothing is recorded for a held draft, a skipped one, an operation-less "scheduled"
+   one, or any trigger that is not a follow-up); `followup-channel.test.ts` (what the window
+   question answers, and the controls that keep a `false` from silencing a chase something could carry);
+   `followup-store.integration.test.ts` (the crash window, concurrent claims, the lease, the claim asking
+   the channel before spending an attempt and with the facts it read under the lock, and cancellation
+   driven through the ingestion store's `recordActivity` and `startHumanTakeover` and through `takeOver`
+   rather than through the helper, because a
+   cancellation helper with no caller is this same defect class); `human-task-store.integration.test.ts`
+   (both paths that set an assignee, and the read withholding a foreign name through either column, after
+   a revoked grant and for a row written past the store); and `followup-slice.integration.test.ts` on a
+   real PostgreSQL and a real Redis (a due row becoming exactly one queued job, the lease keeping the next
+   pass off it, one draft and one scheduled operation the follow-up names, a dead worker's operation
+   recovered rather than a second one made, an ordinary reply to the same old message still held, nothing
+   queued and no model asked once the window closed with no route left, and no job at all once the customer
+   replied or a person took over). Eighteen mutations applied to the production code; seventeen killed by
+   the suite that owns the behaviour, and the one survivor is an empty-`IN` short circuit that no guarantee
+   rests on, documented as the optimisation it is.
+
+1. **P5-04 / Issue #30 — thirteen blockers on PR #79 across three reviews and two directed repairs, all
+   repaired.**
+
+   **The stale-proposal dead end, directed at `e3210e88…`.** Two admins, one screen: A composes a change
+   that widens something against version N, B saves, A submits. The CONFIRM gate refuses *before*
+   `savePolicy`, so the CONFLICT path that re-stamps a proposal never ran — the refusal handed A's values
+   back still at version N, the page saw a stale proposal, withheld the acknowledgement and the seal, and
+   the form re-posted version N for ever. It failed closed, which is the right direction, and it never
+   converged, which is the defect: the screen promised a recovery that could not complete, and two pieces
+   of copy said so in as many words.
+
+   The fix is one idea: **the review is always a triple — the owner's values, the version stored now, and
+   the impacts those values have against that version.** The refusal mints that triple and the gate
+   verifies it, so a refusal is a usable review rather than a repetition. Three things follow:
+
+   - a refusal hands back the values rebased onto the current version, with the summary recomputed against
+     it, so submitting again completes instead of looping;
+   - a seal stops verifying the moment anybody else saves — **including a change that leaves the impact
+     list identical**, which a seal over the version the *form* carried could not tell apart and left to
+     the store's conditional write as the only guard;
+   - the two gates stay distinct questions. "Did you see this summary" is the seal; "is this still the
+     state you saw" is the store's versioned write. Neither stands in for the other, and the write is
+     still refused when a form names a version that is not the stored one.
+
+   The copy was wrong as well as the flow, and that is fixed with it: the "tick the box to save them"
+   sentence no longer renders when there is no box, and the button says *re-check these values against the
+   current settings* in the state where pressing it does that, rather than "Save anyway" for a save the
+   gate would refuse.
+
+   **A follow-up on that copy fix, because the first version of it was complete-looking rather than
+   complete.** The checkbox is withheld for five reasons and the sentence that names it weighed only one of
+   them, so a reader without permission to edit, a URL carrying impacts but no seal, and a profile with no
+   stored policy were each still told to tick a control that was not on the page — the worst of them
+   showing "You are seeing what is in use" and "Tick the box to save them" at the same time. The rule was
+   written in a comment beside the sentence, in those words, and was simply not the rule the code applied.
+   It is one predicate now, `acknowledgementOffered`, asked once for the control and for the sentence that
+   names it, and tested for each missing piece.
+
+   **Found in the same pass, reported rather than fixed at the time, and now closed as Astra's first
+   R5-final blocker:** `policyImpactsOf` modelled **no impact at all** for widening the WhatsApp template
+   allowlist once `TEMPLATE_AUTOPILOT` was already the stored policy — the allowlist sub-check sat inside
+   an arm guarded by `before.whatsappAfterWindowPolicy !== "TEMPLATE_AUTOPILOT"`, so it was unreachable in
+   exactly the state the screen itself produces and warns about. See blocker 8 below for the repair.
+
+   **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`. The persisted exact-head run was green
+   and covered none of the seven cases, which is the usual shape of these findings: every one of them is
+   a gap *between* two correct pieces, and a gap has no failing test until somebody writes one.
+
+   **1. Policy changes had no role authorization.** `ONBOARDING_UX.md` says workspace roles constrain
+   policy changes, and connecting a channel already enforced that; changing the automation policy did not.
+   `requireBusinessProfileContext` proves membership and profile visibility, which is not permission, so
+   an AGENT holding a perfectly valid context could switch the workspace to AUTOPILOT and have it audited
+   as a legitimate change. `savePolicy` now requires `WORKSPACE_ADMIN_ROLES` **before it reads the row** —
+   deliberately before, because a store that checked the row first would answer `CONFLICT` for a wrong
+   version and `SAVED` for the right one, which tells a member without permission what the stored version
+   is. The screen renders the settings read-only for anybody else and the action reports `FORBIDDEN`.
+
+   **2. Two tabs silently overwrote each other.** The save read the current row and then wrote by `id`
+   alone, and neither the form nor `PolicyEdit` carried a version — so the second tab posted its whole
+   form from a snapshot predating the first save, succeeded, reverted fields its author had never seen,
+   and left two audit rows deriving `before` from the same stale state. There is now an
+   `automation_policies.version` column, `PolicyEdit.expectedVersion` is **required** rather than optional
+   (an optional guard is a guard the next caller forgets), and the comparison happens under a
+   `SELECT … FOR UPDATE` taken at the top of the save's own transaction. The lock is the part worth
+   keeping: without it both savers read the same version at READ COMMITTED, both find their expectation
+   satisfied, and the second write still lands on the first one's result — a lost update that no amount of
+   version *checking* catches, because the check itself was reading stale data. A `Promise.all` test does
+   not prove this; removing the lock leaves it passing, because the two transactions simply run in turn.
+   The regression is a barrier: one writer is held open across the other's read.
+
+   **3. The high-impact confirmation could be acknowledged before the summary existed.** The checkbox was
+   rendered on every load and the server only asked whether `confirm=on` had been posted, so "show the
+   effect summary before save" was skippable by ticking it first — and when the save *was* refused, the
+   redirect carried only impact codes, so the form was rebuilt from **stored** values and the summary
+   ended up describing a change that was no longer on screen. The acknowledgement is now the summary's own
+   checkbox, its value is the exact list of impact codes the server computed, and the server compares
+   sets: acknowledging fewer, more, or a different set is refused again. The refused proposal travels in
+   the URL and the form renders from it, so the summary and the values being confirmed are the same
+   thing. The proposal carries the version it was composed against, so an acknowledgement cannot be
+   carried across somebody else's change either.
+
+   **4. "Custom" timing could be selected and not configured.** The selector offered `CUSTOM` and the
+   form posted only `timingPreset`, so the store fell back to the previous ranges and selecting Custom
+   saved nothing custom. Four range inputs are now on the form — seconds on screen, milliseconds in the
+   store — posted only when the preset is `CUSTOM`, because a named preset carries its own ranges and
+   sending both is a contradiction the store refuses. They are rendered whichever preset is selected: only
+   rendering them for `CUSTOM` would mean a round trip before the inputs even appeared.
+
+   **5. The audit UI omitted the values and hid everything past twenty entries.** The store returned
+   `before` and `after` and the screen rendered actor, time and impact labels only; the read took the
+   newest twenty with no continuation, so the twenty-first change was unreachable from the screen for
+   ever. `listPolicyAudits` is now a keyset page over `(changedAt, id)` — both halves, because two saves
+   can share a millisecond and a cursor on an instant alone repeats or skips rows, which on a change log
+   reads as a change happening twice or not at all. The screen shows both sides of every field that
+   *moved*, from a named field list rather than `Object.keys`, so a column added later cannot reach this
+   screen with no label and no translation.
+
+   **6. The simulation could not test what it claimed to.** Channel, account health, capabilities and the
+   messaging window were constants: every run was Instagram, connected, inside an open free-form window.
+   So the WhatsApp selector and template allowlist could never affect the result, neither Instagram
+   after-window choice was ever exercised, and the screen still described the answer as the expected
+   send/review path for the saved configuration. A playground that silently tests one path of several is
+   more misleading than one that tests none, because its answer looks complete. All three are explicit
+   inputs now, the chosen channel's own after-window policy is used (the union is per channel precisely so
+   a WhatsApp conversation cannot be judged against an Instagram policy), and the result states which
+   inputs produced it. `AFTER` is modelled as an expired window rather than `NOT_ELIGIBLE`, which would
+   short-circuit the gates the run exists to exercise.
+
+   **The re-review at `d67da89e…` closed findings 1, 2, 5 and 7 and kept three.** All three are now fixed,
+   and the third one corrects a judgement of mine rather than only a defect.
+
+   **The acknowledgement needed a server-issued proof, not a comparison.** Comparing the posted impact
+   codes against the freshly computed ones is necessary and not sufficient: the codes are public — URL,
+   page, translation catalogue — so a first crafted POST naming the right code satisfied the comparison
+   with no summary ever rendered, and "the page only renders the checkbox after a refusal" is a statement
+   about one caller of a public endpoint. The refusal now mints an HMAC seal over the encoded proposal, the
+   version and the sorted impacts (`proposal-seal.ts`, `AUTH_SECRET`, compared with `timingSafeEqual`), and
+   the save accepts an acknowledgement only with a seal it minted. Stateless rather than a persisted
+   pending proposal: a table would need an owner, a lifetime, a cleanup policy and an answer for two tabs
+   proposing at once, and what is being authenticated already travels with the request.
+
+   **An invalid Custom submission was reported as a success, and a test of mine said that was correct.**
+   The permanent case read "sends nothing when a custom range is only half typed" — so a repair-directive
+   requirement was contradicted by a green suite, which is the trap of a test quoting a spec and asserting
+   its opposite. It refuses now, with three outcomes, and the bounds are shared with the form's own
+   `min`/`max`. The same hole sat three lines below the fieldset: `takeoverPauseHours` omitted a cleared
+   box, the store kept the stored hours, and a crafted `100000` was eleven years of silence accepted as a
+   deliberate choice.
+
+   **The allowlist: I argued a limitation where the mechanism already existed.** My previous note said
+   making the playground decide template routing would be a second implementation of a send rule. The
+   premise was right and the conclusion was wrong, because `templateRoute` — two settled booleans computed
+   where the catalogue is, never inside the engine — is this chain's own design for exactly this question.
+   It is implemented here: `TemplateRoute` and the optional `PolicyInput.templateRoute`, an
+   `evaluateTemplateGate` in which `TEMPLATE_REQUIRED` is a review item a person can resolve while
+   `NO_ELIGIBLE_TEMPLATE` is a dead end, the reason code itself, and a simulation that computes
+   `automatable` from the owner's **saved** allowlist. Empty versus non-empty now decides `SKIP` against
+   `SCHEDULE`, and the three WhatsApp modes are distinguishable — asserted in the engine's own suite, where
+   a policy rule belongs.
+
+   **The bug that was the real cause.** I had mapped "after the window" to an expired free-form window for
+   both channels. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is the state the template gate
+   keys on — so the gate never ran, and nothing done to the allowlist could have changed an answer.
+   Instagram's closed window stays an expired free-form one, because its after-window policy is about what
+   may still happen then.
+
+   **Six more came from my own adversarial pass before sending the evidence**, and two were as serious as
+   anything in the review: the playground's GET form replaced the whole query and so silently destroyed a
+   pending proposal — while the history link three hundred lines away obeyed the opposite rule *and had a
+   test saying why*, one rule with two implementations and the untested one losing state; and the audit
+   diff sorted every list and compared the *rendered* line, so a criteria reorder or a criterion split in
+   two wrote an audit row whose diff rendered empty — a history entry asserting a change and showing none.
+   The comparison is on a JSON encoding now, and only the two lists the store itself treats as unordered
+   are sorted. Also: the page held both versions and compared them nowhere; "show earlier changes" carried
+   the playground's question and so billed a model request per page of history; and the length bound
+   covered one of the three free-text fields that share the proposal parameter, which is a bound on
+   nothing.
+
+   That last pair needed a fifth input to be provable at all. `HUMAN_ASSISTED_EXTENDED` opens a human-only
+   review path only while a human-support exception is live, and the exception was hard-coded unavailable
+   — so both Instagram choices produced the same `WINDOW_CLOSED` and nothing selected on this screen could
+   change a single answer. It is an explicit input now, and the only one whose default is the conservative
+   value: an exception is something a business has to have been approved for, and assuming it would show
+   an owner a review path their account may not offer.
+
+   **The concurrency proof is deterministic, by directive.** The barrier in "does not lose a write that
+   commits between the read and the update" synchronised with `setTimeout(250)`, which is a guess about how
+   the host scheduled two connections rather than a fact about the database. Under the full parallel suite
+   the guess was sometimes wrong and the case then reported a lost update that was really a race inside the
+   test. Where that was observed matters, so it is recorded precisely: on the **propagation tree**, where
+   this branch is merged into the chain tip and the `@omnichannel/db` suite is 1,078 cases, one of three
+   identical runs failed. On this branch's own 460-case suite the race does not lose — six consecutive full
+   runs pass, and so does the timed version under two suites in parallel. So the repetition here is not
+   what makes the repair sound; the argument is structural, and the merged tree is what proves the
+   assumption can be false in this repository at all. In the one regression that distinguishes a real row lock
+   from a version check reading stale data, that is worse than having no case: a flake there teaches the
+   next person to re-run rather than look.
+
+   It now waits for the state it depends on: a backend observably blocked on the **holding transaction's
+   own id**, read from `pg_locks`. Keyed to that transaction rather than to "some lock is ungranted
+   somewhere", because the broad form is satisfied by an unrelated suite's contention and would reintroduce
+   the race it replaces. Bounded, and it throws if the barrier never forms, so the case cannot pass for the
+   wrong reason. Still load-bearing: deleting the `FOR UPDATE` from `savePolicy` fails it.
+
+   **Two defects found, measured, and deliberately not fixed here.** Both are reported on the PR rather
+   than repaired, because this repair is scoped to named blockers and widening it would make the diff
+   unreviewable against them.
+
+   - **Nothing in production created an `automation_policies` row.** Reported here, and now closed as
+     Astra's second R5-final blocker — see blocker 9 below. The measurement in this note was close: the
+     fixtures that collided with `automation_policies_profile_default_key` turned out to be **14 files**
+     (5 in `packages/db`, 5 in `apps/worker`, 1 in `apps/web`, plus the three suites whose own cases were
+     about the absent row), not the 20 + 8 estimated from the grep.
+   - **The send path still asks "has this policy changed?" with `updated_at`.**
+     `delivery-store.ts policyUnchanged` compares a `TIMESTAMP(3)`, which is the mechanism this branch's
+     own migration rejects for that exact question — two writes inside one millisecond compare equal.
+     `version` is now the precise answer, so this is one rule with two implementations and the weaker one
+     is in the send path. Harmless today, because every write moves both. Not changed here: it is a
+     reviewed send gate, and a send gate is not something to alter inside a repair about a settings
+     screen.
+
+   **7. The coordination documents contradicted each other.** See the table above; both files now say the
+   same thing, and the queue names #79 as current work rather than #78.
+
+   One thing worth carrying forward: the version rule now has **one** implementation. `expectedVersionOf`
+   moved to `apps/web/src/server/form-fields.ts`, which Knowledge, Style and AI settings all read from. It
+   is deliberately strict — `Number.parseInt` is happy to read `2` out of `"2; DROP"`, and a guard whose
+   refusals depend on the shape of the attacker's string is not a guard.
+
+   Every new guard was mutation-checked: removing the role check, the version comparison, the row lock,
+   the acknowledgement comparison, the version refusal in the action and the `CUSTOM`-only timing
+   condition each fails a named test.
+
+   **8. Widening an already-enabled WhatsApp template allowlist was not a material change.** Astra's
+   first R5-final blocker, and the finding this document had been carrying as reported-not-fixed. With
+   `TEMPLATE_AUTOPILOT` already stored, adding a template emitted `impacts: []`: no effect summary, no
+   sealed acknowledgement, and an audit row saying nothing material happened. ADR-016 makes an empty
+   allowlist permit no unattended template send at all, so the first entry is the dormant-to-live step and
+   every later one widens the same unattended authority.
+
+   `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is its own impact code, in both catalogues, compared as a
+   **set**: empty→non-empty and any addition are material, removal and reorder are not, a repeated name is
+   not a change, and a one-for-one swap *is* one — which is why a length comparison would have been
+   wrong. It is an `else if` beside the enablement arm, so enabling the mode and filling the list in one
+   edit is one decision with one warning rather than the same consequence stated twice. Nothing in the
+   action changed: the gate already refuses any proposal with impacts that carries no server-minted seal,
+   so emitting the code is what makes the existing confirmation apply, and the store already recomputes
+   impacts for the audit row inside the same transaction as the write.
+
+   **9. A production Business Profile had no automation settings, so this feature had no form.** Astra's
+   second R5-final blocker, and the other finding carried here. `createBusinessProfile` created the
+   profile and nothing else, `readPolicies` returned `[]`, the page set `stored` from that list, and `form`
+   was `undefined` — a profile that is listed, accepts a channel account and cannot be configured, with
+   automation stuck at OFF. The permanent policy suite passed because it created the row itself, in a
+   helper named `ensureDefault`.
+
+   The default is now written **in the same statement** as the profile, as a nested create, so the two
+   rows arrive together or neither does; `ensureDefault` is gone, and the suite runs against the policy a
+   real profile has. Not a second call afterwards, because two statements can be interrupted between them
+   and what is left behind is exactly the half-made profile; and not lazily on first read, because reading
+   settings is open to any member who may see the profile while writing them is OWNER/ADMIN only, so an
+   initialization hidden in a read would have to break that boundary. The values come from the domain
+   (`defaultAutomationSettings`), not from the column defaults, with a domain test asserting it agrees
+   with `createAutomationPolicy` field by field. Migration `20261011090000_profile_default_policy`
+   backfills profiles created before this, idempotently by `NOT EXISTS` rather than by an inferred
+   `ON CONFLICT` target, because the index that would catch a duplicate is partial.
+
+   The product-path regression starts where an owner starts:
+   `apps/web/src/server/settings-screen.integration.test.ts` creates the Workspace and the profile through
+   the production path, authorizes an owner, asks the screen's own predicate (`profileDefaultOf`, now
+   extracted from `page.tsx` so the test drives the page's rule rather than a restatement of it) whether
+   there is a form, asserts the conservative values, and completes the first save against the version the
+   form rendered. All four cases fail if the nested create is removed. On the database side,
+   `policy-store.integration.test.ts` proves the row is conservative, that a rolled-back creating
+   transaction leaves **neither** row, that four concurrent creations get exactly one default each, and —
+   asked of the whole database rather than of the rows the case knows about — that no Business Profile
+   exists without one.
+
+1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
 
    **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
    immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
@@ -541,9 +1007,14 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 1. **#55 / P3-02 is the current work**, as PR #82 on `feat/p3-02-goals-followups`, stacked on P3-01's
    accepted head `13212612bb0ac73b2468c1adc99b1c5e48008c16`. Conversation goals, bounded follow-ups and
    human tasks, with no UI; see `docs/specs/GOALS_FOLLOWUPS.md`, which the issue referenced and the
-   repository did not have.
+   repository did not have. **It was reviewed CHANGES_REQUESTED and both P1 blockers are now repaired** —
+   the missing executable path and the assignee who cannot reach the profile — plus the provider-deadline
+   gap the end-to-end test exposed; see the P3-02 entry above for all three.
    - Every follow-up is revalidated at execution rather than at planning, and a `READY` claim goes to the
      **shared delivery coordinator**. There is no second send path.
+   - What makes one happen is `apps/worker/src/followup-sweeper.ts`, which enqueues the same AI-draft job
+     an inbound message does. Without it the whole feature was unreachable, which is what the first
+     blocker was. A claim it cannot enqueue is left claimed: the lease is what makes that safe.
    - Attempts are bounded by CHECK constraints (1–5), so "no unlimited chasing" survives a careless
      caller, a migration and a console session.
    - `human_tasks` has no draft, operation or delivery column at all, which is how "completing a task
@@ -645,3 +1116,221 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
+
+## PR #82 accepted, and joined to #83 — 2026-10-14
+
+**#82 / P3-02 is accepted at `9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`.** Gemini (Google Antigravity)
+published a formal exact-head review on 2026-10-13T21:07:24Z: GitHub state `APPROVED` on that commit,
+carrying `ANTIGRAVITY_REVIEW: PASS head=9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`. The acceptance covers
+that SHA and no other.
+
+**Reviewer routing (owner decision, 2026-10-13T20:32:45Z).** Gemini/Antigravity is **temporary primary**
+independent reviewer; **Astra is secondary, advisory-only** until it has a working PostgreSQL/Redis/Linux
+runner of its own and the owner changes routing. This is an owner-approved infrastructure exception rather
+than quota exhaustion: Astra's `BLOCKED` note on this head reported its missing database and Redis
+runtime, which is neither a PASS nor a CHANGES_REQUESTED. Its earlier `CHANGES_REQUESTED` at
+`2e876c1d1d62ce9fabaf18ae8240784d4603eada` stays historical. Claude remains the sole author. The
+readiness marker keeps the `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility.
+
+**#83 / P5-08 is the sole current propagation and review gate. #84 onwards are frozen** — no Stage E, no
+P5-09, no downstream propagation, nothing into #84+ until #83 has its own current-head PASS.
+
+**The ancestry was not what the numbering suggested, and that is why this merge was needed.** Segment two
+(`#83 -> ... -> #105`) forked from an **older** #82 at `c098c18290bb88ea749a8b4d708912870044df89`, which
+was also the merge base of the two segments. #83 named `feat/p3-02-goals-followups` as its base while
+containing none of the accepted repair; GitHub compared them as 20 ahead / 20 behind. #83 is now joined
+to the accepted head by an **ordinary non-rebase merge** — no rebase, no force-push, no squash, nothing to
+`main`, and nothing propagated downstream. `git merge-base --is-ancestor 9040a2c… HEAD` succeeds on the
+new head.
+
+### What the merge reconciled
+
+Three conflicts, each resolved to keep both behaviours rather than to pick a side. The third is the one
+that mattered: the human takeover now does both things inside its single transaction — #83's
+`TAKEOVER_STARTED` audit row **and** the accepted head's `cancelPendingFollowUps`. Keeping only one side
+would have left either a conversation somebody holds with no record of who took it, or a human-held
+conversation with an automated chase still scheduled. The other two were `index.ts` (#82's three tenancy
+types added, #83's duplicate export dropped) and `policy-store.ts` (#83's audit writes kept alongside
+#82's `profileDefaultPolicyWrite()` and wider tenancy import).
+
+Two pieces of integration fallout, both inside #83's own audit suite, both from accepted #82 behaviour
+rather than from anything new:
+
+1. **`savePolicy` requires `expectedVersion`** — deliberately, so that no caller can decide not to care.
+   The five call sites now go through the same `save` helper `policy-store.integration.test.ts` uses, and
+   the transactional case reads the version *outside* the transaction because that case has to write
+   through `tx` itself.
+2. **A Business Profile is born with its default policy.** `createBusinessProfile` writes it as a nested
+   create from the domain's `profileDefaultPolicyWrite()`, so the fixture creating one by hand violated
+   `automation_policies_profile_default_key`. The fixture's own comment — "which onboarding creates in
+   the real flow" — is now literally true in code, and the hand-written row is gone.
+
+### Verification of this head
+
+Commands as run, with their actual numbers and limits. Nothing was skipped except where noted, and no
+assertion or timeout was changed.
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` (`eslint . --max-warnings=0 && pnpm lint:boundaries`) | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 34 files, **709/709**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web E2E | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 80 files, **892/892**, exit 0 |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 104 files passed / 48 skipped, 1479 passed / 839 skipped |
+
+`--maxWorkers=2` is deliberate and is disclosed rather than hidden: unbounded local full runs on this
+machine produce a *different* load-sensitive failure set on each attempt, in files a change cannot have
+touched, and each passes alone. The reviewer's own Linux runner reported the same thing and bounded its
+runs the same way. The 48 skipped files and 839 skipped tests in the last row are the PostgreSQL and Redis
+suites declining to run without `TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they
+are the same suites counted in full in the rows above.
+
+One environment note, not a code defect: `packages/billing-stripe` left on disk by a checkout of a later
+branch breaks `scripts/verification/gate.test.ts` with ENOENT on branches that do not have that package.
+It was removed before the run above.
+
+## PR #83 accepted, and joined to #84 — 2026-10-14
+
+**#83 / P5-08 is accepted at `c7b02267e183b58a54814c0b4663ee69d5608612`.** Gemini (Google Antigravity)
+published a formal exact-head GitHub review on 2026-10-14T12:07:55Z: state `APPROVED` on that commit,
+carrying `ANTIGRAVITY_REVIEW: PASS head=c7b02267e183b58a54814c0b4663ee69d5608612`. Verified through
+`GET /pulls/83/reviews` rather than from a coordination comment — state, `commit_id` and the marker all
+match.
+
+**Routing unchanged:** Gemini/Antigravity temporary **primary**, Astra **secondary advisory-only** until
+it has a working PostgreSQL/Redis/Linux runner of its own and the owner re-routes. Claude is the sole
+author. The marker keeps the `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility.
+
+**#84 / P5-09 is the sole propagation and review gate. #85 onwards are frozen** — no Phase 4
+propagation, no Stage E, no new feature work until #84 has its own exact-head PASS.
+
+**The ancestry repair.** #84 reported #83 as its base while its live base SHA was the *pre-acceptance*
+#83 head `8f84deebf92c1ee204cacb80654a9a228759db07`, which was also the merge base; GitHub compared them
+as 16 ahead / 21 behind, so #84 held none of the accepted work. Joined by an **ordinary non-rebase
+merge** — no rebase, force-push, squash, merge to `main`, or propagation into #85+.
+`git merge-base --is-ancestor c7b02267e183b58a54814c0b4663ee69d5608612 HEAD` succeeds on the new head.
+
+This is the second link of the shape #82→#83 had, and it was **measured in advance**: a throwaway local
+probe predicted zero conflicts and three typecheck errors in one file. That is exactly what occurred,
+which is the useful part — a clean merge is not a working merge, and both links so far compiled only
+after fixing files that had no textual conflict at all.
+
+### What the merge reconciled
+
+Zero conflicts. Three pieces of integration fallout, all in
+`apps/web/src/journeys/operator-journey.integration.test.ts` and all from accepted #83 behaviour:
+
+1. **`savePolicy` requires `expectedVersion`.** The journey now reads the profile default's live version
+   and posts it back, which is what the real screen does. The requirement exists so that no caller can
+   decide not to care, and it was not weakened.
+2. **`listPolicyAudits` answers a `PolicyAuditPage`, not an array.** `audits[0]` became
+   `audits.entries[0]`. The change history is paged because the spec wants old and new values kept rather
+   than capped.
+3. **A Business Profile is born with its default policy.** The journey's hand-written
+   `automationPolicy.create` violated `automation_policies_profile_default_key`; it is gone, and
+   `MANDATORY_REVIEW_REASON_CODES` left the import with it. This is the same fallout #83's audit suite
+   had — the second place it surfaced, and worth expecting at every further link.
+
+Accepted #83 behaviour was re-verified here rather than assumed: the human takeover still retains both
+the `TAKEOVER_STARTED` audit row and `cancelPendingFollowUps` inside one transaction, policy
+`expectedVersion` concurrency and default-policy creation are intact, and the analytics/audit
+tenant-isolation, append-only and sensitive-event invariants all pass.
+
+### Verification of this head
+
+Commands as run, with their real numbers and limits. No assertion or timeout was changed.
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` | exit 0 |
+| production build | `pnpm build` | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 34 files, **709/709**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web E2E | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 84 files, **941/941**, exit 0 |
+| P5-09 coverage specifically | the same, narrowed to `a11y` and `journeys` | 3 files, **42/42** — contrast, semantics, the operator journey |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 107 files passed / 49 skipped, 1501 passed / 866 skipped |
+
+**Retries and failures, disclosed.** The first `pnpm typecheck` after the merge failed with the three
+predicted errors. The first full worker+web run then failed one file — the journey's `beforeAll` hitting
+the profile-default unique constraint, which the typecheck could not see. Both were fixed as described and
+re-run clean. `--maxWorkers=2` is deliberate and disclosed: unbounded local runs on this machine give a
+different load-sensitive failure set each attempt in files a change cannot have touched. The 49 skipped
+files in the last row are the PostgreSQL and Redis suites declining to run without
+`TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full in the rows
+above.
+
+## PR #84 accepted, and joined to #85 — 2026-10-14
+
+**#84 / P5-09 is accepted at `ca86e7d7877b8ab2deb1fb280956d2306224e898`** — Gemini/Antigravity formal
+GitHub review, state `APPROVED`, 2026-10-14T13:27:18Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ca86e7d7877b8ab2deb1fb280956d2306224e898`. Verified through
+`GET /pulls/84/reviews`, not from a coordination comment.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#85 / FIX-ISSUE-9 is the sole
+gate; #86 onwards are frozen.**
+
+**The ancestry repair.** #85 reported #84 as its base while its live base SHA was the pre-acceptance #84
+head `82f9f3fbe6cbc67966f8ba4d1a34569cff544501`, also the merge base; GitHub compared them as 12 ahead /
+22 behind. Joined by an ordinary non-rebase merge — no rebase, force-push, squash, merge to `main`, or
+propagation into #86+. `git merge-base --is-ancestor ca86e7d… HEAD` succeeds.
+
+### The one conflict, and why it is the most consequential of the propagation so far
+
+`apps/worker/src/main.ts`. **Both sides of it are a fix for the same class of defect — a loop nobody
+starts.** This branch adds the Instagram token refresh, whose own comment says *"every part of the
+Instagram token lifecycle is implemented and none of it runs: a 60-day token expires, the account still
+reads CONNECTED, and every reply fails with a provider error nobody was warned about."* The accepted
+parent adds the follow-up sweeper, whose comment says *"`dueFollowUps` and `claimFollowUp` had no caller
+at all, so the feature existed and never ran."* A resolution keeping one side would have silently
+re-created whichever defect it dropped, and each is a two-line `const`.
+
+**Five edits were needed. The conflict markers showed two.**
+
+1. Both `const` declarations, token refresh then sweeper, matching start order.
+2. Both `.close()` calls.
+3. **The startup `loops` report.** It merged cleanly and would have stopped naming the sweeper — a loop
+   running while the observability built to report running loops stayed silent about it, which is the
+   original Issue #9 shape arriving through a merge instead of through a missing caller. `follow_ups` is
+   added **unconditionally**; `instagram_tokens` stays conditional on the refresh runner's `running`
+   state. The asymmetry is deliberate and now documented in the code: the sweeper always starts, so its
+   absence would be a defect, while the refresh only runs where it is configured, so its absence is
+   information.
+4. **The shutdown commentary's own count.** Both sides read *"`allSettled`, not `all`: five independent
+   closes"* above five entries. There are now six; the sentence merged without a conflict and became
+   wrong, pointing at a count that no longer matched the lines beneath it.
+5. **`main.test.ts`'s expected loop list** — the one a conflict probe could not predict, found by running
+   the real worker. The case named *"says which background loops are running, so a loop wired to nothing
+   is visible (#9)"* asserts the entire list, so it now names `follow_ups` too. Its sibling case, which
+   proves the refresh drops out of the list without a credential key, now also asserts that `follow_ups`
+   is still there — which is what pins the unconditional half of the asymmetry above.
+
+Items 3 and 4 fail no typecheck, no lint and no test. Item 5 is why "inspect the merged code rather than
+trust the probe" was the right instruction: the probe got four of five, and the fifth lived in the test
+that exists to catch exactly this defect.
+
+### Verification of this head
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` | exit 0 |
+| production build | `pnpm build` | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 35 files, **721/721**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 86 files, **954/954**, exit 0 |
+| worker lifecycle specifically | the same, narrowed to `main`, `bundle`, `instagram-token`, `followup-sweeper` | 5 files, **32/32** — boot report, graceful shutdown, refresh scheduling and lease, sweeper behaviour |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 109 files passed / 50 skipped, 1511 passed / 881 skipped |
+
+**Failures and retries, disclosed.** The first worker run failed exactly one case — item 5 above — and
+nothing else; it was fixed and re-run clean. `--maxWorkers=2` is deliberate and disclosed: unbounded local
+runs on this machine give a different load-sensitive failure set each attempt. The 50 skipped files in the
+last row are the PostgreSQL and Redis suites declining to run without
+`TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full above.
