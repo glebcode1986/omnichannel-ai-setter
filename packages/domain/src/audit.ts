@@ -1,0 +1,55 @@
+import { literalGuard } from "./enum";
+
+/**
+ * The material actions the product records (LEADS_ANALYTICS_UX.md, Issue #34).
+ *
+ * "Material" is the spec's word and it means something specific: an action that changes what the product
+ * will do to a customer, or who is allowed to make it do so. Reading a page is not material. Changing a
+ * mode, approving a reply, connecting a channel or granting somebody access all are.
+ *
+ * A closed list rather than a free-text kind, so a search can offer the kinds that exist and a reader can
+ * tell the difference between "nothing happened" and "somebody logged it under a name I did not guess".
+ */
+export const AUDIT_EVENT_KINDS = [
+  "CHANNEL_CONNECTED",
+  "CHANNEL_DISCONNECTED",
+  "POLICY_CHANGED",
+  "MODE_CHANGED",
+  "KNOWLEDGE_VERSIONED",
+  "STYLE_VERSIONED",
+  "DRAFT_APPROVED",
+  "DRAFT_EDITED",
+  "DRAFT_REJECTED",
+  "REPLY_COMPOSED",
+  "TAKEOVER_STARTED",
+  "TAKEOVER_ENDED",
+  "TEMPLATE_POLICY_CHANGED",
+  "AMBIGUOUS_SEND_RESOLVED",
+  "MEMBER_CHANGED",
+] as const;
+export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
+export const isAuditEventKind = literalGuard(AUDIT_EVENT_KINDS);
+
+/**
+ * Who acted.
+ *
+ * Reconciliation resolves an ambiguous send and the scheduler cancels a superseded one without anybody
+ * asking. Recording those as a person's action would put a name against something nobody did.
+ */
+export const AUDIT_ACTOR_KINDS = ["USER", "SYSTEM"] as const;
+export type AuditActorKind = (typeof AUDIT_ACTOR_KINDS)[number];
+
+/**
+ * The kinds only an admin may read.
+ *
+ * Membership, roles and channel connections decide who can reach customers and on whose behalf. An Agent
+ * doing their own work does not need to see who was granted access last Tuesday, and "admin-only" here
+ * means the rows are absent rather than redacted: a row shown as `***` still discloses that somebody's
+ * access changed at 14:02, which is most of what was being withheld.
+ */
+export const ADMIN_ONLY_AUDIT_KINDS: readonly AuditEventKind[] = ["MEMBER_CHANGED", "CHANNEL_CONNECTED", "CHANNEL_DISCONNECTED"];
+
+/** Whether this kind belongs to the workspace rather than to one Business Profile. */
+export function isWorkspaceScopedAuditKind(kind: AuditEventKind): boolean {
+  return kind === "MEMBER_CHANGED";
+}

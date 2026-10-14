@@ -14,6 +14,7 @@
 import type { EmojiUsage, ReplyLength } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 /** The stored vocabulary, named here so the lifecycle helpers below are not typed on string literals. */
@@ -175,14 +176,28 @@ export async function saveStyleProfile(
     select: { id: true, updatedAt: true },
   });
 
+  const audit = async (subjectId: string) =>
+    recordAuditEvent(db, context, {
+      kind: "STYLE_VERSIONED",
+      summary: businessProfileId === null ? "Saved the workspace voice" : "Saved this profile's voice",
+      subjectType: "style_profiles",
+      subjectId,
+      actorUserId: context.userId,
+      detail: { layer: businessProfileId === null ? "WORKSPACE" : "BUSINESS_PROFILE" },
+    });
+
   if (existing === null) {
     if (expected?.updatedAt !== undefined) {
       // The form was rendered against a layer that has since been deleted. Nothing to overwrite, and
       // writing a fresh one would silently discard whatever the other operator did.
       return { status: "CONFLICT" };
     }
+    let created: { readonly id: string };
     try {
-      await db.styleProfile.create({ data: { workspaceId: scope.workspaceId, businessProfileId, ...data } });
+      created = await db.styleProfile.create({
+        data: { workspaceId: scope.workspaceId, businessProfileId, ...data },
+        select: { id: true },
+      });
     } catch (error) {
       // Two first saves can both see no row. The partial unique index decides which one wins, and the
       // loser is told it conflicted rather than handed a raw constraint error.
@@ -191,6 +206,9 @@ export async function saveStyleProfile(
       }
       throw error;
     }
+    // Audited after the write, and only where there was one: the losing create returned above, so this
+    // cannot record a save the database refused.
+    await audit(created.id);
     return { status: "SAVED" };
   }
 
@@ -206,7 +224,11 @@ export async function saveStyleProfile(
     where: { id: existing.id, ...(expected === undefined ? {} : { updatedAt: existing.updatedAt }) },
     data,
   });
-  return changed.count === 0 ? { status: "CONFLICT" } : { status: "SAVED" };
+  if (changed.count === 0) {
+    return { status: "CONFLICT" };
+  }
+  await audit(existing.id);
+  return { status: "SAVED" };
 }
 
 /** Prisma's unique-violation code, named once rather than compared inline at each call site. */

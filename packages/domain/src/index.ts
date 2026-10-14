@@ -39,6 +39,7 @@ export * from "./incident";
 export * from "./human-takeover";
 export * from "./ids";
 export * from "./language";
+export * from "./audit";
 export * from "./goals";
 export * from "./lead";
 export * from "./message";

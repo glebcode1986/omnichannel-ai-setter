@@ -19,7 +19,14 @@ import { describe, expect, it } from "vitest";
 
 const inboxDir = path.dirname(fileURLToPath(import.meta.url));
 /** Every directory of panes this rule covers. The Review queue is held to the same criterion. */
-const paneDirs = [inboxDir, path.resolve(inboxDir, "../review"), path.resolve(inboxDir, "../knowledge"), path.resolve(inboxDir, "../style"), path.resolve(inboxDir, "../leads")];
+const paneDirs = [
+  inboxDir,
+  path.resolve(inboxDir, "../review"),
+  path.resolve(inboxDir, "../knowledge"),
+  path.resolve(inboxDir, "../style"),
+  path.resolve(inboxDir, "../leads"),
+  path.resolve(inboxDir, "../analytics"),
+];
 
 /**
  * Comments are stripped before anything is matched.
@@ -128,6 +135,8 @@ describe("the Inbox components", () => {
     expect(files).toContain("review/review-card.tsx");
     expect(files).toContain("knowledge/knowledge-list.tsx");
     expect(files).toContain("knowledge/retrieval-results.tsx");
+    expect(files).toContain("analytics/metrics-view.tsx");
+    expect(files).toContain("analytics/audit-table.tsx");
     expect(files).toContain("style/style-example-list.tsx");
     expect(files).toContain("style/voice-editor.tsx");
     expect(files).toContain("leads/lead-board.tsx");

@@ -11,11 +11,61 @@ Everything implemented so far is one stacked chain of unmerged PRs, each branch 
 each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+
+**The chain is two segments, and the ancestry is not what the PR numbers suggest.** Segment two
+(`#83 -> #84 -> ... -> #105`) forked from an **older** #82 at `c098c18290bb88ea749a8b4d708912870044df89`,
+which was also the two segments' merge base. So #83 reported `feat/p3-02-goals-followups` as its base
+while not containing the accepted #82 head at all — GitHub compared them as 20 ahead / 20 behind. #83 is
+joined to the accepted #82 by an **ordinary non-rebase merge**, recorded below. A repository-wide change
+needs both segments; measure the graph with `git merge-base --is-ancestor` rather than inferring it from
+numbering.
 
 Nothing is merged to `main`.
 
-### Current work — repairing PR #82 / P3-02 after CHANGES_REQUESTED
+### Current work — the accepted #82, propagated into #83 and nowhere else
+
+**PR #82 / P3-02 is accepted.** Gemini (Google Antigravity) published a formal exact-head review on
+2026-10-13T21:07:24Z — GitHub review state `APPROVED`, commit
+`9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`. That SHA is the accepted head
+and the only one the acceptance covers.
+
+**Reviewer routing, by owner decision of 2026-10-13T20:32:45Z.** Gemini/Antigravity is the **temporary
+primary** independent reviewer for current and subsequent eligible PR+SHAs. **Astra is secondary and
+advisory-only** until its own working PostgreSQL/Redis/Linux verification runner exists and the owner
+changes routing — an owner-approved infrastructure exception, not quota exhaustion. Astra's `BLOCKED`
+note on this same head was a report of its missing database and Redis runtime, not a verdict; its earlier
+`CHANGES_REQUESTED` at `2e876c1d1d62ce9fabaf18ae8240784d4603eada` remains historical. Claude is still the
+sole author. The readiness marker keeps its `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility
+even though the reviewer is now Gemini.
+
+**#83 / P5-08 is the sole current propagation and review gate, and #84 onwards are frozen.** No Stage E,
+no P5-09, no broad downstream propagation, and nothing into #84+ until #83 has its own genuine
+current-head PASS.
+
+**What the merge had to reconcile.** Three conflicts, each resolved to keep both behaviours rather than
+to pick a side:
+
+- `packages/db/src/index.ts` — #82's three tenancy types added; the duplicate
+  `usersWhoCanActOnBusinessProfile` export #83 already had was dropped.
+- `packages/db/src/policy-store.ts` — #83's `MODE_CHANGED` / `POLICY_CHANGED` audit writes kept **and**
+  #82's `profileDefaultPolicyWrite()`, its wider tenancy import and its note on the version nothing read.
+- `packages/db/src/conversation-operations-store.ts` — the takeover now does both things in its one
+  transaction: #83's `TAKEOVER_STARTED` audit row **and** #82's `cancelPendingFollowUps`. Dropping either
+  would have been a real regression — no record of who took the conversation, or a human-held
+  conversation with an automated chase still scheduled.
+
+**Two pieces of integration fallout, both in #83's own audit suite.** `savePolicy` now requires
+`expectedVersion`, deliberately, so no caller can decide not to care; the five call sites go through the
+same `save` helper `policy-store.integration.test.ts` uses, and the transactional case reads the version
+outside the transaction because it must write through `tx` itself. And the fixture no longer creates the
+profile default by hand: the accepted head makes `createBusinessProfile` write it alongside the profile
+from `profileDefaultPolicyWrite()`, so creating it again violated
+`automation_policies_profile_default_key`. The fixture's old comment — "which onboarding creates in the
+real flow" — is now literally true in code.
+
+### Superseded — repairing PR #82 / P3-02 after CHANGES_REQUESTED
 
 Two P1 blockers, both closed on `feat/p3-02-goals-followups`. No rebase, no force-push, nothing to `main`,
 nothing into #83 or later, no Stage D. **The reviewer is Astra, temporarily, from 2026-10-13**; Antigravity
@@ -436,6 +486,48 @@ carries the other list's cursor through, so paging the suggestions cannot move t
 
 ### Current work — P3-01 / Issue #54
 ### Current work — P3-02 / Issue #55
+### Blocker repair — P5-01 / Issue #27, propagated to every branch
+
+Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:
+**activation was permitted while the STYLE step was unfinished and had not been deliberately skipped.**
+Fixed at #73 and merged down through #74–#83, ordinary merges only, each branch verified at its own head.
+
+The gate is one rule in one place: `blockersFor()` takes the validated skip set and adds
+`STYLE_NOT_CONFIGURED`. `activateBusinessProfile()` already re-reads through `readOnboarding()` inside its
+row-locked transaction, so it enforces that rule rather than a second one that agrees until somebody edits
+it.
+
+**Two things worth carrying forward.** Three tests were written against the bug rather than the spec —
+including one that quoted the sentence and asserted its opposite — which is how it survived to an
+independent review. And a fixture valid at #73 was invalid from P5-06 onward, because
+`style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
+runs green on the branch it was written on is not coverage for the chain.
+
+### Current work — P5-08 / Issue #34
+
+**Branch `feat/p5-08-analytics-audit`**, stacked on P3-02. Operational analytics and a searchable,
+append-only audit log. The owner's directive on PR #81 placed this after P3-02, and it was held back until
+#82 was complete; the branch was then brought onto P3-02 by an ordinary merge rather than a rebase.
+
+**`docs/specs/ANALYTICS_DEFINITIONS.md` is written by this task** and is the definition of record: the
+store is the only implementation of any metric in it, because a metric with two implementations has two
+values and the day somebody notices is the day they stop trusting the page.
+
+**The hard invariant shapes the return type, not just the UI.** `deliveryOutcomes` has separate
+`application` and `provider` groups that are never summed. Outbound messages the provider has not spoken
+about are `awaitingReport`, which is the honest name for them — counting them as delivered because our own
+send succeeded is exactly the inference the separation exists to prevent.
+
+**`AMBIGUOUS_SEND_RESOLVED` has no writer, deliberately.** The spec asks for ambiguous-send *manual*
+resolution and there is no manual resolution path in the product yet; the worker's automatic reconciliation
+is not somebody's action, and recording it as one would put a name against something nobody did. The enum
+value stays so the log can record it the day that path exists.
+
+**Audit lives under Settings**, at `/settings/audit`, because `PRODUCT_UX.md` already places
+"security/audit" there and the seven navigation sections it names are product structure. An eighth
+top-level section would be a decision about the product rather than about this task.
+
+### Previous — P3-02 / Issue #55
 
 **Branch `feat/p3-02-goals-followups`**, based on P3-01's accepted head
 `13212612bb0ac73b2468c1adc99b1c5e48008c16` (verified before branching, and `e15c809` — #76's human

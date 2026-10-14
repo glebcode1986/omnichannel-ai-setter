@@ -29,6 +29,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Actor, SendAuthority } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 import { DbInputError } from "./errors";
 import { suggestStyleExample } from "./style-store";
@@ -147,6 +148,19 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         await tx.aiDraft.update({ where: draftKey(draftId), data: { status: "SCHEDULED" } });
         // Approving a reply is taking the conversation: the person who just spoke for the business owns it.
         await tx.conversation.update({ where: conversationKey(conversationId), data: ownershipFor(authority, at) });
+        // Approved and edited are different kinds, because they answer different questions. "Did anybody
+        // change what the model wrote" is the one somebody asks when a reply turns out to be wrong, and
+        // folding both into APPROVED would make it unanswerable.
+        await recordAuditEvent(tx, context, {
+          kind: editedText === undefined ? "DRAFT_APPROVED" : "DRAFT_EDITED",
+          summary: editedText === undefined ? "Approved a reply as written" : "Edited a reply and approved it",
+          subjectType: "ai_drafts",
+          subjectId: draftId,
+          actorUserId: context.userId,
+          conversationId,
+          detail: { reviewMode, operationId },
+          occurredAt: at,
+        });
         return { kind: "SCHEDULED", operationId, replayed: false };
       });
     },
@@ -166,6 +180,15 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         });
         // Dismissing hands the conversation back: nobody is holding it and nothing is waiting.
         await tx.conversation.update({ where: conversationKey(conversationId), data: NO_OWNERSHIP });
+        await recordAuditEvent(tx, context, {
+          kind: "DRAFT_REJECTED",
+          summary: note === undefined ? "Rejected a reply" : `Rejected a reply: ${note}`,
+          subjectType: "ai_drafts",
+          subjectId: draftId,
+          actorUserId: context.userId,
+          conversationId,
+          occurredAt: at,
+        });
         return { kind: "DISMISSED" };
       });
     },

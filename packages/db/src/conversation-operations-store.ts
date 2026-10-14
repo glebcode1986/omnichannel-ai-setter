@@ -14,6 +14,7 @@
  */
 import type { ConversationOperationStore } from "@omnichannel/application";
 
+import { recordAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
 import { deliveryOfConversation } from "./delivery-origin";
 import { cancelPendingFollowUps } from "./followup-store";
@@ -48,6 +49,17 @@ export function createConversationOperationStore(db: DbClient, context: Business
           return { status: "GONE" };
         }
         await tx.conversation.update({ where: conversationKey(conversationId), data: humanOwnership(context.userId, at) });
+        // In the same transaction as the takeover it describes. A crash between the two would leave a
+        // conversation somebody holds with no record of who took it or when.
+        await recordAuditEvent(tx, context, {
+          kind: "TAKEOVER_STARTED",
+          summary: "Took a conversation over",
+          subjectType: "conversations",
+          subjectId: conversationId,
+          actorUserId: context.userId,
+          conversationId,
+          occurredAt: at,
+        });
         // A person is handling this conversation now, so automation does not interrupt them — and a
         // pending follow-up is automation with a timer on it (#55). Cancelled in the same transaction as
         // the takeover, so there is no instant at which the conversation is held and a chase is still
@@ -89,6 +101,16 @@ export function createConversationOperationStore(db: DbClient, context: Business
                   takeoverActorUserId: context.userId,
                   takeoverPausedUntil: pauseUntil,
                 },
+        });
+        await recordAuditEvent(tx, context, {
+          kind: "TAKEOVER_ENDED",
+          summary: pauseUntil === undefined ? "Handed a conversation back to automation" : "Paused automation on a conversation",
+          subjectType: "conversations",
+          subjectId: conversationId,
+          actorUserId: context.userId,
+          conversationId,
+          detail: pauseUntil === undefined ? {} : { pausedUntil: pauseUntil.toISOString() },
+          occurredAt: at,
         });
         return { status: "HANDED_BACK" };
       });
