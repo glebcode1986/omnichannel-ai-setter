@@ -10,5 +10,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@omnichannel/channel-core": "workspace:*",
+    "@omnichannel/domain": "workspace:*",
+    "@omnichannel/observability": "workspace:*",
+    "zod": "^4.6.5"
   }
 }

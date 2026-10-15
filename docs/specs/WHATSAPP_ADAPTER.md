@@ -1,6 +1,14 @@
 # WhatsApp Adapter — Phase 4 Specification
 
-**Status:** Architecture prepared; implementation follows Instagram/AI core stabilization.
+**Status:** Transport implemented in `packages/channel-whatsapp` (P4-01 / Issue #18, 2026-10-04). Platform
+facts re-verified the same day; see the re-verification section of
+`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`.
+
+What P4-01 covers: raw-body verification, inbound normalization, the four window states, free-form text and
+approved-template sending, and the read/typing presence effect. What it does not: Embedded Signup (#19), the
+template catalogue and outside-window policy (#20), outbound media and voice processing (#21), presence
+timing policy (#22), coexistence onboarding (#23) and the vertical slice (#24). The adapter reports
+`interactive: false` until #20 turns it on.
 
 ## Purpose
 
