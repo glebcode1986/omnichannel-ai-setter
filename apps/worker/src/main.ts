@@ -1,6 +1,7 @@
 import { DEFAULT_BACKLOG_THRESHOLDS, dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
 import { createAnthropicReplyModel } from "@omnichannel/ai";
 import {
+  claimFollowUp,
   createAiDraftStore,
   createDbClient,
   createDraftContextStore,
@@ -11,7 +12,9 @@ import {
   createStyleRetriever,
   createSuspensionStore,
   countUnusableGenerations,
+  dueFollowUps,
   findUnresolvedOperations,
+  recordFollowUpSent,
   readReliabilitySnapshot,
   recoverStaleSendingDeliveries,
 } from "@omnichannel/db";
@@ -41,6 +44,8 @@ import { createDraftDisposition } from "./draft-disposition";
 import { createHandlers } from "./handlers";
 import { processGuards } from "./process-guards";
 import { createShutdownSequence } from "./shutdown";
+import { automatedRouteStillOpen } from "./followup-channel";
+import { startFollowUpSweeper } from "./followup-sweeper";
 import { startOutboxSweeper } from "./outbox-sweeper";
 import { createWorkerRuntime } from "./worker-runtime";
 
@@ -52,6 +57,15 @@ const BACKLOG_GUARD_INTERVAL_MS = 30_000;
 /** An unresolved operation is asked about again no more often than this. */
 const RECONCILIATION_RETRY_AFTER_MS = 120_000;
 const RECONCILIATION_BATCH = 100;
+/**
+ * How often due follow-ups are looked for, and how many one pass takes (#55).
+ *
+ * A minute, like the reconciliation sweep: a follow-up is scheduled in hours and a minute of lateness is
+ * invisible to a customer, while a tighter loop would mean a cross-tenant scan every few seconds for work
+ * that is almost never there. The batch is a bound, so one busy minute cannot starve the next pass.
+ */
+const FOLLOW_UP_SWEEP_INTERVAL_MS = 60_000;
+const FOLLOW_UP_BATCH = 50;
 /** Failures fold into incidents over this window; the cap is a storm backstop, not a tuning knob. */
 const INCIDENT_WINDOW_MS = 15 * 60_000;
 const INCIDENT_SIGNAL_LIMIT = 5_000;
@@ -119,6 +133,10 @@ function main(): void {
           timeoutMs: env.AI_REPLY_TIMEOUT_MS,
         },
         context: createDraftContextStore(db),
+        // A follow-up attempt that reached a scheduled operation stops being claimable and names the send
+        // it produced. Only this; an attempt whose draft was held or skipped is settled by the next claim,
+        // so what an unsent attempt means is decided in one place.
+        recordFollowUpSent: ({ followUpId, operationId }) => recordFollowUpSent(db, followUpId, operationId),
         dispose: createDraftDisposition({
           db,
           producer,
@@ -229,6 +247,21 @@ function main(): void {
       // 60-day token expires, the account still reads CONNECTED, and every reply fails with a provider
       // error nobody was warned about.
       const tokenRefresh = startInstagramTokenRefresh(env, db, logger);
+      // What makes a planned follow-up happen (#55). Without it `dueFollowUps` and `claimFollowUp` had no
+      // caller at all, so the feature existed and never ran. It enqueues the same AI-draft job an inbound
+      // message would: there is no second send path, and every gate is re-asked inside the claim.
+      const followUpSweeper = startFollowUpSweeper({
+        intervalMs: FOLLOW_UP_SWEEP_INTERVAL_MS,
+        limit: FOLLOW_UP_BATCH,
+        due: ({ now, limit }) => dueFollowUps(db, now, limit),
+        // The window question, asked inside the claim's own transaction with the facts it read under the
+        // lock. It can only decline to generate, never permit a send: see `followup-channel.ts`.
+        claim: (followUpId, now) => claimFollowUp(db, followUpId, now, { carries: automatedRouteStillOpen }),
+        producer,
+        logger,
+        now: () => new Date(),
+        newCorrelationId: randomUUID,
+      });
       const backlogGuard = startBacklogGuard({
         intervalMs: BACKLOG_GUARD_INTERVAL_MS,
         thresholds: {
@@ -267,16 +300,27 @@ function main(): void {
         // Built from what actually started, not from a list written by hand: a loop that is wired to
         // nothing has to be visible as an absence here. The Instagram token refresh was written, tested
         // and never called, and this is where that would have shown.
-        loops: ["outbox", "reconciliation", ...(tokenRefresh.running ? ["instagram_tokens"] : []), "backlog_guard", "health"],
+        // `follow_ups` unconditionally and `instagram_tokens` conditionally, which is the difference
+        // between the two loops rather than an inconsistency: the sweeper always starts, and the token
+        // refresh only runs where it is configured, so its absence here is information.
+        loops: [
+          "outbox",
+          "reconciliation",
+          ...(tokenRefresh.running ? ["instagram_tokens"] : []),
+          "follow_ups",
+          "backlog_guard",
+          "health",
+        ],
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: five independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: six independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
           const stopped = await Promise.allSettled([
             sweeper.close(),
             reconciliationSweeper.close(),
             tokenRefresh.close(),
+            followUpSweeper.close(),
             backlogGuard.close(),
             health.close(),
           ]);

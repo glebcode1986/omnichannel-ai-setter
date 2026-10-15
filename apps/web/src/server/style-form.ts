@@ -9,18 +9,9 @@
 import { isEmojiUsage, isReplyLength } from "@omnichannel/domain";
 import type { StyleProfileDraft, StyleScope } from "@omnichannel/db";
 
-export function field(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === "string" ? value : "";
-}
+import { field, lines } from "./form-fields";
 
-/** One phrase per line, the same visible convention the Knowledge Library uses for facts. */
-export function lines(formData: FormData, name: string): readonly string[] {
-  return field(formData, name)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-}
+export { field, lines };
 
 /** `WORKSPACE` only when the form said so; anything else is this profile's own layer. */
 export function scopeFrom(formData: FormData): StyleScope {

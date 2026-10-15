@@ -160,6 +160,56 @@ describe("which changes an owner should see the consequences of", () => {
     ).toEqual(["TEMPLATE_AUTOPILOT_ENABLED"]);
   });
 
+  it("names widening the allowlist while template autopilot is already on", () => {
+    const live = (allowlist: readonly string[]) =>
+      settings({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: allowlist });
+
+    // ADR-016: an empty allowlist permits no unattended template send, so the first entry is the step from
+    // dormant to live. Saved as `impacts: []`, it would be a widening nobody confirmed and an audit row
+    // claiming nothing material happened.
+    expect(policyImpactsOf(live([]), live(["booking_reminder"]))).toEqual(["TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED"]);
+    // And every later entry is one more conversation closed after the window with nobody reading it.
+    expect(policyImpactsOf(live(["booking_reminder"]), live(["booking_reminder", "payment_due"]))).toEqual([
+      "TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED",
+    ]);
+  });
+
+  it("says nothing about an allowlist that was narrowed, reordered or merely repeated", () => {
+    const live = (allowlist: readonly string[]) =>
+      settings({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: allowlist });
+    const both = ["booking_reminder", "payment_due"];
+
+    expect(policyImpactsOf(live(both), live(["booking_reminder"]))).toEqual([]);
+    expect(policyImpactsOf(live(both), live([...both].reverse()))).toEqual([]);
+    // A set, so the form sending the same name twice is not a change — the store stores a set either way.
+    expect(policyImpactsOf(live(["booking_reminder"]), live(["booking_reminder", "booking_reminder"]))).toEqual([]);
+    // Swapping one name for another removes authority and grants authority; it is the granting half that
+    // has to be confirmed, so a length comparison would have called this harmless.
+    expect(policyImpactsOf(live(["booking_reminder"]), live(["payment_due"]))).toEqual(["TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED"]);
+  });
+
+  it("warns once when template autopilot is enabled and filled in the same change", () => {
+    // One decision, one warning: "approved templates will go out unattended" already says what filling the
+    // list means, and a second line about the list growing would describe the same consequence twice.
+    expect(
+      policyImpactsOf(
+        settings(),
+        settings({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: ["booking_reminder"] }),
+      ),
+    ).toEqual(["TEMPLATE_AUTOPILOT_ENABLED"]);
+  });
+
+  it("says nothing about an allowlist that grows while template autopilot is being turned off", () => {
+    // Authority is narrowing, not widening: nothing goes unattended after the window at all once the mode
+    // is no longer TEMPLATE_AUTOPILOT, whatever the list says.
+    expect(
+      policyImpactsOf(
+        settings({ whatsappAfterWindowPolicy: "TEMPLATE_AUTOPILOT", whatsappTemplateAutomationAllowlist: [] }),
+        settings({ whatsappAfterWindowPolicy: "TEMPLATE_REVIEW", whatsappTemplateAutomationAllowlist: ["booking_reminder"] }),
+      ),
+    ).toEqual([]);
+  });
+
   it("names opening Instagram's human-support path", () => {
     expect(policyImpactsOf(settings(), settings({ instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" }))).toEqual([
       "HUMAN_ASSISTED_EXTENDED_ENABLED",

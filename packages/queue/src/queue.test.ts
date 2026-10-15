@@ -177,6 +177,31 @@ describe("job payload schemas", () => {
     expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: "HUMAN_REQUEST" }).success).toBe(false);
   });
 
+  it("will not let a follow-up job claim an attempt the bound does not allow", () => {
+    const base = {
+      schemaVersion: 1,
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      correlationId: "corr_1",
+      conversationId: "conv_1",
+      anchorMessageId: "msg_1",
+    };
+    const followUp = { kind: "FOLLOW_UP", followUpId: "fu_1", attempt: 1 };
+
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: followUp }).success).toBe(true);
+
+    // The attempt is an attempt: there is no zeroth one, the domain's ceiling is three and nothing may
+    // ask for a fifth beyond it, and half an attempt is not a number the store could ever have produced.
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...followUp, attempt: 0 } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...followUp, attempt: 6 } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...followUp, attempt: 1.5 } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { kind: "FOLLOW_UP", followUpId: "fu_1" } }).success).toBe(false);
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { kind: "FOLLOW_UP", attempt: 1 } }).success).toBe(false);
+    // A follow-up is automation and has nobody to name, so it cannot borrow a person's authority to
+    // generate in mode OFF by carrying one.
+    expect(aiDraftGenerationJobSchema.safeParse({ ...base, trigger: { ...followUp, requestedByUserId: "user_7" } }).success).toBe(false);
+  });
+
   it("reports paths and codes without echoing values", () => {
     const secret = "customer-secret-value";
     let error: unknown;
@@ -225,6 +250,33 @@ describe("job identity", () => {
     expect(AI_DRAFT_GENERATION.jobId(draft)).not.toBe(AI_DRAFT_GENERATION.jobId({ ...draft, ...bp2 }));
     expect(DELIVERY.jobId(delivery)).not.toBe(DELIVERY.jobId({ ...delivery, ...bp2 }));
     expect(RECONCILIATION.jobId(reconciliation)).not.toBe(RECONCILIATION.jobId({ ...reconciliation, ...bp2 }));
+  });
+
+  it("makes each follow-up attempt its own job, so a second allowed attempt is not dropped", () => {
+    const base = {
+      schemaVersion: 1 as const,
+      workspaceId: "ws_1",
+      businessProfileId: "bp_1",
+      correlationId: "corr_1",
+      conversationId: "conv_1",
+      anchorMessageId: "msg_1",
+    };
+    const attempt = (n: number) => ({ ...base, trigger: { kind: "FOLLOW_UP", followUpId: "fu_1", attempt: n } as const });
+
+    // Re-enqueueing one attempt is one job: that is what makes the sweeper safe to retry after it
+    // claimed but could not enqueue, and it is the duplicate-queue-job case.
+    expect(AI_DRAFT_GENERATION.jobId(attempt(1))).toBe(AI_DRAFT_GENERATION.jobId({ ...attempt(1), correlationId: "other" }));
+    // A follow-up chasing one silence anchors every attempt to the same message, so without the attempt
+    // in the identity the second allowed attempt would be silently dropped as a duplicate of the first.
+    expect(AI_DRAFT_GENERATION.jobId(attempt(1))).not.toBe(AI_DRAFT_GENERATION.jobId(attempt(2)));
+    // Two follow-ups, and a follow-up versus the debounce-triggered draft, stay distinct on one anchor.
+    expect(AI_DRAFT_GENERATION.jobId(attempt(1))).not.toBe(
+      AI_DRAFT_GENERATION.jobId({ ...base, trigger: { kind: "FOLLOW_UP", followUpId: "fu_2", attempt: 1 } }),
+    );
+    expect(AI_DRAFT_GENERATION.jobId(attempt(1))).not.toBe(
+      AI_DRAFT_GENERATION.jobId({ ...base, trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" } }),
+    );
+    expect(AI_DRAFT_GENERATION.jobId(attempt(1))).not.toBe(AI_DRAFT_GENERATION.jobId({ ...attempt(1), businessProfileId: "bp_2" }));
   });
 
   it("cannot collide through separator characters inside identifiers", () => {
