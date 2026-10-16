@@ -11,10 +11,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createChannelAccount } from "./repositories/channel-accounts";
 import { activateBusinessProfile, readOnboarding, skipOnboardingStep, unskipOnboardingStep } from "./setup-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
+import { createTestUser, seedWorkspace, setProfileDefaultPolicy, type SeededProfile } from "./testing/fixtures";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 import { addWorkspaceMember, createBusinessProfile } from "./repositories/workspaces";
-import { createTestUser } from "./testing/fixtures";
 
 describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", () => {
   let database: TestDatabase;
@@ -89,14 +88,11 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
   }, 120_000);
 
   it("stops calling a channel sendable while a kill switch covers it", async () => {
-    await db().automationPolicy.create({
-      data: {
-        workspaceId: main.context.workspaceId,
-        businessProfileId: main.businessProfileId,
-        mode: "AUTOPILOT",
-        mandatoryReviewReasons: [],
-      },
-    });
+    await setProfileDefaultPolicy(
+      db(),
+      { workspaceId: main.context.workspaceId, businessProfileId: main.businessProfileId },
+      { mode: "AUTOPILOT", mandatoryReviewReasons: [] },
+    );
     expect((await readOnboarding(db(), main.context)).facts.channels[0]?.outboundSuspended).toBe(false);
 
     const suspension = await db().automationSuspension.create({
@@ -206,9 +202,7 @@ describe.skipIf(!databaseTestsEnabled())("onboarding, read from what exists", ()
         externalAccountId: `ig-ready-${label}`,
         capabilities: { ...NO_CAPABILITIES, text: true },
       });
-      await db().automationPolicy.create({
-        data: { workspaceId: context.workspaceId, businessProfileId, mode: "DRAFT", mandatoryReviewReasons: [] },
-      });
+      await setProfileDefaultPolicy(db(), { workspaceId: context.workspaceId, businessProfileId }, { mode: "DRAFT", mandatoryReviewReasons: [] });
       await db().knowledgeDocument.create({
         data: {
           workspaceId: context.workspaceId,

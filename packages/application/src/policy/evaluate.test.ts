@@ -321,6 +321,112 @@ describe("Instagram after-window policy (ADR-014)", () => {
   });
 });
 
+describe("WhatsApp's outside-window template route (ADR-016, Issue #20)", () => {
+  /**
+   * Outside the service window, proposing an approved template. The route arrives as two settled
+   * booleans — the engine never sees a catalogue or an allowlist, because a policy engine holding one
+   * would be the place a model's ranking quietly became a send.
+   */
+  const outsideWindow = (
+    policy: "SERVICE_WINDOW_ONLY" | "TEMPLATE_REVIEW" | "TEMPLATE_AUTOPILOT",
+    route?: { approvedTemplateAvailable: boolean; automatable: boolean },
+  ): Partial<PolicyInput> => ({
+    limits: { ...passing().limits, afterWindow: { channel: "WHATSAPP", policy } },
+    capabilities: { ...NO_CAPABILITIES, text: true, templates: true },
+    window: { state: "TEMPLATE_ONLY", expiresAt: new Date(NOW.getTime() + 60_000) },
+    draft: { ...passing().draft, contentType: "TEMPLATE" },
+    ...(route === undefined ? {} : { templateRoute: route }),
+  });
+
+  it("sends an allowlisted template unattended under TEMPLATE_AUTOPILOT", () => {
+    expect(decide(outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: true, automatable: true }))).toEqual({
+      action: "SCHEDULE",
+      reasons: [],
+    });
+  });
+
+  it("asks for a person when the same template is not allowlisted", () => {
+    // This is what an allowlist *is*: the difference between a send and a review, decided by the business
+    // rather than by the model. `automatable` is the only thing that differs from the case above.
+    const held = decide(outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: true, automatable: false }));
+
+    expect(held.action).toBe("HOLD_REVIEW");
+    expect(held.reasons).toEqual(["TEMPLATE_REQUIRED", "WINDOW_CLOSED"]);
+  });
+
+  it("asks for a person under TEMPLATE_REVIEW even when the template is allowlisted", () => {
+    // ADR-016: review means a person approves this template with these values. An allowlist does not
+    // substitute for that, or the two settings would mean the same thing.
+    const held = decide(outsideWindow("TEMPLATE_REVIEW", { approvedTemplateAvailable: true, automatable: true }));
+
+    expect(held.action).toBe("HOLD_REVIEW");
+    expect(held.reasons).toContain("TEMPLATE_REQUIRED");
+  });
+
+  it("sends under TEMPLATE_REVIEW once a person has approved it", () => {
+    const authority: SendAuthority = {
+      kind: "HUMAN_APPROVED",
+      approvedByUserId: toUserId("11111111-1111-4111-8111-111111111111"),
+      approvedAt: NOW,
+      reviewMode: "NORMAL",
+    };
+
+    expect(decide({ ...outsideWindow("TEMPLATE_REVIEW", { approvedTemplateAvailable: true, automatable: true }), authority }).action).toBe("SCHEDULE");
+  });
+
+  it("ends the matter when no approved template exists at all", () => {
+    // A dead end, not a review item: with nothing sendable there is nothing for a person to do either,
+    // and a queue of items nobody can resolve is worse than an empty one.
+    const skipped = decide(outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: false, automatable: false }));
+
+    expect(skipped.action).toBe("SKIP");
+    expect(skipped.reasons).toEqual(["NO_ELIGIBLE_TEMPLATE", "WINDOW_CLOSED"]);
+  });
+
+  it("treats a missing route as no route rather than as a permissive one", () => {
+    // Absent is not a weaker form of "available". A caller that forgot to resolve the route must not get
+    // the answer that sends.
+    expect(decide(outsideWindow("TEMPLATE_AUTOPILOT")).reasons).toEqual(["NO_ELIGIBLE_TEMPLATE", "WINDOW_CLOSED"]);
+  });
+
+  it("asks for a template when the draft is an ordinary reply", () => {
+    const held = decide({
+      ...outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: true, automatable: true }),
+      draft: { ...passing().draft, contentType: "TEXT" },
+    });
+
+    expect(held.reasons).toEqual(["TEMPLATE_REQUIRED", "WINDOW_CLOSED"]);
+  });
+
+  it("offers no template route under SERVICE_WINDOW_ONLY", () => {
+    // The business said nothing goes out until the customer writes again, and an available template does
+    // not override that choice.
+    const skipped = decide(outsideWindow("SERVICE_WINDOW_ONLY", { approvedTemplateAvailable: true, automatable: true }));
+
+    expect(skipped.action).toBe("SKIP");
+    expect(skipped.reasons).toEqual(["WINDOW_CLOSED"]);
+  });
+
+  it("offers no template route on Instagram, whose vocabulary has none", () => {
+    const skipped = decide({
+      ...outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: true, automatable: true }),
+      limits: { ...passing().limits, afterWindow: { channel: "INSTAGRAM", policy: "STANDARD_ONLY" } },
+    });
+
+    expect(skipped.reasons).toEqual(["WINDOW_CLOSED"]);
+  });
+
+  it("does not let the template route past any other gate", () => {
+    // The route decides the window question and nothing else. A disconnected account, a human takeover or
+    // a stale reply still refuse.
+    const sendable = outsideWindow("TEMPLATE_AUTOPILOT", { approvedTemplateAvailable: true, automatable: true });
+
+    expect(decide({ ...sendable, account: "DISCONNECTED" }).action).not.toBe("SCHEDULE");
+    expect(decide({ ...sendable, replyCycle: "SUPERSEDED" }).action).not.toBe("SCHEDULE");
+    expect(decide({ ...sendable, capabilities: { ...NO_CAPABILITIES, text: true } }).action).not.toBe("SCHEDULE");
+  });
+});
+
 describe("gates combine instead of hiding one another", () => {
   it("reports every failing gate, not the first", () => {
     const decision = decide({

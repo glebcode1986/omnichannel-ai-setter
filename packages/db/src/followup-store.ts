@@ -20,11 +20,12 @@
  * is here. `dueFollowUps` rebuilds the work from the table, so a lost queue rebuilds itself.
  *
  * **Everything is revalidated at execution, not at planning.** `claimFollowUp` re-reads the conversation,
- * the goal, the suppression list, the takeover state, the pending review and the channel's health inside
- * one transaction, with the conversation row locked. Anything that changed since the follow-up was planned
- * settles it with a named reason. This is the difference between a scheduler and a chaser: a scheduler
- * asks again.
+ * the goal, the suppression list, the takeover state, the pending review, the channel's health and whether
+ * any route could still carry the message — all inside one transaction, with the conversation row locked.
+ * Anything that changed since the follow-up was planned settles it with a named reason. This is the
+ * difference between a scheduler and a chaser: a scheduler asks again.
  */
+import { followUpGenerationKey } from "@omnichannel/application";
 import { boundedMaxAttempts, isWithinDaypart, type FollowUpStopReason } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
@@ -193,14 +194,30 @@ export async function planFollowUp(
  * promptness, and this exists so that a queue which lost its contents does not lose the intent. The
  * acceptance criteria put it plainly — the queue is not the source of truth.
  */
-export async function dueFollowUps(db: DbExecutor, now: Date, limit = 100): Promise<readonly FollowUpView[]> {
+export async function dueFollowUps(db: DbExecutor, now: Date, limit = 100): Promise<readonly DueFollowUp[]> {
   const rows = await db.followUp.findMany({
     where: { status: "PENDING", dueAt: { lte: now } },
     orderBy: [{ dueAt: "asc" }, { id: "asc" }],
     take: Math.min(Math.max(Math.trunc(limit), 1), 500),
-    select: followUpSelect,
+    // The scope comes back with the row, which `FollowUpView` does not carry: a profile-scoped read
+    // already knows whose profile it asked about, and this scan does not — it crosses every tenant by
+    // design, because due work is due whoever it belongs to. Returning rows without their scope made
+    // this function unusable by the only caller it exists for, which is why it had none.
+    select: { ...followUpSelect, workspaceId: true, businessProfileId: true },
   });
   return rows;
+}
+
+/**
+ * A follow-up that is due, with the tenant it belongs to.
+ *
+ * Separate from `FollowUpView` rather than widening it: every other read of a follow-up is already inside
+ * a Business Profile context, and adding two fields a scoped caller cannot use would invite somebody to
+ * trust them instead of the context they were given.
+ */
+export interface DueFollowUp extends FollowUpView {
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
 }
 
 /** What `claimFollowUp` decided, and what the caller should do about it. */
@@ -220,6 +237,17 @@ export type FollowUpClaim =
   | { readonly status: "STOPPED"; readonly followUpId: string; readonly reason: FollowUpStopReason }
   /** Outside the business's own sending hours. Still pending, moved to the next hour that is inside them. */
   | { readonly status: "DEFERRED"; readonly followUpId: string; readonly dueAt: Date }
+  /**
+   * This attempt's outbound already exists, and the claim recorded it rather than making another.
+   *
+   * The crash window Astra's first P1 on PR #82 named: a worker that scheduled an attempt's delivery and
+   * died before recording it leaves a `PENDING` row whose lease lapses, and the next claim would
+   * otherwise spend a fresh attempt and schedule a *second* operation for the same silence. Two
+   * operations are two sends, and nothing downstream can deduplicate them because their identities
+   * differ. So a claim first asks whether the previous attempt already produced a draft, and settles the
+   * follow-up from what that draft actually did.
+   */
+  | { readonly status: "ALREADY_SENT"; readonly followUpId: string; readonly attempt: number; readonly operationId: string }
   /** Somebody else took it, or it is gone. */
   | { readonly status: "MISSED"; readonly followUpId: string };
 
@@ -247,13 +275,43 @@ export type FollowUpClaim =
  */
 export const FOLLOW_UP_CLAIM_LEASE_MS = 5 * 60_000;
 
-export async function claimFollowUp(
-  db: DbClient,
-  followUpId: string,
-  now: Date,
-  entitlement: { readonly mayAutomate: boolean } = { mayAutomate: true },
-  leaseMs = FOLLOW_UP_CLAIM_LEASE_MS,
-): Promise<FollowUpClaim> {
+/** What the claim knows about the conversation when it asks whether anything could carry a message now. */
+export interface FollowUpChannelQuestion {
+  readonly channel: string;
+  /** The customer's own last message: where every provider's messaging window starts counting. */
+  readonly lastInboundAt: Date | null;
+  readonly at: Date;
+  /** The profile's own after-window choice for each channel, as configured (ADR-014, ADR-016). */
+  readonly instagramAfterWindowPolicy: string;
+  readonly whatsappAfterWindowPolicy: string;
+}
+
+/**
+ * Whether any route at all could carry this follow-up now — the provider's messaging window and, where a
+ * channel has one, its template requirement.
+ *
+ * Injected rather than computed here: a messaging window is a provider fact, and this package does not
+ * import a channel adapter. Default: yes, so a caller that supplies nothing behaves exactly as before.
+ *
+ * **It can never permit a send.** The policy engine still decides every send twice downstream — at the
+ * disposition and again at the final pre-send gate — so this port only decides whether to *bother*: a
+ * `false` saves an attempt and a model call on a follow-up that could not have gone out anyway, and a
+ * wrong `true` costs one wasted attempt and changes nothing about what reaches a customer. That asymmetry
+ * is why it may fail open for a channel it has nothing to say about.
+ */
+export type FollowUpChannelPort = (question: FollowUpChannelQuestion) => boolean;
+
+export interface FollowUpClaimOptions {
+  /** Whether the Workspace may still automate at all. Not this table's fact to know, so it is passed in. */
+  readonly entitlement?: { readonly mayAutomate: boolean };
+  readonly carries?: FollowUpChannelPort;
+  readonly leaseMs?: number;
+}
+
+export async function claimFollowUp(db: DbClient, followUpId: string, now: Date, options: FollowUpClaimOptions = {}): Promise<FollowUpClaim> {
+  const entitlement = options.entitlement ?? { mayAutomate: true };
+  const leaseMs = options.leaseMs ?? FOLLOW_UP_CLAIM_LEASE_MS;
+  const carries = options.carries ?? (() => true);
   return db.$transaction(async (tx) => {
     // The follow-up row, locked *before* anything is read from it.
     //
@@ -317,6 +375,50 @@ export async function claimFollowUp(
       return { status: "STOPPED", followUpId: followUp.id, reason };
     };
 
+    // Recovery, asked **before** the gates and before an attempt is spent.
+    //
+    // Before the gates on purpose: if this attempt's message already went out, the customer has it, and a
+    // gate that then answered `SUPERSEDED` because they replied to it would record a decision the world
+    // has already overtaken. What is left to do is to write down what happened.
+    //
+    // The attempt's draft is the durable record of the attempt having got that far, and the generation key
+    // is derived the same way the worker derives it — one format, exported from `application`, because two
+    // spellings of it would differ one day and the symptom would be a second follow-up about one silence.
+    if (followUp.attemptCount > 0) {
+      const previous = await tx.aiDraft.findFirst({
+        where: {
+          ...scope,
+          generationKey: followUpGenerationKey({
+            conversationId: followUp.conversationId,
+            anchorMessageId: followUp.anchorMessageId,
+            followUpId: followUp.id,
+            attempt: followUp.attemptCount,
+          }),
+        },
+        select: { id: true },
+      });
+      if (previous !== null) {
+        // The delivery record is the authority rather than the draft's status: `scheduleAutomatedDelivery`
+        // writes the record and moves the draft in one transaction, so a record is what "an operation
+        // exists for this attempt" means, and it carries the identity to record.
+        const scheduled = await tx.deliveryJobRecord.findUnique({
+          where: { workspaceId_businessProfileId_draftId: { ...scope, draftId: previous.id } },
+          select: { operationId: true },
+        });
+        if (scheduled !== null) {
+          await tx.followUp.update({
+            where: { id: followUp.id },
+            data: { status: "SENT", deliveryOperationId: scheduled.operationId, settledAt: now, lastAttemptAt: now },
+          });
+          return { status: "ALREADY_SENT", followUpId: followUp.id, attempt: followUp.attemptCount, operationId: scheduled.operationId };
+        }
+        // A draft with no delivery: the policy held it, so somebody has to decide and no send is coming
+        // for this attempt. Settled rather than retried — a retry would re-ask a question that has an
+        // answer, and retrying an attempt whose draft keeps being held is how a follow-up loops for ever.
+        return stop("REVIEW_PENDING", "CANCELLED");
+      }
+    }
+
     const conversation = await tx.conversation.findFirst({
       where: { ...scope, id: followUp.conversationId },
       select: {
@@ -326,8 +428,10 @@ export async function claimFollowUp(
         contactId: true,
         channelAccountId: true,
         aiEnabled: true,
+        // The customer's own last message, for the window question below.
+        lastInboundAt: true,
         // Through the identity, which is where the account hangs off a conversation.
-        channelIdentity: { select: { channelAccount: { select: { status: true } } } },
+        channelIdentity: { select: { channelAccount: { select: { channel: true, status: true } } } },
       },
     });
     if (conversation === null) {
@@ -383,6 +487,30 @@ export async function claimFollowUp(
     if (conversation.channelIdentity.channelAccount.status !== "CONNECTED") {
       // Needs re-authorization or disconnected. A follow-up that tried anyway would fail at the provider
       // and spend an attempt on a problem the business has to fix first.
+      return stop("CHANNEL_INELIGIBLE", "BLOCKED");
+    }
+
+    // The other half of what `CHANNEL_INELIGIBLE` has always promised — "window closed, template
+    // required, account unhealthy" — and the half that was never asked. A follow-up whose window has
+    // closed with no after-window route configured cannot be delivered by anything, so generating for it
+    // spends an attempt and a model call to produce a review item the policy engine then declines. Asked
+    // inside this transaction, under the same lock, because a window is read from a timestamp another
+    // transaction may be writing. The port fails open by design: see `FollowUpChannelPort`.
+    const policies = await tx.automationPolicy.findMany({
+      where: { ...scope, OR: [{ channelAccountId: conversation.channelAccountId }, { channelAccountId: null }] },
+      select: { channelAccountId: true, instagramAfterWindowPolicy: true, whatsappAfterWindowPolicy: true },
+    });
+    const policy =
+      policies.find((row) => row.channelAccountId === conversation.channelAccountId) ?? policies.find((row) => row.channelAccountId === null);
+    if (
+      !carries({
+        channel: conversation.channelIdentity.channelAccount.channel,
+        lastInboundAt: conversation.lastInboundAt,
+        at: now,
+        instagramAfterWindowPolicy: policy?.instagramAfterWindowPolicy ?? "STANDARD_ONLY",
+        whatsappAfterWindowPolicy: policy?.whatsappAfterWindowPolicy ?? "SERVICE_WINDOW_ONLY",
+      })
+    ) {
       return stop("CHANNEL_INELIGIBLE", "BLOCKED");
     }
 
@@ -498,6 +626,13 @@ export async function recordFollowUpSent(db: DbExecutor, followUpId: string, ope
  * Called when an inbound message arrives or a person takes over, so the cancellation is a fact the moment
  * the thing that invalidated it happens — rather than something the next scan notices. `claimFollowUp`
  * checks the same conditions again anyway: this is the prompt path, and that is the correct one.
+ *
+ * Its callers, named because the first repair got this wrong: `ingestion-store`'s `recordActivity` for an
+ * inbound and `startHumanTakeover` for a person answering from the provider's own app — **the two paths a
+ * webhook actually takes** — and `conversation-operations-store`'s `takeOver` for the button in our own UI.
+ * `repositories/messages`'s `appendInboundMessage` also calls it and is correct to, but has no production
+ * caller: hooking the cancellation only there, as the first attempt did, meant it ran in that function's
+ * own test and nowhere else.
  */
 export async function cancelPendingFollowUps(
   db: DbExecutor,
