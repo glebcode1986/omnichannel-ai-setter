@@ -16,6 +16,7 @@
     "@omnichannel/application": "workspace:*",
     "@omnichannel/channel-core": "workspace:*",
     "@omnichannel/channel-instagram": "workspace:*",
+    "@omnichannel/channel-whatsapp": "workspace:*",
     "@omnichannel/db": "workspace:*",
     "@omnichannel/domain": "workspace:*",
     "@omnichannel/env": "workspace:*",

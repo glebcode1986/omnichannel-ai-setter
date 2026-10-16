@@ -217,6 +217,9 @@ importers:
       '@omnichannel/channel-instagram':
         specifier: workspace:*
         version: link:../../packages/channel-instagram
+      '@omnichannel/channel-whatsapp':
+        specifier: workspace:*
+        version: link:../../packages/channel-whatsapp
       '@omnichannel/db':
         specifier: workspace:*
         version: link:../../packages/db

@@ -2,8 +2,16 @@ import type { AiMode, ChannelCapabilities, ChannelType } from "./channel";
 import { literalGuard } from "./enum";
 import type { BusinessProfileId, ChannelAccountId, CredentialReference, WorkspaceId } from "./ids";
 
-/** Connection health; sends fail closed unless CONNECTED (INSTAGRAM_ADAPTER.md). */
-export const CHANNEL_ACCOUNT_STATUSES = ["CONNECTED", "NEEDS_REAUTH", "DISCONNECTED"] as const;
+/**
+ * Connection health; sends fail closed unless CONNECTED (INSTAGRAM_ADAPTER.md).
+ *
+ * `DEGRADED` is a connection the provider still honours but has flagged — WhatsApp onboarding
+ * (WHATSAPP_ONBOARDING.md, Issue #19) needs it because Meta reports a number's quality rating, and a
+ * number rated red is one message away from being restricted. It is deliberately not the same as
+ * `NEEDS_REAUTH`: the credential and the assets are fine, so a person can still approve a reply, and
+ * nothing automated goes out unattended until somebody has looked.
+ */
+export const CHANNEL_ACCOUNT_STATUSES = ["CONNECTED", "DEGRADED", "NEEDS_REAUTH", "DISCONNECTED"] as const;
 export type ChannelAccountStatus = (typeof CHANNEL_ACCOUNT_STATUSES)[number];
 export const isChannelAccountStatus = literalGuard(CHANNEL_ACCOUNT_STATUSES);
 
