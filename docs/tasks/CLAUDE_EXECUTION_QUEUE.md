@@ -23,7 +23,117 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #86, propagated into #87 and nowhere else
+### Current work — the accepted #87, propagated into #88 and nowhere else
+
+**PR #87 / P4-01 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-15T06:25:13Z, commit `c13d32dea988daf38a6a4a6b03a612553c26c72b`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=c13d32dea988daf38a6a4a6b03a612553c26c72b`
+(review `5529023598`).
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#88 / P4-02 is now the sole
+gate; #89 onwards are frozen** — no broader Phase 4 propagation and no unrelated work until #88 has its
+own exact-head PASS.
+
+**The ancestry repair.** #88 named `feat/p4-01-whatsapp-adapter` as its base while its live merge base was
+the pre-acceptance #87 head `48fd78a93d626ea56b2ada97c24a25ccd2595e14` — GitHub compared them as
+`diverged`, 9 ahead / 25 behind. Joined by an **ordinary non-rebase merge** at
+`6bac028d3c658ca4e2ea01fbaf4f74fa1acdb8cb`; `git merge-base --is-ancestor` of the accepted #87 head now
+succeeds, and the prior #88 head `960f7174abaa732a183624defcc5c1104af262da` remains an ancestor too.
+
+**Zero conflicts, and the union widening did not bite.** 77 files, 7,976 insertions against 311 deletions,
+no conflict markers. The zero says little by itself: #88 widens a channel-account status union, which is
+the shape that breaks exhaustive consumers *without* producing a conflict. Checked rather than assumed —
+`pnpm install --frozen-lockfile` first because the branch moves the lockfile, then `pnpm typecheck` clean
+across all 14 packages and `pnpm lint` + `lint:boundaries` clean at 535 package source files with no
+dependency cycles.
+
+#### The one authored change: coexistence echo detection compares numbers, not spellings
+
+Carried under the directive's step 3, which scoped the post-review #87 risk this author disclosed on that
+PR. Nothing else about P4-02 is touched.
+
+`normalize.ts` recognised a coexistence echo with `message.from === value.metadata?.display_phone_number`.
+Those are two different Meta surfaces: `from` is a `wa_id` (digits only) while `display_phone_number` is
+the *display* field, which the Graph `/phone_numbers` edge spells `+1 631-555-5555` — a spelling this
+product already stores at onboarding and already carries in its own fixtures as `"+1 555 0100"`. Meta's
+webhook metadata happens to use the digits-only spelling, so **nothing was broken in production**; the
+defect was that a missed match does not fall through to "ignored" but to `INBOUND_MESSAGE` with the
+business's own number as sender — a phantom contact the draft path would answer.
+
+- `sameNumber(left, right)` compares a canonical digits-only value and **refuses a match when either side
+  reduces to no digits**, so missing or non-numeric metadata can never read as an echo.
+- The old test was powerless: `from` and `metadata.display_phone_number` were drawn from the **same
+  fixture constant**, so one value sat on both sides of the comparison. The fixture now declares
+  `BUSINESS_WA_ID` (digits only, what `from` carries) and `BUSINESS_DISPLAY_NUMBER` (`+1 555-000-0001`,
+  what the Graph edge returns) as **separate constants with different values**, and `envelope()` takes a
+  `displayPhoneNumber` override so each case states both wire values independently.
+- Five cases now cover it: the plain webhook spelling, the punctuated Graph spelling, a genuine non-match
+  (a real customer), an absent display number, and two spellings carrying no digits.
+- **Mutation-tested, each clause killed by exactly one case.** Restoring raw `===` fails only the
+  punctuated-spelling case; deleting the empty-digits guard fails only the no-digits case; making
+  `sameNumber` always return true fails the controls broadly. A guard no test kills is a guard that is not
+  doing anything.
+- Identity and idempotency were checked, not assumed: tenancy keys off `phone_number_id`, dedupe off
+  `wamid`, and **no unique index includes `display_phone_number`**.
+
+**Author-disclosed defect in this same change, found and fixed before pushing.** The first placement of the
+new helper inserted it between `belongsToThisAsset`'s doc comment and its function, orphaning that comment
+above the new one. Typecheck, lint and 102 passing tests all stayed green, because none of them read doc
+comments. Helper moved below `belongsToThisAsset`; both comments now document the function beneath them.
+
+**Meta re-verification 2026-10-15 / 2026-10-16** is recorded in full in
+`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`, dated and sourced per the directive's step 4. The
+short form: Embedded Signup **v4 remains latest** with expiry TBD and `onboarding.ts` already targets v4
+only; the v2 deprecation date **passed with Meta's pages still in the future tense and no changelog entry
+confirming the cutover**, so enforcement is announced-and-reached rather than observed; `v26.0` is still
+the current Graph version and **no v27.0 exists**; the 30-second code TTL, the six-digit PIN, the
+Allowed-Domains-**and**-Valid-OAuth-Redirect-URIs conjunction, and the 24-hour window with `131047` are all
+confirmed unchanged.
+
+Four documented risks were checked against this code and found **absent** — which is why this pass changed
+no behaviour beyond the echo repair:
+
+1. `sessionInfoVersion: 4` is **not** corroborated by Meta for v4; this repository sends no
+   `sessionInfoVersion` at all.
+2. `subscribed_apps` documents **no** per-field parameter; this repository sends no `subscribed_fields`.
+3. `code_verification_status` and `quality_rating` carry **contradictory enumerations across sibling Meta
+   pages**; both are typed as plain `string` end to end here, with one case-insensitive comparison, so no
+   union or CHECK can fail on a value Meta itself documents elsewhere.
+4. From Graph **v24.0** onward the `statuses` webhook drops the `conversation` object; this adapter reads
+   neither `conversation` nor `pricing` from a status.
+
+One finding that is **not** a defect but changes how the echo branch should be read: Meta documents a
+coexistence business's app-sent and companion-device messages under a webhook field of their own,
+`smb_message_echoes` → `value.message_echoes[]`, where **arrival under that field is itself the authorship
+signal**. At this head the adapter skips every non-`messages` field with an `whatsapp.unhandled_field`
+record, so a real echo is logged and dropped here and consuming that field belongs to the later
+coexistence task in this chain. The repaired comparison is therefore the belt-and-braces path, and the
+repair still earns its place because `message_echoes[].from` is documented as the business *display* phone
+number — the same spelling trap, inherited by whatever consumes echoes next. The code comment now says so.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7 in Docker, every suite bounded to
+`--maxWorkers=2`:
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 535 source files, 0 cycles |
+| `@omnichannel/channel-whatsapp` | **102 passed** (6 files) |
+| `pnpm test:db` | **743 passed** (36 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **53 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1002 passed** (88 files) |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1661 passed, 903 skipped |
+
+**Disclosed limitations.** The 903 skipped tests in the no-infrastructure run are the DB/Redis suites
+declining to run without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, which is the behaviour CI relies on; they
+are the same suites reported green above with infrastructure present. No retries or reruns were needed, no
+flakes were observed, and no test was skipped to make a gate pass. Local runs are macOS; the authoritative
+Linux evidence is the exact-head GitHub Actions run and the reviewer's own container.
+
+### Superseded — the accepted #86, propagated into #87 and nowhere else
 
 **PR #86 is accepted.** Gemini/Antigravity formal GitHub review, `APPROVED`, 2026-10-14T18:50:34Z,
 commit `3f6a7e48cda96417332c2f11e0918329e865b6de`, carrying
