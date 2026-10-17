@@ -23,7 +23,100 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #91, propagated into #92 and nowhere else
+### Current work — the accepted #92, propagated into #93 and nowhere else
+
+**PR #92 / P4-06 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-17T17:21:42Z, commit `fddf0a2f0154135fce7c3d62cbc91c67e0651fe0`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=fddf0a2f0154135fce7c3d62cbc91c67e0651fe0` (review `5559051465`).
+
+**Routing unchanged.** **#93 / P4-07 is now the sole gate; #94 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `ce7fe8f536709872b25f4d155a6fbf388c4adb4c`: the accepted #92
+segment ran 36 commits ahead of it, #93's own authored segment 8 — genuinely `diverged`, 8 ahead / 36
+behind. Ordinary non-rebase merge at `1c36c19501c4bed44a849f02e07b4fe639667a1c`; `--is-ancestor` succeeds
+for the accepted #92 head and the prior #93 head `e439f39ab2a402707978f5c9cd58bbf16c9ff1e1` alike.
+
+#### One conflict, and both sides were excluding the same budget for different reasons
+
+`apps/worker/src/draft-disposition.ts`, the computation of `remainingMs` — how much of the provider's
+automated-response budget is left. Each segment had added its own reason the budget does **not** apply, and
+each reason had already cost this product a working feature once:
+
+- **#93:** the budget is Instagram's and only Instagram's. WhatsApp publishes no such deadline, so measuring
+  one against a WhatsApp send would shorten or abandon the human-like delay for a rule that platform does
+  not impose.
+- **The accepted #92 segment:** the budget must not apply to a planned follow-up. Its anchor is the
+  customer's last message, and a follow-up exists precisely because they stopped writing, so the budget is
+  always already spent. Applying it anyway sent **every** follow-up to `DEADLINE_MISSED` — its own docstring
+  says the feature "could be wired up correctly end to end and still never send anything".
+
+Keeping either side alone reintroduces a defect that was already found and accepted as fixed: #93's version
+alone sends every Instagram follow-up back to `DEADLINE_MISSED`, and #92's version alone subjects WhatsApp
+to an Instagram-only deadline while the comment directly above it — which merged cleanly — says the
+opposite. The union is therefore all three conditions: a budget is computed only when there is a
+`lastInboundAt`, **and** the channel is Instagram, **and** the draft is not a follow-up. The docstring
+carries both reasons and records that each has already cost a feature.
+
+The comment above `timing` was trimmed rather than left to restate the first reason, because two statements
+of one rule drift apart — the same hazard `defaultAutomationSettings` and `profileDefaultPolicyWrite` are
+written to avoid.
+
+**Both halves are pinned, which took two passes to establish.** Dropping the follow-up exclusion fails two
+cases. Dropping the channel exclusion appeared to fail **nothing** — and that conclusion was wrong, because
+the run that produced it had #93's own slice suite not executing (below). With that suite running, dropping
+the channel exclusion fails `schedules through the shared disposition, with a delay the delay engine chose`.
+A mutation result is only as good as the suite that ran.
+
+#### The branch's flagship suite was not running, and reported as skipped
+
+`apps/worker/src/whatsapp-slice.integration.test.ts` — thirteen end-to-end cases, the whole point of P4-07 —
+failed in `beforeAll` on `automation_policies_profile_default_key`, because the fixture hand-wrote a profile
+default that `createBusinessProfile` has written since the accepted P3-02 head. Vitest then reports the
+file's cases as **skipped**, so a batched run reads `1090 passed | 13 skipped` and looks green; only a
+single-file run prints the `FAIL`. Fixed the same way as the identical fallout on #91: edit the existing
+default instead of creating a second one. 13/13 now pass.
+
+**The rule this leaves:** in an infrastructure run with `TEST_DATABASE_URL` and `TEST_REDIS_URL` set, a
+non-zero skip count is a failure until explained — the suites are gated on exactly those variables, so
+nothing should skip.
+
+#### Step 3's other named re-checks
+
+- **Positional handler signatures** — `createHandlers` unchanged at six parameters; #93 adds no queue
+  family, so the arity fallout that hit two earlier links did not recur, and typecheck confirms the
+  follow-up slice test still matches.
+- **Worker lifecycle wiring** — the `loops` list is unchanged.
+- **Outbound ownership correlation and takeover/follow-up cancellation** — the accepted #92 behaviour is
+  intact: the echo reaches `process-event.ts`'s `case "OUTBOUND_ECHO"`, and `ingestion-store.ts` sets
+  `takeover_reason = 'UNMATCHED_OUTBOUND_ECHO'` only when the state is not already `HUMAN_ACTIVE`.
+- **Canonical phone comparison and self-message refusal** — #92's refusal with `sameNumber` survives the
+  merge untouched; the WhatsApp suite's 30 normalization cases still pass.
+- **No migration** — #93 adds none, and drift is clean.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, focused
+packages run separately with their own labels, `db:generate` before typecheck.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 578 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **166 passed** (9 files) |
+| `pnpm test:db` | **804 passed** (39 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1103 passed** (96 files), **no skips** |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1041 skipped |
+
+**Disclosed.** The slice suite failed on the first run of this head and is reported as fixed, not as green
+first time. No other retries or flakes, and nothing skipped to make a gate pass. With the services present
+nothing skips; the 1041 skips in the no-infrastructure run are the DB and Redis suites declining to start,
+which is what CI relies on.
+
+### Superseded — the accepted #91, propagated into #92 and nowhere else
 
 **PR #91 / P4-05 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T15:19:11Z, commit `550100cae7d6f18f78a341543ec2feb194f1797e`, carrying

@@ -2154,3 +2154,93 @@ previous link, where a no-op install left a stale client that looked like a sour
 1028 skipped tests in the no-infrastructure run are the PostgreSQL and Redis suites declining to start
 without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, which is what CI relies on, and are the same suites reported
 in full above. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.
+
+## PR #92 accepted, and joined to #93 / P4-07 — 2026-10-17
+
+**#92 is accepted at `fddf0a2f0154135fce7c3d62cbc91c67e0651fe0`** — Gemini/Antigravity formal GitHub review
+`5559051465`, `APPROVED`, 2026-10-17T17:21:42Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=fddf0a2f0154135fce7c3d62cbc91c67e0651fe0`, verified through
+`GET /pulls/92/reviews`.
+
+**Routing unchanged.** **#93 / P4-07 is the sole gate; #94 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `ce7fe8f536709872b25f4d155a6fbf388c4adb4c` — the accepted #92 segment
+36 commits ahead of it, #93's authored segment 8 — so #93 against accepted #92 was genuinely `diverged`, 8
+ahead / 36 behind. Ordinary non-rebase merge at `1c36c19501c4bed44a849f02e07b4fe639667a1c`; no rebase,
+force-push, squash, merge to `main`, or propagation into #94+.
+
+### One conflict, where both sides excluded the same budget for different reasons
+
+`draft-disposition.ts`, the computation of `remainingMs`. Each segment had added its own reason the
+provider's automated-response budget does **not** apply, and each reason had already cost this product a
+working feature once.
+
+#93's reason: the budget is Instagram's and only Instagram's, because WhatsApp publishes no such deadline,
+so measuring one against a WhatsApp send would shorten or abandon the human-like delay for a rule that
+platform does not impose. The accepted segment's reason: it must not apply to a planned follow-up, whose
+anchor is the customer's last message — a follow-up exists precisely because they stopped writing, so the
+budget is always already spent, and applying it sent **every** follow-up to `DEADLINE_MISSED`. That
+docstring's own words: the feature "could be wired up correctly end to end and still never send anything".
+
+Keeping either alone reintroduces a defect already found and accepted as fixed. The union is all three
+conditions — a budget only when there is a `lastInboundAt`, **and** the channel is Instagram, **and** the
+draft is not a follow-up — with a docstring carrying both reasons and recording that each has cost a
+feature. The comment above `timing` was trimmed rather than left restating the first reason, because two
+statements of one rule drift apart.
+
+**Both halves are pinned, and establishing that took two passes.** Dropping the follow-up exclusion fails
+two cases. Dropping the channel exclusion appeared to fail nothing — a conclusion I nearly published, and
+it was wrong: that run had #93's own slice suite not executing. With the suite running, dropping the same
+clause fails `schedules through the shared disposition, with a delay the delay engine chose`. **A mutation
+result is only as good as the suite that ran.**
+
+### The branch's flagship suite was not running, and said "skipped"
+
+`whatsapp-slice.integration.test.ts` is thirteen end-to-end cases and the whole point of P4-07. It failed in
+`beforeAll` on `automation_policies_profile_default_key`, because the fixture hand-wrote a profile default
+that `createBusinessProfile` has written since the accepted P3-02 head. Vitest then reports that file's
+cases as **skipped**, so a batched run reads `1090 passed | 13 skipped` and looks green; only a single-file
+run prints the `FAIL`. This is the second occurrence of that masking — the first was #91's presence handler.
+
+Fixed as before: edit the existing default rather than create a second one. The E2E project went from 95
+files with 1090 passed and 13 skipped to **96 files with 1103 passed and no skips**.
+
+**The standing rule this leaves:** in an infrastructure run with `TEST_DATABASE_URL` and `TEST_REDIS_URL`
+set, a non-zero skip count is a failure until explained. The suites are gated on exactly those variables, so
+nothing should skip.
+
+### Step 3's other named re-checks
+
+`createHandlers` is unchanged at six parameters — #93 adds no queue family, so the arity fallout that hit
+two earlier links did not recur — and the `loops` list is unchanged. The accepted #92 behaviour is intact:
+the echo reaches `process-event.ts`'s `case "OUTBOUND_ECHO"`, `ingestion-store.ts` sets
+`UNMATCHED_OUTBOUND_ECHO` only when the state is not already `HUMAN_ACTIVE`, and the self-message refusal
+with `sameNumber` survives untouched with the WhatsApp suite's normalization cases passing. #93 adds no
+migration and drift is clean.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; focused packages run
+separately with their own labels; `db:generate` before typecheck.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **578** source files, 0 cycles |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/application` | 14 files, **294/294** |
+| `@omnichannel/channel-whatsapp` | 9 files, **166/166** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 39 files, **804/804**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 96 files, **1103/1103**, **no skips** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 59 skipped, **1844 passed** / 1041 skipped |
+
+**Disclosed limitations.** The flagship slice suite **failed on the first run of this head** and is reported
+as fixed rather than as green first time — it is described above. No other retries, no flakes, and no test
+skipped to make a gate pass. The 1041 skipped tests in the no-infrastructure run are the PostgreSQL and
+Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, which is what CI relies on;
+that is the one place a skip count is expected, and it is 59 files rather than 58 because this head adds the
+slice suite to them. With the services present nothing skips at all. Local runs are macOS; the authoritative
+Linux evidence is the exact-head GitHub Actions run.
