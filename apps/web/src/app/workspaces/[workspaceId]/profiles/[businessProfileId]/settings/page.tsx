@@ -133,12 +133,8 @@ export default async function SettingsPage({
           instagramAfterWindowPolicy: edited?.instagramAfterWindowPolicy ?? stored.instagramAfterWindowPolicy,
           whatsappAfterWindowPolicy: edited?.whatsappAfterWindowPolicy ?? stored.whatsappAfterWindowPolicy,
           allowlist: (edited?.whatsappTemplateAutomationAllowlist ?? stored.whatsappTemplateAutomationAllowlist).join("\n"),
-          // From `stored` only, unlike every field above it. Presence arrived with P4-05, which predates
-          // the rejected-proposal round trip entirely: `PolicyProposal` carries no presence fields, so
-          // there is no `edited` value to prefer. Reading it here rather than from the policy directly
-          // keeps one source for what the form shows, which is what this object is for.
-          presenceMode: stored.presenceMode,
-          presenceLeadSeconds: Math.round(stored.presenceTypingLeadMs / MS_PER_SECOND),
+          presenceMode: edited?.presenceMode ?? stored.presenceMode,
+          presenceLeadSeconds: Math.round((edited?.presenceTypingLeadMs ?? stored.presenceTypingLeadMs) / MS_PER_SECOND),
           expectedVersion: edited?.expectedVersion ?? stored.version,
         };
 

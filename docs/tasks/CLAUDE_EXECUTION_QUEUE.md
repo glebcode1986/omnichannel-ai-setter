@@ -88,14 +88,41 @@ positional handler signatures and lifecycle wiring, and that was the right place
    skipping its 15 tests. Changed to edit the existing default rather than invent a second one. The other
    four `automationPolicy.create` sites in the suites were checked and do not collide.
 
+#### The sixth breakage: a disclosure that turned out to be a defect
+
+Written up first as a design note — "presence is absent from the rejected-proposal round trip, which
+discards nothing because #91 predates that mechanism" — and then checked against the save path before being
+published. The claim was wrong, and the thing under it is a defect **this merge created**.
+
+`saveSettingsAction` does not hand the form to the store. It builds a `PolicyProposal`, and `editFrom`
+maps that to the store's `PolicyEdit` **field by field** — with no presence in the mapping. So the form
+posted `presenceMode` and `presenceTypingLeadSeconds`, `proposalFrom` read both, `editFrom` rebuilt the
+edit without them, and `savePolicy` never saw them: **#91's presence setting could not be saved from the
+settings page.** On #91's own head there is no proposal indirection — the edit was built directly, presence
+included — so routing #91's reads through the accepted segment's mapper is what broke it. That is the
+"do not discard either segment" case exactly.
+
+Nothing caught it. Typecheck cannot: presence enters through conditional spreads, which do not trigger
+excess-property checking, so the proposal carried fields its own type never declared. And no test asserted
+that presence reaches the store.
+
+Proven before fixed, in that order: a new case asserting the mode and the lead arrive at `savePolicy`
+failed on the merged head, passes with the fix, and fails again — alone — when the fix is removed. A second
+case is the control: a form carrying neither value must send neither key, so an unrelated save cannot reset
+a business's presence to `OFF`.
+
+The fix completes the union inside the accepted segment's architecture: `PolicyProposal` declares both
+fields, because the proposal is the one thing that travels between a refusal and a sealed confirmation;
+`decodeProposal` re-validates both on the way in like every other field, since the parameter is
+user-editable; `editFrom` carries them through; and the page's `form` prefers `edited ?? stored` for them,
+consistent with every sibling field.
+
 #### Disclosed, not fixed
 
-- **Presence does not survive the rejected-proposal round trip.** `PolicyProposal`, `encodeProposal` and
-  `decodeProposal` are the accepted segment's, enumerate their fields explicitly, and carry no presence.
-  #91 predates that mechanism entirely — its head has no proposal machinery at all — so leaving presence
-  out of it **discards nothing #91 did**, and adding it would be new design rather than a union. The
-  consequence to be aware of: if a high-impact change needs confirmation, the re-rendered form shows the
-  owner's other edits but the *stored* presence values. Whether to extend the proposal is an owner call.
+- ~~Presence does not survive the rejected-proposal round trip, and that discards nothing.~~
+  **Withdrawn — this was wrong, and what it was hiding is the sixth breakage, recorded above.** Tracing the
+  save path before publishing the claim showed that `editFrom` dropped presence before `savePolicy`, so
+  #91's setting could not be saved at all. Fixed, with a test that fails without the fix.
 - **The two presence inputs carry no `disabled={!mayEdit}`** while every sibling input does. Checked
   against #91's own head: they did not have it there either, so the merge lost nothing. The server still
   refuses an AGENT, so this is a UI inconsistency rather than a permission hole.
@@ -123,15 +150,14 @@ focused package run separately with its own label.
 | `@omnichannel/channel-whatsapp` | **152 passed** (8 files) |
 | `pnpm test:db` | **793 passed** (38 files), 0 failures, 0 skips |
 | `pnpm test:redis` | **55 passed** (3 files) |
-| `pnpm test:e2e` (worker + web) | **1084 passed** (95 files), 0 skips |
+| `pnpm test:e2e` (worker + web) | **1086 passed** (95 files), 0 skips |
 | `pnpm evals` | **20/20**, 0 quality regressions |
 | `pnpm build` | exit 0 |
-| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1824 passed, 1017 skipped |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1826 passed, 1017 skipped |
 
 **Disclosed.** The presence-handler suite failed on the first full run and is reported as fixed, not as
 green first time: one failed file and 15 skipped tests on
-`automation_policies_profile_default_key`, reproduced alone, fixed at the fixture, re-run to 95 files and
-1084 tests with no skips. No other retries or flakes. `db:migrate:deploy` reported "No pending migrations
+`automation_policies_profile_default_key`, reproduced alone, fixed at the fixture, re-run to 95 files with no skips. No other retries or flakes. `db:migrate:deploy` reported "No pending migrations
 to apply" — correct but not evidence, since `20261005160000_presence_timing` was applied to this local
 database on 2026-10-05 (read from `_prisma_migrations`); the suites build a fresh database per run anyway.
 

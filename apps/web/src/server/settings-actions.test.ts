@@ -368,6 +368,30 @@ describe("a change that widens what goes out", () => {
   });
 });
 
+describe("presence", () => {
+  it("sends the mode and the lead an owner chose, in milliseconds", async () => {
+    await outcomeOf(() => saveSettingsAction(TARGET, wholeForm({ presenceMode: "READ_AND_TYPING", presenceTypingLeadSeconds: "6" })));
+
+    // The finding this pins: the form posted both values and `proposalFrom` read them, but the proposal is
+    // mapped to the store's edit field by field — and that mapping had no presence in it, so a setting an
+    // owner changed was dropped on the way to `savePolicy` with every gate green.
+    expect(store.savePolicy.mock.calls[0]?.[3]).toMatchObject({
+      presenceMode: "READ_AND_TYPING",
+      presenceTypingLeadMs: 6_000,
+    });
+  });
+
+  it("sends nothing about presence when the form carries neither value", async () => {
+    // The control: an absent or unrecognised value must leave the stored setting alone rather than
+    // resetting a business's presence to OFF on every unrelated save.
+    await outcomeOf(() => saveSettingsAction(TARGET, wholeForm()));
+
+    const edit = store.savePolicy.mock.calls[0]?.[3] as Record<string, unknown>;
+    expect(edit).not.toHaveProperty("presenceMode");
+    expect(edit).not.toHaveProperty("presenceTypingLeadMs");
+  });
+});
+
 describe("custom timing", () => {
   it("sends the four numbers an owner typed, in milliseconds", async () => {
     await outcomeOf(() =>

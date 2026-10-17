@@ -273,6 +273,8 @@ function editFrom(proposal: PolicyProposal): PolicyEdit {
     ...(proposal.instagramAfterWindowPolicy === undefined ? {} : { instagramAfterWindowPolicy: proposal.instagramAfterWindowPolicy }),
     ...(proposal.whatsappAfterWindowPolicy === undefined ? {} : { whatsappAfterWindowPolicy: proposal.whatsappAfterWindowPolicy }),
     whatsappTemplateAutomationAllowlist: proposal.whatsappTemplateAutomationAllowlist,
+    ...(proposal.presenceMode === undefined ? {} : { presenceMode: proposal.presenceMode }),
+    ...(proposal.presenceTypingLeadMs === undefined ? {} : { presenceTypingLeadMs: proposal.presenceTypingLeadMs }),
   };
 }
 

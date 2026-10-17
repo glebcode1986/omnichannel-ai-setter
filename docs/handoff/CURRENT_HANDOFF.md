@@ -1966,11 +1966,19 @@ from:
 
 ### Disclosed, not fixed
 
-Presence is absent from the rejected-proposal round trip: `PolicyProposal` and `decodeProposal` are the
-accepted segment's and enumerate their fields, while #91's head has no proposal machinery at all — so
-omitting presence discards nothing #91 did, and adding it would be new design. The visible consequence is
-that a confirmation re-render shows the owner's other edits but the stored presence values; extending it is
-an owner call. Also: the two presence inputs lack `disabled={!mayEdit}`, which #91's own head lacked too
+**A sixth breakage, found by checking a disclosure before publishing it.** I had written that presence was
+absent from the rejected-proposal round trip and that this discarded nothing, because #91 predates that
+mechanism. Tracing the save path first showed the claim was wrong: `saveSettingsAction` builds a
+`PolicyProposal` and `editFrom` maps it to the store's `PolicyEdit` field by field, with no presence in the
+mapping — so the form posted presence, `proposalFrom` read it, and it was dropped before `savePolicy`.
+**#91's presence setting could not be saved from the settings page.** #91's own head built the edit directly
+with presence included, so the accepted segment's mapper is what broke it. Typecheck could not see it —
+presence enters through conditional spreads, which evade excess-property checking — and no test asserted
+that presence reaches the store. Fixed after a failing test proved it: `PolicyProposal` now declares both
+fields, `decodeProposal` re-validates them like every other user-editable field, `editFrom` carries them,
+and the page prefers `edited ?? stored` for them as every sibling field does.
+
+Also: the two presence inputs lack `disabled={!mayEdit}`, which #91's own head lacked too
 (the server still refuses an AGENT); `presenceSettingsOf`'s coercions are unreachable from its only caller,
 because the columns are a Prisma enum and `Int NOT NULL`, and no test pins them; and
 `profileDefaultPolicyWrite()` does not map the presence columns, which changes nothing today because the
@@ -1990,15 +1998,15 @@ separately with its own label.
 | `@omnichannel/channel-whatsapp` | 8 files, **152/152** |
 | PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 38 files, **793/793**, no skips |
 | Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
-| worker + web E2E | 95 files, **1084/1084** |
+| worker + web E2E | 95 files, **1086/1086** |
 | evals | **20/20, 0 failed, 0 quality regressions** |
 | production build | exit 0 |
-| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 126 files passed / 57 skipped, **1824 passed** / 1017 skipped |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 126 files passed / 57 skipped, **1826 passed** / 1017 skipped |
 
 **Disclosed limitations.** The presence-handler suite **failed on the first full run** and is reported as
 fixed rather than as having passed first time: `automation_policies_profile_default_key`, one failed file
 and 15 skipped tests. It was reproduced on its own, fixed at the fixture, and re-run — the whole E2E project
-then went from 94 passed / 1 failed with 15 skipped to **95 passed with 1084 tests and no skips**. No other
+then went from 94 passed / 1 failed with 15 skipped to **95 passed with no skips**. No other
 retries, no flakes, and nothing skipped to make a gate pass. The 1017 skipped tests in the no-infrastructure
 run are the PostgreSQL and Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`,
 which is what CI relies on. `db:migrate:deploy` again reported "No pending migrations to apply": correct but
