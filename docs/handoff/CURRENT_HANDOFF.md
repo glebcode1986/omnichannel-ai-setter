@@ -1663,3 +1663,85 @@ full above. One environment note worth recording: those variables are `TEST_DATA
 `TEST_REDIS_URL`, not `DATABASE_URL`; a first run with the wrong names failed 31 suites loudly rather than
 skipping them silently, which is the right design and is why it was caught immediately. Local runs are
 macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.
+
+## PR #88 accepted, and joined to #89 / P4-03 — 2026-10-17
+
+**#88 is accepted at `98c2b2696f670ccc82a32252a91fa0460d2dfffa`** — Gemini/Antigravity formal GitHub review
+`5550962495`, `APPROVED`, 2026-10-16T16:53:26Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=98c2b2696f670ccc82a32252a91fa0460d2dfffa`, verified through
+`GET /pulls/88/reviews`. The verdict audited `sameNumber` explicitly and found zero blocking defects.
+
+**Routing unchanged.** **#89 / P4-03 is the sole gate; #90 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `960f7174abaa732a183624defcc5c1104af262da` — accepted #88 ran 27
+commits ahead of it, #89's authored segment 9 — so #89 against accepted #88 was genuinely `diverged`, 9
+ahead / 27 behind. Ordinary non-rebase merge at `3752ae2b11cfa8dc6b53365385e2e80845e23026`; no rebase,
+force-push, squash, merge to `main`, or propagation into #90+. `--is-ancestor` succeeds for both the
+accepted #88 head and the prior #89 head `f257f0a6f73e55f98d5395abce46d9f72e0bb190`.
+
+### The conflict that was only a comment, and why that still took work
+
+Two conflicts. The documentation one was a plain union: both segments had appended a dated section to
+`META_WHATSAPP_PHASE4_VERIFICATION.md`, so both are kept, in chronological order — #89's P4-03 templates
+re-verification of 2026-10-04, then #88's propagation re-verification of 2026-10-16. Neither was folded into
+the other.
+
+The other was `evaluate.ts`, and it was a **doc comment** — which made it more dangerous rather than less,
+because the two sides disagreed about a fact. #89's prose counted "unattended sending needs the allowlist"
+among four conditions; #88's said the allowlist is **not** read in the policy engine at all but arrives as
+two settled booleans computed where the catalogue is. A comment cannot be resolved by preferring the longer
+one, so it was resolved against the code: `evaluateTemplateGate` reads
+`input.templateRoute.approvedTemplateAvailable` and `input.templateRoute.automatable`, and touches no
+catalogue. #88's framing is the factual one.
+
+The resolution is a genuine union rather than a choice. It keeps #89's four operator-facing conditions —
+each of which does describe real behaviour — keeps #88's distinction between `undefined` and an empty
+refusal list, and ends by naming `selectTemplate` as the place the two booleans are decided. That closing
+sentence is *more* true after this merge than before it, because `selectTemplate` is #89's own new
+`packages/application/src/policy/template-route.ts`. The two segments did not conflict about behaviour; they
+conflicted about which of them owned a sentence, and the merged code makes both halves of it true.
+
+### The semantic union, checked rather than presumed
+
+- **#88's echo normalization survives** — `sameNumber` defined and still called at the echo branch, with
+  `BUSINESS_WA_ID` and `BUSINESS_DISPLAY_NUMBER` still separate constants in fixture and test.
+- **#89's template work survives** — `policy/template-route.ts` with its 17 cases,
+  `channel-whatsapp/templates.ts`, `db/whatsapp-template-store.ts`, `domain/message-template.ts`, the new
+  reason codes, and migration `20261004210000_whatsapp_template_shape` with both CHECKs.
+- **The boundary the #87 verdict demanded holds.** That review required transport-owned template checks not
+  to claim the then-unbuilt Issue #20 catalogue. #89 now builds it, so the boundary was re-checked instead
+  of presumed: `checkSendable` refuses only shape — missing template name or language, empty parameter —
+  and never approval status, freshness or the allowlist. Eligibility stays in `selectTemplate`. No
+  duplicated check and no contradiction between the layers.
+- **#89's freshness rule was mutation-checked**, since it is the claim its own prose rests on ("a cached
+  catalogue row is not a permission forever"). Making `isFresh` always true, and separately computing
+  availability without the freshness filter, each fail exactly the two staleness cases. The tests have
+  power; nothing needed changing.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; every suite bounded to `--maxWorkers=2`.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **545** source files, 0 cycles |
+| `@omnichannel/application` | 6 files, **138/138** |
+| `@omnichannel/channel-whatsapp` | 7 files, **123/123** |
+| `@omnichannel/domain` | 13 files, **266/266** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 37 files, **753/753**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **53/53** |
+| worker + web E2E | 89 files, **1010/1010** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 121 files passed / 52 skipped, **1733 passed** / 913 skipped |
+
+**Disclosed limitations.** No retries, no reruns, no flakes, and no test skipped to make a gate pass. One
+precision worth recording rather than glossing: `pnpm --filter @omnichannel/db db:migrate:deploy` reported
+*"No pending migrations to apply"* on this branch, and that was **correct but not evidence** — this
+long-lived local database already had `20261004210000_whatsapp_template_shape` applied on 2026-10-05 during
+earlier work on this branch. Nor does `db:check-drift` consult the live database; it compares the migrations
+directory against `schema.prisma`. What actually demonstrates the migration is sound is that every
+integration suite builds a **fresh** database per run through `createMigratedTestDatabase`, and 753 tests
+passed against those. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub
+Actions run.
