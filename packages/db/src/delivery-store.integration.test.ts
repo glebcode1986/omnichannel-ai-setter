@@ -686,9 +686,16 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
           }),
       },
       {
-        what: "a Business Profile default policy appearing where there was none",
+        // Written since, not appearing from nothing: every Business Profile is created with its default,
+        // so the transition a production profile can actually make is an edit. The `none` half of the
+        // guard — a row appearing where the decision saw none — is proved further down, by deleting the
+        // default and inserting one underneath a claim that is already in flight.
+        what: "the Business Profile default policy being written since",
         change: () =>
-          database.db.automationPolicy.create({ data: { ...scope(), channelAccountId: null, mode: "OFF", mandatoryReviewReasons: [] } }),
+          database.db.automationPolicy.updateMany({
+            where: { ...scope(), channelAccountId: null },
+            data: { confidenceThreshold: 0.99 },
+          }),
       },
       {
         // Nothing rewrites an authority today — it is granted once, when the delivery is scheduled. The
