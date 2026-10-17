@@ -165,22 +165,33 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
       return { status: "SKIPPED", reasons: ["no automation policy"] };
     }
 
+    // The provider timing rules the budget below is measured against. Named for Instagram because they
+    // are Instagram's; `remainingMs` states when they apply and when they do not.
     const timing = instagramTimingPolicy();
     /**
-     * How long the provider's automated-response budget still allows, or `undefined` when it does not apply.
+     * How long the provider's automated-response budget still allows, or `undefined` when it does not
+     * apply. Two independent reasons it may not, and both have already cost this product a working
+     * feature, so both are kept.
      *
-     * It does not apply to a planned follow-up. The budget is Meta's rule about answering a person
-     * promptly and it starts at *their* message; a follow-up exists precisely because they stopped
-     * writing, so its anchor is hours or days old by design and a budget measured from it is always
-     * already spent. Applying it anyway sent every follow-up to `DEADLINE_MISSED`, which asked a person to
-     * review a message nobody is waiting for and left the attempt to be cancelled as `REVIEW_PENDING` —
-     * so the feature could be wired up correctly end to end and still never send anything.
+     * **It is Instagram's budget, and only Instagram's.** WhatsApp publishes no such deadline, so
+     * measuring one against a WhatsApp send would shorten or abandon the human-like delay for a rule that
+     * platform does not impose.
+     *
+     * **It does not apply to a planned follow-up, on any channel.** The budget is Meta's rule about
+     * answering a person promptly and it starts at *their* message; a follow-up exists precisely because
+     * they stopped writing, so its anchor is hours or days old by design and a budget measured from it is
+     * always already spent. Applying it anyway sent every follow-up to `DEADLINE_MISSED`, which asked a
+     * person to review a message nobody is waiting for and left the attempt to be cancelled as
+     * `REVIEW_PENDING` — so the feature could be wired up correctly end to end and still never send
+     * anything.
      *
      * Nothing else is relaxed: the 24-hour messaging window is still computed from the customer's last
      * message and still refuses a follow-up outside it, and every other gate is untouched.
      */
     const remainingMs =
-      conversation.lastInboundAt === null || draft.trigger === "FOLLOW_UP"
+      conversation.lastInboundAt === null ||
+      conversation.channelIdentity.channelAccount.channel !== "INSTAGRAM" ||
+      draft.trigger === "FOLLOW_UP"
         ? undefined
         : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
     const decision: PolicyDecision = evaluatePolicy({
@@ -209,14 +220,17 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
         ...(policy.quietHoursTimeZone === null || policy.quietHoursStart === null || policy.quietHoursEnd === null
           ? {}
           : { quietHours: toQuietHours(policy.quietHoursTimeZone, policy.quietHoursStart, policy.quietHoursEnd) }),
-        afterWindow: { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
+        // The channel's own policy, not Instagram's for everything. Naming one channel here meant a
+        // WhatsApp conversation was judged by Instagram's after-window rules — which have different
+        // values and a different meaning — and ADR-016's three WhatsApp modes could never take effect.
+        afterWindow:
+          conversation.channelIdentity.channelAccount.channel === "WHATSAPP"
+            ? { channel: "WHATSAPP", policy: policy.whatsappAfterWindowPolicy }
+            : { channel: "INSTAGRAM", policy: policy.instagramAfterWindowPolicy },
       },
       account: conversation.channelIdentity.channelAccount.status,
       capabilities: { ...NO_CAPABILITIES, text: true },
-      window:
-        conversation.lastInboundAt === null
-          ? { state: "NOT_ELIGIBLE", reason: "no user-initiated conversation" }
-          : { state: "OPEN_FREEFORM", expiresAt: new Date(conversation.lastInboundAt.getTime() + 24 * 60 * 60 * 1000) },
+      window: windowFor(conversation.channelIdentity.channelAccount.channel, conversation.lastInboundAt, now),
       // Approval is a live capability, and eligibility is computed from the customer's own last message —
       // the provider's clock — rather than assumed. Without an approved app it stays unavailable.
       humanAgent: humanAgentAvailability(dependencies, { workspaceId: input.workspaceId, conversationId: input.conversationId }, conversation, now),
@@ -287,6 +301,27 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
     });
     return { status: "SCHEDULED", operationId: scheduled.operationId, delayMs: delay.delayMs };
   };
+}
+
+/**
+ * The messaging window as this decision needs it.
+ *
+ * Both channels open a 24-hour window from the customer's own last message. They differ at the end of it:
+ * an Instagram conversation with no inbound has never been eligible, while a WhatsApp one is
+ * `TEMPLATE_ONLY` — an approved template is the documented way to start a conversation there, and calling
+ * it "not eligible" would throw away the only business-initiated route the platform has.
+ */
+function windowFor(channel: string, lastInboundAt: Date | null, now: Date): PolicyInput["window"] {
+  if (channel === "WHATSAPP") {
+    if (lastInboundAt === null) {
+      return { state: "TEMPLATE_ONLY" };
+    }
+    const expiresAt = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+    return expiresAt.getTime() > now.getTime() ? { state: "OPEN_FREEFORM", expiresAt } : { state: "TEMPLATE_ONLY" };
+  }
+  return lastInboundAt === null
+    ? { state: "NOT_ELIGIBLE", reason: "no user-initiated conversation" }
+    : { state: "OPEN_FREEFORM", expiresAt: new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000) };
 }
 
 /**

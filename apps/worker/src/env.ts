@@ -24,6 +24,15 @@ export const workerEnvSchema = runtimeEnvSchema.extend({
    * a stored flag on an account, and `UNKNOWN` fails closed — which is the default on purpose.
    */
   INSTAGRAM_HUMAN_AGENT_APPROVAL: z.enum(["APPROVED", "NOT_APPROVED", "UNKNOWN"]).default("UNKNOWN"),
+  /**
+   * WhatsApp's half of the same pair (#24).
+   *
+   * The worker only sends, but the adapter is one object and holds both halves — and the verify token is
+   * part of what binds it, so a deployment missing either configures no WhatsApp transport at all rather
+   * than half of one.
+   */
+  WHATSAPP_APP_SECRET: z.string().min(1).max(512).optional(),
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).max(512).optional(),
 
   /** Model provider credentials. Read once here and passed inward as typed configuration. */
   ANTHROPIC_API_KEY: z.string().min(1).max(512),
