@@ -109,6 +109,11 @@ export function defaultAutomationSettings(): AutomationPolicySettings {
     instagramAfterWindowPolicy: "STANDARD_ONLY",
     whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
     whatsappTemplateAutomationAllowlist: [],
+    // OFF, for the same reason the mode is: presence is a promise made to a customer — that their message
+    // was seen, that a reply is being written — and a profile nobody has configured has not made it. The
+    // lead is still stated, so turning presence on later does not also require choosing a number.
+    presenceMode: "OFF",
+    presenceTypingLeadMs: DEFAULT_PRESENCE_TYPING_LEAD_MS,
   };
 }
 

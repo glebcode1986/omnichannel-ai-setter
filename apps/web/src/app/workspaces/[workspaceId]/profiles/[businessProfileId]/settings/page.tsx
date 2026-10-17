@@ -133,6 +133,12 @@ export default async function SettingsPage({
           instagramAfterWindowPolicy: edited?.instagramAfterWindowPolicy ?? stored.instagramAfterWindowPolicy,
           whatsappAfterWindowPolicy: edited?.whatsappAfterWindowPolicy ?? stored.whatsappAfterWindowPolicy,
           allowlist: (edited?.whatsappTemplateAutomationAllowlist ?? stored.whatsappTemplateAutomationAllowlist).join("\n"),
+          // From `stored` only, unlike every field above it. Presence arrived with P4-05, which predates
+          // the rejected-proposal round trip entirely: `PolicyProposal` carries no presence fields, so
+          // there is no `edited` value to prefer. Reading it here rather than from the policy directly
+          // keeps one source for what the form shows, which is what this object is for.
+          presenceMode: stored.presenceMode,
+          presenceLeadSeconds: Math.round(stored.presenceTypingLeadMs / MS_PER_SECOND),
           expectedVersion: edited?.expectedVersion ?? stored.version,
         };
 
@@ -339,7 +345,7 @@ export default async function SettingsPage({
           />
 
           <label htmlFor="settings-presence">{t.t("settings.presence")}</label>
-          <select id="settings-presence" name="presenceMode" defaultValue={policy.presenceMode}>
+          <select id="settings-presence" name="presenceMode" defaultValue={form.presenceMode}>
             {PRESENCE_MODES.map((value) => (
               <option key={value} value={value}>
                 {t.t(`presenceMode.${value}`)}
@@ -355,7 +361,7 @@ export default async function SettingsPage({
             type="number"
             min="0"
             max={Math.floor(MAX_PRESENCE_TYPING_LEAD_MS / 1_000)}
-            defaultValue={Math.round(policy.presenceTypingLeadMs / 1_000)}
+            defaultValue={form.presenceLeadSeconds}
           />
 
           <label htmlFor="settings-instagram">{t.t("settings.instagram")}</label>

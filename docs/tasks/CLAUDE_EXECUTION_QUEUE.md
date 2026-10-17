@@ -23,7 +23,119 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #89, propagated into #90 and nowhere else
+### Current work — the accepted #90, propagated into #91 and nowhere else
+
+**PR #90 / P4-04 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-17T13:00:07Z, commit `07ce360c09999e83a6a882fdd79152df535865b6`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=07ce360c09999e83a6a882fdd79152df535865b6` (review `5557862173`).
+
+**Routing unchanged.** **#91 / P4-05 is now the sole gate; #92 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `b3fe33e775c32f5654066a11edc04e7df1ab41d8`: the accepted #90
+segment ran 31 commits ahead of it, #91's own authored segment 8 — genuinely `diverged`, 8 ahead / 31
+behind. Ordinary non-rebase merge at `6b0613952cc01c85afc5dff7b61a579a25c371b7`; `--is-ancestor` succeeds
+for the accepted #90 head and the prior #91 head `f0d89c6e3b9cc5a8a5d413d1bf2d5a00b37b22b0` alike.
+
+#### Three conflicts, resolved as unions
+
+**`packages/db/src/policy-store.ts` — four hunks, all the same shape.** #91 adds `presenceMode` and
+`presenceTypingLeadMs`; the accepted segment adds `version`. Both sides appended at the same point in four
+parallel structures: the `PolicyView` interface, the `policySelect`, the row type and the row mapping. All
+three fields kept in all four places, presence grouped with the other channel-policy fields and `version`
+with `updatedAt` as metadata.
+
+**`apps/web/src/server/settings-actions.ts` — overlapping edits, not appends.** Four things had to survive
+together, and two of them were only visible by reading the merged body: the accepted segment's `.trim()` on
+`takeoverPauseHours` (a fix, not a style change), its `customSeconds`/`custom` pair — **already referenced
+by the merged body between the two hunks**, so dropping it would not compile — its `expectedVersion` in the
+proposal, and #91's two presence reads with their seconds-to-milliseconds conversion. All four kept.
+
+**`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`** — a dated section from each side, both kept. The
+file now holds six re-verification sections in chronological order, through P4-05 of 2026-10-05 and the
+propagation re-verification of 2026-10-16.
+
+#### Five pieces of fallout that produced no conflict at all
+
+This link's real work was here, not in the conflicts. The directive asked specifically to re-check
+positional handler signatures and lifecycle wiring, and that was the right place to look.
+
+1. **A stale Prisma client, which looked like a source defect.** `apps/worker/src/draft-disposition.ts`
+   failed typecheck claiming a policy row lacked `presenceMode`/`presenceTypingLeadMs` — but the row comes
+   from an unselected `findMany`, so the columns are the schema's. The install had been a no-op
+   (`Lockfile is up to date`, 19 ms), so `prisma generate` never ran and the generated client still
+   described #90's schema. `db:generate` cleared the error with no source change. **The lesson is to
+   regenerate before believing a merge produced a type error in working code.**
+2. **`defaultAutomationSettings()` became incomplete.** `AutomationPolicySettings` is
+   `Omit<AutomationPolicy, …>`, #91 widened `AutomationPolicy` with the two presence fields, and the
+   accepted segment's default literal therefore no longer satisfied its own type. Filled from #91's own
+   defaults — `"OFF"` and `DEFAULT_PRESENCE_TYPING_LEAD_MS` — which is not a guess: `domain.test.ts`
+   asserts `defaultAutomationSettings()` **`toEqual`** the settings `createAutomationPolicy` produces, an
+   exhaustive comparison that would fail on any other value. It passes.
+3. **`createHandlers` arity, for the second consecutive link.** #91 inserted `announcePresence` as the
+   **fifth** of six parameters, again ahead of `reconcile`, and the follow-up slice test — which the
+   previous link had just corrected to five arguments — needed a sixth. Fixed, and the comment now states
+   the whole order and says why types cannot check it: the rejecters take no arguments, so they satisfy
+   every slot and the suite passes whichever order they are in. The order was read from `handlers.ts` and
+   matched against the production call in `main.ts`.
+4. **The settings page referred to a variable the accepted segment had replaced.** #91's presence inputs
+   read `policy.presenceMode`; the accepted segment had refactored the page's defaults into a single `form`
+   object built from `edited ?? stored`. Presence now comes from `form`, sourced from `stored` — see the
+   disclosure below for why not from `edited`.
+5. **A fixture hand-wrote a profile default that now already exists.**
+   `apps/worker/src/presence-handler.integration.test.ts` created an `automationPolicy` with no channel
+   account, which collides with the row `createBusinessProfile` has written since the accepted P3-02 head:
+   `Unique constraint failed on … automation_policies_profile_default_key`, failing the whole suite and
+   skipping its 15 tests. Changed to edit the existing default rather than invent a second one. The other
+   four `automationPolicy.create` sites in the suites were checked and do not collide.
+
+#### Disclosed, not fixed
+
+- **Presence does not survive the rejected-proposal round trip.** `PolicyProposal`, `encodeProposal` and
+  `decodeProposal` are the accepted segment's, enumerate their fields explicitly, and carry no presence.
+  #91 predates that mechanism entirely — its head has no proposal machinery at all — so leaving presence
+  out of it **discards nothing #91 did**, and adding it would be new design rather than a union. The
+  consequence to be aware of: if a high-impact change needs confirmation, the re-rendered form shows the
+  owner's other edits but the *stored* presence values. Whether to extend the proposal is an owner call.
+- **The two presence inputs carry no `disabled={!mayEdit}`** while every sibling input does. Checked
+  against #91's own head: they did not have it there either, so the merge lost nothing. The server still
+  refuses an AGENT, so this is a UI inconsistency rather than a permission hole.
+- **`presenceSettingsOf`'s fallbacks are unreachable from its only caller.** It coerces a non-`PresenceMode`
+  string to `"OFF"` and a non-finite or negative lead to the default, but `presence_mode` is a Prisma enum
+  column and `presence_typing_lead_ms` is `Int NOT NULL`, and the one production caller passes a full row
+  after checking it is not `undefined`. No test exercises the fallbacks. Not a defect — defensive code on
+  an exported structural signature — but worth knowing it is unpinned.
+- **`profileDefaultPolicyWrite()` does not map the presence columns.** Its own comment states the intent
+  that "the columns are set from the domain's answer", and the domain's answer now includes presence. The
+  written row is identical today because the schema defaults are the same two values, so nothing is wrong
+  at runtime; the drift the comment warns about would only appear if the domain default changed later.
+  Left alone because extending the accepted segment's reviewed writer is not what this directive asked for.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, each
+focused package run separately with its own label.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 571 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **152 passed** (8 files) |
+| `pnpm test:db` | **793 passed** (38 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1084 passed** (95 files), 0 skips |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1824 passed, 1017 skipped |
+
+**Disclosed.** The presence-handler suite failed on the first full run and is reported as fixed, not as
+green first time: one failed file and 15 skipped tests on
+`automation_policies_profile_default_key`, reproduced alone, fixed at the fixture, re-run to 95 files and
+1084 tests with no skips. No other retries or flakes. `db:migrate:deploy` reported "No pending migrations
+to apply" — correct but not evidence, since `20261005160000_presence_timing` was applied to this local
+database on 2026-10-05 (read from `_prisma_migrations`); the suites build a fresh database per run anyway.
+
+### Superseded — the accepted #89, propagated into #90 and nowhere else
 
 **PR #89 / P4-03 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T10:54:39Z, commit `cdba474caead94c87bdc5038500e8b32274a1507`, carrying
