@@ -355,3 +355,41 @@ describe("the template bootstrap", () => {
     expect(result.ok && result.value.templates).toHaveLength(10);
   });
 });
+
+describe("the shape the bootstrap stores", () => {
+  it("parses each template's parameter format and placeholders at sync time", async () => {
+    // Parsed where the provider's payload is read, so nothing downstream has to know what `components`
+    // looks like — and so a parser never runs on the way to a customer (Issue #20).
+    const { config, requests } = signupConfig([templates(1)]);
+
+    const result = await fetchMessageTemplates(config, BUSINESS_TOKEN, WABA_ID);
+
+    expect(result.ok && result.value.templates[0]).toMatchObject({ parameterFormat: "POSITIONAL", parameters: ["1"] });
+    // And the request asks for the field, or the format would always fall back to the default.
+    expect(requests[0]?.url).toContain("parameter_format");
+  });
+
+  it("parses a named template's placeholders by name", async () => {
+    const { config } = signupConfig([
+      ok({
+        data: [
+          {
+            id: "tpl_named",
+            name: "order_confirmation",
+            language: "en_US",
+            status: "APPROVED",
+            parameter_format: "named",
+            components: [{ type: "BODY", text: "Thank you, {{first_name}}! Your order is {{order_number}}." }],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await fetchMessageTemplates(config, BUSINESS_TOKEN, WABA_ID);
+
+    expect(result.ok && result.value.templates[0]).toMatchObject({
+      parameterFormat: "NAMED",
+      parameters: ["first_name", "order_number"],
+    });
+  });
+});

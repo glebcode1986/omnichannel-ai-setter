@@ -217,15 +217,35 @@ function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefi
 }
 
 /**
- * The outside-window template route, or `undefined` when this channel and policy have none (ADR-016).
+ * The WhatsApp outside-window template route (ADR-016).
  *
- * `undefined` rather than an empty refusal list, because "templates do not apply here" and "a template
- * would have been allowed" are different answers and the caller above distinguishes them: only the first
- * may fall through to the human-support path, which is Instagram's alone.
+ * `undefined` means this channel and this policy have no template route, and the caller falls through to
+ * the window gate it had before — so a business that chose `SERVICE_WINDOW_ONLY` is in exactly the
+ * position it was in before this existed: automation stops until the customer writes again. `undefined`
+ * rather than an empty refusal list, because "templates do not apply here" and "a template would have
+ * been allowed" are different answers and the caller above distinguishes them: only the first may fall
+ * through to the human-support path, which is Instagram's alone.
  *
- * The allowlist is not read here. `templateRoute` arrives as two settled booleans, computed where the
- * catalogue is — a policy engine holding a catalogue would be the place a model's ranking quietly became
- * a send.
+ * Four things decide the answer, and each is a different sentence to the operator.
+ *
+ * **The window must be `TEMPLATE_ONLY`.** `NOT_ELIGIBLE` and `UNKNOWN` never get a template route:
+ * the first is the provider saying this recipient or account may not be messaged at all, and the second
+ * is us not knowing, which fails closed everywhere else in this file and must fail closed here.
+ *
+ * **There must be an approved template to send.** Without one the matter ends, because a review item
+ * asking a person to pick from nothing is one they cannot resolve.
+ *
+ * **The content must *be* a template.** A free-form draft composed while the window was open and
+ * dispatched after it closed cannot be sent whoever approved it: approving words is not approving a
+ * template, and no click reopens a messaging window.
+ *
+ * **Unattended sending needs the template allowlisted.** `TEMPLATE_AUTOPILOT` with nothing allowlisted
+ * sends nothing on its own — ADR-016 is explicit — and a human approval of this very template send is the
+ * other way through. In `TEMPLATE_REVIEW` only the second exists, which is the whole of that mode.
+ *
+ * The catalogue and the allowlist are not read here. `templateRoute` arrives as two settled booleans,
+ * `approvedTemplateAvailable` and `automatable`, decided by `selectTemplate` where the catalogue is — a
+ * policy engine holding a catalogue would be the place a model's ranking quietly became a send.
  */
 function evaluateTemplateGate(input: PolicyInput, approved: HumanApproval | undefined): readonly ReasonCode[] | undefined {
   const afterWindow = input.limits.afterWindow;

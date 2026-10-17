@@ -43,6 +43,7 @@ export * from "./audit";
 export * from "./goals";
 export * from "./lead";
 export * from "./message";
+export * from "./message-template";
 export * from "./onboarding";
 export * from "./reason-codes";
 export * from "./reconciliation";

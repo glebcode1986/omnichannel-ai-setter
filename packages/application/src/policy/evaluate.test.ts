@@ -749,3 +749,166 @@ describe("an operator's kill switch", () => {
     expect(decision.reasons).toContain("AUTOMATION_SUSPENDED");
   });
 });
+
+/**
+ * The WhatsApp outside-window template route (ADR-016, Issue #20).
+ *
+ * The acceptance criteria for Issue #20 are mostly about *not* sending, and the distinctions below are the
+ * ones that decide whether an operator sees a review item they can resolve, a conversation that quietly
+ * stopped, or a customer receiving an approved template nobody chose.
+ */
+const whatsapp = (
+  policy: "SERVICE_WINDOW_ONLY" | "TEMPLATE_REVIEW" | "TEMPLATE_AUTOPILOT",
+  overrides: Partial<PolicyInput> = {},
+): PolicyInput => ({
+  ...passing(),
+  capabilities: { ...NO_CAPABILITIES, text: true, templates: true },
+  limits: { ...passing().limits, afterWindow: { channel: "WHATSAPP", policy } },
+  window: { state: "TEMPLATE_ONLY" },
+  ...overrides,
+});
+
+const templateDraft = (): PolicyInput["draft"] => ({ ...passing().draft, contentType: "TEMPLATE" });
+
+describe("outside WhatsApp's service window", () => {
+  it("stops automation entirely under SERVICE_WINDOW_ONLY, as it did before templates existed", () => {
+    const decision = evaluatePolicy(whatsapp("SERVICE_WINDOW_ONLY", { draft: templateDraft() }));
+
+    // No review item: a business that chose this said automation waits for the customer to write again.
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
+  });
+
+  it("holds a template for a person under TEMPLATE_REVIEW", () => {
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_REVIEW", { draft: templateDraft(), templateRoute: { approvedTemplateAvailable: true, automatable: true } }),
+    );
+
+    // Even with the template allowlisted for automation: TEMPLATE_REVIEW means a person approves, and an
+    // allowlist cannot answer a mode that exists to ask them.
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decision.reasons).toContain("TEMPLATE_REQUIRED");
+  });
+
+  it("schedules an allowlisted template under TEMPLATE_AUTOPILOT", () => {
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", { draft: templateDraft(), templateRoute: { approvedTemplateAvailable: true, automatable: true } }),
+    );
+
+    expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("sends nothing unattended under TEMPLATE_AUTOPILOT when nothing is allowlisted", () => {
+    // ADR-016 is explicit: an empty allowlist means no unattended outside-window template send. A person
+    // can still approve one, so this is a review item rather than the end of the matter.
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", { draft: templateDraft(), templateRoute: { approvedTemplateAvailable: true, automatable: false } }),
+    );
+
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decision.reasons).toContain("TEMPLATE_REQUIRED");
+  });
+
+  it("ends the matter when there is no approved template to send at all", () => {
+    // Nobody can resolve a review item asking them to pick from nothing, and the provider pauses,
+    // disables and finally archives templates on its own — so an account can arrive here.
+    for (const mode of ["TEMPLATE_REVIEW", "TEMPLATE_AUTOPILOT"] as const) {
+      const decision = evaluatePolicy(whatsapp(mode, { draft: templateDraft(), templateRoute: { approvedTemplateAvailable: false, automatable: false } }));
+
+      expect(decision).toEqual({ action: "SKIP", reasons: ["NO_ELIGIBLE_TEMPLATE", "WINDOW_CLOSED"] });
+    }
+  });
+
+  it("treats a missing route as no route, not as an available one", () => {
+    const decision = evaluatePolicy(whatsapp("TEMPLATE_AUTOPILOT", { draft: templateDraft() }));
+
+    expect(decision).toEqual({ action: "SKIP", reasons: ["NO_ELIGIBLE_TEMPLATE", "WINDOW_CLOSED"] });
+  });
+
+  it("refuses free-form content whatever the mode, because no click reopens a window", () => {
+    // A draft composed while the window was open and dispatched after it closed. Approving words is not
+    // approving a template.
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", {
+        templateRoute: { approvedTemplateAvailable: true, automatable: true },
+        authority: { kind: "HUMAN_APPROVED", approvedByUserId: toUserId("usr_1"), approvedAt: NOW, reviewMode: "NORMAL" },
+      }),
+    );
+
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decision.reasons).toContain("TEMPLATE_REQUIRED");
+  });
+
+  it("lets a person's approval of this template send it under TEMPLATE_REVIEW", () => {
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_REVIEW", {
+        draft: templateDraft(),
+        templateRoute: { approvedTemplateAvailable: true, automatable: false },
+        authority: { kind: "HUMAN_APPROVED", approvedByUserId: toUserId("usr_1"), approvedAt: NOW, reviewMode: "NORMAL" },
+      }),
+    );
+
+    expect(decision).toEqual({ action: "SCHEDULE", reasons: [] });
+  });
+
+  it("offers no template route when the provider says this conversation is not eligible at all", () => {
+    // `NOT_ELIGIBLE` is the provider refusing the recipient or the account, not a closed window, and
+    // `UNKNOWN` is us not knowing. Both fail closed, as everywhere else in this engine.
+    for (const window of [{ state: "NOT_ELIGIBLE" as const, reason: "recipient opted out" }, { state: "UNKNOWN" as const, reason: "not connected" }]) {
+      const decision = evaluatePolicy(
+        whatsapp("TEMPLATE_AUTOPILOT", { draft: templateDraft(), window, templateRoute: { approvedTemplateAvailable: true, automatable: true } }),
+      );
+
+      expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
+    }
+  });
+
+  it("still holds a template send for every gate that is not about the window", () => {
+    // The template route answers the window. It answers nothing else: a suspended account, a kill switch
+    // and a customer who has written since all still apply.
+    const suspended = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", {
+        draft: templateDraft(),
+        templateRoute: { approvedTemplateAvailable: true, automatable: true },
+        outboundSuspended: { scope: "WORKSPACE", reason: "OPERATOR" },
+      }),
+    );
+    expect(suspended).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(suspended.reasons).toContain("AUTOMATION_SUSPENDED");
+
+    const superseded = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", {
+        draft: templateDraft(),
+        templateRoute: { approvedTemplateAvailable: true, automatable: true },
+        replyCycle: "SUPERSEDED",
+      }),
+    );
+    expect(superseded).toMatchObject({ action: "SKIP" });
+    expect(superseded.reasons).toContain("SUPERSEDED_BY_NEWER_INBOUND");
+  });
+
+  it("holds a template send on a degraded account, because the provider flagged the number", () => {
+    const decision = evaluatePolicy(
+      whatsapp("TEMPLATE_AUTOPILOT", {
+        draft: templateDraft(),
+        templateRoute: { approvedTemplateAvailable: true, automatable: true },
+        account: "DEGRADED",
+      }),
+    );
+
+    expect(decision).toMatchObject({ action: "HOLD_REVIEW" });
+    expect(decision.reasons).toContain("ACCOUNT_UNHEALTHY");
+  });
+
+  it("does not offer a template route to Instagram, whose policy vocabulary has none", () => {
+    const decision = evaluatePolicy({
+      ...passing(),
+      // Everything the WhatsApp case has except the channel, so the channel is the only difference.
+      capabilities: { ...NO_CAPABILITIES, text: true, templates: true },
+      window: { state: "TEMPLATE_ONLY" },
+      draft: templateDraft(),
+      templateRoute: { approvedTemplateAvailable: true, automatable: true },
+    });
+
+    expect(decision).toEqual({ action: "SKIP", reasons: ["WINDOW_CLOSED"] });
+  });
+});

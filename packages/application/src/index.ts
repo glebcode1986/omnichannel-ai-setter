@@ -7,6 +7,7 @@
  */
 export {
   ingestWebhook,
+  type AccountEventPort,
   type IngestionDependencies,
   type IngestionSummary,
   type WebhookIngestionRequest,
@@ -110,6 +111,14 @@ export type {
   ReplyCycleState,
   TemplateRoute,
 } from "./policy/inputs";
+export { selectTemplate, templateRouteOf } from "./policy/template-route";
+export type {
+  CatalogueTemplate,
+  ProposedTemplate,
+  TemplateRefusal,
+  TemplateSelection,
+  TemplateSelectionInput,
+} from "./policy/template-route";
 export { coordinateDelivery, type DeliveryCommand, type DeliveryDependencies, type DeliveryOutcome } from "./delivery/coordinate-delivery";
 export { NATURAL_MODE_FRACTION, selectDeliveryDelayMs, type DeliveryDelay, type DeliveryDelayInput } from "./delivery/schedule";
 export type {

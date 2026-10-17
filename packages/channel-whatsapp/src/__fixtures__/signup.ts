@@ -89,6 +89,7 @@ export const templates = (count = 2, next?: string): WhatsAppHttpResult =>
       language: "en_US",
       category: "UTILITY",
       status: index === 0 ? "APPROVED" : "PENDING",
+      parameter_format: "positional",
       components: [{ type: "BODY", text: "Your appointment is at {{1}}." }],
     })),
     ...(next === undefined ? {} : { paging: { next } }),

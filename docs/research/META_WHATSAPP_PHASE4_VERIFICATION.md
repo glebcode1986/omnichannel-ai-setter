@@ -235,6 +235,87 @@ Meta's own test path is to run the flow with the provider's Meta credentials; an
 Admin or Developer can do the same. **Test accounts expire after 30 days.** No production credential of
 any kind appears in this repository's tests; every provider response in the suite is a fixture.
 
+## Re-verification for P4-03 / Issue #20 — templates and the window, 2026-10-04
+
+Read from Meta's live template documentation and webhook reference on 2026-10-04. The issue asks for
+current template and service-window rules to be re-verified; these are the ones the implementation rests
+on, and three of them changed what the code does rather than merely confirming it.
+
+### The platform fact ADR-016 is built on
+
+> "Template messages are the only type of message you can send to WhatsApp users outside the customer
+> service window."
+
+That is why `TEMPLATE_ONLY` is a window *state* and not a closed window, and why the outside-window policy
+has three modes rather than a boolean.
+
+### Only `APPROVED` may send, and approval is not permanent
+
+A template must reach `APPROVED` before it can be used in a message, and Meta's wording is that a template
+rejected — or whose status changed to anything else — cannot be used. The statuses that matter:
+
+- `PENDING`, `REJECTED`, `IN_APPEAL`: never sendable;
+- `APPROVED` with quality *unknown*, *high*, *medium* or *low*: all sendable. A low-quality approved
+  template still sends, and Meta says it may be paused or disabled soon;
+- `PAUSED` and `DISABLED`: **not** sendable. These arrive *after* approval, from quality feedback;
+- `PENDING_DELETION`: added as a `message_template_status_update` event value.
+
+So a status cached at connect time is a record, not a permission — which is why eligibility reads
+`syncedAt` and a row older than the caller's freshness bound is treated as unknown rather than approved.
+
+Two more ways a catalogue row can describe a template that no longer exists: **unused templates are
+archived after 12 months and deleted 28 days later**, and a messaging account holds at most 250 templates
+(6,000 if the business portfolio is verified and one of its WhatsApp accounts has a verified display name).
+
+### Status changes arrive by webhook, and the field names are exact
+
+- `message_template_status_update` — a status changed;
+- `message_template_quality_update` — the quality score changed;
+- `message_template_components_update`, `template_category_update`.
+
+None of the four supports a callback override. Two operational facts from the same reference shape the
+handler: the **maximum webhook payload is 3 MB**, and Meta **retries a failed delivery with decreasing
+frequency for up to 7 days, delivering retries to every subscribed app** — so a duplicate status update is
+ordinary rather than exceptional, and applying one has to be idempotent.
+
+### A template is identified by name *and* language
+
+Template names are deliberately **not unique**: one name exists once per language, and each language
+counts separately against the account's limit. Sending the English version of a template a Russian-speaking
+customer was promised is sending different words, which is why `LANGUAGE_NOT_APPROVED` is a refusal of its
+own rather than folded into "not in the catalogue".
+
+### Two parameter formats, and they do not serialize the same way
+
+This is the finding that fixed a defect. `parameter_format` is `positional` or `named`, and **defaults to
+`positional`** when a template does not declare one.
+
+- **Positional**: placeholders are `{{1}}`, `{{2}}`; send values carry only `type` and `text`, and they
+  must be in the same order as the placeholders.
+- **Named**: placeholders are `{{snake_case}}`; **every send value must carry its own `parameter_name`**,
+  and order does not matter.
+
+P4-01's `buildTemplatePayload` emitted positional parameters for everything, so a business whose templates
+use named parameters could not send a template at all — Meta refuses the payload. It now derives the format
+from the names (a positional parameter's name *is* a number; a named one's cannot be) and serializes
+accordingly, and the approved shape is parsed once at sync rather than on the way to a customer.
+
+### What Meta's current documentation does *not* say
+
+It publishes no whitespace rule for parameter values — no "no newlines, tabs or more than four consecutive
+spaces". Older community material states one; the current reference does not, so nothing in this
+implementation refuses on it. A local refusal we cannot point at is a rule of our own pretending to be the
+platform's, and it would reject sends the provider would have accepted.
+
+### Also noted, for the tasks after this one
+
+- **Delivery order across messages is not guaranteed.** To order a sequence, wait for the `delivered`
+  status webhook before sending the next one.
+- Per-conversation limits cap how many templates may be sent outside the window, and marketing template
+  messages are additionally rate-limited per recipient. Both are provider quotas rather than product
+  policy, and they surface as send refusals.
+- A template's `expiration` (delivery retry period) is set at creation and is the provider's, not ours.
+
 ## Re-verification 2026-10-16 (P4-02 propagation, directive dated 2026-10-15)
 
 Read from Meta's live documentation on **2026-10-15 and 2026-10-16**, the day of and the day after the

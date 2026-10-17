@@ -1,0 +1,71 @@
+/**
+ * WhatsApp's account-level webhooks, applied after verification (Issue #20).
+ *
+ * One field matters to this product today: `message_template_status_update`. It is the only way a template
+ * status change reaches us without being asked for, and it is what keeps a cached `APPROVED` from
+ * outliving the approval — Meta pauses and disables approved templates on quality feedback, and a send
+ * decided on a stale row is a message the provider refuses after the customer was promised a reply.
+ *
+ * These events are deliberately not conversation events. They belong to the messaging account, they
+ * produce no message and nothing in them can be attributed to a contact, so the normalizer never sees
+ * them and this port applies them instead.
+ *
+ * **Scoped by the webhook's own `entry.id`, not by the route's channel account.** A messaging account may
+ * own several numbers, and the template belongs to the account rather than to one of them — updating only
+ * the number the webhook happened to arrive on would leave the others sending on a status Meta has
+ * withdrawn. The scope is still a provider asset this deployment stores: a status update naming a
+ * messaging account nobody connected matches no row and changes nothing.
+ */
+import type { AccountEventPort } from "@omnichannel/application";
+import { readTemplateStatusChanges, parseWebhook } from "@omnichannel/channel-whatsapp";
+import { applyTemplateStatusUpdate, type DbClient } from "@omnichannel/db";
+import type { Logger } from "@omnichannel/observability";
+
+
+export interface WhatsAppAccountEventOptions {
+  readonly db: () => DbClient;
+  readonly logger: () => Logger;
+  readonly now: () => Date;
+}
+
+export function createWhatsAppAccountEventPort(options: WhatsAppAccountEventOptions): AccountEventPort {
+  return {
+    async apply({ account, webhook }) {
+      if (account.channel !== "WHATSAPP" || webhook.method !== "POST") {
+        return 0;
+      }
+      // Re-read from the same verified bytes the adapter verified. Parsing again rather than threading a
+      // parsed object through the application keeps the provider's shape inside the channel package.
+      const parsed = parseWebhook(webhook.rawBody);
+      if (parsed === undefined) {
+        return 0;
+      }
+      const changes = readTemplateStatusChanges(parsed);
+      if (changes.length === 0) {
+        return 0;
+      }
+      const at = options.now();
+      let recorded = 0;
+      for (const change of changes) {
+        const { updated } = await applyTemplateStatusUpdate(options.db(), {
+          wabaId: change.wabaId,
+          name: change.name,
+          languageCode: change.languageCode,
+          status: change.status,
+          ...(change.reason === undefined ? {} : { event: change.reason }),
+          at,
+        });
+        recorded += updated;
+        // Identifiers and the provider's own codes only — never its prose, which quotes the template.
+        options.logger().info("whatsapp.template_status_applied", {
+          workspaceId: account.workspaceId,
+          templateName: change.name,
+          languageCode: change.languageCode,
+          status: change.status,
+          rows: updated,
+        });
+      }
+      return recorded;
+    },
+  };
+}

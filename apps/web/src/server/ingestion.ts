@@ -5,6 +5,7 @@ import { getChannelAdapters } from "./channel-adapters";
 import { getDb } from "./db";
 import { getLogger } from "./logger";
 import { getQueueProducer } from "./queue";
+import { createWhatsAppAccountEventPort } from "./whatsapp-account-events";
 
 let dependencies: IngestionDependencies | undefined;
 
@@ -17,6 +18,9 @@ export function getIngestionDependencies(): IngestionDependencies {
     log: getLogger(),
     now: () => new Date(),
     random: Math.random,
+    // WhatsApp delivers template status changes on the same endpoint as messages, and they are not
+    // conversation events. Applied here so a cached `APPROVED` cannot outlive the approval (Issue #20).
+    accountEvents: createWhatsAppAccountEventPort({ db: getDb, logger: getLogger, now: () => new Date() }),
   };
   return dependencies;
 }
