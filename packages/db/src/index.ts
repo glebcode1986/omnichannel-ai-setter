@@ -177,6 +177,19 @@ export * from "./repositories/channel-connect-states";
 export { createInstagramOnboardingStore, type ConnectedAccountRef, type ChannelOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
 export { applyTemplateStatusUpdate, readTemplateCatalogue, type StoredTemplate, type TemplateStatusUpdate } from "./whatsapp-template-store";
 export {
+  createPendingTranscripts,
+  loadTranscriptionWork,
+  markTranscriptMediaDeleted,
+  readMessageTranscripts,
+  recordTranscript,
+  recordTranscriptionFailure,
+  type MessageTranscriptRecord,
+  type PendingTranscriptInput,
+  type RecordedTranscript,
+  type TranscriptionStateValue,
+  type TranscriptionWork,
+} from "./transcript-store";
+export {
   createWhatsAppOnboardingStore,
   type ConnectWhatsAppInput,
   type WhatsAppConnectionRecord,

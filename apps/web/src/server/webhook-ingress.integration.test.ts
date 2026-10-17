@@ -139,6 +139,7 @@ describe.skipIf(!databaseTestsEnabled())("the production Instagram webhook ingre
     const dependencies: IngestionDependencies = {
       store: createIngestionStore(database.db),
       adapters: createChannelAdapters({ env, db: database.db, cipher: CIPHER, logger, ...(http === undefined ? {} : { http }) }),
+      transcription: { scheduleMediaTranscription: () => Promise.resolve({ jobId: "job_transcribe", queueName: "media-transcription", deduplicated: false }) },
       scheduler: {
         scheduleInboundDebounce: (job) => {
           enqueued.push(job);

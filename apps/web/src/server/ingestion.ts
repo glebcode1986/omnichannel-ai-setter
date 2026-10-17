@@ -15,6 +15,8 @@ export function getIngestionDependencies(): IngestionDependencies {
     store: createIngestionStore(getDb()),
     adapters: getChannelAdapters(),
     scheduler: getQueueProducer(),
+    // The same producer: a reading job is just another family on the same queue (Issue #21).
+    transcription: getQueueProducer(),
     log: getLogger(),
     now: () => new Date(),
     random: Math.random,

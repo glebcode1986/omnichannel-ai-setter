@@ -387,6 +387,66 @@ describe("retrieval outage", () => {
   });
 });
 
+/**
+ * A reply to a recording nobody heard (Issue #21).
+ *
+ * The same shape of fact as an unreachable corpus, and deliberately the same answer: the draft is still
+ * written, because the burst may carry a caption or a later message that stands on its own, but it is
+ * never sent without a person. The model cannot know a recording failed to transcribe — it is handed
+ * text, and a label where the words would be — so only this layer can account for it.
+ */
+describe("a recording the product could not read", () => {
+  it("holds the reply for a person and says why", async () => {
+    const { dependencies, saved } = harness([modelResult({ output: validOutput({ needs_review: false, should_send: true }) })]);
+
+    const outcome = await generateDraft(dependencies, command({ unreadableAudio: true }));
+
+    expect(outcome).toMatchObject({ status: "GENERATED", needsReview: true });
+    expect(saved[0]?.reasonCodes).toContain("AUDIO_NOT_TRANSCRIBED");
+    expect(saved[0]?.needsReview).toBe(true);
+    // The model's own advice is still stored verbatim, never tidied to agree with the outcome.
+    expect(saved[0]?.modelSuggestsSend).toBe(true);
+  });
+
+  it("is a code of its own rather than the one that means the channel cannot carry a reply", async () => {
+    const { dependencies, saved } = harness([modelResult({})]);
+
+    await generateDraft(dependencies, command({ unreadableAudio: true }));
+
+    // An audit has to tell "we could not hear the customer" from "we could not send what we wrote".
+    expect(saved[0]?.reasonCodes).toContain("AUDIO_NOT_TRANSCRIBED");
+    expect(saved[0]?.reasonCodes).not.toContain("UNSUPPORTED_MEDIA");
+  });
+
+  it("still writes the draft, because the burst may say enough without the recording", async () => {
+    const { dependencies, saved } = harness([modelResult({})]);
+
+    const outcome = await generateDraft(dependencies, command({ unreadableAudio: true }));
+
+    expect(outcome.status).toBe("GENERATED");
+    expect(saved[0]?.text).toBe("We open at 10 on Saturday.");
+  });
+
+  it("adds nothing when every recording was read", async () => {
+    const { dependencies, saved } = harness([modelResult({ output: validOutput({ needs_review: false }) })]);
+
+    // A successful reading is ordinary customer text by the time it reaches here; nothing marks it.
+    await generateDraft(dependencies, command({ unreadableAudio: false }));
+
+    expect(saved[0]?.reasonCodes).not.toContain("AUDIO_NOT_TRANSCRIBED");
+    expect(saved[0]?.needsReview).toBe(false);
+  });
+
+  it("adds nothing when the caller says nothing about recordings at all", async () => {
+    const { dependencies, saved } = harness([modelResult({ output: validOutput({ needs_review: false }) })]);
+
+    await generateDraft(dependencies, command());
+
+    expect(saved[0]?.reasonCodes).not.toContain("AUDIO_NOT_TRANSCRIBED");
+    expect(saved[0]?.needsReview).toBe(false);
+  });
+});
+
 describe("malformed output", () => {
   it("repairs exactly once, then holds the generation for review", async () => {
     const { dependencies, requests, saved } = harness([

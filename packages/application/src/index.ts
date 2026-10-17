@@ -23,6 +23,8 @@ export type {
   IngestionStore,
   IngestionTransaction,
   LogPort,
+  MediaTranscriptionPayload,
+  MediaTranscriptionScheduler,
   OutboxEntry,
   SourceEventKey,
   StoredMessageStatus,
@@ -99,6 +101,15 @@ export {
   type DraftRetrievalQuery,
   type RetrievalLogPort,
 } from "./retrieval/retrieve-draft-context";
+export { transcriptionRetryable, TranscriptionUnavailableError } from "./ai/transcription";
+export type {
+  ConfidenceSource,
+  Transcript,
+  TranscriptionFailure,
+  TranscriptionOutcome,
+  TranscriptionProvider,
+  TranscriptionRequest,
+} from "./ai/transcription";
 export { evaluatePolicy } from "./policy/evaluate";
 export type {
   AccountHealth,

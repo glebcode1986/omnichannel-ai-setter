@@ -103,6 +103,9 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       capabilityHints: ["text"],
       inbound: context.inbound,
       history: context.history,
+      // A recording in this burst that nobody could read. The draft is still written — the reply may well
+      // be fine — and it is held for a person rather than sent on the strength of a guess (Issue #21).
+      unreadableAudio: context.unreadableAudio,
       retrieval: retrieved,
     });
 

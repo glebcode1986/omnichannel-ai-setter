@@ -41,6 +41,18 @@ export const REASON_CODES = [
   "RATE_LIMITED",
   "SUPERSEDED_BY_NEWER_INBOUND",
   "RETRIEVAL_UNAVAILABLE",
+  /**
+   * The burst this draft answers contains a recording the product could not read (Issue #21).
+   *
+   * Deliberately not `UNSUPPORTED_MEDIA`, which already means something else: that the *outbound* channel
+   * cannot carry the content of a reply. Conflating them would make an audit unable to tell "we could not
+   * hear the customer" from "we could not send what we wrote", and those call for different fixes.
+   *
+   * Like `RETRIEVAL_UNAVAILABLE`, it is set by this codebase rather than by a model — a model cannot know
+   * a download failed — and it holds the draft for a person. Replying to a voice note nobody heard is the
+   * invented content this exists to prevent.
+   */
+  "AUDIO_NOT_TRANSCRIBED",
   /** An operator, or the system on their behalf, stopped automated outbound for this scope. */
   "AUTOMATION_SUSPENDED",
 ] as const;

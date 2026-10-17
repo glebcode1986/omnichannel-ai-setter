@@ -10,13 +10,14 @@ const appDir = path.resolve(import.meta.dirname, "..");
 const outDir = path.join(appDir, "node_modules", ".cache", "worker-bundle-test");
 
 /**
- * Boot-time warnings this run legitimately produces: no Redis, and no Meta app credentials.
+ * Boot-time warnings this run legitimately produces: no Redis, no Meta app credentials, and no
+ * credential-encryption key — so no stored access token can be decrypted and no recording fetched.
  *
  * `queue.client_error` is each queue client reporting that failure in its own right — name and code,
  * never the URL, once per queue family. The monitor used to drop it instead, which is what ended the
  * process during an outage it was supposed to ride out, so it belongs on this list.
  */
-const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "queue.client_error", "worker.no_channel_adapter"];
+const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "queue.client_error", "worker.no_channel_adapter", "worker.no_media_port"];
 /** Whatever this environment provides, the log must never echo it back. */
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
 
@@ -54,9 +55,9 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
       child.on("close", (code) => resolve({ code, stdout, stderr }));
     });
 
-    // Without a reachable Redis and without Meta app credentials, the only stderr entries allowed are the
-    // URL-free outage warning and the worker saying it cannot deliver — which it should say at boot rather
-    // than discover on the first customer message.
+    // Without a reachable Redis, without Meta app credentials and without a credential key, the only
+    // stderr entries allowed are the URL-free outage warning and the worker saying what it cannot do —
+    // which it should say at boot rather than discover on the first customer message.
     for (const line of result.stderr.split("\n").filter((entry) => entry.trim().length > 0)) {
       expect(EXPECTED_STARTUP_WARNINGS).toContain((JSON.parse(line) as { event: string }).event);
     }

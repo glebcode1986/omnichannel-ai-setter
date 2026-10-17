@@ -315,6 +315,19 @@ enum OutboundTransportPath {
 
 enum OutboxKind {
   INBOUND_DEBOUNCE
+  /// A voice note to read, enqueued in the same transaction as the message it belongs to (Issue #21).
+  MEDIA_TRANSCRIPTION
+}
+
+/// How a reading of a customer's recording ended (Issue #21).
+///
+/// `UNSUPPORTED` is kept apart from `FAILED` because the two are different sentences and different fixes:
+/// one will never succeed however many times it is tried, and the other might.
+enum TranscriptionState {
+  PENDING
+  READY
+  FAILED
+  UNSUPPORTED
 }
 
 enum ChannelEventType {
@@ -1133,6 +1146,7 @@ model Message {
 
   followUpAnchors      FollowUp[]
   suppressionSources   FollowUpSuppression[]
+  transcripts          MessageTranscript[]
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, businessProfileId, conversationId, id])
   @@unique([workspaceId, businessProfileId, channelAccountId, channelMessageId], map: "messages_channel_message_key")
@@ -1884,4 +1898,68 @@ model WhatsAppMessageTemplate {
   @@unique([workspaceId, connectionId, name, language])
   @@index([workspaceId, connectionId, status])
   @@map("whatsapp_message_templates")
+}
+
+/**
+ * A machine's reading of one recording a customer sent (Issue #21).
+ *
+ * A table of its own, and never a column on `messages`, because a transcript is a *claim about* the
+ * message rather than part of it. The raw media reference stays where it was — in the message's own
+ * `media` array — and everything about who read it, with what, how long it took and whether it worked
+ * lives here. That separation is what lets a reading be retried, superseded or deleted without touching
+ * the customer's message, and what lets an audit say which model produced the words a reply was drafted
+ * against.
+ *
+ * `confidence` is nullable and is expected to be null: the recommended transcription model publishes no
+ * confidence of any kind. A CHECK forbids a number without a `confidence_source`, so a figure can never
+ * sit here unattributed — the point is that "we do not know how sure it was" stays visible instead of
+ * becoming an invented 1.0.
+ *
+ * Like `ConversationSummary`, this is assistive and has no confirmation column. There is nothing here for
+ * a person to make authoritative: the recording is the authority, and this is one reading of it.
+ */
+model MessageTranscript {
+  id                String             @id @default(uuid(7))
+  workspaceId       String             @map("workspace_id")
+  businessProfileId String             @map("business_profile_id")
+  messageId         String             @map("message_id")
+  /// The provider's own media object. Kept so a deletion request can name it at the provider's end.
+  providerMediaId   String             @map("provider_media_id")
+  mimeType          String?            @map("mime_type")
+  sizeBytes         Int?               @map("size_bytes")
+  state             TranscriptionState @default(PENDING)
+  /// The words, when there are any. Null while pending and null whenever the reading failed.
+  text              String?
+  /// ISO-639-1 as the provider detected it. Null when it could not tell, which is a real answer.
+  language          String?
+  provider          String?
+  /// The model the provider says actually ran, not the alias that was requested.
+  model             String?
+  /// The provider's own revision marker for that model, when it publishes one.
+  modelRevision     String?            @map("model_revision")
+  confidence        Float?
+  /// `PROVIDER` or `DERIVED`. Set exactly when `confidence` is, so no number is unattributed.
+  confidenceSource  String?            @map("confidence_source")
+  durationSeconds   Float?             @map("duration_seconds")
+  providerRequestId String?            @map("provider_request_id")
+  latencyMs         Int?               @map("latency_ms")
+  /// This codebase's own failure vocabulary. Never the provider's prose, which can quote the recording.
+  failureReason     String?            @map("failure_reason")
+  /// The provider's own code, for the audit trail.
+  failureCode       String?            @map("failure_code")
+  attemptCount      Int                @default(0) @map("attempt_count")
+  requestedAt       DateTime           @default(now()) @map("requested_at")
+  completedAt       DateTime?          @map("completed_at")
+  /// Set when the raw media was deleted at the provider's end, which is the retention hook's record.
+  mediaDeletedAt    DateTime?          @map("media_deleted_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  message Message @relation(fields: [workspaceId, businessProfileId, messageId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One reading per media object per message: a retry updates the row rather than adding a second claim.
+  @@unique([workspaceId, messageId, providerMediaId])
+  @@unique([workspaceId, id])
+  @@index([workspaceId, state])
+  @@map("message_transcripts")
 }

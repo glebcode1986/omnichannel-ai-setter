@@ -6,6 +6,7 @@ import {
   type IngestionDependencies,
   type IngestionStore,
   type LogPort,
+  type MediaTranscriptionPayload,
   type WebhookIngestionResult,
 } from "@omnichannel/application";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +19,7 @@ import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
 const FOREIGN_KEY_VIOLATION = { code: "P2003" };
 
 type TextFixture = Extract<FakeEventFixture, { kind: "text" }>;
+type VoiceFixture = Extract<FakeEventFixture, { kind: "voice" }>;
 
 interface LogLine {
   readonly level: "info" | "warn" | "error";
@@ -34,6 +36,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
   let foreign: SeededProfile;
   let logs: LogLine[];
   let scheduled: { job: InboundDebouncePayload; delayMs: number }[];
+  let transcribed: { job: MediaTranscriptionPayload; delayMs: number }[];
   let schedulerFailure: Error | undefined;
   let normalizeCalls: number;
   let sequence = 0;
@@ -52,6 +55,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
   beforeEach(() => {
     logs = [];
     scheduled = [];
+    transcribed = [];
     schedulerFailure = undefined;
     normalizeCalls = 0;
   });
@@ -77,6 +81,20 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     };
     return {
       store: createIngestionStore(database.db),
+      // The queue takes a reading job whether or not a transcriber is configured; the handler reports
+      // "not configured". This suite asserts the entry is written, dispatched and carries the message
+      // whose recordings are owed a reading (Issue #21).
+      transcription: {
+        scheduleMediaTranscription: (job, { delayMs }) => {
+          // Honours the same outage switch as the debounce scheduler: Redis being unreachable is one
+          // fact about the process, not a per-family one.
+          if (schedulerFailure !== undefined) {
+            return Promise.reject(schedulerFailure);
+          }
+          transcribed.push({ job, delayMs });
+          return Promise.resolve();
+        },
+      },
       adapters: {
         adapterFor: (account) => {
           const adapter = createFakeChannelAdapter(account);
@@ -106,6 +124,17 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
       webhook: fakeWebhook(events, options.signature === undefined ? {} : { signature: options.signature }),
       correlationId: options.correlationId ?? unique("corr"),
     });
+
+  const voice = (from: string, overrides: Partial<VoiceFixture> = {}): VoiceFixture => ({
+    kind: "voice",
+    id: unique("evt"),
+    from,
+    mid: unique("mid"),
+    mediaId: unique("media"),
+    mimeType: "audio/ogg; codecs=opus",
+    at: new Date().toISOString(),
+    ...overrides,
+  });
 
   const text = (from: string, overrides: Partial<TextFixture> = {}): TextFixture => ({
     kind: "text",
@@ -166,7 +195,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
 
     expect(result).toEqual({
       kind: "ACCEPTED",
-      summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, debounceScheduled: 1, debounceDeferred: 0 },
+      summary: { received: 1, processed: 1, duplicates: 0, rejected: 0, outboxDispatched: 1, outboxDeferred: 0 },
     });
     const { identity, conversation } = await threadOf(main, "ig-user-new");
     expect(identity).toMatchObject({ displayName: "New Customer" });
@@ -302,7 +331,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
 
     expect(throughMain).toEqual({
       kind: "ACCEPTED",
-      summary: { received: 8, processed: 0, duplicates: 0, rejected: 8, debounceScheduled: 0, debounceDeferred: 0 },
+      summary: { received: 8, processed: 0, duplicates: 0, rejected: 8, outboxDispatched: 0, outboxDeferred: 0 },
     });
     expect(throughSecond).toMatchObject({ summary: { received: 1, processed: 0, rejected: 1 } });
     expect(throughForeign).toMatchObject({ summary: { received: 1, processed: 0, rejected: 1 } });
@@ -334,9 +363,9 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     const again = await ingest([event]);
     const concurrent = await Promise.all([ingest([event]), ingest([event]), ingest([event])]);
 
-    expect(first).toMatchObject({ summary: { processed: 1, debounceScheduled: 1 } });
+    expect(first).toMatchObject({ summary: { processed: 1, outboxDispatched: 1 } });
     for (const result of [again, ...concurrent]) {
-      expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 0, duplicates: 1, debounceScheduled: 0 } });
+      expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 0, duplicates: 1, outboxDispatched: 0 } });
     }
     expect(await counts()).toEqual(before);
     expect(scheduled).toHaveLength(1);
@@ -344,7 +373,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     // The same platform message under a new provider event ID is stored once and starts no second reply cycle;
     // the refreshed display name is profile data only and does not advance the conversation state.
     const sameMessage = await ingest([{ ...event, id: unique("evt"), name: "Renamed Customer" }]);
-    expect(sameMessage).toMatchObject({ summary: { processed: 1, debounceScheduled: 0 } });
+    expect(sameMessage).toMatchObject({ summary: { processed: 1, outboxDispatched: 0 } });
     expect(await db().message.count()).toBe(before.messages);
     expect(scheduled).toHaveLength(1);
     const refreshed = await threadOf(main, "ig-user-dup");
@@ -427,7 +456,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
 
     expect(result).toEqual({
       kind: "ACCEPTED",
-      summary: { received: 6, processed: 4, duplicates: 0, rejected: 2, debounceScheduled: 2, debounceDeferred: 0 },
+      summary: { received: 6, processed: 4, duplicates: 0, rejected: 2, outboxDispatched: 2, outboxDeferred: 0 },
     });
     const after = await counts();
     expect(after.events - before.events).toBe(4);
@@ -683,7 +712,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     ]);
 
     const reply = await ingest([text("ig-user-human")]);
-    expect(reply).toMatchObject({ summary: { processed: 1, debounceScheduled: 0, debounceDeferred: 0 } });
+    expect(reply).toMatchObject({ summary: { processed: 1, outboxDispatched: 0, outboxDeferred: 0 } });
     expect(await stateVersionOf(conversation.id)).toBe(3);
     expect(scheduled).toHaveLength(0);
   });
@@ -693,7 +722,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     const event = text("ig-user-outage");
     const result = await ingest([event], { correlationId: "corr-outage", profile: second });
 
-    expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 1, debounceScheduled: 0, debounceDeferred: 1 } });
+    expect(result).toMatchObject({ kind: "ACCEPTED", summary: { processed: 1, outboxDispatched: 0, outboxDeferred: 1 } });
     const pending = await db().queueOutbox.findFirstOrThrow({ where: { correlationId: "corr-outage" } });
     expect(pending).toMatchObject({ ...scope(second), dispatchedAt: null, attempts: 1, lastErrorName: "Error", lockedUntil: null });
     expect(pending.availableAt.getTime()).toBeGreaterThan(Date.now());
@@ -880,6 +909,159 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     await expect(
       inboundEvent({ workspaceId: main.context.workspaceId, businessProfileId: foreign.businessProfileId }, foreign.channelAccount.id),
     ).rejects.toMatchObject(FOREIGN_KEY_VIOLATION);
+  });
+
+  /**
+   * A voice note's reading, queued in the same transaction as the message (Issue #21).
+   *
+   * Two copies of "which recordings are owed a reading" eventually disagree, so the list lives in rows the
+   * worker reads back and the queue payload carries only the message. What this suite can prove that a
+   * unit test cannot: the rows and the outbox entry commit together, a redelivered webhook adds neither,
+   * and the reading is queued whatever the conversation's automation state.
+   */
+  describe("a customer's voice note", () => {
+    const transcriptsOf = (messageId: string) => db().messageTranscript.findMany({ where: { messageId }, orderBy: { providerMediaId: "asc" } });
+
+    it("stores the recording, records that it is owed a reading, and queues exactly that", async () => {
+      const event = voice("ig-user-voice-1");
+
+      expect(await ingest([event], { correlationId: "corr-voice-1" })).toMatchObject({ kind: "ACCEPTED" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+      expect(message).toMatchObject({ ...scope(main), kind: "AUDIO", text: null });
+      expect(await transcriptsOf(message.id)).toMatchObject([
+        { ...scope(main), providerMediaId: event.mediaId, mimeType: "audio/ogg; codecs=opus", state: "PENDING", attemptCount: 0, text: null },
+      ]);
+
+      const entry = await db().queueOutbox.findFirstOrThrow({ where: { kind: "MEDIA_TRANSCRIPTION", correlationId: "corr-voice-1" } });
+      expect(entry).toMatchObject({
+        ...scope(main),
+        dedupeKey: `media-transcription:${main.context.workspaceId}:${main.businessProfileId}:${message.id}`,
+        // A reading is not a reply: nothing about human-like timing applies to it.
+        delayMs: 0,
+      });
+      expect(entry.dispatchedAt).not.toBeNull();
+      expect(transcribed.map((item) => item.job)).toEqual([
+        {
+          schemaVersion: 1,
+          ...scope(main),
+          correlationId: "corr-voice-1",
+          channelAccountId: main.channelAccount.id,
+          conversationId: message.conversationId,
+          messageId: message.id,
+        },
+      ]);
+      // The payload names the message and nothing else about the recording: the rows are the list.
+      expect(Object.keys(transcribed[0]?.job ?? {})).not.toContain("providerMediaId");
+      expect(transcribed[0]?.delayMs).toBe(0);
+    });
+
+    it("adds neither a second reading nor a second job when the webhook is redelivered", async () => {
+      const event = voice("ig-user-voice-2");
+      await ingest([event], { correlationId: "corr-voice-2" });
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+
+      // Meta redelivers for up to seven days, and a different source event ID is the awkward case: the
+      // event claim does not catch it, so the message insert and the dedupe key have to.
+      await ingest([{ ...event, id: unique("evt") }], { correlationId: "corr-voice-2-again" });
+
+      expect(await transcriptsOf(message.id)).toHaveLength(1);
+      expect(await db().queueOutbox.count({ where: { kind: "MEDIA_TRANSCRIPTION", payload: { path: ["messageId"], equals: message.id } } })).toBe(1);
+      expect(transcribed).toHaveLength(1);
+    });
+
+    it("records one reading per recording, and still only one job for the message", async () => {
+      const event = voice("ig-user-voice-3", { alsoMediaIds: ["media-voice-3-second"] });
+
+      await ingest([event], { correlationId: "corr-voice-3" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+      expect((await transcriptsOf(message.id)).map((row) => row.providerMediaId)).toEqual([...new Set([event.mediaId, "media-voice-3-second"])].sort());
+      // One job, because the rows are the list: the worker reads back what is outstanding rather than
+      // trusting a payload, and two jobs for one message would mean two workers racing over both rows.
+      expect(transcribed).toHaveLength(1);
+      expect(transcribed[0]?.job.messageId).toBe(message.id);
+    });
+
+    it("leaves an image or a document alone", async () => {
+      const picture = voice("ig-user-voice-4", { mediaKind: "IMAGE", mimeType: "image/jpeg" });
+
+      await ingest([picture], { correlationId: "corr-voice-4" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: picture.mid } });
+      // Reading a picture is a different capability with a different provider. Queueing work nothing
+      // performs would be a queue of jobs that always fail.
+      expect(await transcriptsOf(message.id)).toEqual([]);
+      expect(transcribed).toEqual([]);
+      expect(await db().queueOutbox.count({ where: { kind: "MEDIA_TRANSCRIPTION", correlationId: "corr-voice-4" } })).toBe(0);
+    });
+
+    it("leaves a recording the provider gave no identifier for alone", async () => {
+      const event = voice("ig-user-voice-5", { mediaId: undefined });
+
+      await ingest([event], { correlationId: "corr-voice-5" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+      // There is nothing to ask the provider for. The draft path still sees an unreadable recording on
+      // the message, which is the honest answer.
+      expect(await transcriptsOf(message.id)).toEqual([]);
+      expect(transcribed).toEqual([]);
+    });
+
+    it("reads the recording even in a conversation a person has taken over", async () => {
+      const paused = await db().conversation.findFirstOrThrow({ where: { ...scope(second) }, select: { id: true } });
+      await db().conversation.update({
+        where: { id: paused.id },
+        data: {
+          takeoverState: "HUMAN_ACTIVE",
+          takeoverReason: "UNMATCHED_OUTBOUND_ECHO",
+          takeoverActorKind: "NATIVE_APP",
+          humanTakeoverAt: new Date(),
+          takeoverPausedUntil: new Date(Date.now() + 6 * 60 * 60 * 1000),
+        },
+      });
+      const identity = await db().channelIdentity.findFirstOrThrow({ where: { ...scope(second) }, select: { externalUserId: true } });
+      const event = voice(identity.externalUserId);
+
+      await ingest([event], { profile: second, correlationId: "corr-voice-6" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+      // No draft is coming, and the reading matters more rather than less: the person about to answer is
+      // the one who needs to know what the customer said, and the Inbox has nothing to show them without it.
+      expect(await transcriptsOf(message.id)).toHaveLength(1);
+      expect(transcribed).toHaveLength(1);
+      expect(scheduled).toEqual([]);
+      await db().conversation.update({
+        where: { id: paused.id },
+        data: { takeoverState: "NONE", takeoverReason: null, takeoverActorKind: null, humanTakeoverAt: null, takeoverPausedUntil: null },
+      });
+    });
+
+    it("keeps the reading job and the message in one commit when the queue is unreachable", async () => {
+      // The outbox is the whole point: the entry is a row first and a job second, so a queue outage
+      // leaves a message whose reading is still owed rather than one nobody will ever read.
+      const event = voice("ig-user-voice-7");
+      schedulerFailure = new Error("redis down");
+
+      await ingest([event], { correlationId: "corr-voice-7" });
+
+      const message = await db().message.findFirstOrThrow({ where: { channelMessageId: event.mid } });
+      expect(await transcriptsOf(message.id)).toHaveLength(1);
+      const entry = await db().queueOutbox.findFirstOrThrow({ where: { kind: "MEDIA_TRANSCRIPTION", correlationId: "corr-voice-7" } });
+      expect(entry.dispatchedAt).toBeNull();
+    });
+
+    it("never logs the recording's words, bytes or identifier alongside a customer's caption", async () => {
+      const event = voice("ig-user-voice-8", { caption: "canary-caption-i-need-to-reschedule" });
+
+      await ingest([event], { correlationId: "corr-voice-8" });
+
+      // A caption is a customer's own writing and a media ID is a provider credential of sorts: holding
+      // one is enough to download the recording for the next five minutes.
+      const serialized = JSON.stringify(logs);
+      expect(serialized).not.toContain("canary-caption");
+      expect(serialized).not.toContain(event.mediaId ?? "unset");
+    });
   });
 
   /**

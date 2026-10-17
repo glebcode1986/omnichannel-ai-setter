@@ -77,7 +77,8 @@ Manual human activity always wins. A platform outbound echo that does not match 
 - `STANDARD_ONLY`: no send after the standard automated window until the user reopens it.
 - `HUMAN_ASSISTED_EXTENDED`: AI may draft outside the standard window, but the extended Human Agent send requires an explicit real-human review/send action and current Meta eligibility/approval.
 - The automated worker never silently applies `HUMAN_AGENT` merely to bypass the standard window.
-- MVP auto-send content is text. Inbound media may be mirrored/represented but unsupported media understanding is held or escalated until dedicated vision/transcription support exists.
+- MVP auto-send content is text. Inbound media is stored as a reference; understanding it is a separate capability per media kind.
+- Inbound audio is transcribed (P4-04). The reading is stored apart from the recording with its provider, model and revision, and a stored confidence must say where it came from or the database refuses the row. A failed or pending reading never carries words: the draft is written, marked `AUDIO_NOT_TRANSCRIBED` and held for a person. Images, video and documents are stored and not interpreted, which is held or escalated the same way.
 
 ## Reliability invariants
 

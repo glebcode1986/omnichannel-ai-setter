@@ -7,6 +7,7 @@
  */
 import type {
   InboundDebouncePayload,
+  MediaTranscriptionPayload,
   IngestionStore,
   IngestionTransaction,
   OutboxEntry,
@@ -18,6 +19,7 @@ import { isMessageDeliveryStatus } from "@omnichannel/domain";
 import type { DbClient } from "./client";
 import { cancelPendingFollowUps } from "./followup-store";
 import type { Prisma } from "./generated/prisma/client";
+import { createPendingTranscripts } from "./transcript-store";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -68,17 +70,23 @@ export function createIngestionStore(db: DbClient): IngestionStore {
         });
         if (count === 1) {
           const entry = await db.queueOutbox.findUniqueOrThrow({ where: { id } });
-          claimed.push({
+          const base = {
             id: entry.id,
-            kind: entry.kind,
             workspaceId: entry.workspaceId,
             businessProfileId: entry.businessProfileId,
             correlationId: entry.correlationId,
-            payload: entry.payload as unknown as InboundDebouncePayload,
             delayMs: entry.delayMs,
             createdAt: entry.createdAt,
             attempts: entry.attempts,
-          });
+          };
+          // The payload is JSON the application wrote and only the application validates. The narrowing
+          // is on `kind`, which is a database enum, so an entry cannot be read as the wrong kind of work
+          // however the payload column drifted.
+          claimed.push(
+            entry.kind === "MEDIA_TRANSCRIPTION"
+              ? { ...base, kind: "MEDIA_TRANSCRIPTION", payload: entry.payload as unknown as MediaTranscriptionPayload }
+              : { ...base, kind: "INBOUND_DEBOUNCE", payload: entry.payload as unknown as InboundDebouncePayload },
+          );
         }
       }
       return claimed;
@@ -369,6 +377,19 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
         select: { id: true },
       });
       return created[0] === undefined ? undefined : { id: created[0].id };
+    },
+
+    async recordPendingTranscripts(input) {
+      return createPendingTranscripts(tx, {
+        workspaceId: input.workspaceId,
+        businessProfileId: input.businessProfileId,
+        messageId: input.messageId,
+        media: input.media,
+        // The transaction's own clock rather than a caller's: the row is created with the message, and a
+        // requested-at that disagreed with it would make the pending work look older or newer than the
+        // recording it belongs to.
+        at: new Date(),
+      });
     },
   };
 }
