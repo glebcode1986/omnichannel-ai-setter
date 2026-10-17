@@ -11,7 +11,14 @@
  * content, never delays and never sends on its own initiative.
  */
 export { createWhatsAppAdapter, type WhatsAppAdapter } from "./adapter";
-export { WHATSAPP_CAPABILITIES } from "./capabilities";
+export {
+  ACCOUNT_LIFECYCLE_EVENTS,
+  ACCOUNT_UPDATE_FIELD,
+  readAccountLifecycleChanges,
+  type AccountLifecycleChange,
+  type AccountLifecycleEvent,
+} from "./account-lifecycle";
+export { coexistenceCapabilities, WHATSAPP_CAPABILITIES } from "./capabilities";
 export {
   DEFAULT_GRAPH_HOST,
   DEFAULT_GRAPH_VERSION,

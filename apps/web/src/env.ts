@@ -49,6 +49,14 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   WHATSAPP_APP_SECRET: z.string().min(1).max(256).optional(),
   WHATSAPP_SIGNUP_CONFIG_ID: z.string().min(1).max(64).optional(),
   /**
+   * The token Meta echoes back during the webhook subscription handshake.
+   *
+   * Chosen by this deployment and configured in the App Dashboard, exactly like Instagram's. Without it
+   * no WhatsApp adapter is bound, which answers every WhatsApp webhook with a 404 rather than accepting a
+   * payload this deployment cannot verify.
+   */
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).max(256).optional(),
+  /**
    * Graph API version for the onboarding calls.
    *
    * A default of this deployment rather than a constant of the code: Meta deprecates a version after two

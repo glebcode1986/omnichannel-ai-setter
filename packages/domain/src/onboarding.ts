@@ -81,7 +81,27 @@ export interface ChannelOnboardingFacts {
    * between "could send" and "would send right now", and it is the reason `SENDABLE` exists separately.
    */
   readonly outboundSuspended: boolean;
+  /**
+   * Caveats worth telling an operator about, as codes rather than sentences.
+   *
+   * Separate from `status`, because these are things the account cannot *see* rather than things it
+   * cannot do: an account carrying one is working normally and would be wrong to mark unhealthy. Codes
+   * rather than prose so the surface stays localizable and the set stays closed — a free-text slot here
+   * would be where a provider's own message eventually leaks onto a page.
+   */
+  readonly caveats: readonly ChannelCaveat[];
 }
+
+/**
+ * What a channel account cannot tell this product.
+ *
+ * `NATIVE_REPLIES_INVISIBLE`: somebody can answer a customer from the provider's own app and nothing here
+ * will ever know, so the assistant may keep drafting into a conversation a colleague is already handling.
+ * It is the limitation the spec anticipated — when a provider cannot expose reliable native-send signals,
+ * the product states it rather than guessing authorship.
+ */
+export const CHANNEL_CAVEATS = ["NATIVE_REPLIES_INVISIBLE"] as const;
+export type ChannelCaveat = (typeof CHANNEL_CAVEATS)[number];
 
 export interface OnboardingFacts {
   /** Channel accounts belonging to this Business Profile, in whatever order persistence returned them. */

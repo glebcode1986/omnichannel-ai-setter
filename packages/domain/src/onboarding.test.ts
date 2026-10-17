@@ -22,6 +22,7 @@ const connectedChannel = (overrides: Partial<ChannelOnboardingFacts> = {}): Chan
   canCarryText: true,
   mode: "DRAFT",
   outboundSuspended: false,
+  caveats: [],
   ...overrides,
 });
 

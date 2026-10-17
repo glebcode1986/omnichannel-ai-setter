@@ -23,7 +23,112 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #90, propagated into #91 and nowhere else
+### Current work — the accepted #91, propagated into #92 and nowhere else
+
+**PR #91 / P4-05 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-17T15:19:11Z, commit `550100cae7d6f18f78a341543ec2feb194f1797e`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=550100cae7d6f18f78a341543ec2feb194f1797e` (review `5558442119`).
+
+**Routing unchanged.** **#92 / P4-06 is now the sole gate; #93 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `f0d89c6e3b9cc5a8a5d413d1bf2d5a00b37b22b0`: the accepted #91
+segment ran 34 commits ahead of it, #92's own authored segment 7 — genuinely `diverged`, 7 ahead / 34
+behind. Ordinary non-rebase merge at `7fe737e0855457aa6f3f6f125c0bdd005a51ed88`; `--is-ancestor` succeeds
+for the accepted #91 head and the prior #92 head `ce7fe8f536709872b25f4d155a6fbf388c4adb4c` alike.
+
+#### The collision this link was measured for, and why the union is stronger than either side
+
+Three conflicts, all of them predicted: `git merge-tree` was run against #92 from the #91 head before any
+directive existed, and it named `normalize.ts`, its test, and the research note. The code one is the
+substantive link in the whole chain so far, because **both segments had independently reached the same
+conclusion and each had only half of the answer**.
+
+#92 replaced the old "classify a `messages` entry from our own number as an echo" branch with a **refusal**
+— `whatsapp.message_from_self`, return `undefined` — and its comment gives both reasons: the branch was not
+where Meta publishes native sends, so it never fired on a real one, and when it failed to fire *because the
+two fields are formatted differently*, the business's own message became an inbound message from a
+"customer" who is the business, starting a reply cycle answering ourselves. #92 also added the real
+mechanism: `HANDLED_FIELDS = {"messages", "smb_message_echoes"}` and `normalizeEcho` over
+`value.message_echoes[]`.
+
+#91 had fixed the comparison — canonical, digits-only `sameNumber`, refusing to call two spellings with no
+digits equal — but was still classifying.
+
+**So #92 had the right semantics with the comparison that caused the problem it describes, and #91 had the
+right comparison with the wrong semantics.** The resolution keeps #92's refusal, its comment and its
+warning, and calls `sameNumber` in the condition, with one paragraph added saying why the comparison must
+be canonical: a refusal keyed on raw equality misses in exactly the cases the spellings differ, which would
+leave the phantom-inbound behaviour its own comment describes still reachable.
+
+**Mutation-proven, and the proof is the interesting part.** `envelope` puts the digits-only spelling in
+`metadata.display_phone_number` (#91's fixture split) while `BUSINESS_DISPLAY_NUMBER` is the punctuated
+Graph spelling, so **#92's own refusal case now compares two different spellings of one number**. On #92's
+branch both sides were the same constant and that case could not fail. After the merge:
+
+- restoring raw `===` fails **#92's own case**, `refuses a \`messages\` entry that claims to come from the
+  business itself` — it passes only because the comparison is canonical;
+- deleting the empty-digits guard fails `does not treat two spellings that carry no digits as the same
+  number` — that guard now prevents a *false refusal* rather than a false classification.
+
+The test file keeps #92's suite verbatim — it tests the real mechanism and is correct — and adds a focused
+block for what that suite cannot cover: the plain spelling refused, and the two ways a canonical comparison
+could refuse something it must not (an absent display number, two spellings with no digits). #91's
+`OUTBOUND_ECHO` assertions were not kept, because the behaviour they asserted no longer exists; their
+*value* is kept, re-aimed at refusal.
+
+**A stale comment corrected rather than carried.** `sameNumber`'s docstring still described the pre-merge
+world — "echo detection", "belt-and-braces", and `smb_message_echoes` as something "a later task in this
+chain consumes". The branch refuses now and `normalizeEcho` is in this file, so the comment was rewritten to
+match. A doc comment that disagrees with its code is the same defect class this chain hit at #89.
+
+#### The disclosed coverage gap, folded forward
+
+The #91 verdict judged the missing `decodeProposal` presence cases "a coverage gap rather than an
+implementation bug … can be addressed during future polish without destabilizing the current verified
+HEAD". This is that next head, so the four cases are here: presence survives the round trip, an
+unrecognised mode is dropped, and a lead that is negative or past `MAX_PRESENCE_TYPING_LEAD_MS` is dropped.
+
+They have power, checked both ways: removing presence from `decodeProposal` fails the carry case alone, and
+carrying it unvalidated fails all three validation cases. The first case states in its own comment why it
+exists — the file's `toEqual(PROPOSAL)` round-trip assertion cannot show a field the fixture omits, which
+is the one-fixture-on-both-sides shape that made the old echo case worthless.
+
+#### Step 3's named re-checks
+
+- **Phone-number normalization** — the union above.
+- **Positional handler signatures** — `createHandlers` is unchanged at six parameters; #92 adds no queue
+  family, so the arity fallout that hit the two previous links did not recur, and typecheck confirms the
+  follow-up slice test still matches.
+- **Worker lifecycle wiring** — the `loops` list is unchanged; coexistence is ingestion and normalization,
+  not a sweep.
+- **Native-echo cancellation and takeover ownership** — the echo reaches `process-event.ts`'s
+  `case "OUTBOUND_ECHO"`, and `ingestion-store.ts:339` sets `takeover_reason = 'UNMATCHED_OUTBOUND_ECHO'`
+  **only when the state is not already `HUMAN_ACTIVE`**, so an existing human takeover is preserved rather
+  than overwritten. Authorship is correlated, never attributed, which is what the adapter's own comments
+  promise.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, focused
+packages run separately with their own labels, and `db:generate` before typecheck — the lesson from the
+previous link, where a no-op install left a stale client that looked like a source defect.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 576 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **166 passed** (9 files) |
+| `pnpm test:db` | **804 passed** (39 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1090 passed** (95 files) |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1028 skipped |
+
+**Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass.
+
+### Superseded — the accepted #90, propagated into #91 and nowhere else
 
 **PR #90 / P4-04 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T13:00:07Z, commit `07ce360c09999e83a6a882fdd79152df535865b6`, carrying
@@ -977,6 +1082,40 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Current work — P4-06 / Issue #23, coexistence and native-human takeover
+
+**Branch `feat/p4-06-whatsapp-coexistence`**, based on `feat/p4-05-whatsapp-presence`.
+
+**The finding that mattered: the existing echo detection was looking in the wrong place.** Meta
+publishes a business's native sends on their own webhook field, `smb_message_echoes`; P4-01 looked
+inside `messages` and compared `message.from` to `metadata.display_phone_number` — two fields of the
+same payload, formatted differently, on a field that by Meta's contract carries customer-to-business
+traffic only. It never fired on a real native send, and when it failed to fire the business's own
+message became a customer message and started a reply cycle answering ourselves.
+
+**Authorship cannot be read from a payload.** Meta publishes no device, operator or origin field, and
+states nowhere that Cloud-API sends are excluded from the echo field. So authorship is *correlated* by
+message id, never attributed, and an echo that cannot be correlated is treated as a person's — the two
+errors are not symmetric, and the product must never draft over a colleague.
+
+**Two correctness fixes, both mutation-checked:**
+
+- `isAppOriginatedMessage` matched a delivery job only through its draft, so a reply a person composed
+  in the Inbox (no draft, ADR-018 Option B) could never be recognised as ours and its echo took the
+  conversation over on the strength of our own send.
+- A provider echo arriving before `settle` committed inserted the platform id first, as a human's
+  message; `settle`'s plain `create` then violated the unique id and aborted, leaving the delivery
+  `SENDING` with no sent time and the audit trail claiming a person wrote the assistant's reply. The
+  send is the authoritative record of its own authorship, so it now claims the row it finds.
+
+**Webhook ingestion had no WhatsApp adapter at all.** `createWhatsAppAdapterRegistry` had no production
+caller, so every WhatsApp webhook answered `ADAPTER_UNAVAILABLE` — none of this was reachable. It is
+wired now, bound to the messaging account the account row carries rather than one looked up while
+binding.
+
+**The limitation is stated rather than guessed.** An account that cannot see native replies carries a
+`NATIVE_REPLIES_INVISIBLE` caveat on its channel card, in both locales.
+
 ### Current work — P4-05 / Issue #22, read and typing presence timing
 
 **Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of

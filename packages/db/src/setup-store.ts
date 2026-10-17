@@ -12,6 +12,7 @@ import {
   evaluateOnboarding,
   isOnboardingStep,
   isSkippableOnboardingStep,
+  type ChannelCaveat,
   type OnboardingFacts,
   type OnboardingState,
   type OnboardingStep,
@@ -94,6 +95,7 @@ export async function readOnboarding(db: DbClient, context: BusinessProfileConte
       canCarryText: carriesText(account.capabilities),
       mode: accountPolicy(account.id)?.mode ?? account.defaultAiMode,
       outboundSuspended: profileWideSuspension || suspendedAccounts.has(account.id),
+      caveats: caveatsOf(account.capabilities),
     })),
     policyConfigured: policies.length > 0,
     // Quiet hours are the only timing field with no default, so they are the only one whose presence
@@ -155,6 +157,19 @@ function carriesText(capabilities: unknown): boolean {
     return false;
   }
   return (capabilities as Record<string, unknown>).text === true;
+}
+
+/**
+ * What this account cannot tell the product, from what was recorded when it was connected.
+ *
+ * Read the same checked way as `carriesText`, and for the same reason: the column is JSON written by an
+ * earlier connect, so an account stored before a capability existed simply has no key for it. Reading an
+ * absent key as "cannot see native replies" is the safe direction — it produces a sentence on a card,
+ * where the opposite produces an assistant drafting over a colleague.
+ */
+function caveatsOf(capabilities: unknown): readonly ChannelCaveat[] {
+  const row = typeof capabilities === "object" && capabilities !== null && !Array.isArray(capabilities) ? (capabilities as Record<string, unknown>) : {};
+  return row["nativeOutboundVisible"] === true ? [] : ["NATIVE_REPLIES_INVISIBLE"];
 }
 
 /** What happened to an attempt to take a profile live. */

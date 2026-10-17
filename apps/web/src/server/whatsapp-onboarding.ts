@@ -44,7 +44,7 @@ import {
   registerPhoneNumber,
   subscribeMessagingAccount,
   unsubscribeMessagingAccount,
-  WHATSAPP_CAPABILITIES,
+  coexistenceCapabilities,
   type SignupFailureReason,
   type WhatsAppOnboardingMode,
   type WhatsAppSignupConfig,
@@ -285,7 +285,11 @@ export async function completeWhatsAppConnect(
       ...(notice.businessPortfolioId === undefined ? {} : { businessPortfolioId: notice.businessPortfolioId }),
       asset: asset.value,
       onboardingMode: notice.mode,
-      capabilities: WHATSAPP_CAPABILITIES,
+      // Per account rather than per channel: whether replies a person sends outside this product are
+      // visible to it depends on whether this number is on coexistence, which Meta reports only at the
+      // end of the flow. An account that cannot see them has to say so rather than behave as though
+      // none happen (#23).
+      capabilities: coexistenceCapabilities(notice.mode),
       purpose: CREDENTIAL_PURPOSE,
       token: accessToken,
       expiresAt: access.value.expiresAt ?? expiryOf(exchanged.value.expiresInSeconds, now),

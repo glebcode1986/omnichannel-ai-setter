@@ -1,5 +1,5 @@
 /**
- * Channel adapters available to webhook ingestion in this deployment (#16, P2-09).
+ * Channel adapters available to webhook ingestion in this deployment (#16, P2-09, #23).
  *
  * Every Instagram webhook arrives here first. Until this was wired the provider returned
  * `adapterFor: () => undefined`, so ingestion answered `ADAPTER_UNAVAILABLE` before signature
@@ -17,6 +17,11 @@
  */
 import type { ChannelAdapterProvider, WebhookAccount } from "@omnichannel/application";
 import { createFetchHttpPort, createInstagramAdapterRegistry, type InstagramHttpPort } from "@omnichannel/channel-instagram";
+import {
+  createFetchHttpPort as createWhatsAppHttpPort,
+  createWhatsAppAdapterRegistry,
+  type WhatsAppHttpPort,
+} from "@omnichannel/channel-whatsapp";
 import { readChannelCredential, type CredentialCipher, type DbClient } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
 
@@ -27,12 +32,21 @@ import { getDb } from "./db";
 import { getLogger } from "./logger";
 
 export interface ChannelAdapterOptions {
-  readonly env: Pick<WebEnv, "INSTAGRAM_APP_SECRET" | "INSTAGRAM_VERIFY_TOKEN" | "INSTAGRAM_HUMAN_AGENT_APPROVAL">;
+  readonly env: Pick<
+    WebEnv,
+    | "INSTAGRAM_APP_SECRET"
+    | "INSTAGRAM_VERIFY_TOKEN"
+    | "INSTAGRAM_HUMAN_AGENT_APPROVAL"
+    | "WHATSAPP_APP_SECRET"
+    | "WHATSAPP_VERIFY_TOKEN"
+    | "WHATSAPP_GRAPH_VERSION"
+  >;
   readonly db: DbClient;
   readonly cipher: CredentialCipher;
   readonly logger: Logger;
   /** Injectable so a test can read which account's token an adapter actually resolved. */
   readonly http?: InstagramHttpPort;
+  readonly whatsappHttp?: WhatsAppHttpPort;
 }
 
 export function createChannelAdapters(options: ChannelAdapterOptions): ChannelAdapterProvider {
@@ -60,9 +74,61 @@ export function createChannelAdapters(options: ChannelAdapterOptions): ChannelAd
     logger: options.logger,
   });
 
-  // WhatsApp (Phase 4) adds itself here. Until it does, the registry answers `undefined` for every other
-  // channel by itself, which is the same 404 an unknown account gets.
-  return { adapterFor: (account: WebhookAccount) => instagram.adapterFor(account) };
+  const whatsapp = createWhatsAppAdapterRegistry({
+    bindingFor: (account) => {
+      const appSecret = options.env.WHATSAPP_APP_SECRET;
+      const whatsappVerifyToken = options.env.WHATSAPP_VERIFY_TOKEN;
+      if (appSecret === undefined || whatsappVerifyToken === undefined) {
+        options.logger.warn("webhook.adapter_unconfigured", { channel: "WHATSAPP", reason: "WhatsApp app credentials are not configured" });
+        return undefined;
+      }
+      // The messaging account arrives with the account rather than being looked up: binding is
+      // synchronous, and the webhook names this id in `entry.id` to prove which account it belongs to.
+      const wabaId = account.parentExternalAccountId;
+      if (wabaId === undefined || wabaId === "") {
+        // Onboarding never finished, so there is nothing to check `entry.id` against. Refusing is the
+        // same 404 an unknown account gets, which is right: a payload we cannot attribute is not ours.
+        options.logger.warn("webhook.adapter_unbound", { channel: "WHATSAPP", reason: "no messaging account is recorded for this number" });
+        return undefined;
+      }
+      return {
+        wabaId,
+        secrets: {
+          appSecret,
+          verifyToken: whatsappVerifyToken,
+          accessToken: () => whatsappAccessTokenFor(options, account),
+        },
+      };
+    },
+    http: options.whatsappHttp ?? createWhatsAppHttpPort(),
+    logger: options.logger,
+  });
+
+  // Each registry answers `undefined` for a channel that is not its own, so the order here is not a
+  // precedence rule — it is two independent registries asked in turn.
+  return { adapterFor: (account: WebhookAccount) => instagram.adapterFor(account) ?? whatsapp.adapterFor(account) };
+}
+
+async function whatsappAccessTokenFor(options: ChannelAdapterOptions, account: { readonly workspaceId: string; readonly channelAccountId: string }): Promise<string | undefined> {
+  const credential = await options.db.channelCredential.findFirst({
+    where: {
+      workspaceId: account.workspaceId,
+      purpose: "WHATSAPP_BUSINESS_TOKEN",
+      revokedAt: null,
+      channelAccount: { id: account.channelAccountId },
+    },
+    select: { id: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (credential === null) {
+    return undefined;
+  }
+  const stored = await readChannelCredential(options.db, options.cipher, {
+    workspaceId: account.workspaceId,
+    credentialId: credential.id,
+    purpose: "WHATSAPP_BUSINESS_TOKEN",
+  });
+  return stored?.token;
 }
 
 async function accessTokenFor(options: ChannelAdapterOptions, account: WebhookAccount): Promise<string | undefined> {
