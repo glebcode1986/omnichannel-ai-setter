@@ -99,6 +99,30 @@ function belongsToThisAsset(value: WhatsAppChangeValue, config: ResolvedWhatsApp
   return asset === undefined || asset === config.binding.phoneNumberId;
 }
 
+/**
+ * Whether two spellings name the same telephone number.
+ *
+ * `from` arrives as a `wa_id`: digits only. `display_phone_number` is Meta's *display* field, and the Graph
+ * `/phone_numbers` edge spells the same number `+1 555-000-0001` — a spelling this system already stores
+ * during onboarding. Comparing the raw strings would make echo detection depend on which spelling a payload
+ * carries, and a missed echo is not a cosmetic loss: it falls through to `INBOUND_MESSAGE` with the
+ * business's own number as the sender, which the draft path would then answer.
+ *
+ * This guards the `messages` field only. Meta documents a coexistence business's app-sent and
+ * companion-device messages under a webhook field of their own, `smb_message_echoes`, where arrival under
+ * that field is itself the authorship signal — so this comparison is the belt-and-braces path for a
+ * `messages` entry that names the business as sender, not the documented coexistence mechanism, which a
+ * later task in this chain consumes.
+ */
+function sameNumber(left: string, right: string | undefined): boolean {
+  if (right === undefined) {
+    return false;
+  }
+  const digits = left.replace(/\D/gu, "");
+  // Two unparseable spellings are not a match; without this, empty or non-numeric metadata reads as an echo.
+  return digits !== "" && digits === right.replace(/\D/gu, "");
+}
+
 function normalizeMessage(
   message: WhatsAppMessage,
   value: WhatsAppChangeValue,
@@ -140,7 +164,7 @@ function normalizeMessage(
   // business's own number as the sender. It is an echo, not a customer message, and the application
   // correlates it against stored sends to decide whether a human took over (ADR-013). Deciding that here
   // would be this adapter guessing at takeover, which is not its job.
-  if (message.from !== undefined && message.from === value.metadata?.display_phone_number) {
+  if (message.from !== undefined && sameNumber(message.from, value.metadata?.display_phone_number)) {
     const recipient = value.contacts?.[0]?.wa_id;
     return {
       ...base,

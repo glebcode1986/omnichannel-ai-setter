@@ -63,6 +63,24 @@ export type DraftTrigger =
       readonly requestedAt: Date;
       /** Distinguishes repeated requests; a retried queue job reuses the same value. */
       readonly requestId: string;
+    }
+  | {
+      /**
+       * A scheduled follow-up attempt asking for a reply (#55).
+       *
+       * Its own kind rather than `AUTOMATIC` with a note, because the two differ in what a reader needs
+       * to know afterwards and in what identifies the work. An automatic draft answers an inbound message
+       * and is identified by the anchor it answers; a follow-up answers a *silence*, and the thing that
+       * identifies it is which attempt of which follow-up asked — the anchor is the same message every
+       * time, so an anchor-keyed identity would make every attempt of one follow-up the same generation.
+       *
+       * It is automation, not a human request: `isHumanRequested` is false for it, so mode OFF, a human
+       * takeover and a pending review all block it exactly as they block an inbound-triggered draft.
+       */
+      readonly kind: "FOLLOW_UP";
+      readonly followUpId: string;
+      /** Which attempt this is, counting from one. Part of the generation's identity. */
+      readonly attempt: number;
     };
 
 /** True only for a request an authorized person made deliberately. */
@@ -445,6 +463,35 @@ function save(
  * should do.
  */
 export function generationKey(command: DraftGenerationCommand): string {
+  if (command.trigger.kind === "FOLLOW_UP") {
+    return followUpGenerationKey({
+      conversationId: command.scope.conversationId,
+      anchorMessageId: command.anchorMessageId,
+      followUpId: command.trigger.followUpId,
+      attempt: command.trigger.attempt,
+    });
+  }
   const request = command.trigger.kind === "HUMAN_REQUEST" ? command.trigger.requestId : "";
   return [command.scope.conversationId, command.anchorMessageId, command.trigger.kind, request].join("|");
+}
+
+/**
+ * The identity of one follow-up attempt's generation, derivable without a command.
+ *
+ * Exported because two places have to agree on it and neither can be the other's caller: the worker
+ * derives it to generate, and `claimFollowUp` derives it to find out whether the previous attempt already
+ * produced a draft. A format written twice would be a format that one day differs in one of the two, and
+ * the symptom would be a customer receiving two follow-ups about one silence.
+ *
+ * Keyed on the attempt and not only on the follow-up, because a second attempt after a further silence is
+ * a different message that somebody deliberately allowed — bounded by `max_attempts`, which is where that
+ * decision belongs.
+ */
+export function followUpGenerationKey(identity: {
+  readonly conversationId: string;
+  readonly anchorMessageId: string;
+  readonly followUpId: string;
+  readonly attempt: number;
+}): string {
+  return [identity.conversationId, identity.anchorMessageId, "FOLLOW_UP", `${identity.followUpId}:${String(identity.attempt)}`].join("|");
 }

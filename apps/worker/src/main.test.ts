@@ -166,7 +166,18 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     });
 
     expectGracefulShutdown(result);
-    expect(startedFields(result.stdout).loops).toEqual(["outbox", "reconciliation", "instagram_tokens", "backlog_guard", "health"]);
+    // `follow_ups` joins the list with the accepted P3-02 head, which starts the sweeper that gave
+    // `dueFollowUps` and `claimFollowUp` their first caller — the same defect this case guards, in a
+    // second loop. Asserted as the whole list rather than by `toContain`, because the point is that
+    // nothing is missing from it.
+    expect(startedFields(result.stdout).loops).toEqual([
+      "outbox",
+      "reconciliation",
+      "instagram_tokens",
+      "follow_ups",
+      "backlog_guard",
+      "health",
+    ]);
   }, 30_000);
 
   it("leaves the token refresh out of that list when it cannot read the stored tokens", async () => {
@@ -182,6 +193,9 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
     expectGracefulShutdown(result);
     expect(startedFields(result.stdout).loops).not.toContain("instagram_tokens");
+    // And the unconditional loop is still reported, which is the whole difference between the two: the
+    // sweeper always starts, so its absence would be a defect rather than a configuration.
+    expect(startedFields(result.stdout).loops).toContain("follow_ups");
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {

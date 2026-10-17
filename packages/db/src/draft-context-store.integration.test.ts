@@ -4,7 +4,7 @@ import { createDraftContextStore, type DraftContextStore } from "./draft-context
 import { appendInboundMessage } from "./repositories/messages";
 import { createPendingTranscripts, loadTranscriptionWork, recordTranscript, recordTranscriptionFailure } from "./transcript-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
-import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
+import { seedWorkspace, setProfileDefaultPolicy, type SeededProfile } from "./testing/fixtures";
 
 describe.skipIf(!databaseTestsEnabled())("draft context store (PostgreSQL)", () => {
   let database: TestDatabase;
@@ -97,14 +97,11 @@ describe.skipIf(!databaseTestsEnabled())("draft context store (PostgreSQL)", () 
   });
 
   it("prefers a conversation override, then a channel policy, then the profile default", async () => {
-    await db().automationPolicy.create({
-      data: {
-        workspaceId: profile.context.workspaceId,
-        businessProfileId: profile.businessProfileId,
-        mode: "DRAFT",
-        mandatoryReviewReasons: [],
-      },
-    });
+    await setProfileDefaultPolicy(
+      db(),
+      { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId },
+      { mode: "DRAFT", mandatoryReviewReasons: [] },
+    );
     expect((await store.load(query()))?.snapshot.mode).toBe("DRAFT");
 
     await db().automationPolicy.create({
