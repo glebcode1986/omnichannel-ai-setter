@@ -121,9 +121,10 @@ export function timingPresetOf(settings: TimingSettings): TimingPreset {
  * Whether a change is one an owner should be shown the consequences of before it is saved.
  *
  * Not every edit: a greeting is not this. What is, is anything that widens what goes out without a person
- * looking — turning on autopilot, letting templates go unattended, opening Instagram's human-support path,
- * lowering how certain the assistant has to be, or removing a topic from the review list. The spec names
- * the first two; the rest are the same kind of change and would be strange to confirm less carefully.
+ * looking — turning on autopilot, letting templates go unattended, adding a template to the list that may
+ * go unattended, opening Instagram's human-support path, lowering how certain the assistant has to be, or
+ * removing a topic from the review list. The spec names the first two; the rest are the same kind of
+ * change and would be strange to confirm less carefully.
  */
 export interface PolicyImpactInput {
   readonly mode: string;
@@ -138,6 +139,7 @@ export const POLICY_IMPACTS = [
   "AUTOPILOT_ENABLED",
   "TEMPLATE_AUTOPILOT_ENABLED",
   "TEMPLATE_AUTOPILOT_WITHOUT_ALLOWLIST",
+  "TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED",
   "HUMAN_ASSISTED_EXTENDED_ENABLED",
   "CONFIDENCE_LOWERED",
   "REVIEW_TOPICS_REMOVED",
@@ -156,6 +158,20 @@ export function policyImpactsOf(before: PolicyImpactInput, after: PolicyImpactIn
       // looks enabled and does nothing. Worth saying before it is saved rather than debugged later.
       impacts.push("TEMPLATE_AUTOPILOT_WITHOUT_ALLOWLIST");
     }
+  } else if (
+    before.whatsappAfterWindowPolicy === "TEMPLATE_AUTOPILOT" &&
+    after.whatsappAfterWindowPolicy === "TEMPLATE_AUTOPILOT" &&
+    widens(before.whatsappTemplateAutomationAllowlist, after.whatsappTemplateAutomationAllowlist)
+  ) {
+    // The allowlist is the whole extent of unattended template authority: ADR-016 lets nothing out
+    // while it is empty, so the first entry is the step from dormant to live, and every later entry is
+    // one more conversation the assistant may close after the window with nobody reading it. Which is
+    // the same kind of change as switching the mode on, and is why it is confirmed the same way.
+    //
+    // `else if`, because enabling the mode and filling the list in one edit is one decision and gets
+    // one warning: `TEMPLATE_AUTOPILOT_ENABLED` already says templates will go out unattended, and a
+    // second line saying the list grew would be describing the same consequence twice.
+    impacts.push("TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED");
   }
   if (after.instagramAfterWindowPolicy === "HUMAN_ASSISTED_EXTENDED" && before.instagramAfterWindowPolicy !== "HUMAN_ASSISTED_EXTENDED") {
     impacts.push("HUMAN_ASSISTED_EXTENDED_ENABLED");
@@ -168,4 +184,17 @@ export function policyImpactsOf(before: PolicyImpactInput, after: PolicyImpactIn
     impacts.push("REVIEW_TOPICS_REMOVED");
   }
   return impacts;
+}
+
+/**
+ * Whether the second allowlist permits a template the first did not.
+ *
+ * A set question, not a list one. Removing an entry narrows authority and reordering changes nothing, so
+ * neither is widening; comparing lengths would call a one-for-one swap harmless and comparing positions
+ * would call a reorder a widening. Duplicates are not meaningful either — the store stores a set — so the
+ * form sending the same name twice is not a change.
+ */
+function widens(before: readonly string[], after: readonly string[]): boolean {
+  const permitted = new Set(before);
+  return after.some((template) => !permitted.has(template));
 }
