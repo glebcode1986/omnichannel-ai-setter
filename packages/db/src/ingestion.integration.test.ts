@@ -11,7 +11,7 @@ import {
 } from "@omnichannel/application";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createIngestionStore } from "./index";
+import { createIngestionStore, planFollowUp, readFollowUps, setPrimaryGoal } from "./index";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createFakeChannelAdapter, fakeWebhook, FAKE_VERIFY_TOKEN, type FakeEventFixture } from "./testing/fake-channel-adapter";
 import { seedWorkspace, type SeededProfile } from "./testing/fixtures";
@@ -1063,4 +1063,96 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
       expect(serialized).not.toContain(event.mediaId ?? "unset");
     });
   });
+
+  /**
+   * The follow-up cancellations, driven through the path a webhook actually takes (#55).
+   *
+   * These exist because the first repair hooked them to `appendInboundMessage`, which has **no production
+   * caller** — the real inbound write is this ingestion store's own, and `appendInboundMessage` is the
+   * repositories-layer equivalent that only tests use. The cancellation therefore ran in its own test and
+   * nowhere else: the same defect the follow-up work was blocked for, one layer down. So these cases call
+   * `ingestWebhook` and nothing closer.
+   *
+   * The safety property never depended on this — `claimFollowUp` re-reads the newer inbound and the
+   * takeover under its own lock and refuses either way — but a documented prompt path that does not run is
+   * a claim the code does not keep.
+   */
+  describe("a webhook calls off a chase", () => {
+    /**
+     * A customer of this profile with a goal and one pending follow-up.
+     *
+     * Its own conversation per case, created by its own first inbound: a conversation can hold one primary
+     * goal and one pending follow-up, so sharing one would have the second case planning against the
+     * first's leftovers. The thread-opening message lands *before* the chase is planned and therefore
+     * cannot be the thing that cancels it.
+     */
+    const chaseFor = async (profile: SeededProfile) => {
+      const externalUserId = unique("ig-user-chase");
+      await ingest([text(externalUserId, { text: "do you have availability?" })], { profile });
+      const { conversation } = await threadOf(profile, externalUserId);
+      const at = new Date();
+      const goal = await setPrimaryGoal(db(), profile.context, { conversationId: conversation.id, kind: "BOOK_APPOINTMENT", at });
+      if (goal.status !== "SET") {
+        throw new Error(`the fixture expected a goal to be SET, got ${goal.status}`);
+      }
+      const planned = await planFollowUp(db(), profile.context, {
+        conversationId: conversation.id,
+        goalId: goal.id,
+        dueAt: new Date(at.getTime() + 24 * 60 * 60 * 1000),
+        daypart: { timeZone: "UTC", startHour: 0, endHour: 23 },
+        at,
+      });
+      if (planned.status !== "PLANNED") {
+        throw new Error(`the fixture expected PLANNED, got ${planned.status}`);
+      }
+      return { externalUserId, conversationId: conversation.id, followUpId: planned.id };
+    };
+
+    const followUpOf = async (profile: SeededProfile, conversationId: string, followUpId: string) =>
+      (await readFollowUps(db(), profile.context, conversationId)).find((row) => row.id === followUpId);
+
+    it("settles it when the customer's own message arrives", async () => {
+      const { externalUserId, conversationId, followUpId } = await chaseFor(main);
+
+      const result = await ingest([text(externalUserId, { text: "sorry — yes, tomorrow works" })]);
+
+      expect(result).toMatchObject({ summary: { processed: 1 } });
+      // SUPERSEDED rather than CANCELLED: the question moved on rather than being called off by a person.
+      expect(await followUpOf(main, conversationId, followUpId)).toMatchObject({
+        status: "SUPERSEDED",
+        stopReason: "NEW_INBOUND",
+        attemptCount: 0,
+      });
+    });
+
+    it("settles it when a person answers from the provider's own app", async () => {
+      const { externalUserId, conversationId, followUpId } = await chaseFor(main);
+
+      // An outbound echo our own send path cannot account for: somebody replied from the native app, which
+      // is a human takeover by the other door.
+      const result = await ingest([
+        { kind: "echo", id: unique("evt"), to: externalUserId, mid: unique("mid"), text: "I'll handle this", at: new Date().toISOString() },
+      ]);
+
+      expect(result).toMatchObject({ summary: { processed: 1 } });
+      expect(await followUpOf(main, conversationId, followUpId)).toMatchObject({
+        status: "CANCELLED",
+        stopReason: "HUMAN_TAKEOVER",
+        attemptCount: 0,
+      });
+    });
+
+    it("leaves a chase in another conversation alone", async () => {
+      const mine = await chaseFor(main);
+      const neighbour = await chaseFor(second);
+
+      await ingest([text(mine.externalUserId, { text: "still here" })]);
+
+      expect((await followUpOf(main, mine.conversationId, mine.followUpId))?.status).toBe("SUPERSEDED");
+      // The scope on the cancellation predicate is what guarantees this: one customer replying must not
+      // call off another Business Profile's chase.
+      expect((await followUpOf(second, neighbour.conversationId, neighbour.followUpId))?.status).toBe("PENDING");
+    });
+  });
+
 });

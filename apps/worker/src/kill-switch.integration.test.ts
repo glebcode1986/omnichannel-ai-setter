@@ -26,7 +26,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
 import { createChannelStateResolver } from "./delivery-policy";
-import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
+import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-19T12:00:00.000Z");
 
@@ -54,7 +54,7 @@ describe.skipIf(!endToEndTestsEnabled())("automated-outbound kill switch (end to
       capabilities: { ...NO_CAPABILITIES, text: true },
     });
     channelAccountId = account.id;
-    await infra.db.automationPolicy.create({ data: { ...scope, mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [] } });
+    await setProfileDefaultPolicy(infra.db, scope, { mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [] });
   }, 180_000);
 
   afterEach(async () => {

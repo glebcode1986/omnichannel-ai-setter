@@ -79,6 +79,39 @@ export interface AutomationPolicyInput {
  * SERVICE_WINDOW_ONLY (no stored choice behaves conservatively, ADR-016), empty template allowlist and
  * every mandatory-review category enabled. Mandatory-review categories cannot be removed.
  */
+/**
+ * The automation settings every Business Profile starts with, with no identity attached.
+ *
+ * `createAutomationPolicy` already states them — but it states them *about a policy that exists*, and it
+ * needs the three ids to do so. The profile default is written in the same statement that creates the
+ * profile, so neither the policy's id nor the profile's exists at the moment the values are needed. This
+ * is the same answer in the shape that statement can use.
+ *
+ * The domain's own suite asserts the two agree field by field. A default with two spellings is a default
+ * that will one day be conservative in only one of them, and the conservative one is not the one anybody
+ * notices.
+ */
+export type AutomationPolicySettings = Omit<
+  AutomationPolicy,
+  "id" | "workspaceId" | "businessProfileId" | "channelAccountId" | "quietHours"
+>;
+
+export function defaultAutomationSettings(): AutomationPolicySettings {
+  return {
+    // OFF, not DRAFT: a profile that has just been created has no knowledge, no style and nobody who has
+    // read its settings, and the one mode that cannot surprise its owner is the one that does nothing.
+    mode: "OFF",
+    confidenceThreshold: toConfidence(DEFAULT_CONFIDENCE_THRESHOLD, "confidenceThreshold"),
+    mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES],
+    debounceWindowMs: DEFAULT_DEBOUNCE_WINDOW_MS,
+    deliveryDelayMs: DEFAULT_DELIVERY_DELAY_MS,
+    takeoverPauseMs: DEFAULT_TAKEOVER_PAUSE_MS,
+    instagramAfterWindowPolicy: "STANDARD_ONLY",
+    whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
+    whatsappTemplateAutomationAllowlist: [],
+  };
+}
+
 export function createAutomationPolicy(input: AutomationPolicyInput): AutomationPolicy {
   const mode = input.mode ?? "OFF";
   if (!isAiMode(mode)) {
