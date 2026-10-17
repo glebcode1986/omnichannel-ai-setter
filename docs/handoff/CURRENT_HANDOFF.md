@@ -2047,3 +2047,84 @@ not evidence, because this long-lived local database already had `20261005160000
 2026-10-05 — checked in `_prisma_migrations`, not assumed — and the integration suites build a fresh
 database per run regardless. Local runs are macOS; the authoritative Linux evidence is the exact-head
 GitHub Actions run.
+
+## PR #91 accepted, and joined to #92 / P4-06 — 2026-10-17
+
+**#91 is accepted at `550100cae7d6f18f78a341543ec2feb194f1797e`** — Gemini/Antigravity formal GitHub review
+`5558442119`, `APPROVED`, 2026-10-17T15:19:11Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=550100cae7d6f18f78a341543ec2feb194f1797e`, verified through
+`GET /pulls/91/reviews`. That verdict also judged four author-disclosed observations non-blocking, and
+named the missing decode cases as a coverage gap to be closed in later polish.
+
+**Routing unchanged.** **#92 / P4-06 is the sole gate; #93 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `f0d89c6e3b9cc5a8a5d413d1bf2d5a00b37b22b0` — the accepted #91 segment
+34 commits ahead of it, #92's authored segment 7 — so #92 against accepted #91 was genuinely `diverged`, 7
+ahead / 34 behind. Ordinary non-rebase merge at `7fe737e0855457aa6f3f6f125c0bdd005a51ed88`; no rebase,
+force-push, squash, merge to `main`, or propagation into #93+.
+
+### The one collision in this chain where both sides were half right
+
+Three conflicts, all of them already measured: `git merge-tree` had been run against #92 from the #91 head
+before this directive existed, and it named `normalize.ts`, its test, and the research note.
+
+The code conflict is the substantive one. **Both segments had independently reached the same conclusion
+about the coexistence echo, and each held only half the answer.** #92 replaced the old classification with
+a refusal, and its comment states both reasons — the branch was never where Meta publishes native sends, so
+it never fired on a real one, and when it failed to fire *because the two fields are formatted differently*
+the business's own message became an inbound message from a "customer" who is the business, starting a
+reply cycle answering ourselves. #92 also brought the real mechanism, `smb_message_echoes` and
+`normalizeEcho`. #91, meanwhile, had fixed the comparison — canonical, digits-only — but was still
+classifying.
+
+So #92 had the right semantics with the very comparison that caused the failure it describes, and #91 had
+the right comparison attached to semantics that are now wrong. The resolution keeps #92's refusal, comment
+and warning, and uses `sameNumber` in the condition, with a paragraph explaining why: a refusal keyed on
+raw equality misses in exactly the cases where the spellings differ, which would leave the phantom-inbound
+behaviour reachable through the refusal instead of through the classification.
+
+**What makes this provable rather than asserted:** #91's fixture split put the digits-only spelling in
+`envelope`'s metadata and left `BUSINESS_DISPLAY_NUMBER` as the punctuated Graph form, so **#92's own
+refusal case now compares two different spellings of one number**, where on its own branch both sides were
+the same constant and the case could not fail. Restoring raw `===` fails #92's case and nothing else;
+deleting the empty-digits guard fails the no-digits case, which now guards against a *false refusal*.
+
+#91's `OUTBOUND_ECHO` assertions were not carried over, because the behaviour they asserted no longer
+exists. Their value was: the test file keeps #92's suite verbatim and adds a block for what it cannot cover
+— the plain spelling refused, and the two ways a canonical comparison could refuse something it must not.
+`sameNumber`'s docstring was rewritten too: it still described "echo detection" and called itself
+belt-and-braces for a mechanism "a later task in this chain consumes", and that task is in this file now.
+
+### The coverage gap I disclosed on #91, folded forward
+
+The verdict's own words were that it "can be addressed during future polish without destabilizing the
+current verified HEAD". This is that head. Four cases now cover `decodeProposal`: presence survives the
+round trip, an unrecognised mode is dropped, and a negative or over-long lead is dropped. Checked both
+ways — removing presence from the decoder fails the carry case alone; carrying it unvalidated fails all
+three validation cases. The first case records in its comment why it must exist separately: the file's
+`toEqual(PROPOSAL)` round-trip assertion cannot show a field the fixture omits.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; focused packages run
+separately with their own labels. `db:generate` was run before typechecking, which is the lesson from the
+previous link, where a no-op install left a stale client that looked like a source defect.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **576** source files, 0 cycles |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/application` | 14 files, **294/294** |
+| `@omnichannel/channel-whatsapp` | 9 files, **166/166** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 39 files, **804/804**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 95 files, **1090/1090** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 58 skipped, **1844 passed** / 1028 skipped |
+
+**Disclosed limitations.** No retries, no reruns, no flakes, and no test skipped to make a gate pass. The
+1028 skipped tests in the no-infrastructure run are the PostgreSQL and Redis suites declining to start
+without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, which is what CI relies on, and are the same suites reported
+in full above. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.

@@ -56,6 +56,40 @@ describe("the refused proposal", () => {
     expect(decodeProposal(encodeProposal(PROPOSAL))).toEqual(PROPOSAL);
   });
 
+  it("carries presence, which the shared fixture above cannot show", () => {
+    // The round-trip case above asserts `toEqual(PROPOSAL)`, and `PROPOSAL` states no presence — so it
+    // would pass just as well if the decoder dropped these two fields entirely. That is the same
+    // one-fixture-on-both-sides shape that made the old coexistence echo case worthless, so presence gets
+    // its own case rather than relying on that one.
+    const withPresence = { ...PROPOSAL, presenceMode: "READ_AND_TYPING", presenceTypingLeadMs: 6_000 } as const;
+
+    expect(decodeProposal(encodeProposal(withPresence))).toMatchObject({
+      presenceMode: "READ_AND_TYPING",
+      presenceTypingLeadMs: 6_000,
+    });
+  });
+
+  it("drops a presence mode nobody defined rather than carrying it into a save", () => {
+    const tampered = { ...PROPOSAL, presenceMode: "SHOUTING" } as unknown as PolicyProposal;
+
+    expect(decodeProposal(encodeProposal(tampered))).not.toHaveProperty("presenceMode");
+  });
+
+  it("drops a typing lead the provider's own indicator would outlive", () => {
+    // Bounded by `MAX_PRESENCE_TYPING_LEAD_MS`, because the parameter is user-editable: a hand-edited URL
+    // must not be able to propose a lead the domain would refuse, and leaving the stored value alone is
+    // the same answer every other unusable field in this decoder gets.
+    const tooLong = { ...PROPOSAL, presenceTypingLeadMs: 999_999 } as const;
+
+    expect(decodeProposal(encodeProposal(tooLong))).not.toHaveProperty("presenceTypingLeadMs");
+  });
+
+  it("drops a negative typing lead", () => {
+    const negative = { ...PROPOSAL, presenceTypingLeadMs: -1 } as const;
+
+    expect(decodeProposal(encodeProposal(negative))).not.toHaveProperty("presenceTypingLeadMs");
+  });
+
   it("distinguishes two versions of otherwise identical values", () => {
     // What makes "the seal covers the version" true. The seal signs the encoded proposal, and the version
     // is part of it — so this is the property that guarantees an acknowledgement cannot be carried across
