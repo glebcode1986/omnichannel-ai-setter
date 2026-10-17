@@ -33,6 +33,16 @@ export interface AiDraftHandlerDependencies {
    */
   readonly dispose?: (input: { readonly workspaceId: string; readonly businessProfileId: string; readonly conversationId: string; readonly draftId: string; readonly correlationId: string }) => Promise<unknown>;
   /**
+   * Writes down that a follow-up attempt produced an outbound operation (#55).
+   *
+   * Called only once the shared disposition has actually scheduled one, and only for a follow-up job —
+   * which is what keeps `follow_ups` a record of what happened rather than of what was attempted. There
+   * is deliberately **no** counterpart for a disposition that did not schedule: a follow-up whose draft
+   * was held or skipped is left `PENDING`, and the next claim settles it from the draft it finds. One
+   * place decides what an unsent attempt means, and it is the claim.
+   */
+  readonly recordFollowUpSent?: (input: { readonly followUpId: string; readonly operationId: string }) => Promise<unknown>;
+  /**
    * The platform's voice of last resort, used only where a business has configured nothing. It is a safe
    * default, never the authoritative persona for a tenant (product-owner decision on PR #65).
    */
@@ -103,13 +113,20 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
     if (outcome.status === "GENERATED" && dependencies.dispose !== undefined) {
       // The draft exists; the shared policy engine decides what becomes of it. There is no branch here
       // that could schedule a send on its own.
-      await dependencies.dispose({
+      const disposition = await dependencies.dispose({
         workspaceId: job.workspaceId,
         businessProfileId: job.businessProfileId,
         conversationId: job.conversationId,
         draftId: outcome.draft.aiDraftId,
         correlationId: job.correlationId,
       });
+      // A follow-up attempt that reached a scheduled operation is recorded against the follow-up, so the
+      // row stops being claimable and names the send it produced. The identity is the disposition's, not
+      // this handler's: there is one send path and it issues the operation.
+      const operationId = scheduledOperation(disposition);
+      if (job.trigger.kind === "FOLLOW_UP" && operationId !== undefined && dependencies.recordFollowUpSent !== undefined) {
+        await dependencies.recordFollowUpSent({ followUpId: job.trigger.followUpId, operationId });
+      }
     }
     dependencies.logger.info("worker.ai_draft", {
       correlationId: job.correlationId,
@@ -119,6 +136,22 @@ export function createAiDraftHandler(dependencies: AiDraftHandlerDependencies) {
       outcome: outcome.status,
     });
   };
+}
+
+/**
+ * The operation a disposition scheduled, if it scheduled one.
+ *
+ * Read structurally rather than by importing the disposition's type, for the same reason `AiDraftJob`
+ * restates the queue's shape: this handler is given its collaborators and does not depend on their
+ * modules. Anything that is not a scheduled send — a review, a skip, a missed deadline — answers
+ * `undefined`, and a follow-up then stays claimable until the claim settles it.
+ */
+function scheduledOperation(disposition: unknown): string | undefined {
+  if (typeof disposition !== "object" || disposition === null) {
+    return undefined;
+  }
+  const row = disposition as { readonly status?: unknown; readonly operationId?: unknown };
+  return row.status === "SCHEDULED" && typeof row.operationId === "string" && row.operationId !== "" ? row.operationId : undefined;
 }
 
 /**

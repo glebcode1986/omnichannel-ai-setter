@@ -11,9 +11,542 @@ Everything implemented so far is one stacked chain of unmerged PRs, each branch 
 each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+
+**The chain is two segments, and the ancestry is not what the PR numbers suggest.** Segment two
+(`#83 -> #84 -> ... -> #105`) forked from an **older** #82 at `c098c18290bb88ea749a8b4d708912870044df89`,
+which was also the two segments' merge base. So #83 reported `feat/p3-02-goals-followups` as its base
+while not containing the accepted #82 head at all — GitHub compared them as 20 ahead / 20 behind. #83 is
+joined to the accepted #82 by an **ordinary non-rebase merge**, recorded below. A repository-wide change
+needs both segments; measure the graph with `git merge-base --is-ancestor` rather than inferring it from
+numbering.
 
 Nothing is merged to `main`.
+
+### Current work — the accepted #87, propagated into #88 and nowhere else
+
+**PR #87 / P4-01 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-15T06:25:13Z, commit `c13d32dea988daf38a6a4a6b03a612553c26c72b`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=c13d32dea988daf38a6a4a6b03a612553c26c72b`
+(review `5529023598`).
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#88 / P4-02 is now the sole
+gate; #89 onwards are frozen** — no broader Phase 4 propagation and no unrelated work until #88 has its
+own exact-head PASS.
+
+**The ancestry repair.** #88 named `feat/p4-01-whatsapp-adapter` as its base while its live merge base was
+the pre-acceptance #87 head `48fd78a93d626ea56b2ada97c24a25ccd2595e14` — GitHub compared them as
+`diverged`, 9 ahead / 25 behind. Joined by an **ordinary non-rebase merge** at
+`6bac028d3c658ca4e2ea01fbaf4f74fa1acdb8cb`; `git merge-base --is-ancestor` of the accepted #87 head now
+succeeds, and the prior #88 head `960f7174abaa732a183624defcc5c1104af262da` remains an ancestor too.
+
+**Zero conflicts, and the union widening did not bite.** 77 files, 7,976 insertions against 311 deletions,
+no conflict markers. The zero says little by itself: #88 widens a channel-account status union, which is
+the shape that breaks exhaustive consumers *without* producing a conflict. Checked rather than assumed —
+`pnpm install --frozen-lockfile` first because the branch moves the lockfile, then `pnpm typecheck` clean
+across all 14 packages and `pnpm lint` + `lint:boundaries` clean at 535 package source files with no
+dependency cycles.
+
+#### The one authored change: coexistence echo detection compares numbers, not spellings
+
+Carried under the directive's step 3, which scoped the post-review #87 risk this author disclosed on that
+PR. Nothing else about P4-02 is touched.
+
+`normalize.ts` recognised a coexistence echo with `message.from === value.metadata?.display_phone_number`.
+Those are two different Meta surfaces: `from` is a `wa_id` (digits only) while `display_phone_number` is
+the *display* field, which the Graph `/phone_numbers` edge spells `+1 631-555-5555` — a spelling this
+product already stores at onboarding and already carries in its own fixtures as `"+1 555 0100"`. Meta's
+webhook metadata happens to use the digits-only spelling, so **nothing was broken in production**; the
+defect was that a missed match does not fall through to "ignored" but to `INBOUND_MESSAGE` with the
+business's own number as sender — a phantom contact the draft path would answer.
+
+- `sameNumber(left, right)` compares a canonical digits-only value and **refuses a match when either side
+  reduces to no digits**, so missing or non-numeric metadata can never read as an echo.
+- The old test was powerless: `from` and `metadata.display_phone_number` were drawn from the **same
+  fixture constant**, so one value sat on both sides of the comparison. The fixture now declares
+  `BUSINESS_WA_ID` (digits only, what `from` carries) and `BUSINESS_DISPLAY_NUMBER` (`+1 555-000-0001`,
+  what the Graph edge returns) as **separate constants with different values**, and `envelope()` takes a
+  `displayPhoneNumber` override so each case states both wire values independently.
+- Five cases now cover it: the plain webhook spelling, the punctuated Graph spelling, a genuine non-match
+  (a real customer), an absent display number, and two spellings carrying no digits.
+- **Mutation-tested, each clause killed by exactly one case.** Restoring raw `===` fails only the
+  punctuated-spelling case; deleting the empty-digits guard fails only the no-digits case; making
+  `sameNumber` always return true fails the controls broadly. A guard no test kills is a guard that is not
+  doing anything.
+- Identity and idempotency were checked, not assumed: tenancy keys off `phone_number_id`, dedupe off
+  `wamid`, and **no unique index includes `display_phone_number`**.
+
+**Author-disclosed defect in this same change, found and fixed before pushing.** The first placement of the
+new helper inserted it between `belongsToThisAsset`'s doc comment and its function, orphaning that comment
+above the new one. Typecheck, lint and 102 passing tests all stayed green, because none of them read doc
+comments. Helper moved below `belongsToThisAsset`; both comments now document the function beneath them.
+
+**Meta re-verification 2026-10-15 / 2026-10-16** is recorded in full in
+`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`, dated and sourced per the directive's step 4. The
+short form: Embedded Signup **v4 remains latest** with expiry TBD and `onboarding.ts` already targets v4
+only; the v2 deprecation date **passed with Meta's pages still in the future tense and no changelog entry
+confirming the cutover**, so enforcement is announced-and-reached rather than observed; `v26.0` is still
+the current Graph version and **no v27.0 exists**; the 30-second code TTL, the six-digit PIN, the
+Allowed-Domains-**and**-Valid-OAuth-Redirect-URIs conjunction, and the 24-hour window with `131047` are all
+confirmed unchanged.
+
+Four documented risks were checked against this code and found **absent** — which is why this pass changed
+no behaviour beyond the echo repair:
+
+1. `sessionInfoVersion: 4` is **not** corroborated by Meta for v4; this repository sends no
+   `sessionInfoVersion` at all.
+2. `subscribed_apps` documents **no** per-field parameter; this repository sends no `subscribed_fields`.
+3. `code_verification_status` and `quality_rating` carry **contradictory enumerations across sibling Meta
+   pages**; both are typed as plain `string` end to end here, with one case-insensitive comparison, so no
+   union or CHECK can fail on a value Meta itself documents elsewhere.
+4. From Graph **v24.0** onward the `statuses` webhook drops the `conversation` object; this adapter reads
+   neither `conversation` nor `pricing` from a status.
+
+One finding that is **not** a defect but changes how the echo branch should be read: Meta documents a
+coexistence business's app-sent and companion-device messages under a webhook field of their own,
+`smb_message_echoes` → `value.message_echoes[]`, where **arrival under that field is itself the authorship
+signal**. At this head the adapter skips every non-`messages` field with an `whatsapp.unhandled_field`
+record, so a real echo is logged and dropped here and consuming that field belongs to the later
+coexistence task in this chain. The repaired comparison is therefore the belt-and-braces path, and the
+repair still earns its place because `message_echoes[].from` is documented as the business *display* phone
+number — the same spelling trap, inherited by whatever consumes echoes next. The code comment now says so.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7 in Docker, every suite bounded to
+`--maxWorkers=2`:
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 535 source files, 0 cycles |
+| `@omnichannel/channel-whatsapp` | **102 passed** (6 files) |
+| `pnpm test:db` | **743 passed** (36 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **53 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1002 passed** (88 files) |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1661 passed, 903 skipped |
+
+**Disclosed limitations.** The 903 skipped tests in the no-infrastructure run are the DB/Redis suites
+declining to run without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, which is the behaviour CI relies on; they
+are the same suites reported green above with infrastructure present. No retries or reruns were needed, no
+flakes were observed, and no test was skipped to make a gate pass. Local runs are macOS; the authoritative
+Linux evidence is the exact-head GitHub Actions run and the reviewer's own container.
+
+### Superseded — the accepted #86, propagated into #87 and nowhere else
+
+**PR #86 is accepted.** Gemini/Antigravity formal GitHub review, `APPROVED`, 2026-10-14T18:50:34Z,
+commit `3f6a7e48cda96417332c2f11e0918329e865b6de`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=3f6a7e48cda96417332c2f11e0918329e865b6de`.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#87 / P4-01 is the sole gate;
+#88 onwards are frozen** — no broader Phase 4 propagation and no unrelated work until #87 has its own
+exact-head PASS.
+
+**The ancestry repair.** #87 named #86 as its base while its live base SHA was the pre-acceptance #86
+head `67846521f682693d27b4fe5438b4898cb0821994`, also the merge base — GitHub compared them as 9 ahead /
+24 behind. Ordinary non-rebase merge; `--is-ancestor` of the accepted head now succeeds.
+
+**Zero conflicts and zero fixes.** #87 is additive — a new `packages/channel-whatsapp`, 2,560 insertions
+against 7 deletions — and new files do not conflict, so the zero says little by itself. What was checked
+instead: `pnpm lint:boundaries` (a fresh package is how a forbidden edge arrives), `pnpm install
+--frozen-lockfile` first because the branch moves the lockfile, and the P4-01 contract item by item.
+
+**The P4-01 invariants, verified in the merged code rather than inferred from a green run:** raw-body
+HMAC-SHA256 with `timingSafeEqual` and a length pre-check, failing closed on an empty app secret and
+refusing to normalize an unverified webhook; `display_phone_number` used **only** to recognise a
+coexistence echo (ADR-013) and never as identity or idempotency — that is `sourceEventId(kind, …parts)`,
+with a deterministic SHA-256 digest when the key would overflow; send outcomes confined to
+`ACCEPTED | REJECTED | AMBIGUOUS`; and the accepted #86 invariants intact (dead suspension resolver still
+deleted, guarded kill-switch path authoritative, `proactive`/`dispatchDeadline` present, both loops
+starting, reporting and closing with the shutdown prose still saying six).
+
+**Meta re-verification, 2026-10-15.** `v26.0` remains current — released 2026-07-29, expiration TBD, and
+**no v27.0 exists** — so `DEFAULT_GRAPH_VERSION` is unchanged from the 2026-10-04 note. The signature
+contract is confirmed as `X-Hub-Signature-256` with a `sha256=` prefix, keyed by the app secret. Meta's
+own guidance notes that the signature is computed over the **escaped-unicode** payload rather than
+decoded bytes, which breaks implementations that parse and re-serialize; this adapter is unaffected
+because `readBody` passes `new Uint8Array(await request.arrayBuffer())` and the *same* bytes are both
+hashed and parsed.
+
+**Reported, not fixed:** `packages/channel-whatsapp/src/config.ts:103` illustrates the endpoint as
+`…/v23.0/<phone_number_id>/messages` while the constant is `v26.0`. It is a doc comment only — the URL is
+built from `config.graphVersion` — and it predates this merge, so correcting it would be the unrelated
+cleanup these directives forbid.
+
+### Superseded — the accepted #85, propagated into #86 and nowhere else
+
+**PR #85 / FIX-ISSUE-9 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-14T17:25:58Z, commit `5f56302f8101b1512f9d46a4263643b36f3bbce6`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=5f56302f8101b1512f9d46a4263643b36f3bbce6`.
+
+**Reviewer routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#86 /
+FIX-DEAD-SUSPENSION-RESOLVER is the sole gate; #87 onwards are frozen.**
+
+**The ancestry repair.** #86 named #85 as its base while its live base SHA was the pre-acceptance #85 head
+`36314e2068e8fb3a7bc2cbdb4ba79e1bc014ac55`, also the merge base — GitHub compared them as 11 ahead / 23
+behind. Joined by an ordinary non-rebase merge; `--is-ancestor` of the accepted head now succeeds.
+
+**Zero conflicts, and zero fixes — the first costless link of the propagation.** That is the finding
+rather than the absence of one: #86 changes exactly one file, `apps/worker/src/delivery-policy.ts`
+(−42/+11, deleting the dead suspension resolver), and the accepted chain had modified **that same file**
+to add the `proactive` handling. Git reporting no conflict means the edits did not overlap textually,
+which is precisely the shape where a clean merge can still be wrong **in either direction** — the deletion
+undone or the addition orphaned.
+
+**Four behaviours verified individually rather than inferred from a green exit code**, as the directive
+required:
+
+- `createSuspensionResolver` and its wiring are **still deleted** — zero occurrences repository-wide.
+- The guarded kill-switch path in `delivery-store.ts` remains authoritative: `activeSuspension` is read
+  there and `suspensionLockKeysFor` still supplies the keys that protect the claim race.
+- `proactive` and the `dispatchDeadline` branch it guards are **intact** in `delivery-policy.ts`.
+- Both worker loops still start, report and close: the token refresh conditional on its runner's
+  `running` state, `follow_ups` unconditional, both `.close()` calls present, and the shutdown prose still
+  says six.
+
+### Superseded — the accepted #84, propagated into #85 and nowhere else
+
+**PR #84 / P5-09 is accepted.** Gemini/Antigravity published a formal exact-head GitHub review on
+2026-10-14T13:27:18Z — state `APPROVED`, commit `ca86e7d7877b8ab2deb1fb280956d2306224e898`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ca86e7d7877b8ab2deb1fb280956d2306224e898`.
+
+**Reviewer routing unchanged:** Gemini/Antigravity temporary **primary**, Astra **advisory-only**. Claude
+remains the sole author; the readiness marker keeps its legacy spelling for parser compatibility.
+
+**#85 / FIX-ISSUE-9 is the sole propagation and review gate; #86 onwards are frozen** — no broader Phase 4
+propagation, no Stage E, no unrelated feature work until #85 has its own exact-head PASS.
+
+**The ancestry repair.** #85 named #84 as its base while its live base SHA was the pre-acceptance #84 head
+`82f9f3fbe6cbc67966f8ba4d1a34569cff544501`, which was also the merge base — GitHub compared them as
+12 ahead / 22 behind. Joined by an **ordinary non-rebase merge**;
+`git merge-base --is-ancestor ca86e7d… HEAD` succeeds.
+
+**One conflict, and it is the one worth describing: `apps/worker/src/main.ts`.** Both sides of it are a
+fix for the same class of defect — *a loop nobody starts*. This branch adds the Instagram token refresh
+(FIX #9, "every part of the token lifecycle is implemented and none of it runs"); the accepted parent adds
+the follow-up sweeper (#55, "`dueFollowUps` and `claimFollowUp` had no caller at all"). Keeping either
+side alone would silently re-create the defect the other was written to fix.
+
+**It took five edits, and the two conflict markers showed two of them:**
+
+1. both `const` declarations, token refresh then sweeper, in start order;
+2. both `.close()` calls;
+3. **the startup `loops` report** — merged cleanly and would have stopped naming the sweeper. `follow_ups`
+   is added **unconditionally** and `instagram_tokens` stays conditional on the refresh runner's own
+   `running` state: that difference is information, not an inconsistency, because the sweeper always
+   starts and the refresh only runs where it is configured;
+4. **the shutdown commentary's own count** — both sides read "five independent closes" above five entries;
+   there are now six, and the sentence merged without a conflict and became wrong;
+5. **`main.test.ts`'s expected loop list**, which a probe could not predict and the real run found: the
+   case named "says which background loops are running, so a loop wired to nothing is visible (#9)"
+   asserts the whole list, so it now names `follow_ups` too. Its sibling case — the one that proves the
+   token refresh drops out without a credential key — now also asserts `follow_ups` is still present,
+   which is what pins the unconditional half of the distinction above.
+
+Items 3 and 4 fail no typecheck, lint or test. Item 5 is why the directive's instruction to inspect the
+merged code rather than trust a probe was right.
+
+### Superseded — the accepted #83, propagated into #84 and nowhere else
+
+**PR #83 / P5-08 is accepted.** Gemini (Google Antigravity) published a formal exact-head GitHub review on
+2026-10-14T12:07:55Z — state `APPROVED`, commit `c7b02267e183b58a54814c0b4663ee69d5608612`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=c7b02267e183b58a54814c0b4663ee69d5608612`. That SHA is the accepted head
+and the only one the acceptance covers.
+
+**Reviewer routing is unchanged:** Gemini/Antigravity temporary **primary**, Astra **secondary and
+advisory-only** until it has its own working PostgreSQL/Redis/Linux runner and the owner re-routes. Claude
+remains the sole author; the readiness marker keeps its `CLAUDE_READY_FOR_ASTRA` spelling for parser
+compatibility.
+
+**#84 / P5-09 is now the sole propagation and review gate, and #85 onwards are frozen** — no Phase 4
+propagation, no Stage E, no new feature work until #84 has its own genuine exact-head independent PASS.
+
+**The ancestry repair, measured rather than assumed.** #84 named #83 as its base while its live base SHA
+was the *pre-acceptance* #83 head `8f84deebf92c1ee204cacb80654a9a228759db07`, which was also the two
+branches' merge base — GitHub compared them as 16 ahead / 21 behind, so #84 contained none of the accepted
+#83 work. Joined by an **ordinary non-rebase merge**; `git merge-base --is-ancestor c7b02267… HEAD` now
+succeeds. This is the second link of the same shape as #82→#83, and it was probed in advance: the probe
+predicted zero conflicts and three typecheck errors in one file, and that is exactly what happened.
+
+**Zero merge conflicts. Three pieces of integration fallout, all in `operator-journey.integration.test.ts`:**
+
+- `savePolicy` requires `expectedVersion` from the accepted parent, so the journey reads the profile
+  default's live version and posts it back — the same thing the real screen does.
+- `listPolicyAudits` answers a `PolicyAuditPage` rather than an array from the accepted parent onwards, so
+  `audits[0]` became `audits.entries[0]`. The history is paged because the spec wants old and new values
+  kept rather than capped.
+- The journey no longer creates the profile default by hand. `createBusinessProfile` writes it alongside
+  the profile from `profileDefaultPolicyWrite()`, so creating one again violated
+  `automation_policies_profile_default_key` — the same fallout #83's audit suite had, in a second place.
+
+**Accepted #83 behaviour preserved and re-verified on this head:** the native human takeover still retains
+both the `TAKEOVER_STARTED` audit row and `cancelPendingFollowUps` in one transaction, the policy
+`expectedVersion` concurrency enforcement and default-policy creation are intact, and the analytics/audit
+tenant-isolation, append-only and sensitive-event invariants pass in full.
+
+### Superseded — the accepted #82, propagated into #83 and nowhere else
+
+**PR #82 / P3-02 is accepted.** Gemini (Google Antigravity) published a formal exact-head review on
+2026-10-13T21:07:24Z — GitHub review state `APPROVED`, commit
+`9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`. That SHA is the accepted head
+and the only one the acceptance covers.
+
+**Reviewer routing, by owner decision of 2026-10-13T20:32:45Z.** Gemini/Antigravity is the **temporary
+primary** independent reviewer for current and subsequent eligible PR+SHAs. **Astra is secondary and
+advisory-only** until its own working PostgreSQL/Redis/Linux verification runner exists and the owner
+changes routing — an owner-approved infrastructure exception, not quota exhaustion. Astra's `BLOCKED`
+note on this same head was a report of its missing database and Redis runtime, not a verdict; its earlier
+`CHANGES_REQUESTED` at `2e876c1d1d62ce9fabaf18ae8240784d4603eada` remains historical. Claude is still the
+sole author. The readiness marker keeps its `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility
+even though the reviewer is now Gemini.
+
+**#83 / P5-08 is the sole current propagation and review gate, and #84 onwards are frozen.** No Stage E,
+no P5-09, no broad downstream propagation, and nothing into #84+ until #83 has its own genuine
+current-head PASS.
+
+**What the merge had to reconcile.** Three conflicts, each resolved to keep both behaviours rather than
+to pick a side:
+
+- `packages/db/src/index.ts` — #82's three tenancy types added; the duplicate
+  `usersWhoCanActOnBusinessProfile` export #83 already had was dropped.
+- `packages/db/src/policy-store.ts` — #83's `MODE_CHANGED` / `POLICY_CHANGED` audit writes kept **and**
+  #82's `profileDefaultPolicyWrite()`, its wider tenancy import and its note on the version nothing read.
+- `packages/db/src/conversation-operations-store.ts` — the takeover now does both things in its one
+  transaction: #83's `TAKEOVER_STARTED` audit row **and** #82's `cancelPendingFollowUps`. Dropping either
+  would have been a real regression — no record of who took the conversation, or a human-held
+  conversation with an automated chase still scheduled.
+
+**Two pieces of integration fallout, both in #83's own audit suite.** `savePolicy` now requires
+`expectedVersion`, deliberately, so no caller can decide not to care; the five call sites go through the
+same `save` helper `policy-store.integration.test.ts` uses, and the transactional case reads the version
+outside the transaction because it must write through `tx` itself. And the fixture no longer creates the
+profile default by hand: the accepted head makes `createBusinessProfile` write it alongside the profile
+from `profileDefaultPolicyWrite()`, so creating it again violated
+`automation_policies_profile_default_key`. The fixture's old comment — "which onboarding creates in the
+real flow" — is now literally true in code.
+
+### Superseded — repairing PR #82 / P3-02 after CHANGES_REQUESTED
+
+Two P1 blockers, both closed on `feat/p3-02-goals-followups`. No rebase, no force-push, nothing to `main`,
+nothing into #83 or later, no Stage D. **The reviewer is Astra, temporarily, from 2026-10-13**; Antigravity
+is paused; Claude remains the only authorized author; this side publishes only
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=P3-02` and emits no verdict marker.
+
+**P1-1 — the follow-up feature had no executable path.** `dueFollowUps`, `claimFollowUp` and
+`recordFollowUpSent` were correct, tested and called by nothing, so a planned follow-up sat in the table
+for ever. `apps/worker/src/followup-sweeper.ts` is what makes one happen: a `startRecoveryLoop` that finds
+due work and hands each `READY` claim to **the same AI-draft job an inbound message enqueues**. It decides
+nothing — every gate is re-asked inside the claim, under the conversation lock. Carrying it: the
+`FOLLOW_UP` draft trigger (its own migration, because PostgreSQL will not use an enum value added in the
+same transaction), `followUpGenerationKey` exported from `application` so one key is derived one way, the
+attempt inside the queue `jobId` so a re-enqueued attempt is one job and a second allowed attempt is two,
+the tenant scope on `DueFollowUp`, and `recordFollowUpSent` called only on a disposition that actually
+scheduled — a held attempt is settled by the next claim, in one place.
+
+**P1-2 — a task could be assigned to somebody who cannot reach the Business Profile.** `createTask` and
+`assignTask` checked Workspace membership and not the profile grant. Closed with
+`canActOnBusinessProfile`, used by both paths through one refusal helper. The read side too, which the
+directive asked for in the same breath — "including when users or grants change": `listTasks` resolves an
+assignee's (and the completer's) identity through the grant **as it stands now**, on every read, in one
+query per page, so a revoked grant and a row written before the gate both stop naming a stranger while
+keeping the id an operator needs in order to take the task back. Reported and not fixed:
+`lead-store.editLead` has the same asymmetry and belongs to #80.
+
+**The recheck list's "window/template", which the claim did not ask.** `CHANNEL_INELIGIBLE` has always
+been documented as "window closed, template required, account unhealthy" and only the last was asked. The
+claim now asks an injected port, inside its transaction, with the facts read under the lock. The port
+cannot permit a send — the engine still decides twice downstream — so it answers `false` only where there
+is provably no route (outside the window on `STANDARD_ONLY`, or a conversation the customer never started)
+and leaves `HUMAN_ASSISTED_EXTENDED`, and WhatsApp, to the engine.
+
+**A third gap, found by the end-to-end test.** With all of the above correct, nothing could still be sent:
+Meta's automated-response budget — "about 25 seconds after the latest **triggering inbound**" — was applied
+to a send that answers nothing, and a follow-up's anchor is hours or days old by design. A proactive send
+now carries no dispatch deadline at either gate that reads one; the 24-hour messaging window is untouched
+and still refuses a follow-up outside it. Recorded in `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`, and
+flagged for the reviewer as the one send-path behaviour this repair changes.
+
+**Two repairs landed the same day that belong to no feature, and one structural correction.**
+
+**The chain is two live segments, not one.** `git merge-base --is-ancestor origin/feat/p3-02-goals-followups
+origin/feat/p5-08-analytics-audit` answers **no**: #83 forks from `c098c18`, an older state of #82, and the
+second segment carries neither the accepted #79/#80/#81 parents nor the P3-02 repair. A repo-wide fix must
+therefore be applied in **both** segments. Its branch order is also not PR-number order — #85 is
+`fix/instagram-token-lifecycle`, #86 is `fix/dead-suspension-resolver`. Measure the graph; PR numbers and
+bases both lie about it.
+
+**PR #90 had been red since 2026-10-08** — a fixture clock overtaken by the real one against
+`channel_credentials_lifetime_check` — with the repair already present on #91 and below, applied downstream
+and never returned to the branch that owns the test. Fixed at #90 and merged down its 15 descendants, every
+link content-neutral.
+
+**Then nine more fuses of the same class**, the earliest due 2026-11-09. Six went to the branch that owns
+them (#85, #88, #89, #90, #91, #93); four belong to PASSed #64/#71 and went to the earliest *live* branch
+instead (#82 and #83, byte-identically), as a recorded exception because a PASSed branch is terminal and its
+CI never re-runs. All 24 heads green afterwards.
+
+**Actions was unavailable for ~45 minutes** that day: every run failed in 3 seconds with zero steps, which
+is the private repo's allowance rather than anything in the code. It cleared on making the repository
+public. Judge a run by its `steps` count, not only its conclusion. Sixteen heads were verified locally
+while it lasted, and every result matched the later CI run.
+
+**#82 is still the current gate. #83 and everything below stays frozen**, still carrying the pre-repair
+#79. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
+repairs and their markers were re-published at the new SHAs.
+
+**#26 and #49 have no workflow run and never had one:** `.github/workflows/verify.yml` first appears on
+#50, so they predate CI. Both were verified locally at their exact PASSed heads instead — `pnpm verify`
+green, 148 and 213 tests — and the evidence posted on each. Giving them real CI needs a `verify`-only
+workflow, because the `infrastructure suites` job runs `test:db`/`test:redis`/`test:e2e`, scripts those
+branches do not have; and it needs a credential with the `workflow` scope, which this one lacks.
+
+### Earlier — propagating the accepted P3-01 parent into P3-02 / PR #82
+
+`ANTIGRAVITY_REVIEW: PASS head=d9a34ffef120b7f0b171eb12f130d3848c9928cf` accepted PR #81, with a formal
+approving review. The directive on #82 merges that exact parent into `feat/p3-02-goals-followups`, **one
+branch only**: no rebase, no force-push, nothing to `main`, nothing into #83 or later, no Stage D.
+
+No conflicts. Four files were touched by both branches — both canonical documents, `schema.prisma` and
+`packages/db/src/index.ts` — and all four auto-merged. Verified rather than trusted: every line either
+side added since the merge base is present, every P3-01 and P5-07 file is byte-identical to the accepted
+parent, and P3-02's own goal, follow-up and human-task stores are untouched.
+
+**The reviewer is Astra again, temporarily, from 2026-10-13**, while the owner diagnoses the local
+Antigravity watcher. The two verdicts Antigravity already gave stand and are not to be re-reviewed to
+change a name; never launch both reviewer systems for one PR and SHA. **Claude remains the only
+authorized author.** This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>` and emits
+no verdict marker of its own.
+
+**A provenance note:** the owner's own workstation holds a local-only #82 merge commit
+(`2abb64117c2274adfbe6fc85ae7d552e23faf4b9`) from local reviewer activity. It is not in this repository
+and not a GitHub head; the propagation recorded here was performed from the remote heads in the
+programmer's environment, which is where the pushed SHA comes from.
+
+**#82 is now the current gate. #83 and everything below is frozen** and still carries the pre-repair #79.
+#104 and #105 sit off the chain, based on #103, and are unaffected.
+
+### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
+
+`ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` accepted PR #80. The directive on
+#81 merges that exact parent into `feat/p3-01-customer-identity-memory`, **one branch only**: no rebase,
+no force-push, nothing to `main`, nothing into #82 or later, and no P3-02/P5-08/Stage D work.
+
+**The independent reviewer is temporarily Antigravity (Gemini 3.8 Flash)**, at the owner's direction of
+2026-10-12. Prior Astra verdicts stand; the contracts are unchanged; the verdict marker is
+`ANTIGRAVITY_REVIEW: …`. This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which
+the owner accepted for backward compatibility, and emits neither reviewer's marker itself.
+
+No conflicts. Five files were touched by both branches — both canonical documents, `schema.prisma`,
+`packages/db/src/index.ts` and `constraints.integration.test.ts` — and all five auto-merged. Verified
+rather than trusted: every line either side added since the merge base is present in the result, and
+every P5-04 settings/policy and P5-07 leads file is byte-identical to the accepted parent.
+
+**#81 PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf`, by Antigravity.
+
+### Earlier — propagating the accepted P5-04 parent into P5-07 / PR #80
+
+`ASTRA_REVIEW: PASS head=a1b46cb7789091f7782f039fdbf148631a77e3ea` accepted PR #79. The directive on #80
+propagates that exact parent into `feat/p5-07-leads-pipeline` by ordinary merge commit, **one branch
+only**: no rebase, no force-push, nothing to `main`, nothing into #81 or later, and Stage D not started.
+
+One conflict, additive: both branches appended to `OUTCOMES` in `apps/web/src/ui/outcome-notice.tsx`, and
+the resolution keeps both sides. `catalogue.ts`, `schema.prisma` and `packages/db/src/index.ts` were the
+other three files both branches touched; all three auto-merged, and every line either side added is
+present in the result. Every P5-04 settings, policy and simulation file is byte-identical to the accepted
+head. `presenceMode`/`presenceTypingLeadMs`, which the directive named, do not exist at #80 — they arrive
+with P4-05 (`6ac04a3`), below #80 in the chain, so that collision is a later branch's problem and is
+recorded as such.
+
+**#80 PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c`, by Antigravity under the owner's temporary
+reviewer route.
+
+### Completed — P5-04 / Issue #30, the blockers on PR #79
+
+**Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
+persisted exact-head run was green and did not cover any of the seven cases.
+
+All seven are repaired on `feat/p5-04-ai-settings-simulation`:
+
+1. **role authorization** — `savePolicy` requires OWNER or ADMIN (`ONBOARDING_UX.md`: workspace roles
+   constrain policy changes), the screen shows the settings read-only to anybody else, and the action
+   reports the refusal as `FORBIDDEN` rather than crashing;
+2. **concurrent writes** — `automation_policies.version`, compared under `SELECT … FOR UPDATE` inside the
+   save's own transaction, with a typed `CONFLICT` carrying the stored values, and a barrier-based
+   regression that fails when the lock is removed;
+3. **the confirmation** — the acknowledgement carries the exact impact codes the server computed and
+   showed, the summary is rendered next to the refused proposal rather than next to stored values, and
+   the proposal travels with the version it was composed against;
+4. **custom timing** — four range inputs on the form, sent only for `CUSTOM`, in seconds on screen and
+   milliseconds in the store;
+5. **the audit UI** — both sides of every field that moved, and a keyset cursor so the twenty-first
+   change is reachable;
+6. **the simulation** — channel, window, connection, the human-support exception, what would be sent and
+   which approved template are all explicit inputs; the chosen channel's own after-window policy is used,
+   and the screen states which inputs produced the answer. Every one of them is proved to move the
+   deterministic outcome, including the **template allowlist**: it reaches the engine as
+   `templateRoute.automatable`, computed where a catalogue would be rather than inside the engine
+   (ADR-016), so empty versus non-empty decides `SKIP` against `SCHEDULE` and the three WhatsApp modes are
+   distinguishable. WhatsApp's closed service window is `TEMPLATE_ONLY`, which is what the gate keys on —
+   modelling it as an expired free-form window was why the modes had been indistinguishable;
+7. **coordination state** — this section and `CURRENT_HANDOFF.md` now say the same thing, which is the
+   defect finding 7 actually was.
+
+**The stale-proposal flow converges.** A refusal hands the owner's values back rebased onto the version
+stored now, with the impact summary recomputed against it and a seal minted for that exact pair — so after
+another admin's save the original operator reviews a refreshed proposal and completes it, instead of
+re-posting a stale version into the same refusal. A seal stops verifying as soon as the stored version
+moves, including when the change leaves the impact list identical; the store's conditional write remains
+the separate answer to "is this still the state you saw".
+
+**One predicate decides whether the acknowledgement is offered**, and the sentence that names the control
+asks the same one — `acknowledgementOffered`. Weighing a subset of its five facts somewhere else is how the
+page came to say "tick the box" with no box.
+
+**Closed — Astra's two R5-final blockers at `c4ebadb0…`.**
+
+8. **Widening an already-enabled allowlist is material.** With `TEMPLATE_AUTOPILOT` already stored, adding
+   a template used to emit `impacts: []`: no effect summary, no sealed acknowledgement, an audit row
+   claiming nothing material happened. `TEMPLATE_AUTOPILOT_ALLOWLIST_WIDENED` is now its own impact code
+   in both catalogues, compared as a **set** — empty→non-empty and any addition are material, removal and
+   reorder are not, a repeated name is not a change, a one-for-one swap is — and it sits in an `else if`
+   beside the enablement arm, so enabling the mode and filling the list in one edit gets one warning
+   rather than the same consequence twice. The action needed no change: the gate already refuses any
+   proposal with impacts and no server-minted seal, and the store already recomputes impacts for the audit
+   inside the write's transaction.
+9. **A normally created Business Profile now has settings to render.** `createBusinessProfile` writes the
+   conservative default **in the same statement** as the profile, so the two rows arrive together or
+   neither does; the test-only `ensureDefault` that had been masking its absence is gone. Values come from
+   the domain's `defaultAutomationSettings`, not from the column defaults, and a domain test asserts the
+   two agree field by field. Migration `20261011090000_profile_default_policy` backfills older profiles
+   idempotently by `NOT EXISTS`. The regression starts at profile creation
+   (`apps/web/src/server/settings-screen.integration.test.ts`) and asks the page's own predicate,
+   `profileDefaultOf`, whether there is a form; the database side proves a rolled-back creating
+   transaction leaves neither row, that concurrent creations get exactly one default each, and that no
+   Business Profile exists without one.
+
+**The acknowledgement is a sealed one.** The refusal mints an HMAC over the exact proposal, its version
+and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
+impact codes is not proof, because the codes are in the URL, the page and the catalogue.
+
+**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79 PASSED at
+`a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
+`d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
+missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
+#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity); **#82 is the current gate**,
+carrying that accepted parent and awaiting independent review; #83 and everything below is frozen and
+**not ready for review**, because they still contain the pre-repair #79.
+
+**The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
+on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
+observably blocked on the holding transaction's own id. The review request issued against `ef8b0d4f…` is
+superseded by this test-only head, and #79 remains the current gate.
+
+**The #79 repairs are propagated exactly one step.** They exist on
+`feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
+#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
+down in turn once #80 passes.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
@@ -68,7 +601,7 @@ clean-environment `pnpm verify` with no database and no Redis; the PostgreSQL an
 suites; the webhook-to-queue E2E suite; the evaluation harness with no quality regression; and
 `db:check-drift` reporting `No difference detected.`
 
-### Current work — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
+### Previous work, now passed — P5-06 / Issue #32, the retired-list reachability blocker on PR #78
 
 **Reviewed head:** `66a317fa0330e29b6bed9238286158fde48f9c01`. Astra accepted the database-enforced
 immutability and the per-example lifecycle pagination in full, and returned one blocking reachability
@@ -357,6 +890,21 @@ for the actions this task introduces and says so. Same precedent as `MVP_RELEASE
 work already added, rather than a new table. A lead's "what happens next" and a conversation's are the same
 question, and a second place to answer it would give two answers depending on which screen an operator
 opened. It also avoids changing core entity semantics, which needs an ADR.
+
+**What the first review found, and what it changed.** The stores above were all correct and the feature was
+unreachable: nothing called `dueFollowUps`, `claimFollowUp` or `recordFollowUpSent`, so the goal and
+follow-up tables were a complete record of intentions nobody acted on. The repair is described under
+"Current work" at the top of this file. Two details are worth carrying forward because they are general:
+
+- **A store with no caller passes its own tests.** Every follow-up case here calls the store, so none of
+  them could notice. The regressions added for the repair deliberately start from the worker and from the
+  real event — the sweeper's pass, the ingestion store's `recordActivity` and `startHumanTakeover`, and
+  `takeOver` — rather than from the helper. The first attempt hooked the inbound cancellation to
+  `appendInboundMessage`, which has no production caller, so it ran in one test and nowhere else: the same
+  defect one layer down, found by auditing for the class rather than by trusting the repair.
+- **Correct pieces can still not meet.** The provider's automated-response budget was right, the follow-up
+  path was right, and together they made a feature that could never send: the budget is counted from the
+  message being answered, and a follow-up answers none.
 
 **P5-08 / Issue #34 is next**, per the owner's directive on PR #81 — and not before. Its work is committed
 on a local `feat/p5-08-analytics-audit` branch and deliberately unpushed.
