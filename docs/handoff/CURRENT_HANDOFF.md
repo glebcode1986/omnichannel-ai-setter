@@ -1788,3 +1788,90 @@ directory against `schema.prisma`. What actually demonstrates the migration is s
 integration suite builds a **fresh** database per run through `createMigratedTestDatabase`, and 753 tests
 passed against those. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub
 Actions run.
+
+## PR #89 accepted, and joined to #90 / P4-04 — 2026-10-17
+
+**#89 is accepted at `cdba474caead94c87bdc5038500e8b32274a1507`** — Gemini/Antigravity formal GitHub review
+`5557475655`, `APPROVED`, 2026-10-17T10:54:39Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=cdba474caead94c87bdc5038500e8b32274a1507`, verified through
+`GET /pulls/89/reviews`.
+
+**Routing unchanged.** **#90 / P4-04 is the sole gate; #91 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `f257f0a6f73e55f98d5395abce46d9f72e0bb190` — the accepted #89 segment
+29 commits ahead of it, #90's authored segment 11 — so #90 against accepted #89 was genuinely `diverged`,
+11 ahead / 29 behind. Ordinary non-rebase merge at `3c2f00665ddb16426bfcfdf0b1170b775bad8988`; no rebase,
+force-push, squash, merge to `main`, or propagation into #91+. `--is-ancestor` holds for the accepted #89
+head and the prior #90 head alike.
+
+### Three conflicts, resolved as unions
+
+**An import collision** in `packages/db/src/ingestion-store.ts`: #90 added `createPendingTranscripts`, the
+accepted segment added `cancelPendingFollowUps`, on the same line. Both symbols are used in the merged body,
+so keeping one would have deleted a feature outright. Both kept.
+
+**Two whole suites appended at one place** in `packages/db/src/ingestion.integration.test.ts` — #90's
+`describe("a customer's voice note")` (eight cases) and #89's `describe("a webhook calls off a chase")`
+(three). Unrelated subjects, so both kept. The care needed was structural rather than semantic: the two
+sides shared one `/**` opener above the conflict marker, so each side's prose continued the *same* comment.
+The second suite was given its own opener instead of letting #89's paragraphs run on under #90's heading.
+
+**A dated research section from each side**, kept in chronological order. The file now holds five
+re-verification sections: P4-01, P4-02 and P4-03 of 2026-10-04, P4-04 of 2026-10-04/05, and the propagation
+re-verification of 2026-10-16.
+
+### The fallout that produced no conflict, and that only the typechecker could catch
+
+`apps/worker/src/followup-slice.integration.test.ts` arrived from the accepted #89 segment calling
+`createHandlers` with four arguments. #90 had inserted a fifth parameter — `transcribeMedia` — **as the
+fourth**, ahead of `reconcile`. Neither side touched the other's lines, so git merged both cleanly and the
+test's `"no reconciliation is processed in this slice"` rejecter silently took the *transcription* slot
+while `reconcile` received nothing.
+
+Resolved by passing both rejecters in the signature's order, with a comment recording why the fourth one
+exists. What is worth keeping from it:
+
+- **The test could not have caught this.** Every non-draft handler in that slice is a rejecter, so a
+  mis-ordered resolution passes just as well — the suite proves that no other job runs, not which slot each
+  rejecter sits in. The whole-repository `pnpm typecheck` was the only gate that could see the arity, which
+  is the standing reason to run it on every link rather than trusting a green Vitest run.
+- This is the recurring shape of this chain: a parameter added in the middle of a positional signature,
+  merged against a caller that predates it, with no textual overlap to raise a conflict.
+
+### The semantic union, checked rather than assumed
+
+#89's `policy/template-route.ts`, the `selectTemplate` reference in the resolved `evaluate.ts` comment, the
+`cancelPendingFollowUps` call on the ingestion path and the chase suite are all present. #90's
+`db/transcript-store.ts`, its `createPendingTranscripts` call on the same path, the voice-note suite and the
+`transcribeMedia` wiring in `apps/worker/src/main.ts` are all present. #88's `sameNumber` is still defined
+and still called at the coexistence echo branch.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; every suite bounded to `--maxWorkers=2`. Each focused
+package was run **separately with its own label**, after a labelling error on the previous link that came
+from reading a multi-filter run's blocks in the order the filters were typed rather than in pnpm's
+dependency order.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **561** source files, 0 cycles |
+| `@omnichannel/application` | 13 files, **271/271** |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/channel-whatsapp` | 8 files, **152/152** |
+| `apps/worker` follow-up slice (the adapted test) | 1 file, **7/7** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 38 files, **793/793**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 93 files, **1055/1055** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 125 files passed / 55 skipped, **1801 passed** / 988 skipped |
+
+**Disclosed limitations.** No retries, no reruns, no flakes, and no test skipped to make a gate pass. The
+988 skipped tests in the no-infrastructure run are the PostgreSQL and Redis suites declining to start
+without `TEST_DATABASE_URL` / `TEST_REDIS_URL` — the behaviour CI depends on — and are the same suites
+reported in full above with infrastructure present. One honest note on method: in the batched gate run the
+drift line came back blank because the summary took the last line of its output and that line was empty; it
+was re-run on its own and printed `No difference detected.` A blank line is not a pass, and it was not
+counted as one. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.

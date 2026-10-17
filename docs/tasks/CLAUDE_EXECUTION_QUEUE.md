@@ -23,7 +23,91 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #88, propagated into #89 and nowhere else
+### Current work — the accepted #89, propagated into #90 and nowhere else
+
+**PR #89 / P4-03 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-17T10:54:39Z, commit `cdba474caead94c87bdc5038500e8b32274a1507`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=cdba474caead94c87bdc5038500e8b32274a1507` (review `5557475655`).
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#90 / P4-04 is now the sole gate;
+#91 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `f257f0a6f73e55f98d5395abce46d9f72e0bb190`: the accepted #89
+segment ran 29 commits ahead of it, #90's own authored segment 11, so #90 against accepted #89 was
+genuinely `diverged` — 11 ahead / 29 behind. Ordinary non-rebase merge at
+`3c2f00665ddb16426bfcfdf0b1170b775bad8988`; `--is-ancestor` now succeeds for the accepted #89 head and for
+the prior #90 head `b3fe33e775c32f5654066a11edc04e7df1ab41d8` alike.
+
+#### Three conflicts, and the one that was not a conflict at all
+
+**`packages/db/src/ingestion-store.ts` — two different imports on one line.** #90 added
+`createPendingTranscripts` from `./transcript-store`; the accepted #89 segment added
+`cancelPendingFollowUps` from `./followup-store`. Both symbols are used in the merged body —
+`cancelPendingFollowUps` twice, `createPendingTranscripts` once — so the union is not a judgement call but
+a requirement: dropping either import deletes a feature and breaks the build. Both kept, in the file's
+alphabetical order.
+
+**`packages/db/src/ingestion.integration.test.ts` — two whole suites appended at one place.** #90's
+`describe("a customer's voice note")` with eight cases, and #89's `describe("a webhook calls off a chase")`
+with three. They test unrelated things, so both are kept. The splice needed care: the two sides shared a
+single `/**` opener above the marker, so each side's prose continued the *same* comment. The resolution
+gives the second suite its own opener rather than letting #89's paragraphs run on under #90's heading.
+
+**`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md` — a dated section from each side.** Both kept. The
+file now carries five re-verification sections in chronological order: P4-01, P4-02 and P4-03 of
+2026-10-04, P4-04 of 2026-10-04/05, and the propagation re-verification of 2026-10-16.
+
+#### The fallout that produced no conflict at all, and that only `tsc` could catch
+
+`apps/worker/src/followup-slice.integration.test.ts` came in from the accepted #89 segment and called
+`createHandlers` with four arguments. **#90 had inserted a fifth parameter — `transcribeMedia` — as the
+fourth, ahead of `reconcile`.** Git merged both sides cleanly because neither had touched the other's lines.
+The result: the test's `"no reconciliation is processed in this slice"` rejecter was landing in the
+*transcription* slot, and `reconcile` had no argument at all.
+
+Resolved as the union by passing both rejecters in the signature's order, with a comment saying why the
+fourth exists. Two things are worth recording about how this was found:
+
+- **Vitest could not have caught it.** All four non-draft handlers in that slice are rejecters, so a
+  mis-ordered resolution still passes — the test only proves no other job runs, not which slot each
+  rejecter occupies. Only the whole-repository `pnpm typecheck` saw the arity.
+- It is the exact shape the chain keeps producing: a parameter added in the middle of a positional
+  signature, merged against a caller that predates it, with no textual overlap to flag it.
+
+#### The semantic union, checked rather than assumed
+
+- **#89 intact:** `policy/template-route.ts`, `selectTemplate` still named in the resolved `evaluate.ts`
+  comment, `cancelPendingFollowUps` still called from the ingestion path, and the chase suite present.
+- **#90 intact:** `db/transcript-store.ts`, `createPendingTranscripts` still called from the ingestion
+  path, the voice-note suite present, and `transcribeMedia` still wired in `apps/worker/src/main.ts`.
+- **#88 intact:** `sameNumber` still defined and called at the coexistence echo branch.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, every suite bounded to `--maxWorkers=2`.
+Each focused package was run **separately with its own label**, after a labelling error on the previous link
+that came from reading a multi-filter run's blocks in the order the filters were typed rather than in
+pnpm's dependency order; that error was corrected publicly on #89.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 561 source files, 0 cycles |
+| `@omnichannel/application` | **271 passed** (13 files) |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/channel-whatsapp` | **152 passed** (8 files) |
+| `apps/worker` follow-up slice (the adapted test) | **7 passed** (1 file) |
+| `pnpm test:db` | **793 passed** (38 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1055 passed** (93 files) |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1801 passed, 988 skipped |
+
+**Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass. In the batched run the
+drift line came back blank because the summary captured an empty trailing line; it was re-run on its own and
+printed `No difference detected.` A blank line was not counted as a pass.
+
+### Superseded — the accepted #88, propagated into #89 and nowhere else
 
 **PR #88 / P4-02 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-16T16:53:26Z, commit `98c2b2696f670ccc82a32252a91fa0460d2dfffa`, carrying

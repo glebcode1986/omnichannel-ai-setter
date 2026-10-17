@@ -243,6 +243,9 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
       handler,
       () => Promise.reject(new Error("no delivery is processed in this slice")),
       () => Promise.reject(new Error("no debounce is processed in this slice")),
+      // The media reading arrived with P4-04 as the fourth parameter, ahead of reconciliation. Passing it
+      // explicitly keeps this slice's claim literal: the only job this test runs is the draft generation.
+      () => Promise.reject(new Error("no transcription is processed in this slice")),
       () => Promise.reject(new Error("no reconciliation is processed in this slice")),
     );
     // The queue's own job identity and attempt number, as the worker would pass them.
