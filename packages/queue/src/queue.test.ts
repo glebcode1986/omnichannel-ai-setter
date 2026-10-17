@@ -11,6 +11,7 @@ import {
   deliveryJobSchema,
   INBOUND_DEBOUNCE,
   MEDIA_TRANSCRIPTION,
+  PRESENCE,
   inboundDebounceJobSchema,
   JOB_FAMILIES,
   JobPayloadValidationError,
@@ -320,6 +321,7 @@ describe("job identity", () => {
       INBOUND_DEBOUNCE.jobName,
       MEDIA_TRANSCRIPTION.jobName,
       AI_DRAFT_GENERATION.jobName,
+      PRESENCE.jobName,
       DELIVERY.jobName,
       RECONCILIATION.jobName,
     ]);

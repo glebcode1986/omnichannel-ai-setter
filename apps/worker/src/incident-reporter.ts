@@ -26,6 +26,13 @@ const COMPONENT_FOR_QUEUE: Readonly<Record<string, FailureSignal["kind"]>> = {
   delivery: "CHANNEL_ACCOUNT",
   "delivery-reconciliation": "CHANNEL_ACCOUNT",
   "inbound-debounce": "QUEUE",
+  // Its own component rather than AI_PROVIDER: a transcriber failing leaves voice notes unread and holds
+  // those replies for a person, which is a different thing for an operator to see than a reply model
+  // failing. Added with #22 after #21 left it unmapped and falling through to INTEGRATION.
+  "media-transcription": "TRANSCRIPTION",
+  // A read receipt or typing indicator is carried by the channel account's own credential, so a run of
+  // failures here is a fact about that account rather than about the queue.
+  presence: "CHANNEL_ACCOUNT",
 };
 
 export interface IncidentReporter {

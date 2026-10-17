@@ -8,6 +8,7 @@ import {
   DELIVERY,
   INBOUND_DEBOUNCE,
   MEDIA_TRANSCRIPTION,
+  PRESENCE,
   RECONCILIATION,
   type JobFamily,
 } from "./families";
@@ -18,6 +19,7 @@ import {
   type DeliveryJob,
   type InboundDebounceJob,
   type MediaTranscriptionJob,
+  type PresenceJob,
   type ReconciliationJob,
 } from "./payloads";
 import { closeAll } from "./close-all";
@@ -46,6 +48,14 @@ export interface QueueProducer {
    */
   scheduleMediaTranscription(job: MediaTranscriptionJob, options: { readonly delayMs: number }): Promise<EnqueuedJob>;
   enqueueAiDraftGeneration(job: AiDraftGenerationJob): Promise<EnqueuedJob>;
+  /**
+   * Queues the presence announcement for a reply that was just scheduled (#22).
+   *
+   * The delay is the gap the caller computed between now and shortly before the send, so this never
+   * sleeps and never touches the reply's own schedule. One job per operation, so a duplicate enqueue is a
+   * no-op rather than a second typing indicator.
+   */
+  schedulePresence(job: PresenceJob, options: { readonly delayMs: number }): Promise<EnqueuedJob>;
   /** Stage B: durable delayed delivery at `job.scheduledFor`; never sleeps in the caller. */
   scheduleDelivery(job: DeliveryJob, options?: RaiseOptions): Promise<EnqueuedJob>;
   enqueueReconciliation(job: ReconciliationJob, options?: RaiseOptions): Promise<EnqueuedJob>;
@@ -182,6 +192,10 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
 
     async enqueueAiDraftGeneration(input) {
       return add(AI_DRAFT_GENERATION, parsePayload(AI_DRAFT_GENERATION.schema, AI_DRAFT_GENERATION.jobName, input), 0);
+    },
+
+    async schedulePresence(input, { delayMs }) {
+      return add(PRESENCE, parsePayload(PRESENCE.schema, PRESENCE.jobName, input), Math.max(0, delayMs));
     },
 
     async scheduleDelivery(input, options = {}) {

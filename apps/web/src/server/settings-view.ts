@@ -22,8 +22,17 @@
  * new values of material changes, which means comparing two stored snapshots field by field — a pure
  * function over two JSON values, and one that must not invent a field that is absent from both.
  */
-import { POLICY_IMPACTS, isAiMode, isConfidencePreset, isInstagramAfterWindowPolicy, isTimingPreset, isWhatsAppAfterWindowPolicy } from "@omnichannel/domain";
-import type { AiMode, ConfidencePreset, InstagramAfterWindowPolicy, PolicyImpact, TimingPreset, WhatsAppAfterWindowPolicy } from "@omnichannel/domain";
+import {
+  MAX_PRESENCE_TYPING_LEAD_MS,
+  POLICY_IMPACTS,
+  isAiMode,
+  isConfidencePreset,
+  isInstagramAfterWindowPolicy,
+  isPresenceMode,
+  isTimingPreset,
+  isWhatsAppAfterWindowPolicy,
+} from "@omnichannel/domain";
+import type { AiMode, ConfidencePreset, InstagramAfterWindowPolicy, PolicyImpact, PresenceMode, TimingPreset, WhatsAppAfterWindowPolicy } from "@omnichannel/domain";
 import { WORKSPACE_ADMIN_ROLES } from "@omnichannel/db";
 import type { PolicyAuditCursor } from "@omnichannel/db";
 
@@ -71,6 +80,15 @@ export interface PolicyProposal {
   readonly instagramAfterWindowPolicy?: InstagramAfterWindowPolicy;
   readonly whatsappAfterWindowPolicy?: WhatsAppAfterWindowPolicy;
   readonly whatsappTemplateAutomationAllowlist: readonly string[];
+  /**
+   * Presence, which arrived with P4-05 after this proposal shape existed.
+   *
+   * Declared here rather than only read off the form, because the proposal is the one thing that travels
+   * between the refusal and the confirmation: a field the proposal does not carry is a field an owner's
+   * sealed acknowledgement silently drops.
+   */
+  readonly presenceMode?: PresenceMode;
+  readonly presenceTypingLeadMs?: number;
   /** The policy version the form was rendered from. */
   readonly expectedVersion: number;
 }
@@ -129,6 +147,8 @@ export function decodeProposal(encoded: string | undefined): PolicyProposal | un
   const instagram = raw["instagramAfterWindowPolicy"];
   const whatsapp = raw["whatsappAfterWindowPolicy"];
   const hours = raw["takeoverPauseHours"];
+  const presenceMode = raw["presenceMode"];
+  const presenceLead = raw["presenceTypingLeadMs"];
   return {
     ...(isAiMode(mode) ? { mode } : {}),
     businessGoal: goal,
@@ -143,6 +163,13 @@ export function decodeProposal(encoded: string | undefined): PolicyProposal | un
     ...(isInstagramAfterWindowPolicy(instagram) ? { instagramAfterWindowPolicy: instagram } : {}),
     ...(isWhatsAppAfterWindowPolicy(whatsapp) ? { whatsappAfterWindowPolicy: whatsapp } : {}),
     whatsappTemplateAutomationAllowlist: allowlist,
+    // Re-validated like every other field, because the parameter is user-editable: a mode nobody defined
+    // or a lead past the provider's own indicator lifetime reads as "not proposed" and leaves the stored
+    // value alone, rather than travelling into a save.
+    ...(typeof presenceMode === "string" && isPresenceMode(presenceMode) ? { presenceMode } : {}),
+    ...(typeof presenceLead === "number" && Number.isSafeInteger(presenceLead) && presenceLead >= 0 && presenceLead <= MAX_PRESENCE_TYPING_LEAD_MS
+      ? { presenceTypingLeadMs: presenceLead }
+      : {}),
     expectedVersion: version,
   };
 }

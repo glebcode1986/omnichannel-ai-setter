@@ -243,9 +243,14 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
       handler,
       () => Promise.reject(new Error("no delivery is processed in this slice")),
       () => Promise.reject(new Error("no debounce is processed in this slice")),
-      // The media reading arrived with P4-04 as the fourth parameter, ahead of reconciliation. Passing it
-      // explicitly keeps this slice's claim literal: the only job this test runs is the draft generation.
+      // Every job this slice does not run gets a rejecter, in `createHandlers`' own parameter order:
+      // generateDraft, deliver, debounce, transcribeMedia, announcePresence, reconcile. Each Phase 4 task
+      // has inserted its handler *before* `reconcile` rather than after it — the media reading at P4-04,
+      // the presence announcement at P4-05 — so the order here is read from `handlers.ts` and matched
+      // against the production call in `main.ts`, never assumed. Types cannot check it: these rejecters
+      // take no arguments, so they satisfy every slot, and the suite passes whichever order they are in.
       () => Promise.reject(new Error("no transcription is processed in this slice")),
+      () => Promise.reject(new Error("no presence is announced in this slice")),
       () => Promise.reject(new Error("no reconciliation is processed in this slice")),
     );
     // The queue's own job identity and attempt number, as the worker would pass them.

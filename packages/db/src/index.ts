@@ -45,6 +45,13 @@ export {
   scheduleAutomatedDelivery,
   type AutomatedDeliveryInput,
 } from "./delivery-store";
+export {
+  createPresenceStore,
+  presenceCapabilitiesOf,
+  presenceSettingsOf,
+  type PresenceContext,
+  type PresenceStore,
+} from "./presence-store";
 export { createReviewStore, createStyleLearningStore } from "./review-store";
 export {
   editLead,

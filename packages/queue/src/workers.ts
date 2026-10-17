@@ -11,6 +11,7 @@ import {
   DEFAULT_QUEUE_LIMITS,
   INBOUND_DEBOUNCE,
   MEDIA_TRANSCRIPTION,
+  PRESENCE,
   RECONCILIATION,
   type JobFamily,
   type QueueExecutionLimits,
@@ -22,6 +23,7 @@ import {
   type DeliveryJob,
   type InboundDebounceJob,
   type MediaTranscriptionJob,
+  type PresenceJob,
   type ReconciliationJob,
 } from "./payloads";
 import { closeAll } from "./close-all";
@@ -60,6 +62,14 @@ export interface QueueHandlers {
    */
   transcribeMedia(job: MediaTranscriptionJob, context: JobContext): Promise<void>;
   generateAiDraft(job: AiDraftGenerationJob, context: JobContext): Promise<void>;
+  /**
+   * Announces that the customer's message was seen, and that a reply is being written (#22).
+   *
+   * Never throws, and the family allows one attempt: an announcement is only meaningful in the seconds
+   * before the reply, so a retry a minute later would raise a typing indicator after the message had
+   * already arrived. A failed announcement is a cosmetic loss and must never reach the reply.
+   */
+  announcePresence(job: PresenceJob, context: JobContext): Promise<void>;
   /**
    * Must claim the operation before sending and must not throw after a send may have happened; a thrown
    * error is treated as an unknown outcome and quarantined for reconciliation, never retried.
@@ -205,6 +215,11 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
 
     worker(AI_DRAFT_GENERATION, async (job, context) => {
       await handlers.generateAiDraft(job, context);
+      return "HANDLED";
+    }),
+
+    worker(PRESENCE, async (job, context) => {
+      await handlers.announcePresence(job, context);
       return "HANDLED";
     }),
 
