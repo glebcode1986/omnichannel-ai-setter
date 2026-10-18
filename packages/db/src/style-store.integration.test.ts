@@ -804,6 +804,13 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect((await rejectStyleExample(db(), agent, id)).status).toBe("REJECTED_EXAMPLE");
     });
 
+    it("allows an admin to reject a Workspace-scoped suggestion", async () => {
+      const { id } = await suggestedWorkspaceExample("Shared voice eight");
+      const admin = await member("Reject Admin", "ADMIN");
+
+      expect((await rejectStyleExample(db(), admin, id)).status).toBe("REJECTED_EXAMPLE");
+    });
+
     it("refuses an agent restoring a Workspace-scoped example an admin archived", async () => {
       const { id } = await exampleFor("WORKSPACE", "Shared voice six");
       const admin = await member("Restore Admin", "ADMIN");

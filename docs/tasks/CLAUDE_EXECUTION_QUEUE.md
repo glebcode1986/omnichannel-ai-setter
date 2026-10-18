@@ -57,7 +57,7 @@ deliberately — a refusal that depended on `act` would leave whichever screen o
 human verified it. Unguarded, an agent could supply that provenance for content every profile's voice
 draws on.
 
-**Tests, and the control each one needs.** Fourteen cases across the two integration suites: an `AGENT`
+**Tests, and the control each one needs.** Fifteen cases across the two integration suites: an `AGENT`
 refused for every listed Workspace-scoped mutation, the **same agent still performing the corresponding
 profile-scoped operation** as the control, and an `ADMIN` allowed for each act the agent was refused.
 Without that last row the refusals would also pass if the lifecycle were simply broken for everyone.

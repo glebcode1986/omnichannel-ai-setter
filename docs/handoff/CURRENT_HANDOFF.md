@@ -2439,7 +2439,7 @@ defensive. Archive, restore, publish and all four knowledge paths are reachable 
 
 ### Tests, and the control each one needs
 
-Fourteen cases across the two integration suites: an `AGENT` refused for every listed Workspace-scoped
+Fifteen cases across the two integration suites: an `AGENT` refused for every listed Workspace-scoped
 mutation, the **same agent still performing the corresponding profile-scoped operation** as the control,
 and an `ADMIN` allowed for each act the agent was refused. Without that last row the refusals would also
 pass if the lifecycle were simply broken for everyone.
@@ -2473,19 +2473,19 @@ drift check. **Any unexplained skip treated as a failure.**
 |---|---|
 | migration drift | **No difference detected.** |
 | typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 |
-| unit suites (`pnpm test`) | 188 files, **2931/2931** |
-| PostgreSQL suites (`pnpm test:db`) | 41 files, **850/850**, no skips |
+| unit suites (`pnpm test`) | 188 files, **2932/2932** |
+| PostgreSQL suites (`pnpm test:db`) | 41 files, **851/851**, no skips |
 | Redis suites (`pnpm test:redis`) | 3 files, **55/55** |
 | worker + web E2E (`pnpm test:e2e`) | 96 files, **1103/1103** |
 | evals | **20/20, 0 failed, 0 quality regressions** |
 | production build | exit 0 |
-| no-infrastructure path (`pnpm verify` under `env -i`) | exit 0; 127 files passed / 61 skipped, **1844 passed** |
+| no-infrastructure path (`pnpm verify` under `env -i`) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1088 skipped |
 
-The two suites this change touches are **52/52** (knowledge) and **49/49** (style), up by 3 and 11
-cases — 14 in all, which is also the +14 in the `pnpm test:db` total above.
+The two suites this change touches are **52/52** (knowledge) and **50/50** (style), up by 3 and 12
+cases — 15 in all, which is also the +15 in the `pnpm test:db` total above.
 
 **Disclosed limitations.** No retries, no reruns, no flakes, nothing skipped to make a gate pass; with the
-service variables present nothing skipped at all. The 1087 skips in the no-infrastructure run are the
+service variables present nothing skipped at all. The 1088 skips in the no-infrastructure run are the
 PostgreSQL and Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, the
 behaviour CI relies on. The ADMIN + `SELECTED`-scope half remains open by this directive's own step 4: an
 ADMIN holding only `SELECTED` profiles can still create Workspace-scoped knowledge or style examples that
