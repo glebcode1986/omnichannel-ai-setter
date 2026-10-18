@@ -23,6 +23,61 @@ numbering.
 
 Nothing is merged to `main`.
 
+### Current work — PR #94 `CHANGES_REQUESTED`, remediated on this branch
+
+**PR #94 / P3-04 received a formal `CHANGES_REQUESTED`** (Gemini/Antigravity review `5563757640`) at exact
+head `5da1213cce104bf21ff0d697021db97867da7c58`. The reviewer independently reproduced the authorization
+finding this branch had disclosed and named three scenarios — Knowledge Hijack, Knowledge Denial of
+Service, Style Governance Bypass — then specified remediation matching the patch already prepared locally.
+The owner's `CLAUDE_FIX_DIRECTIVE_FROM_PR94_CHANGES_REQUESTED` directed that patch onto the branch.
+
+**Routing unchanged.** **#94 / P3-04 remains the sole gate; #95 onwards are frozen.** No rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+**What was unguarded.** `createKnowledge` and `createStyleExample` each require `WORKSPACE_ADMIN_ROLES` to
+*make* a Workspace-scoped row. Changing or retiring one required nothing beyond access to any single
+Business Profile, because every lifecycle call resolved its row through `scopeFilter(undefined, …)` /
+`exampleScopeFilter(undefined, …)` — whose `null` branch **is** the Workspace-scoped row — and applied no
+role check. Five call sites, one shape of mistake.
+
+| path | act | now |
+|---|---|---|
+| `editKnowledge` | rewrite the facts every profile answers from | `requireRole` when the row is Workspace-scoped |
+| `archiveKnowledge` | retire it from every profile's retrieval | ownership read added, then `requireRole` |
+| `restoreKnowledge` / `publishKnowledge` | put it back into every profile's retrieval | `requireRole` above the act check |
+| `decide` (approve / reject / archive / restore) | decide a shared style example, **stamping the approver** | one guard covering all four |
+| `saveStyleProfile` | rewrite the voice every profile replies in | fixed earlier, at `5da1213` |
+
+`archiveKnowledge` needed more than a line: it wrote through a blind `updateMany` and never read the row,
+so there was nothing to check the scope against. The guard sits above the `act` check in the publish path
+deliberately — a refusal that depended on `act` would leave whichever screen omitted it unguarded.
+
+**The approver stamp is why this is not only an integrity question.** Approve and restore both record
+`approvedByUserId`. A CHECK requires that name for anything `ACTIVE`, which is the database insisting a
+human verified it. Unguarded, an agent could supply that provenance for content every profile's voice
+draws on.
+
+**Tests, and the control each one needs.** Fourteen cases across the two integration suites: an `AGENT`
+refused for every listed Workspace-scoped mutation, the **same agent still performing the corresponding
+profile-scoped operation** as the control, and an `ADMIN` allowed for each act the agent was refused.
+Without that last row the refusals would also pass if the lifecycle were simply broken for everyone.
+
+Each guard was then removed one at a time and the suite rerun — the honest check, since a refusal test
+that passes with the guard gone is theatre. All five are individually pinned; no removal was silent.
+
+**Reachability, stated rather than implied.** Approve and reject start from `SUGGESTED`, and **no writer in
+this repository produces a Workspace-scoped suggestion**: `suggestStyleExample`, the composer's learning
+write and `recordEditedDraft` all stamp `profileScopeOf(context).businessProfileId`, while
+`createStyleExample` lands a Workspace example straight in `ACTIVE`. Those two rows are therefore inserted
+directly in the tests, and the guard on those two transitions is defensive. Archive, restore, publish and
+the knowledge paths are all reachable through ordinary product screens.
+
+**Still open, and deliberately not taken here.** The ADMIN + `SELECTED`-scope half — wiring
+`requireWorkspaceWideWrite` through three web actions that would each need a `WorkspaceContext` — is
+outside this directive's scope by its own step 4. The gap it leaves is unchanged: an ADMIN holding only
+`SELECTED` profiles can still create Workspace-scoped knowledge or style examples that profiles they were
+never granted will read.
+
 ### Current work — the accepted #93, propagated into #94 and nowhere else
 
 **PR #93 / P4-07 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,

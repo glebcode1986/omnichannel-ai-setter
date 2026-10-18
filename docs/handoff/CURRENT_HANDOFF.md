@@ -2395,3 +2395,99 @@ worker lifecycle case that now asserts the loop. That matches `backlog-guard` an
 which have none either, while the follow-up, outbox and Instagram-token sweepers do — a mixed pattern in the
 repository rather than something this merge introduced. Local runs are macOS; the authoritative Linux
 evidence is the exact-head GitHub Actions run.
+
+## PR #94 `CHANGES_REQUESTED`, remediated — 2026-10-18
+
+**Review `5563757640`, state `CHANGES_REQUESTED`, at exact head
+`5da1213cce104bf21ff0d697021db97867da7c58`.** Gemini/Antigravity independently reproduced the
+authorization finding this branch had disclosed, naming three scenarios — Knowledge Hijack, Knowledge
+Denial of Service, Style Governance Bypass — and specified remediation matching the patch already prepared
+locally. The owner's `CLAUDE_FIX_DIRECTIVE_FROM_PR94_CHANGES_REQUESTED` directed it onto the branch.
+
+**Routing unchanged.** **#94 / P3-04 remains the sole gate; #95 onwards are frozen.** No rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+### One shape of mistake, five call sites
+
+Making a Workspace-scoped row required `WORKSPACE_ADMIN_ROLES`; changing or retiring one required nothing
+beyond access to any single Business Profile. Every lifecycle call resolved its row through
+`scopeFilter(undefined, …)` or `exampleScopeFilter(undefined, …)`, whose `null` branch **is** the
+Workspace-scoped row, and applied no role check.
+
+- `editKnowledge` — rewrite the facts every profile answers from.
+- `archiveKnowledge` — retire it from every profile's retrieval. This one wrote through a blind
+  `updateMany` and never read the row, so an ownership read had to be added before a guard had anything to
+  check.
+- `restoreKnowledge` / `publishKnowledge` (the same function under two buttons) — put it back into every
+  profile's retrieval. The guard sits **above** the `act` check: a refusal that depended on `act` would
+  leave whichever screen omitted it unguarded.
+- `decide` — approve, reject, archive and restore a shared style example, through one private helper, so
+  one guard covers all four. Its selected row gained `businessProfileId`, which it had not read.
+- `saveStyleProfile` — rewrite the voice every profile replies in. Fixed earlier, at `5da1213`.
+
+Approve and restore both stamp `approvedByUserId`, and a CHECK requires that name for anything `ACTIVE` —
+the database insisting a human verified it. Unguarded, an agent could supply that provenance for content
+every profile's voice draws on, which is why this was more than an integrity question.
+
+### Reachability, stated rather than implied
+
+Approve and reject start from `SUGGESTED`, and **no writer in this repository produces a Workspace-scoped
+suggestion**: `suggestStyleExample`, the composer's learning write and `recordEditedDraft` all stamp
+`profileScopeOf(context).businessProfileId`, while `createStyleExample` lands a Workspace example straight
+in `ACTIVE`. Those two rows are inserted directly by the tests and the guard on those transitions is
+defensive. Archive, restore, publish and all four knowledge paths are reachable from ordinary screens.
+
+### Tests, and the control each one needs
+
+Fourteen cases across the two integration suites: an `AGENT` refused for every listed Workspace-scoped
+mutation, the **same agent still performing the corresponding profile-scoped operation** as the control,
+and an `ADMIN` allowed for each act the agent was refused. Without that last row the refusals would also
+pass if the lifecycle were simply broken for everyone.
+
+Each guard was then removed one at a time and the owning suite rerun, because a refusal test that still
+passes with its guard gone proves nothing:
+
+| guard removed | suite result |
+|---|---|
+| `editKnowledge` | 1 failed / 51 passed — the knowledge refusal case |
+| `archiveKnowledge` | 1 failed / 51 passed — same case |
+| `restoreKnowledge` / `publishKnowledge` | 1 failed / 51 passed — same case |
+| `decide` | **4 failed** / 45 passed — archive, approve, reject and restore refusals |
+| `saveStyleProfile` | the voice refusal case failed |
+
+All five are individually pinned. The knowledge refusals share one `it`, so a failure names the case rather
+than the guard; each was still isolated by removing one guard at a time with the others present.
+
+**A mistake worth recording.** The first mutation loop restored each file with `git checkout --`, which
+reverted the *uncommitted* patch instead of only the mutation, so runs two through five measured a file
+with no guards at all rather than one missing guard. The reverted work was recovered from the patch
+artifact and the loop rerun against a scratchpad snapshot. Never restore an uncommitted working tree from
+git.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2`; a dedicated shadow database for the
+drift check. **Any unexplained skip treated as a failure.**
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 |
+| unit suites (`pnpm test`) | 188 files, **2931/2931** |
+| PostgreSQL suites (`pnpm test:db`) | 41 files, **850/850**, no skips |
+| Redis suites (`pnpm test:redis`) | 3 files, **55/55** |
+| worker + web E2E (`pnpm test:e2e`) | 96 files, **1103/1103** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify` under `env -i`) | exit 0; 127 files passed / 61 skipped, **1844 passed** |
+
+The two suites this change touches are **52/52** (knowledge) and **49/49** (style), up by 3 and 11
+cases — 14 in all, which is also the +14 in the `pnpm test:db` total above.
+
+**Disclosed limitations.** No retries, no reruns, no flakes, nothing skipped to make a gate pass; with the
+service variables present nothing skipped at all. The 1087 skips in the no-infrastructure run are the
+PostgreSQL and Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, the
+behaviour CI relies on. The ADMIN + `SELECTED`-scope half remains open by this directive's own step 4: an
+ADMIN holding only `SELECTED` profiles can still create Workspace-scoped knowledge or style examples that
+profiles they were never granted will read. Local runs are macOS; the authoritative Linux evidence is the
+exact-head GitHub Actions run.

@@ -18,6 +18,9 @@ import {
   recordIndexingResult,
   restoreKnowledge,
 } from "./knowledge-store";
+import { WorkspacePermissionError } from "./errors";
+import { addWorkspaceMember } from "./repositories/workspaces";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 import { createKnowledgeRetriever } from "./retrieval/retrievers";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
@@ -846,4 +849,62 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
       expect(await readKnowledge(db(), profile.context, theirId)).toBeUndefined();
     }, 180_000);
   });
+
+  describe("who may change a source every profile answers from", () => {
+    /**
+     * Making a Workspace-scoped source needs an admin or owner. Changing or retiring one needed nothing
+     * beyond access to any single profile, because `editKnowledge`, `archiveKnowledge` and
+     * `restoreKnowledge` all resolve the document through `scopeFilter(undefined, …)` — whose `null`
+     * branch *is* the Workspace-scoped row — and applied no role check. Knowledge is this product's
+     * factual authority, so that let an agent granted one profile rewrite what all of them assert as fact.
+     */
+    const agentContext = async (name: string, role: "AGENT" | "ADMIN") => {
+      const user = await database.db.user.create({ data: { name, email: `${name.replace(/\W/gu, "-").toLowerCase()}@example.test` } });
+      const owner = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: workspace.workspaceId });
+      await addWorkspaceMember(database.db, owner, { userId: user.id, role, businessProfileScope: "ALL" });
+      return authorizeBusinessProfileAccess(database.db, { userId: user.id, workspaceId: workspace.workspaceId, businessProfileId: profile.businessProfileId });
+    };
+
+    it("refuses an agent editing, archiving or restoring a Workspace-scoped source", async () => {
+      const shared = await createKnowledge(db(), profile.context, { title: "Shared refund wording", chunks: ["Refunds take five working days."], scope: "WORKSPACE" });
+      const id = shared.status === "CREATED" ? shared.documentId : "";
+      const agent = await agentContext("Knowledge Agent", "AGENT");
+
+      await expect(editKnowledge(db(), agent, id, { chunks: ["Refunds take fifty days."] })).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await expect(archiveKnowledge(db(), agent, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await expect(restoreKnowledge(db(), agent, id, {})).rejects.toBeInstanceOf(WorkspacePermissionError);
+      // `publishKnowledge` is the same function under the other button. Both acts are named here because
+      // the guard has to sit above the act check: a refusal that depended on `act` would leave whichever
+      // screen omitted it unguarded.
+      await expect(publishKnowledge(db(), agent, id, { act: "PUBLISH" })).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await expect(restoreKnowledge(db(), agent, id, { act: "RESTORE" })).rejects.toBeInstanceOf(WorkspacePermissionError);
+    });
+
+    it("still lets that agent change their own profile's source, which is theirs to change", async () => {
+      // The control. The guard is about the Workspace layer, not about agents — narrowing it to both would
+      // have taken the library away from the people who maintain it.
+      const own = await createKnowledge(db(), profile.context, { title: "This profile's hours", chunks: ["We open at nine."] });
+      const id = own.status === "CREATED" ? own.documentId : "";
+      const agent = await agentContext("Knowledge Agent Two", "AGENT");
+
+      expect((await editKnowledge(db(), agent, id, { chunks: ["We open at ten."] })).status).toBe("VERSIONED");
+      expect((await archiveKnowledge(db(), agent, id)).status).toBe("ARCHIVED");
+      expect((await restoreKnowledge(db(), agent, id, { act: "RESTORE" })).status).toBe("RESTORED");
+      expect((await publishKnowledge(db(), agent, id, { act: "PUBLISH" })).status).toBe("RESTORED");
+    });
+
+    it("allows an admin, because the privacy spec gives them this act", async () => {
+      const shared = await createKnowledge(db(), profile.context, { title: "Shared delivery wording", chunks: ["Delivery is free over fifty."], scope: "WORKSPACE" });
+      const id = shared.status === "CREATED" ? shared.documentId : "";
+      const admin = await agentContext("Knowledge Admin", "ADMIN");
+
+      expect((await editKnowledge(db(), admin, id, { chunks: ["Delivery is free over sixty."] })).status).toBe("VERSIONED");
+      // Every act the agent was refused, allowed here. Without this the refusals above would also pass if
+      // the lifecycle were broken for everyone.
+      expect((await publishKnowledge(db(), admin, id, { act: "PUBLISH" })).status).toBe("RESTORED");
+      expect((await archiveKnowledge(db(), admin, id)).status).toBe("ARCHIVED");
+      expect((await restoreKnowledge(db(), admin, id, { act: "RESTORE" })).status).toBe("RESTORED");
+    });
+  });
+
 });

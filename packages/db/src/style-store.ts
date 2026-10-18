@@ -699,9 +699,17 @@ async function decide(
       status: { in: [...transition.from] },
       ...exampleScopeFilter(undefined, scope.businessProfileId),
     };
-    const before = await tx.styleExample.findFirst({ where, select: { status: true, approvedByUserId: true } });
+    const before = await tx.styleExample.findFirst({ where, select: { status: true, approvedByUserId: true, businessProfileId: true } });
     if (before === null) {
       return { status: "GONE" } as const;
+    }
+    if (before.businessProfileId === null) {
+      // One guard for all four transitions, because they share this helper. A Workspace-scoped example is
+      // drawn on by every Business Profile's voice, and approving one *stamps the approver* — so without
+      // this a member granted a single profile could supply the "verified human" provenance the CHECK
+      // exists to require, for content all of them speak in, or archive an active one out of every
+      // profile's retrieval. `createStyleExample` already guards making one (#57).
+      requireRole(context, WORKSPACE_ADMIN_ROLES, "deciding a Workspace-wide style example");
     }
     const changed = await tx.styleExample.updateMany({
       where,
