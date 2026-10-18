@@ -2491,3 +2491,105 @@ behaviour CI relies on. The ADMIN + `SELECTED`-scope half remains open by this d
 ADMIN holding only `SELECTED` profiles can still create Workspace-scoped knowledge or style examples that
 profiles they were never granted will read. Local runs are macOS; the authoritative Linux evidence is the
 exact-head GitHub Actions run.
+
+## PR #94 round two — the refusal tests were green and proved nothing — 2026-10-18
+
+The remediation above was correct in the source and **vacuous in the tests**, which I established by
+adversarially re-checking my own work rather than by being told. Both halves are now fixed on the same
+branch.
+
+### What was wrong with tests that all passed
+
+Every refusal case asserted only `rejects.toBeInstanceOf(WorkspacePermissionError)`. Nothing read the row
+back. Two of the five guarded functions — `archiveKnowledge` and `saveStyleProfile` — are **not
+transactional**, so a guard that fired *after* its write would throw exactly the same error while the write
+committed anyway. Measured, with the guard moved below its `updateMany` and nothing else changed:
+
+| mutation | before this round | now |
+|---|---|---|
+| `archiveKnowledge` guard moved below its write | **52/52 passed** — and the shared source committed as `ARCHIVED` | **1 failed**, the archive refusal |
+| `saveStyleProfile` guard moved after the write *and* the audit | **50/50 passed** — the agent's persona committed to the `businessProfileId = null` layer, audit row claiming the save | **1 failed**, the voice refusal |
+
+So an `AGENT` archived a Workspace-wide knowledge source out of every profile's retrieval, and rewrote the
+voice every profile inherits, with the whole suite green. I had checked guard *sensitivity* — remove the
+guard, does a test fail — and never checked that a refusal **changes nothing**. Those are different
+questions and only the second one is the behaviour.
+
+### What else the re-check found, all now fixed
+
+- **Bundled assertions hid three guards behind one.** The knowledge refusals were five `await expect`s in
+  one `it`; the first failure ends the case, so the later acts were pinned only while the earlier guard
+  held. Removing all three knowledge guards reported exactly **one** failure. Now one act per case.
+- **`publishKnowledge` *is* `restoreKnowledge`** (`export const publishKnowledge = restoreKnowledge`), so
+  three of those five assertions shared one guard and differed only in `act`. Stated in the test now
+  instead of reading as five independent acts.
+- **"The same agent" was not the same agent.** Every control created a second user — `"Knowledge Agent"`
+  refused, `"Knowledge Agent Two"` allowed. Equivalent principals, so the risk was low, but the claim was
+  false as written. Each control now refuses the shared row **and** performs the profile-scoped act as one
+  principal, which also made each guard removal fail more cases.
+- **The provenance argument was asserted nowhere.** The commit's central claim is that an unguarded approve
+  lets an agent supply the verified-human stamp a CHECK requires. No case read `approvedByUserId`. The
+  refusal now asserts the row stays `SUGGESTED` **and** unstamped; the admin case asserts the admin is
+  stamped.
+- **A doc comment asserted the opposite of the code.** `restoreStyleExample` said "The approver is
+  re-stamped rather than left as it was"; `decide` writes `approvedByUserId` only when the row has none,
+  and its own comment calls re-stamping the bug that was removed. Verified against the implementation and
+  the comment corrected. My own test comment repeated the false claim and is corrected too — what a
+  restore actually protects is the *retrieval* half.
+
+**Not a finding, recorded so it is not re-litigated:** the `?? ""` id fallbacks are safe. A missed lookup
+yields `""`, which matches no row and returns `GONE` — a resolved promise, so every refusal case fails
+loudly rather than passing for the wrong reason.
+
+### Guard sensitivity at this head
+
+| guard removed | cases failed |
+|---|---|
+| `editKnowledge` | 1 |
+| `archiveKnowledge` | 2 |
+| `restoreKnowledge` / `publishKnowledge` | 1 |
+| `decide` | **7** |
+| `saveStyleProfile` | 2 |
+
+### Verification
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 |
+| unit suites | **2934/2934** |
+| PostgreSQL suites | 41 files, **853/853**, no skips |
+| Redis suites | **55/55** |
+| worker + web E2E | 96 files, **1103/1103** |
+| evals | **20/20**, 0 quality regressions |
+| production build | exit 0 |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0; 1844 passed / 1090 skipped |
+
+The two suites are **54/54** (knowledge) and **50/50** (style).
+
+### A live instance of the same class, upstream — disclosed, not fixed here
+
+Re-bounding the class across every write in `packages/db` — rather than trusting the earlier bound — found
+**`saveStageDisplays` (`lead-store.ts:76`)**: `LeadStageDisplay` has **no `businessProfileId` column**, is
+keyed `@@unique([workspaceId, stage])`, and `readStageDisplays` reads it by `workspaceId` alone, so it is
+the lead board every profile sees. The function takes a `BusinessProfileContext` and then
+`deleteMany({ where: { workspaceId: context.workspaceId } })`, recreating every stage row. No role check at
+any layer: `saveStagesAction` calls only `requireBusinessProfileContext`, and the Leads page renders the
+form with no role conditional. **An AGENT with one profile can rename, reorder and hide the lead stages on
+every other profile's board.** It also never calls `profileScopeOf`, so the branded-context validation
+never runs there.
+
+**Introduced by `3c666dd`, which is #80 / P5-07 — upstream of this branch.** Fixing it here would sit
+downstream of its own origin and leave #80→#93 carrying the hole, so it belongs at #80 as its own
+directive.
+
+**Why the earlier bound missed it:** that bound was built by grepping the idiom
+`{ OR: [{ businessProfileId: null }, { businessProfileId }] }`, which **structurally cannot see a model
+with no `businessProfileId` column**. Enumerate by write and ask "can more than one Business Profile read
+this row?" — a grep for a scope filter answers a narrower question than the one that matters.
+
+Also unguarded and currently unreachable: `recordIndexingResult` (`knowledge-store.ts:608`) can flip a
+shared source to `ARCHIVED` with no role check, and `seedKnowledge` / `seedStyleExample`
+(`retrieval/seed.ts:44`, `:100`) default to Workspace-wide, bypass the guarded writers, and
+`seedStyleExample` writes `ACTIVE` with `approved_by_user_id = context.userId` — minting exactly the
+provenance `decide`'s guard withholds. Both exported from `index.ts`.

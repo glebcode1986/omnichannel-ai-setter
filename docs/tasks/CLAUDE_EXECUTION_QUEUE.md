@@ -23,6 +23,33 @@ numbering.
 
 Nothing is merged to `main`.
 
+### Current work — PR #94, round two: the refusal tests were vacuous, and are not now
+
+The remediation was right in the source and **proved nothing in the tests**, found by adversarially
+re-checking my own work. Every refusal asserted only that `WorkspacePermissionError` was thrown; nothing
+read the row back. `archiveKnowledge` and `saveStyleProfile` are **not transactional**, so a guard moved
+*below* its write throws the same error while the write commits — measured at **52/52 and 50/50 passing**
+with an AGENT actually archiving a shared knowledge source and rewriting the Workspace voice. Both
+mutations now fail.
+
+Also fixed: five bundled assertions in one `it` (the first failure ended the case, so later guards were
+pinned only while earlier ones held — removing all three knowledge guards reported *one* failure); the
+fact that `publishKnowledge` **is** `restoreKnowledge`, so three of those assertions shared one guard;
+controls that used a *second* user while claiming "the same agent"; `approvedByUserId` asserted nowhere
+although provenance is the central argument; and a `restoreStyleExample` doc comment asserting the
+opposite of what `decide` implements.
+
+**The lesson, since it generalises:** guard *sensitivity* — remove the guard, does a test fail — is not the
+same question as "does a refusal change nothing", and only the second is the behaviour. Assert the effect.
+
+**A live instance of the same class, upstream.** `saveStageDisplays` (`lead-store.ts:76`) wipes and
+recreates every `LeadStageDisplay` row in the workspace from a single-profile context with no role check
+at any layer, so an AGENT with one profile can rename, reorder and hide the lead stages on every other
+profile's board. Introduced by `3c666dd` = **#80 / P5-07, upstream of #94** — it belongs at #80 and then
+merged down, as its own directive, not here. The earlier "class bounded" claim missed it because the bound
+grepped the `{ OR: [{ businessProfileId: null }, …] }` idiom, which cannot see a model that has **no**
+`businessProfileId` column.
+
 ### Current work — PR #94 `CHANGES_REQUESTED`, remediated on this branch
 
 **PR #94 / P3-04 received a formal `CHANGES_REQUESTED`** (Gemini/Antigravity review `5563757640`) at exact

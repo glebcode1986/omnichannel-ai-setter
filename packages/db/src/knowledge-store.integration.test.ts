@@ -865,27 +865,72 @@ describe.skipIf(!databaseTestsEnabled())("the Knowledge Library", () => {
       return authorizeBusinessProfileAccess(database.db, { userId: user.id, workspaceId: workspace.workspaceId, businessProfileId: profile.businessProfileId });
     };
 
-    it("refuses an agent editing, archiving or restoring a Workspace-scoped source", async () => {
-      const shared = await createKnowledge(db(), profile.context, { title: "Shared refund wording", chunks: ["Refunds take five working days."], scope: "WORKSPACE" });
-      const id = shared.status === "CREATED" ? shared.documentId : "";
+    /**
+     * Each refusal asserts the **effect**, not only the exception. These functions are not all
+     * transactional — `archiveKnowledge` reads, guards and then writes with no transaction around it — so
+     * a guard that fired *after* its write would throw exactly the same error while the row changed
+     * anyway. Asserting the thrown error alone, the whole suite stays green through that: measured, 52/52
+     * passed with the archive guard moved below its `updateMany`, and the shared source committed as
+     * ARCHIVED. The row read-back is what makes "refused" mean refused.
+     *
+     * One act per case, too. Bundled in one `it`, the first failing expectation ends the case and the
+     * later acts never run, so they are pinned only while the earlier guard holds.
+     */
+    const sharedSource = async (marker: string) => {
+      const created = await createKnowledge(db(), profile.context, { title: marker, chunks: [`${marker} is the shared wording.`], scope: "WORKSPACE" });
+      const id = created.status === "CREATED" ? created.documentId : "";
+      const before = await database.db.knowledgeDocument.findFirstOrThrow({ where: { id }, select: { status: true, version: true, publishedVersion: true, title: true } });
+      return { id, before };
+    };
+
+    const unchanged = async (id: string, before: { status: string; version: number; publishedVersion: number | null; title: string }) => {
+      const after = await database.db.knowledgeDocument.findFirstOrThrow({ where: { id }, select: { status: true, version: true, publishedVersion: true, title: true } });
+      expect(after).toEqual(before);
+    };
+
+    it("refuses an agent editing a Workspace-scoped source, and the wording does not move", async () => {
+      const { id, before } = await sharedSource("Shared refund wording");
       const agent = await agentContext("Knowledge Agent", "AGENT");
 
       await expect(editKnowledge(db(), agent, id, { chunks: ["Refunds take fifty days."] })).rejects.toBeInstanceOf(WorkspacePermissionError);
-      await expect(archiveKnowledge(db(), agent, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
-      await expect(restoreKnowledge(db(), agent, id, {})).rejects.toBeInstanceOf(WorkspacePermissionError);
-      // `publishKnowledge` is the same function under the other button. Both acts are named here because
-      // the guard has to sit above the act check: a refusal that depended on `act` would leave whichever
-      // screen omitted it unguarded.
-      await expect(publishKnowledge(db(), agent, id, { act: "PUBLISH" })).rejects.toBeInstanceOf(WorkspacePermissionError);
-      await expect(restoreKnowledge(db(), agent, id, { act: "RESTORE" })).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await unchanged(id, before);
     });
 
-    it("still lets that agent change their own profile's source, which is theirs to change", async () => {
-      // The control. The guard is about the Workspace layer, not about agents — narrowing it to both would
-      // have taken the library away from the people who maintain it.
+    it("refuses an agent archiving a Workspace-scoped source, and it stays in retrieval", async () => {
+      const { id, before } = await sharedSource("Shared cancellation wording");
+      const agent = await agentContext("Knowledge Archive Agent", "AGENT");
+
+      await expect(archiveKnowledge(db(), agent, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+      // The act this one protects: an archive would take the source out of *every* profile's retrieval.
+      await unchanged(id, before);
+    });
+
+    it("refuses an agent publishing a Workspace-scoped source, under either button", async () => {
+      const { id, before } = await sharedSource("Shared delivery promise");
+      const agent = await agentContext("Knowledge Publish Agent", "AGENT");
+
+      // `publishKnowledge` and `restoreKnowledge` are the *same function* — `export const publishKnowledge
+      // = restoreKnowledge` — so these three calls share one guard and differ only in `act`. That is the
+      // point worth pinning: the guard sits above the act check, so neither button, nor a caller that
+      // omits `act` entirely, gets through.
+      await expect(publishKnowledge(db(), agent, id, { act: "PUBLISH" })).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await expect(restoreKnowledge(db(), agent, id, { act: "RESTORE" })).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await expect(restoreKnowledge(db(), agent, id, {})).rejects.toBeInstanceOf(WorkspacePermissionError);
+      await unchanged(id, before);
+    });
+
+    it("still lets the same agent change their own profile's source, which is theirs to change", async () => {
+      // The control, and deliberately **the same principal** that was refused above rather than another
+      // member with the same role: that is what makes "this agent may not touch the shared layer, and may
+      // still run their own" a statement about one person. The guard is about the Workspace layer, not
+      // about agents — narrowing it to both would have taken the library away from the people who
+      // maintain it.
       const own = await createKnowledge(db(), profile.context, { title: "This profile's hours", chunks: ["We open at nine."] });
       const id = own.status === "CREATED" ? own.documentId : "";
-      const agent = await agentContext("Knowledge Agent Two", "AGENT");
+      const agent = await agentContext("Knowledge Own Agent", "AGENT");
+      const sharedId = (await sharedSource("Shared hours wording")).id;
+
+      await expect(archiveKnowledge(db(), agent, sharedId)).rejects.toBeInstanceOf(WorkspacePermissionError);
 
       expect((await editKnowledge(db(), agent, id, { chunks: ["We open at ten."] })).status).toBe("VERSIONED");
       expect((await archiveKnowledge(db(), agent, id)).status).toBe("ARCHIVED");
