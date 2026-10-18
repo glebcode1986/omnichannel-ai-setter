@@ -429,6 +429,8 @@ enum ChannelEventType {
 enum AiDraftTrigger {
   AUTOMATIC
   HUMAN_REQUEST
+  /// A scheduled follow-up attempt asked for this draft (#55). Neither a reply nor a person's request.
+  FOLLOW_UP
 }
 
 enum AiDraftStatus {
@@ -1646,6 +1648,9 @@ model AutomationPolicy {
   instagramAfterWindowPolicy          InstagramAfterWindowPolicy @default(STANDARD_ONLY) @map("instagram_after_window_policy")
   whatsappAfterWindowPolicy           WhatsAppAfterWindowPolicy  @default(SERVICE_WINDOW_ONLY) @map("whatsapp_after_window_policy")
   whatsappTemplateAutomationAllowlist String[]                   @default([]) @map("whatsapp_template_automation_allowlist")
+  /// Incremented by every write. A save carries the version its form was rendered from, so a change made
+  /// against settings that have since moved is refused instead of silently reverting the other change.
+  version                             Int                        @default(1)
   createdAt                           DateTime                   @default(now()) @map("created_at")
   updatedAt                           DateTime                   @updatedAt @map("updated_at")
 
@@ -1679,7 +1684,7 @@ model PolicyChangeAudit {
   businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict, map: "policy_change_audits_business_profile_fkey")
   actor           User            @relation(fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "policy_change_audits_actor_fkey")
 
-  @@index([workspaceId, businessProfileId, changedAt(sort: Desc)], map: "policy_change_audits_history_idx")
+  @@index([workspaceId, businessProfileId, changedAt(sort: Desc), id(sort: Desc)], map: "policy_change_audits_history_idx")
   @@map("policy_change_audits")
 }
 
