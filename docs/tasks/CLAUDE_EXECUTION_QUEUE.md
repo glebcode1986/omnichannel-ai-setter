@@ -23,7 +23,128 @@ numbering.
 
 Nothing is merged to `main`.
 
-### Current work — the accepted #92, propagated into #93 and nowhere else
+### Current work — the accepted #93, propagated into #94 and nowhere else
+
+**PR #93 / P4-07 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-18T12:59:07Z, commit `f3243dea3674d28242a812c8feb49013282d5cdf`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=f3243dea3674d28242a812c8feb49013282d5cdf` (review `5563083113`). **Phase 4 is
+complete**: #87 through #93 each carry their own exact-head verdict.
+
+**Routing unchanged.** **#94 / P3-04 is now the sole gate; #95 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `e439f39ab2a402707978f5c9cd58bbf16c9ff1e1`: the accepted #93
+segment ran 38 commits ahead of it, #94's own authored segment 10 — genuinely `diverged`, 10 ahead / 38
+behind. Ordinary non-rebase merge at `449696ba9271cab97c76c0cda261b0e8d25db363`; `--is-ancestor` succeeds
+for the accepted #93 head and the prior #94 head `4bdc0daf8ebea00e03280d150e7e38305abed549` alike.
+
+#### The worker lifecycle: two conflicts, and a third place that conflicted with nothing
+
+Both conflicts were measured in advance from the #93 gate with `git merge-tree`, and reported before this
+directive existed. The directive's step 3 states the required outcome — seven loop entries, seven close
+calls, prose saying "seven" — and that is what the merge produced, but only the first two were conflicts.
+
+**`apps/worker/src/main.ts`** conflicted on the `loops` array alone: #94 had added `"retention"` to a list
+that did not yet contain `"follow_ups"`, and the accepted #93 head had `"follow_ups"` in a reformatted
+multi-line list. Resolved as the union, seven entries, with #93's explanatory comment widened to cover both
+unconditional sweepers.
+
+**The close block conflicted with nothing, and that is where the defect was.** Git merged both additions
+cleanly, so the shutdown list correctly gained `retention.close()` alongside `followUpSweeper.close()` —
+seven calls — while the comment above it still read **"six independent closes"**. #94's own diff had bumped
+that word from "five" to "six" because its base lacked the follow-up sweeper, and the accepted side also
+said "six", so git had no reason to stop. Nothing typechecks a number in a comment and no test reads one.
+Corrected to "seven", and the three counts are now checked against each other rather than asserted: seven
+`close()` calls, seven loop entries, the word "seven".
+
+**`apps/worker/src/main.test.ts`** conflicted on the whole-list assertion, resolved to the seven-entry list
+in the order `main.ts` reports them.
+
+**And its sibling case needed a change that was not a conflict either.** The case that boots without the
+credential key asserts `not.toContain("instagram_tokens")` and then `toContain("follow_ups")`, with a
+comment calling that "the unconditional loop" — singular, and true when `follow_ups` was the only one.
+`retention` is unconditional too, so it is now asserted there as well: a loop checked only in the
+fully-configured case above is a loop this case would not notice losing.
+
+#### Step 4 — deletion and export reachability, re-measured and resolved
+
+Re-measured on the merged head, with bare re-exports and migration comments excluded as the directive
+requires. **`requestDeletion`, `requestProfileDeletion`, `executeDeletion`, `listDeletionRequests` and
+`exportContact` have no real caller.** The single remaining hit is `executeDeletion` named in a migration
+comment. The branch's own retention sweeper calls only `deleteExpiredConnectStates`, and no file under
+`apps/web` references any of the five.
+
+**Reconciled against the live issue, the intended scope is store-only**, and the evidence is on the record
+rather than inferred:
+
+- **Issue #57 is titled "Implement security/privacy, export, retention and deletion *foundations*".**
+- Its *Required behavior* enumerates capabilities, authorization rules and durable workflow states —
+  `REQUESTED -> PROCESSING -> COMPLETED | PARTIAL_FAILURE` — and never a screen, a route or an operator
+  action in a UI.
+- Its *Tests* section lists cross-BP authorization attacks, member revocation, export permission, redaction,
+  the deletion workflow, partial external-system failure and memory/search cleanup. No interface test.
+- Its *Acceptance criteria* are that "MVP deletion/export **flows** are durable and auditable; unauthorized
+  data is non-discoverable; derived data is not left available for future AI/search after successful
+  deletion" — every one of which the store layer and its suites satisfy.
+- Two of the four specs Issue #57 names, `MVP_RELEASE_SCOPE.md` and `TEAM_ROLES_UX.md`, **do not exist
+  anywhere under `docs/`** — and those are precisely the documents that would define an operator surface and
+  the role UX for one.
+- `PRIVACY_RETENTION_DELETION.md` describes *who may* perform these actions ("Admin or owner only"), which
+  is the authorization model the store enforces, and it demonstrably knows how to record a missing surface
+  when it means one: it says of a different flag that "there is no notification surface in this product …
+  The flag belongs with the first surface that would honour it." It says nothing of the kind about deletion
+  or export.
+
+So the capability is complete and correct at the layer this task owns, and nothing about that is left
+ambiguous. What was ambiguous — and is the reason this section exists — is **who owns the surface**.
+
+#### The owning follow-up task, named rather than implied
+
+**It is not P7-01.** Issue #59 builds a *platform operator* console and states the separation itself: "Keep
+internal SUPPORT / BILLING / OPERATIONS / PLATFORM_ADMIN permissions separate from customer OWNER / ADMIN /
+AGENT roles." Deletion and export are **customer** admin-or-owner actions per the privacy spec, so putting
+them in the platform console would violate that issue's own role boundary. Its MVP surface list does not
+include them, and neither the P7-01 nor the P7-02 branch references any of the five functions.
+
+The customer-facing UI line is Phase 5, which runs P5-01 through P5-10 and is complete without a privacy
+screen. **So no existing task owns this, and the next free customer-facing designation is P5-11.**
+
+**Proposed task — P5-11, "Customer-facing privacy surface: deletion requests and contact export".** Scope:
+an OWNER/ADMIN-only screen under workspace settings that creates a deletion request at one of the four
+specified scopes, lists requests with their durable state, and exports a contact's data; every action
+tenant-scoped through the existing authorization context and written to the customer audit; no new store
+capability, because all four functions and `exportContact` already exist, are tested, and are exported.
+Acceptance: an AGENT cannot reach it, a deletion request appears with its scope and state, a `PARTIAL_FAILURE`
+is shown as terminal rather than retryable, and an export is audited and carries no secret.
+
+**Creating the GitHub issue is the owner's action, not mine** — this entry is the record the directive asks
+for, and the designation should be confirmed when that issue is opened.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, focused
+packages run separately with their own labels, `db:generate` before typecheck. Per the directive, any
+unexplained skip is treated as a failure — with the service variables present, nothing skipped.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 585 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **166 passed** (9 files) |
+| `apps/worker` lifecycle `main.test.ts` | **10 passed** (1 file) |
+| `pnpm test:db` | **833 passed** (41 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1103 passed** (96 files), no skips |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1070 skipped |
+
+**Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass. The new
+`startRetentionSweeper` has no dedicated test file — its startup is covered through the worker lifecycle
+case that now asserts the `retention` loop — which matches `backlog-guard` and `reconciliation-sweeper`
+while the follow-up, outbox and Instagram-token sweepers each have one.
+
+### Superseded — the accepted #92, propagated into #93 and nowhere else
 
 **PR #92 / P4-06 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T17:21:42Z, commit `fddf0a2f0154135fce7c3d62cbc91c67e0651fe0`, carrying

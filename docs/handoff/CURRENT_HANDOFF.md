@@ -2281,3 +2281,96 @@ Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, 
 that is the one place a skip count is expected, and it is 59 files rather than 58 because this head adds the
 slice suite to them. With the services present nothing skips at all. Local runs are macOS; the authoritative
 Linux evidence is the exact-head GitHub Actions run.
+
+## PR #93 accepted, and joined to #94 / P3-04 — 2026-10-18
+
+**#93 is accepted at `f3243dea3674d28242a812c8feb49013282d5cdf`** — Gemini/Antigravity formal GitHub review
+`5563083113`, `APPROVED`, 2026-10-18T12:59:07Z. **Phase 4 is complete**: #87 through #93 each carry their own
+exact-head verdict.
+
+**Routing unchanged.** **#94 / P3-04 is the sole gate; #95 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `e439f39ab2a402707978f5c9cd58bbf16c9ff1e1` — the accepted #93 segment
+38 commits ahead of it, #94's authored segment 10 — so #94 against accepted #93 was genuinely `diverged`, 10
+ahead / 38 behind. Ordinary non-rebase merge at `449696ba9271cab97c76c0cda261b0e8d25db363`; no rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+### The worker lifecycle, and the count that merged cleanly while being wrong
+
+Both conflicts were measured from the #93 gate before this directive existed, with `git merge-tree` and no
+checkout, and reported there. The directive then stated the required outcome — seven loop entries, seven
+close calls, prose saying "seven" — which is what this merge produced. The useful part is that **only two of
+the three places were conflicts**.
+
+`main.ts` conflicted on the `loops` array: #94 had added `"retention"` to a list that did not yet contain
+`"follow_ups"`, while the accepted head had `"follow_ups"` in a reformatted multi-line list. Resolved as the
+union, with #93's comment widened to cover both unconditional sweepers.
+
+**The shutdown block conflicted with nothing.** Git merged both additions cleanly, so the list correctly
+gained `retention.close()` beside `followUpSweeper.close()` — seven calls — while the comment above still
+read "six independent closes". #94's diff had bumped that word from "five" to "six" because its base lacked
+the follow-up sweeper, and the accepted side also said "six", so there was nothing for git to stop on.
+Nothing typechecks a number in a comment and no test reads one. It now says "seven", and the three counts
+are compared against each other rather than trusted.
+
+`main.test.ts` conflicted on the whole-list assertion and was resolved to the seven-entry list in the order
+`main.ts` reports. **Its sibling case also needed a change that was not a conflict:** the boot-without-key
+case asserts `not.toContain("instagram_tokens")` then `toContain("follow_ups")`, calling that "the
+unconditional loop" — singular, and correct when `follow_ups` was the only one. `retention` is unconditional
+too, so it is asserted there now; a loop checked only in the fully-configured case is a loop that case would
+not notice losing.
+
+### Deletion and export are reachable from nothing, and that is now owned rather than open
+
+Re-measured on the merged head with bare re-exports and migration comments excluded:
+`requestDeletion`, `requestProfileDeletion`, `executeDeletion`, `listDeletionRequests` and `exportContact`
+have **no real caller**. The retention sweeper this branch adds calls only `deleteExpiredConnectStates`, and
+nothing under `apps/web` references any of the five.
+
+**Reconciled against Issue #57, store-only is the intended scope of P3-04**, and the evidence is recorded in
+`docs/tasks/CLAUDE_EXECUTION_QUEUE.md` rather than summarised here: the issue is titled "…deletion
+*foundations*", its required behaviour and tests describe capabilities and workflow states rather than any
+interface, its acceptance criteria are satisfied by the store layer, two of the four specs it names
+(`MVP_RELEASE_SCOPE.md`, `TEAM_ROLES_UX.md`) do not exist in the repository at all, and the privacy spec
+describes *who may* act while demonstrably knowing how to flag an absent surface when it means one.
+
+**What was genuinely ambiguous was ownership of the surface, and it now has a name.** It is not P7-01: Issue
+#59 builds a platform operator console and states the boundary itself — internal SUPPORT / BILLING /
+OPERATIONS / PLATFORM_ADMIN roles kept "separate from customer OWNER / ADMIN / AGENT roles" — while deletion
+and export are customer admin-or-owner actions, so placing them there would breach that issue's own role
+separation. Its MVP surface list excludes them, and neither P7 branch references any of the five functions.
+Phase 5 runs P5-01 to P5-10 and completes without a privacy screen, so **P5-11** is proposed and specified in
+the queue document. Opening that issue is the owner's action; the specification is the record this directive
+asked for.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; focused packages run
+separately with their own labels; `db:generate` before typecheck. **Any unexplained skip treated as a
+failure**, per the directive.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **585** source files, 0 cycles |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/application` | 14 files, **294/294** |
+| `@omnichannel/channel-whatsapp` | 9 files, **166/166** |
+| `apps/worker` lifecycle (`main.test.ts`) | 1 file, **10/10** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 41 files, **833/833**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 96 files, **1103/1103**, **no skips** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1070 skipped |
+
+**Disclosed limitations.** No retries, no reruns, no flakes, and nothing skipped to make a gate pass. **With
+the service variables present nothing skipped at all**, which is the condition the directive set. The 1070
+skips in the no-infrastructure run are the PostgreSQL and Redis suites declining to start without
+`TEST_DATABASE_URL` / `TEST_REDIS_URL` — the behaviour CI relies on — and the file count is 61 rather than
+58 because this head adds the deletion and privacy suites to them. One honest note on the branch's own code:
+the new `startRetentionSweeper` has no dedicated test file, and its startup is covered only through the
+worker lifecycle case that now asserts the loop. That matches `backlog-guard` and `reconciliation-sweeper`,
+which have none either, while the follow-up, outbox and Instagram-token sweepers do — a mixed pattern in the
+repository rather than something this merge introduced. Local runs are macOS; the authoritative Linux
+evidence is the exact-head GitHub Actions run.
