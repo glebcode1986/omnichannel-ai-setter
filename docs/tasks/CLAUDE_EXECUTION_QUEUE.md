@@ -119,6 +119,49 @@ is shown as terminal rather than retryable, and an export is audited and carries
 **Creating the GitHub issue is the owner's action, not mine** — this entry is the record the directive asks
 for, and the designation should be confirmed when that issue is opened.
 
+#### A missing authorization check on a cross-profile write, found and fixed in this cycle
+
+Checking that the merge preserved the tenancy invariants step 2 names, rather than assuming a clean merge
+had, turned up something this propagation did not introduce and should not have carried forward silently.
+
+#94 adds `requireWorkspaceWideWrite` to `tenancy.ts`, and its doc comment states the rule exactly: a write
+every Business Profile reads needs an admin or owner **and** `ALL` scope, because "somebody granted two
+profiles out of five has not been given the authority to change what the other three read." **It is called
+from nowhere**, and is not re-exported from the package index.
+
+Tracing where that rule is actually applied found three workspace-scoped writes and one of them
+unprotected:
+
+| write | role checked | `ALL` scope checked |
+|---|---|---|
+| `createKnowledge` with `scope: "WORKSPACE"` | yes | no — delegated in a comment to "the caller that holds a Workspace context" |
+| `createStyleExample` with `scope: "WORKSPACE"` | yes | no — same delegation |
+| **`saveStyleProfile` with `scopeLevel: "WORKSPACE"`** | **no** | no |
+
+`saveStyleProfile` writes the base voice every Business Profile inherits. It authorized only that the caller
+may act on *that* profile and then wrote the row with `businessProfileId = null`, with no role check at all —
+so **a member granted a single profile, including an `AGENT`, could rewrite the voice every profile replies
+in**, from that profile's Style page. No test covered it. This is not the deliberate delegation its siblings
+document: they enforce the role half and delegate only the scope half, and
+`PRIVACY_RETENTION_DELETION.md` assigns "writing a Workspace-scoped knowledge source or style example" to an
+admin or owner.
+
+**Fixed here, mirroring the sibling twenty lines below it** — the same
+`requireRole(context, WORKSPACE_ADMIN_ROLES, …)` for the `WORKSPACE` case. Judged to be inside step 5's
+carve-out rather than new scope, because Issue #57's first required behaviour is that "authorization is
+Workspace + role + BP-scope + action specific", and a workspace-wide write with no role check does not meet
+it. Three cases pin it: an `AGENT` is refused, the **same agent still writes their own profile's layer**
+(the control — the guard is about the workspace layer, not about agents), and an `ADMIN` is allowed.
+Removing the guard fails the agent case alone.
+
+**Not fixed, and proposed instead:** the `ALL`-scope half. Wiring `requireWorkspaceWideWrite` means the three
+web actions obtaining a `WorkspaceContext` — `requireWorkspaceContext` already exists for that — and it
+reaches into a layer this propagation never touched, so it is a scope call rather than mine. The gap it
+leaves open: `addWorkspaceMember`'s own comment confirms "an ADMIN with SELECTED scope" is a supported
+state, and such an admin can today create a Workspace-scoped knowledge source or style example that
+profiles they were never granted will read. Recommended as the first item of whatever cycle follows, or as
+an amendment to this one on a word.
+
 **Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, focused
 packages run separately with their own labels, `db:generate` before typecheck. Per the directive, any
 unexplained skip is treated as a failure — with the service variables present, nothing skipped.
@@ -132,12 +175,12 @@ unexplained skip is treated as a failure — with the service variables present,
 | `@omnichannel/application` | **294 passed** (14 files) |
 | `@omnichannel/channel-whatsapp` | **166 passed** (9 files) |
 | `apps/worker` lifecycle `main.test.ts` | **10 passed** (1 file) |
-| `pnpm test:db` | **833 passed** (41 files), 0 failures, 0 skips |
+| `pnpm test:db` | **836 passed** (41 files), 0 failures, 0 skips |
 | `pnpm test:redis` | **55 passed** (3 files) |
 | `pnpm test:e2e` (worker + web) | **1103 passed** (96 files), no skips |
 | `pnpm evals` | **20/20**, 0 quality regressions |
 | `pnpm build` | exit 0 |
-| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1070 skipped |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1073 skipped |
 
 **Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass. The new
 `startRetentionSweeper` has no dedicated test file — its startup is covered through the worker lifecycle

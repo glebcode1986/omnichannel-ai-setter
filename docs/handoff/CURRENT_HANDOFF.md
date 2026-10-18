@@ -2343,6 +2343,27 @@ Phase 5 runs P5-01 to P5-10 and completes without a privacy screen, so **P5-11**
 the queue document. Opening that issue is the owner's action; the specification is the record this directive
 asked for.
 
+### A missing authorization check on a cross-profile write, found and fixed in this cycle
+
+Checking that the merge preserved the tenancy invariants rather than assuming it had: #94 adds
+`requireWorkspaceWideWrite` to `tenancy.ts` and calls it from nowhere. Tracing where its rule is actually
+applied found three workspace-scoped writes, and `saveStyleProfile` — the base voice every Business Profile
+inherits — had **no role check at all**, so a member granted a single profile, including an `AGENT`, could
+rewrite the voice every profile replies in. Its siblings `createKnowledge` and `createStyleExample` do
+enforce the role half, and the privacy spec assigns these acts to an admin or owner, so this was an omission
+rather than a delegation. Untested.
+
+Fixed by mirroring the sibling: `requireRole(context, WORKSPACE_ADMIN_ROLES, …)` for the `WORKSPACE` case,
+with three cases pinning it — an `AGENT` refused, the same agent still writing their own profile's layer as
+the control, an `ADMIN` allowed — and the guard's removal failing the agent case alone. Judged inside step
+5's carve-out because Issue #57's first required behaviour is that authorization be "Workspace + role +
+BP-scope + action specific".
+
+The `ALL`-scope half is **proposed, not done**: wiring `requireWorkspaceWideWrite` needs three web actions to
+obtain a `WorkspaceContext`, which reaches into a layer this propagation never touched. The gap it leaves:
+an ADMIN with `SELECTED` scope — a state `addWorkspaceMember`'s own comment confirms is supported — can
+create Workspace-scoped knowledge or style examples that profiles they were never granted will read.
+
 ### Verification of this head
 
 Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; focused packages run
@@ -2357,12 +2378,12 @@ failure**, per the directive.
 | `@omnichannel/application` | 14 files, **294/294** |
 | `@omnichannel/channel-whatsapp` | 9 files, **166/166** |
 | `apps/worker` lifecycle (`main.test.ts`) | 1 file, **10/10** |
-| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 41 files, **833/833**, no skips |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 41 files, **836/836**, no skips |
 | Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
 | worker + web E2E | 96 files, **1103/1103**, **no skips** |
 | evals | **20/20, 0 failed, 0 quality regressions** |
 | production build | exit 0 |
-| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1070 skipped |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1073 skipped |
 
 **Disclosed limitations.** No retries, no reruns, no flakes, and nothing skipped to make a gate pass. **With
 the service variables present nothing skipped at all**, which is the condition the directive set. The 1070

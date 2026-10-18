@@ -158,6 +158,14 @@ export async function saveStyleProfile(
   expected?: { readonly updatedAt?: Date },
 ): Promise<StyleWriteOutcome> {
   const scope = profileScopeOf(context);
+  if (scopeLevel === "WORKSPACE") {
+    // The base voice every Business Profile inherits, so writing it from one profile's screen is a
+    // cross-profile write — the same act `createStyleExample` guards twenty lines below and the privacy
+    // spec assigns to an admin or owner. It was the one workspace-scoped write in this file with no role
+    // check at all, which let a member granted a single profile rewrite the voice all of them reply in.
+    // Role only here, like its sibling: a profile context carries no Business Profile scope (#57).
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "writing the Workspace-wide voice");
+  }
   const businessProfileId = scopeLevel === "WORKSPACE" ? null : scope.businessProfileId;
   const data = {
     persona: blankToNull(draft.persona),

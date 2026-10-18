@@ -13,6 +13,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { WorkspacePermissionError } from "./errors";
+import { addWorkspaceMember } from "./repositories/workspaces";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 import {
   approveStyleExample,
   archiveStyleExample,
@@ -694,6 +697,49 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(asFact.hits.some((hit) => hit.text.includes("fully refundable"))).toBe(false);
     }, 180_000);
   });
+
+  describe("who may write the voice every profile inherits", () => {
+    /**
+     * The Workspace layer is read by every Business Profile, so writing it from one profile's screen is a
+     * cross-profile act — the same one `createStyleExample` guards for a workspace-scoped example, and the
+     * one the privacy spec assigns to an admin or owner. `saveStyleProfile` was the single workspace-scoped
+     * write in this file with no role check at all, so a member granted one profile could rewrite the voice
+     * all of them reply in. These cases exist because nothing failed when that check was absent.
+     */
+    const contextFor = async (name: string, role: "AGENT" | "ADMIN") => {
+      const user = await database.db.user.create({ data: { name, email: `${name.replace(/\W/gu, "-").toLowerCase()}@example.test` } });
+      const owner = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: workspace.workspaceId });
+      await addWorkspaceMember(database.db, owner, { userId: user.id, role, businessProfileScope: "ALL" });
+      return authorizeBusinessProfileAccess(database.db, {
+        userId: user.id,
+        workspaceId: workspace.workspaceId,
+        businessProfileId: profile.businessProfileId,
+      });
+    };
+
+    const voice = { persona: "Rewritten", tone: null, replyLength: null, emoji: null, greeting: null, signOff: null, preferredPhrases: [], avoidedPhrases: [], language: null };
+
+    it("refuses an agent, who may answer in this profile but not change what every profile sounds like", async () => {
+      const agent = await contextFor("Style Agent", "AGENT");
+
+      await expect(saveStyleProfile(database.db, agent, "WORKSPACE", voice)).rejects.toBeInstanceOf(WorkspacePermissionError);
+    });
+
+    it("still lets that agent write their own profile's layer, which is theirs to write", async () => {
+      // The control: the guard is about the workspace layer, not about agents, and narrowing it to both
+      // would have taken the profile voice away from the people who use it.
+      const agent = await contextFor("Style Agent Two", "AGENT");
+
+      expect((await saveStyleProfile(database.db, agent, "BUSINESS_PROFILE", voice)).status).toBe("SAVED");
+    });
+
+    it("allows an admin, because the privacy spec gives them this act", async () => {
+      const admin = await contextFor("Style Admin", "ADMIN");
+
+      expect((await saveStyleProfile(database.db, admin, "WORKSPACE", voice)).status).toBe("SAVED");
+    });
+  });
+
 });
 
 function blank() {
