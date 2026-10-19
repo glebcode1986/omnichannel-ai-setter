@@ -1391,3 +1391,81 @@ each was checked rather than assumed:
 **No retries and no failures on this link** — the first time that has been true. `--maxWorkers=2` remains
 deliberate and disclosed, and the 50 skipped files are the PostgreSQL and Redis suites declining to run
 without their service variables, counted in full in the rows above.
+
+## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
+
+**Found while bounding a different authorization class on PR #94 (P3-04), and traced back to this branch
+as its origin (`3c666dd`).** The owner directed the fix here rather than downstream, so this head moves and
+the `ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` no longer covers it: #80 needs
+a fresh verdict, and the chain below it needs this merged down one link at a time.
+
+### What was wrong
+
+`lead_stage_displays` has **no `business_profile_id` column**. It is keyed `(workspace_id, stage)`, and
+`readStageDisplays` reads it by Workspace alone, so the labels, order and hidden flags are the board
+**every** Business Profile in the Workspace sees. `saveStageDisplays` took a `BusinessProfileContext`, then
+inside one transaction deleted every row for `context.workspaceId` and recreated them from the submitted
+form — with no role check at any layer. `saveStagesAction` called only `requireBusinessProfileContext`, and
+the Leads page rendered the `StageConfig` form unconditionally.
+
+**So an AGENT granted a single Business Profile could rename, reorder and hide the lead stages on every
+other profile's board**, and hiding a stage takes those leads off everyone's board view.
+
+A second defect in the same function: it reached for `context.workspaceId` directly and never called
+`profileScopeOf`, so the branded-context validation in `tenancy.ts` — the check that a context was issued
+by `authorizeBusinessProfileAccess` rather than assembled as a plain object — never ran on that path. It
+and `readStageDisplays` were the only two functions in `lead-store.ts` that skipped it; the other six call
+it.
+
+### The fix
+
+- `saveStageDisplays` requires `WORKSPACE_ADMIN_ROLES`, **before the input validation**: whether a member
+  may reconfigure the shared board does not depend on whether their form was well formed, and an
+  unauthorized post should not be able to probe the validation rules. That ordering matches
+  `createStyleExample`, which guards before it validates.
+- Both `saveStageDisplays` and `readStageDisplays` now call `profileScopeOf(context)` and use
+  `scope.workspaceId`. The read keeps no role check — every role sees the board.
+- `leads/page.tsx` computes `canConfigure = WORKSPACE_ADMIN_ROLES.includes(context.role)` and renders
+  `StageConfig` only for an admin or owner, the same gate the channels and setup screens use. The store
+  refuses it either way; hiding the form is so an agent is answered by the page rather than by an error
+  boundary — the doctrine `settings-actions.ts` states.
+
+### Tests, and why they read the rows back
+
+Four cases: an AGENT refused with the `lead_stage_displays` rows asserted **unchanged**; an AGENT posting
+*invalid* input still refused with the permission error rather than a validation message; the **same**
+AGENT still moving a lead and still reading the board; an ADMIN succeeding with the configuration asserted
+to have really landed.
+
+The control is a different shape from the knowledge and style ones on #94: `LeadStageDisplay` has no
+profile column, so there is **no profile-scoped variant** to fall back on. What must still work is the
+ordinary pipeline, which is what the third case asserts.
+
+The rows are read back rather than the exception being trusted, which is the lesson from #94's own round
+two — there, refusal tests that asserted only the thrown error passed 52/52 and 50/50 while the write
+committed. Measured here, each mutation applied alone:
+
+| mutation | result |
+|---|---|
+| guard deleted | **3 failed** |
+| guard moved after the transaction commits | **2 failed**, including "the board every profile reads does not move" |
+| guard moved after the input validation | **1 failed**, the probe case |
+
+### Verification
+
+Real PostgreSQL 17 + pgvector and Redis 7; `--maxWorkers=2`; dedicated shadow database for the drift check.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 — 13 packages, 452 source files, no cycles |
+| unit suites | 138 files, **2039/2039** |
+| PostgreSQL suites | 27 files, **492/492**, no skips |
+| Redis suites | **51/51** |
+| worker + web E2E | **832/832** |
+| evals | **20/20**, 0 quality regressions |
+| production build | exit 0 |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0; **1424 passed / 615 skipped** |
+
+These line up with the numbers the accepted review recorded for `bd1c039` — 488 PostgreSQL cases and
+1424/611 — plus exactly the four cases this change adds, which skip without infrastructure.
