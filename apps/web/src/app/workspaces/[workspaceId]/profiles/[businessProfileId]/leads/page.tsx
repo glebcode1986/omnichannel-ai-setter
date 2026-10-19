@@ -5,7 +5,7 @@
  * and why the stage a person confirms is the conversation's own. The assistant's suggestion lives beside
  * it and never replaces it.
  */
-import { listAssignableMembers, listLeads, readQualification, readStageDisplays, readStageHistory, type LeadFilter } from "@omnichannel/db";
+import { listAssignableMembers, listLeads, readQualification, readStageDisplays, readStageHistory, WORKSPACE_ADMIN_ROLES, type LeadFilter } from "@omnichannel/db";
 import { isLeadStage } from "@omnichannel/domain";
 
 import { LeadBoard } from "@/ui/leads/lead-board";
@@ -35,6 +35,7 @@ export default async function LeadsPage({
   const t = await requestTranslator();
   const query = await searchParams;
   const target = { workspaceId, businessProfileId };
+  const canConfigure = WORKSPACE_ADMIN_ROLES.includes(context.role);
   const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}`;
   const leadsPath = `${basePath}/leads`;
 
@@ -95,7 +96,14 @@ export default async function LeadsPage({
         </button>
       </form>
 
-      <StageConfig t={t} stages={stages} target={target} action={saveStagesAction} />
+      {/*
+        The stage configuration is the board every Business Profile in the Workspace sees, so it is an
+        admin or owner act — the same gate the channels and setup screens apply. The store refuses it
+        either way; hiding the form is so an agent is told by the page rather than by an error, which is
+        the doctrine `settings-actions.ts` states: the screen hides the form, so reaching the action means
+        a direct post, answered rather than crashed.
+      */}
+      {canConfigure ? <StageConfig t={t} stages={stages} target={target} action={saveStagesAction} /> : undefined}
 
       <LeadBoard
         t={t}
