@@ -17,7 +17,7 @@
 import { LEAD_STAGES, type LeadStage } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 export type LeadValueSource = "AI_SUGGESTED" | "HUMAN_CONFIRMED" | "HUMAN_SET";
 
@@ -49,8 +49,12 @@ const DEFAULT_LABELS: Readonly<Record<LeadStage, string>> = {
  * has renamed.
  */
 export async function readStageDisplays(db: DbExecutor, context: BusinessProfileContext): Promise<readonly StageDisplay[]> {
+  // Every role reads the board, so there is no role check here — but the scope call still has to happen:
+  // it is what proves this context was issued by `authorizeBusinessProfileAccess` rather than assembled
+  // as a plain object, and reaching for `context.workspaceId` directly skips that proof.
+  const scope = profileScopeOf(context);
   const rows = await db.leadStageDisplay.findMany({
-    where: { workspaceId: context.workspaceId },
+    where: { workspaceId: scope.workspaceId },
     select: { stage: true, label: true, position: true, hidden: true },
   });
   const configured = new Map(rows.map((row) => [row.stage, row]));
@@ -78,6 +82,18 @@ export async function saveStageDisplays(
   context: BusinessProfileContext,
   displays: readonly { readonly stage: LeadStage; readonly label: string; readonly position: number; readonly hidden: boolean }[],
 ): Promise<StageConfigOutcome> {
+  // `lead_stage_displays` has no `business_profile_id` column: it is keyed `(workspace_id, stage)` and
+  // `readStageDisplays` above reads it by Workspace alone, so these labels, positions and hidden flags are
+  // the board *every* Business Profile sees. Saving them from one profile's screen is therefore a
+  // cross-profile write, the same act `createKnowledge` and `createStyleExample` reserve for an admin or
+  // owner — and this function held only `profileScopeOf`-level authority over a single profile while
+  // replacing the configuration all of them read. Hiding a stage takes those leads off everyone's board.
+  //
+  // Before the input checks, deliberately: whether this member may reconfigure the shared board does not
+  // depend on whether the form they posted was well formed, and an unauthorized caller should not be able
+  // to probe the validation rules.
+  requireRole(context, WORKSPACE_ADMIN_ROLES, "renaming the shared lead stages");
+  const scope = profileScopeOf(context);
   const seen = new Set<LeadStage>();
   for (const display of displays) {
     if (!(LEAD_STAGES as readonly string[]).includes(display.stage)) {
@@ -105,11 +121,11 @@ export async function saveStageDisplays(
   await db.$transaction(async (tx) => {
     // Replaced wholesale inside one transaction: positions are unique per Workspace, so updating rows
     // one at a time would collide with the order being replaced.
-    await tx.leadStageDisplay.deleteMany({ where: { workspaceId: context.workspaceId } });
+    await tx.leadStageDisplay.deleteMany({ where: { workspaceId: scope.workspaceId } });
     for (const display of displays) {
       await tx.leadStageDisplay.create({
         data: {
-          workspaceId: context.workspaceId,
+          workspaceId: scope.workspaceId,
           stage: display.stage,
           label: display.label.trim(),
           position: display.position,
