@@ -17,7 +17,7 @@
 import { LEAD_STAGES, type LeadStage } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
-import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
+import { canActOnBusinessProfile, profileScopeOf, requireRole, usersWhoCanActOnBusinessProfile, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 export type LeadValueSource = "AI_SUGGESTED" | "HUMAN_CONFIRMED" | "HUMAN_SET";
 
@@ -204,6 +204,16 @@ export async function listLeads(db: DbExecutor, context: BusinessProfileContext,
     },
   });
 
+  // Asked once for the whole page, about everyone it names, and asked *now* rather than trusted from when
+  // each lead was assigned. Refusing a bad assignment closes the door; these are the rows already inside —
+  // written before the guard existed, or assigned to somebody whose grant was revoked afterwards. A stored
+  // name does not hear about a revoked grant.
+  const authorized = await usersWhoCanActOnBusinessProfile(
+    db,
+    { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId },
+    rows.map((row) => row.assignedUserId).filter((userId): userId is string => userId !== null),
+  );
+
   return rows.map((row) => ({
     conversationId: row.id,
     contactName: row.contact.displayName,
@@ -211,7 +221,9 @@ export async function listLeads(db: DbExecutor, context: BusinessProfileContext,
     channel: row.channelIdentity.channelAccount.channel,
     stage: row.leadStage,
     assignedUserId: row.assignedUserId,
-    assignedUserName: row.assignedUser?.name ?? null,
+    // The id stays and the name goes: an operator needs to see that a lead is parked on somebody who
+    // cannot work it in order to take it back, and learns no stranger's name doing so.
+    assignedUserName: row.assignedUserId !== null && authorized.has(row.assignedUserId) ? (row.assignedUser?.name ?? null) : null,
     tags: row.leadTags,
     note: row.leadNote,
     nextAction: row.nextAction,
@@ -353,14 +365,21 @@ export async function editLead(
   const tags = edit.tags === undefined ? undefined : [...new Set(edit.tags.map((tag) => tag.trim()).filter((tag) => tag !== ""))];
 
   if (edit.assignedUserId !== undefined && edit.assignedUserId !== null) {
-    const member = await db.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId: context.workspaceId, userId: edit.assignedUserId } },
-      select: { id: true },
-    });
-    if (member === null) {
-      // Assigning a lead to somebody who is not in the Workspace would put a name on it that nobody can
-      // act under, and the next reader would reasonably believe that person was working it.
-      return { status: "REFUSED", reason: "a lead can only be assigned to a member of this workspace" };
+    // Workspace membership is not the test, and checking only it was the defect. A member whose
+    // `businessProfileScope` is `SELECTED` without this profile cannot open it, so a lead parked on them
+    // is a lead nobody is working while the list shows it as somebody's — and their name travels into a
+    // profile-scoped read that had no business knowing it. The same asymmetry was a blocking finding on
+    // human tasks (#55); this is the leads half of it, and the predicate is the same one.
+    if (
+      !(await canActOnBusinessProfile(db, {
+        workspaceId: context.workspaceId,
+        userId: edit.assignedUserId,
+        businessProfileId: scope.businessProfileId,
+      }))
+    ) {
+      // One refusal for a stranger, a member without this grant, and a user id that belongs to nobody: an
+      // assignment form must not become a way to find out who exists.
+      return { status: "REFUSED", reason: "a lead can only be assigned to somebody who works on this Business Profile" };
     }
   }
 

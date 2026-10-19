@@ -42,6 +42,7 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 /**
@@ -357,7 +358,8 @@ export async function savePolicy(
     await tx.automationPolicy.update({ where: { id: existing.id }, data: { ...after, version: { increment: 1 } } });
     // Same transaction. Separately, a crash between the two leaves a policy nobody appears to have
     // changed — the one question this table exists to answer.
-    await tx.policyChangeAudit.create({
+    const audit = await tx.policyChangeAudit.create({
+      select: { id: true },
       data: {
         workspaceId: scope.workspaceId,
         businessProfileId: scope.businessProfileId,
@@ -367,6 +369,41 @@ export async function savePolicy(
         before: auditable(existing),
         after: after as never,
       },
+    });
+    // The searchable log gets an event pointing at the audit row above rather than a copy of it. One
+    // truth, one pointer, and no chance of the two disagreeing later.
+    //
+    // A template-autopilot change is its own kind because the spec lists it separately, and it deserves
+    // to be: widening what goes out unattended is a different decision from tuning a threshold.
+    const templateChange =
+      impacts.includes("TEMPLATE_AUTOPILOT_ENABLED") ||
+      impacts.includes("TEMPLATE_AUTOPILOT_WITHOUT_ALLOWLIST") ||
+      existing.whatsappTemplateAutomationAllowlist.join("\u0000") !== after.whatsappTemplateAutomationAllowlist.join("\u0000");
+    // Two events when the mode changed, not one with a more important-sounding name. They are different
+    // facts: "what did somebody change" and "when did this profile start replying unattended". Somebody
+    // searching for the second should not have to know it was buried in a settings save.
+    if (existing.mode !== after.mode) {
+      await recordAuditEvent(tx, context, {
+        kind: "MODE_CHANGED",
+        summary: `Changed the mode from ${existing.mode} to ${after.mode}`,
+        subjectType: "automation_policies",
+        subjectId: existing.id,
+        actorUserId: context.userId,
+        ...(channelAccountId === null ? {} : { channelAccountId }),
+        detail: { from: existing.mode, to: after.mode },
+      });
+    }
+    await recordAuditEvent(tx, context, {
+      kind: templateChange ? "TEMPLATE_POLICY_CHANGED" : "POLICY_CHANGED",
+      summary:
+        impacts.length === 0
+          ? "Changed automation settings"
+          : `Changed automation settings: ${impacts.join(", ").toLowerCase().replaceAll("_", " ")}`,
+      subjectType: "policy_change_audits",
+      subjectId: audit.id,
+      actorUserId: context.userId,
+      ...(channelAccountId === null ? {} : { channelAccountId }),
+      detail: { impacts: [...impacts], scope: channelAccountId === null ? "PROFILE_DEFAULT" : "CHANNEL_ACCOUNT" },
     });
     // No version in the outcome. It was returned "so a screen can keep editing" and nothing read it: the
     // only caller redirects, and the next render re-reads the policy. A value nothing reads is a value

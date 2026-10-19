@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
@@ -428,6 +429,16 @@ export async function editKnowledge(
     // A title-only change still makes a version: the title is what an operator searches by, and a history
     // that recorded content but not naming would not explain why a source became hard to find.
     await writeChunks(tx, scope.workspaceId, documentId, version, chunks);
+    // Audited after the claim rather than beside the write: an audit line for a save that was refused as
+    // stale would be a record of something that did not happen.
+    await recordAuditEvent(tx, context, {
+      kind: "KNOWLEDGE_VERSIONED",
+      summary: `Saved version ${String(version)} of ${title}`,
+      subjectType: "knowledge_documents",
+      subjectId: documentId,
+      actorUserId: context.userId,
+      detail: { version, title },
+    });
     return { status: "VERSIONED", documentId, version };
   });
 }

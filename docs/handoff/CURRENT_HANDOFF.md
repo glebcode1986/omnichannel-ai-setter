@@ -41,10 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #82**, each branch stacked on its predecessor and each CI-green with evidence
-posted. PRs #73–#81 are completed by Claude and awaiting review; **#82 / P3-02 is the current task**.
-**Next after it is P5-08 / Issue #34**, per the owner's directive on PR #81 — and not before; that work
-exists on a local branch and is deliberately unpublished. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #83**, each branch stacked on its predecessor and each CI-green with evidence
+posted. PRs #73–#82 are completed by Claude and awaiting review; **#83 / P5-08 is the current task**,
+which the owner's directive on PR #81 placed after P3-02 and not before. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -55,7 +54,7 @@ Everything is unmerged PRs stacked by base — but **not one chain. Two live seg
 on 2026-10-13 and had been assumed otherwise until then:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83`
 
 `#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
 
@@ -94,6 +93,7 @@ parent: check every link with `git merge-base --is-ancestor <parent> <child>` be
 | #80 | P5-07 Leads pipeline | #33 |
 | #81 | P3-01 customer identity, search and memory | #54 |
 | #82 | P3-02 goals, follow-ups and human tasks | #55 |
+| #83 | P5-08 operational analytics and searchable audit | #34 |
 
 The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
 under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
@@ -1033,30 +1033,141 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 2. **#54 / P3-01 is accepted** at `13212612bb0ac73b2468c1adc99b1c5e48008c16`; see
    `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
 3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+1. **#34 / P5-08 is the current work**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
+   Operational metrics and a searchable, append-only audit log; see `docs/specs/ANALYTICS_DEFINITIONS.md`,
+   which is the definition of record for every metric on the page.
+   - **Application state and provider state are never summed.** "Handed to the provider" is our claim;
+     "delivered" is the platform's, and only the second may be shown to a customer as delivered. Two
+     result groups, two panels, two captions.
+   - **A day needs a timezone and the caller says which.** The reader chooses, the page states which it
+     used, and the quiet-hours zone is deliberately not borrowed — it answers a different question.
+   - **`audit_events` is append-only by trigger.** `BEFORE UPDATE`/`BEFORE DELETE` raise; a correction is
+     a new row. Sensitivity is derived from the kind, never passed by the caller.
+   - Where a metric has no denominator it reports `null`, never zero.
+2. **#55 / P3-02 is complete**, as PR #82. Conversation goals, bounded follow-ups and human tasks; see
+   `docs/specs/GOALS_FOLLOWUPS.md`. Attempts are bounded by CHECK constraints (1–5), every follow-up is
+   revalidated at execution, and `human_tasks` has no column a send path could attach to.
+3. **#54 / P3-01 is accepted**; see `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
+4. **PRs #73–#83 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
    the earliest affected branch and merge down the chain.
-4. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+5. **PR #73 was repaired on 2026-10-03 after an independent review, and the fix is in every branch here.**
+   Astra returned `CHANGES_REQUESTED` at `98895f4344ca3a0a2582ba69b497e9271dc263fc`: activation was
+   permitted while the STYLE step was unfinished and had not been deliberately skipped.
+   `ONBOARDING_UX.md` requires "style configured **or** intentionally skipped" — a gate with two ways to
+   clear it — and `blockersFor()` had neither the skip set nor a style blocker, so `canActivate` came out
+   true from channel, knowledge, policy and review facts alone.
+
+   `blockersFor()` now takes the validated skip set and adds `STYLE_NOT_CONFIGURED`.
+   `activateBusinessProfile()` needed no separate change, which is the point: it already re-reads through
+   `readOnboarding()` inside its row-locked transaction, so the gate it enforces *is* this rule. A second
+   readiness rule would agree until somebody edited one of them.
+
+   **Three tests were passing on the bug**, which is why it took an outside reader: a domain test quoted
+   the spec sentence and asserted its opposite; the integration fixture called a profile "ready" while
+   creating no style profile, no approved example and no skip; and a keyboard test used an unconfigured
+   style as a stand-in for a ready profile, so it only found an enabled button because the gate was
+   broken.
+
+   Propagated through #74–#83 by ordinary merge, every branch verified at its own head. One consequence
+   needed fixing at #73 and re-propagating: the new fixture wrote an unapproved `ACTIVE` style example,
+   which `style_examples_verified_check` refuses from P5-06 onward, so the test passed at #73 and failed
+   everywhere it was merged to.
+6. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
    owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
    all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
    order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
    `git merge-base --is-ancestor <parent> <child>`.
-5. **P5-08 / Issue #34 (Analytics + Audit) is next after #82**, per the owner's directive on PR #81, and
-   #35 P5-09 (E2E, accessibility, responsive) follows it. Analytics must count the human-composed send
-   path as well as the automated one, which is the reason the repair above came first.
-6. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+7. **#35 / P5-09 (E2E, accessibility, responsive) is the next Phase 5 surface** after #83.
+8. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
    require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
    so that is a decision, not a display preference.
-7. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+9. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
    or names a provider payload type. New tables are held by the cascade guard in
    `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
    foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
-8. No rebases, no force-pushes, and no merges to `main`.
-9. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+10. No rebases, no force-pushes, and no merges to `main`.
+11. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
+
+## PR #82 accepted, and joined to #83 — 2026-10-14
+
+**#82 / P3-02 is accepted at `9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`.** Gemini (Google Antigravity)
+published a formal exact-head review on 2026-10-13T21:07:24Z: GitHub state `APPROVED` on that commit,
+carrying `ANTIGRAVITY_REVIEW: PASS head=9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`. The acceptance covers
+that SHA and no other.
+
+**Reviewer routing (owner decision, 2026-10-13T20:32:45Z).** Gemini/Antigravity is **temporary primary**
+independent reviewer; **Astra is secondary, advisory-only** until it has a working PostgreSQL/Redis/Linux
+runner of its own and the owner changes routing. This is an owner-approved infrastructure exception rather
+than quota exhaustion: Astra's `BLOCKED` note on this head reported its missing database and Redis
+runtime, which is neither a PASS nor a CHANGES_REQUESTED. Its earlier `CHANGES_REQUESTED` at
+`2e876c1d1d62ce9fabaf18ae8240784d4603eada` stays historical. Claude remains the sole author. The
+readiness marker keeps the `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility.
+
+**#83 / P5-08 is the sole current propagation and review gate. #84 onwards are frozen** — no Stage E, no
+P5-09, no downstream propagation, nothing into #84+ until #83 has its own current-head PASS.
+
+**The ancestry was not what the numbering suggested, and that is why this merge was needed.** Segment two
+(`#83 -> ... -> #105`) forked from an **older** #82 at `c098c18290bb88ea749a8b4d708912870044df89`, which
+was also the merge base of the two segments. #83 named `feat/p3-02-goals-followups` as its base while
+containing none of the accepted repair; GitHub compared them as 20 ahead / 20 behind. #83 is now joined
+to the accepted head by an **ordinary non-rebase merge** — no rebase, no force-push, no squash, nothing to
+`main`, and nothing propagated downstream. `git merge-base --is-ancestor 9040a2c… HEAD` succeeds on the
+new head.
+
+### What the merge reconciled
+
+Three conflicts, each resolved to keep both behaviours rather than to pick a side. The third is the one
+that mattered: the human takeover now does both things inside its single transaction — #83's
+`TAKEOVER_STARTED` audit row **and** the accepted head's `cancelPendingFollowUps`. Keeping only one side
+would have left either a conversation somebody holds with no record of who took it, or a human-held
+conversation with an automated chase still scheduled. The other two were `index.ts` (#82's three tenancy
+types added, #83's duplicate export dropped) and `policy-store.ts` (#83's audit writes kept alongside
+#82's `profileDefaultPolicyWrite()` and wider tenancy import).
+
+Two pieces of integration fallout, both inside #83's own audit suite, both from accepted #82 behaviour
+rather than from anything new:
+
+1. **`savePolicy` requires `expectedVersion`** — deliberately, so that no caller can decide not to care.
+   The five call sites now go through the same `save` helper `policy-store.integration.test.ts` uses, and
+   the transactional case reads the version *outside* the transaction because that case has to write
+   through `tx` itself.
+2. **A Business Profile is born with its default policy.** `createBusinessProfile` writes it as a nested
+   create from the domain's `profileDefaultPolicyWrite()`, so the fixture creating one by hand violated
+   `automation_policies_profile_default_key`. The fixture's own comment — "which onboarding creates in
+   the real flow" — is now literally true in code, and the hand-written row is gone.
+
+### Verification of this head
+
+Commands as run, with their actual numbers and limits. Nothing was skipped except where noted, and no
+assertion or timeout was changed.
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` (`eslint . --max-warnings=0 && pnpm lint:boundaries`) | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 34 files, **709/709**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web E2E | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 80 files, **892/892**, exit 0 |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 104 files passed / 48 skipped, 1479 passed / 839 skipped |
+
+`--maxWorkers=2` is deliberate and is disclosed rather than hidden: unbounded local full runs on this
+machine produce a *different* load-sensitive failure set on each attempt, in files a change cannot have
+touched, and each passes alone. The reviewer's own Linux runner reported the same thing and bounded its
+runs the same way. The 48 skipped files and 839 skipped tests in the last row are the PostgreSQL and Redis
+suites declining to run without `TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they
+are the same suites counted in full in the rows above.
+
+One environment note, not a code defect: `packages/billing-stripe` left on disk by a checkout of a later
+branch breaks `scripts/verification/gate.test.ts` with ENOENT on branches that do not have that package.
+It was removed before the run above.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 

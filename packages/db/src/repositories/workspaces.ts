@@ -20,6 +20,7 @@ import {
   WORKSPACE_ADMIN_ROLES,
   type WorkspaceContext,
 } from "../tenancy";
+import { recordWorkspaceAuditEvent } from "../audit-store";
 
 const MAX_NAME_LENGTH = 200;
 
@@ -186,6 +187,16 @@ export async function addWorkspaceMember(
           data: selected.map((businessProfileId) => ({ workspaceId, workspaceMemberId: member.id, businessProfileId })),
         });
       }
+      // A workspace-level event, because who may act is not any one profile's business — and admin-only
+      // to read, because it is the record of who was given reach over customers.
+      await recordWorkspaceAuditEvent(tx, context, {
+        kind: "MEMBER_CHANGED",
+        summary: `Added a member as ${input.role}`,
+        subjectType: "workspace_members",
+        subjectId: member.id,
+        actorUserId: context.userId,
+        detail: { role: input.role, scope: grantsAll ? "ALL" : "SELECTED", businessProfileIds: selected },
+      });
       return { workspaceMemberId: toWorkspaceMemberId(member.id) };
     });
   } catch (error) {

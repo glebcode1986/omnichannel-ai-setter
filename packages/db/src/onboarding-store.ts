@@ -29,6 +29,7 @@ import {
   type CredentialRotation,
   type StoredCredential,
 } from "./repositories/channel-credentials";
+import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export interface ConnectedAccountRef {
@@ -216,6 +217,18 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
             now,
           });
         }
+        // In the same transaction as the status change and the credential tombstone: a disconnection
+        // nobody appears to have made is the one question this record exists to answer.
+        await recordAuditEvent(tx, context, {
+          kind: "CHANNEL_DISCONNECTED",
+          summary: "Disconnected a channel account",
+          subjectType: "channel_accounts",
+          subjectId: channelAccountId,
+          actorUserId: context.userId,
+          channelAccountId,
+          detail: { credentialRevoked: credential !== null && credential !== undefined },
+          occurredAt: now,
+        });
       });
     },
 
