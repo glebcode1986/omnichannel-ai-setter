@@ -23,13 +23,14 @@ import {
   createAiDraftStore,
   createWorkspaceWithOwner,
   appendInboundMessage,
+  rotateChannelCredential,
   writeChannelCredential,
   type BusinessProfileContext,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES, toUserId } from "@omnichannel/domain";
 import { coordinateDelivery, noRetrieval, type DeliverySendCommand } from "@omnichannel/application";
 import type { InstagramHttpPort } from "@omnichannel/channel-instagram";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryEngine } from "./delivery-engine";
 import { createInstagramDeliverySender } from "./instagram-sender";
@@ -297,6 +298,90 @@ describe.skipIf(!endToEndTestsEnabled())("the transport a send leaves on (end to
       data: { lastInboundAt: LAST_INBOUND },
     });
   }, 180_000);
+
+  describe("what a refused token does to the connection (#9)", () => {
+    /**
+     * The gap this closes: Meta's code 190 is final, so the reply correctly fails and is not retried — and
+     * every later reply used to fail the same way while the account still read `CONNECTED`. The Inbox, the
+     * setup checklist and the health probe all read that column, so the product said the channel was fine
+     * and nobody was ever told to reconnect.
+     */
+    const refusing = (status: number, body: unknown, duringCall?: () => Promise<void>): InstagramHttpPort => ({
+      send: async () => {
+        await duringCall?.();
+        return { kind: "RESPONSE" as const, status, body: JSON.stringify(body) };
+      },
+    });
+
+    const sendThrough = async (http: InstagramHttpPort) => {
+      seq += 1;
+      const sender = createInstagramDeliverySender({
+        db: infra.db,
+        cipher: CIPHER,
+        appSecret: "app-secret",
+        verifyToken: "verify-token",
+        humanAgentApproval: "APPROVED",
+        now: () => NOW,
+        http,
+        logger: infra.logger,
+      });
+      return sender.send({
+        channel: "INSTAGRAM",
+        channelAccountId,
+        conversationId,
+        recipientExternalId: "ig-customer",
+        text: "We open at 10 on Saturday.",
+        operationId: `op-credential-${String(seq)}`,
+        authority: { kind: "AUTOMATED" },
+      });
+    };
+
+    const statusOf = async (): Promise<string> =>
+      (await infra.db.channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { status: true } })).status;
+
+    afterEach(async () => {
+      // The fixture is shared with the rest of the file, and marking it is the point of these cases.
+      await infra.db.channelAccount.update({ where: { id: channelAccountId }, data: { status: "CONNECTED" } });
+    });
+
+    it("marks the connection as needing re-authorization, and still reports the send as Meta answered it", async () => {
+      const result = await sendThrough(refusing(400, { error: { code: 190, error_subcode: 463, message: "session expired" } }));
+
+      // The delivery verdict is unchanged: whether this reply may be retried is Meta's answer and the
+      // coordinator's decision, and neither is ours to soften because we learned something about the token.
+      expect(result).toMatchObject({ outcome: "REJECTED", retryable: false, code: "190/463" });
+      expect(await statusOf()).toBe("NEEDS_REAUTH");
+    }, 180_000);
+
+    it("leaves the connection alone when the rejection was about the message", async () => {
+      const result = await sendThrough(refusing(400, { error: { code: 100, message: "invalid parameter" } }));
+
+      expect(result).toMatchObject({ outcome: "REJECTED", code: "100" });
+      expect(await statusOf()).toBe("CONNECTED");
+    }, 180_000);
+
+    it("leaves the connection alone when somebody re-authorized it while Meta was answering", async () => {
+      // The interleaving that matters: the operator reconnects *during* the call, so the refusal belongs to
+      // a token nobody is using any more. Marking here would tell them to reconnect what they just
+      // reconnected — and the account would refuse to send until they did it twice.
+      const result = await sendThrough(
+        refusing(400, { error: { code: 190, message: "invalid access token" } }, async () => {
+          const credentialId = (await infra.db.channelAccount.findUniqueOrThrow({ where: { id: channelAccountId }, select: { credentialId: true } })).credentialId ?? "";
+          await rotateChannelCredential(infra.db, CIPHER, {
+            workspaceId: scope.workspaceId,
+            credentialId,
+            purpose: "INSTAGRAM_ACCESS_TOKEN",
+            token: "ig-access-token-reconnected",
+            expiresAt: CREDENTIAL_EXPIRES,
+            refreshedAt: new Date(),
+          });
+        }),
+      );
+
+      expect(result).toMatchObject({ outcome: "REJECTED", code: "190" });
+      expect(await statusOf()).toBe("CONNECTED");
+    }, 180_000);
+  });
 
   describe("the same question, asked through the coordinator", () => {
     /** The whole path a queued delivery takes: policy gate, atomic claim, then the transport. */

@@ -55,6 +55,7 @@ describe("createWorkerRuntime", () => {
         order.push("processors.started");
         return {
           queueNames: ["delivery"],
+          loops: ["outbox"],
           close: () =>
             new Promise<void>((resolve) => {
               order.push("processors.closing");

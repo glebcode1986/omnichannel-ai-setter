@@ -1036,6 +1036,25 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
 1. **#34 / P5-08 is the current work**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
 1. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
+1. **The Instagram token lifecycle had no caller, and now does (#9).**
+   `refreshInstagramCredential` lived in `apps/web/src/server/`, was covered by eight tests, and was
+   called by no route, no action and no loop. A 60-day token therefore expired with
+   `channel_accounts.status` still `CONNECTED`, so the Inbox, the setup checklist and the health probe all
+   reported a healthy channel while every reply failed with Meta's code 190, and nobody was told to
+   reconnect.
+
+   The policy moved to the worker — `instagram-token-refresh.ts` for one connection,
+   `instagram-token-sweeper.ts` for the loop — which is where it belongs: a token expires on Meta's clock,
+   for every connected account, whether or not anybody opens the dashboard. All eight cases moved with it.
+   The send path marks `NEEDS_REAUTH` on a refused token as well, which covers the one case no refresh can
+   anticipate: a person revoking access at Meta. Both writes are conditional on the credential's mint time,
+   so a connection re-authorized while Meta was answering is left alone.
+
+   **The guard worth keeping:** no unit test can catch "nothing calls this" — the policy passes its own
+   tests either way. The worker now reports its running loops in `worker.started`, built from what actually
+   started, and `main.test.ts` asserts the list against the real process. When looking for this class of
+   bug elsewhere, search for an exported function whose only callers are its own tests.
+2. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
    #83. The full operator journey, an accessibility pass and responsive verification; see
    `docs/specs/UX_VERIFICATION.md`, which the contract asks for and which states the limitations as
    plainly as the coverage.
@@ -1257,6 +1276,76 @@ different load-sensitive failure set each attempt in files a change cannot have 
 files in the last row are the PostgreSQL and Redis suites declining to run without
 `TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full in the rows
 above.
+
+## PR #84 accepted, and joined to #85 — 2026-10-14
+
+**#84 / P5-09 is accepted at `ca86e7d7877b8ab2deb1fb280956d2306224e898`** — Gemini/Antigravity formal
+GitHub review, state `APPROVED`, 2026-10-14T13:27:18Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ca86e7d7877b8ab2deb1fb280956d2306224e898`. Verified through
+`GET /pulls/84/reviews`, not from a coordination comment.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#85 / FIX-ISSUE-9 is the sole
+gate; #86 onwards are frozen.**
+
+**The ancestry repair.** #85 reported #84 as its base while its live base SHA was the pre-acceptance #84
+head `82f9f3fbe6cbc67966f8ba4d1a34569cff544501`, also the merge base; GitHub compared them as 12 ahead /
+22 behind. Joined by an ordinary non-rebase merge — no rebase, force-push, squash, merge to `main`, or
+propagation into #86+. `git merge-base --is-ancestor ca86e7d… HEAD` succeeds.
+
+### The one conflict, and why it is the most consequential of the propagation so far
+
+`apps/worker/src/main.ts`. **Both sides of it are a fix for the same class of defect — a loop nobody
+starts.** This branch adds the Instagram token refresh, whose own comment says *"every part of the
+Instagram token lifecycle is implemented and none of it runs: a 60-day token expires, the account still
+reads CONNECTED, and every reply fails with a provider error nobody was warned about."* The accepted
+parent adds the follow-up sweeper, whose comment says *"`dueFollowUps` and `claimFollowUp` had no caller
+at all, so the feature existed and never ran."* A resolution keeping one side would have silently
+re-created whichever defect it dropped, and each is a two-line `const`.
+
+**Five edits were needed. The conflict markers showed two.**
+
+1. Both `const` declarations, token refresh then sweeper, matching start order.
+2. Both `.close()` calls.
+3. **The startup `loops` report.** It merged cleanly and would have stopped naming the sweeper — a loop
+   running while the observability built to report running loops stayed silent about it, which is the
+   original Issue #9 shape arriving through a merge instead of through a missing caller. `follow_ups` is
+   added **unconditionally**; `instagram_tokens` stays conditional on the refresh runner's `running`
+   state. The asymmetry is deliberate and now documented in the code: the sweeper always starts, so its
+   absence would be a defect, while the refresh only runs where it is configured, so its absence is
+   information.
+4. **The shutdown commentary's own count.** Both sides read *"`allSettled`, not `all`: five independent
+   closes"* above five entries. There are now six; the sentence merged without a conflict and became
+   wrong, pointing at a count that no longer matched the lines beneath it.
+5. **`main.test.ts`'s expected loop list** — the one a conflict probe could not predict, found by running
+   the real worker. The case named *"says which background loops are running, so a loop wired to nothing
+   is visible (#9)"* asserts the entire list, so it now names `follow_ups` too. Its sibling case, which
+   proves the refresh drops out of the list without a credential key, now also asserts that `follow_ups`
+   is still there — which is what pins the unconditional half of the asymmetry above.
+
+Items 3 and 4 fail no typecheck, no lint and no test. Item 5 is why "inspect the merged code rather than
+trust the probe" was the right instruction: the probe got four of five, and the fifth lived in the test
+that exists to catch exactly this defect.
+
+### Verification of this head
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` | exit 0 |
+| production build | `pnpm build` | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 35 files, **721/721**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 86 files, **954/954**, exit 0 |
+| worker lifecycle specifically | the same, narrowed to `main`, `bundle`, `instagram-token`, `followup-sweeper` | 5 files, **32/32** — boot report, graceful shutdown, refresh scheduling and lease, sweeper behaviour |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 109 files passed / 50 skipped, 1511 passed / 881 skipped |
+
+**Failures and retries, disclosed.** The first worker run failed exactly one case — item 5 above — and
+nothing else; it was fixed and re-run clean. `--maxWorkers=2` is deliberate and disclosed: unbounded local
+runs on this machine give a different load-sensitive failure set each attempt. The 50 skipped files in the
+last row are the PostgreSQL and Redis suites declining to run without
+`TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full above.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 

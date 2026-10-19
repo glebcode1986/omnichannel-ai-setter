@@ -16,9 +16,24 @@
  * purpose.
  */
 import type { DeliverySendCommand, DeliverySendPort } from "@omnichannel/application";
-import { createInstagramAdapterRegistry, createFetchHttpPort, type HumanAgentApproval, type InstagramHttpPort } from "@omnichannel/channel-instagram";
-import { readChannelCredential, type CredentialCipher, type DbClient } from "@omnichannel/db";
+import {
+  createInstagramAdapterRegistry,
+  createFetchHttpPort,
+  isAccessTokenRejection,
+  type HumanAgentApproval,
+  type InstagramHttpPort,
+} from "@omnichannel/channel-instagram";
+import { markChannelAccountNeedsReauthorization, readChannelCredential, type CredentialCipher, type DbClient } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
+
+/**
+ * What the port this file implements answers with.
+ *
+ * Taken from the port rather than imported from `@omnichannel/channel-core` so the worker keeps one
+ * runtime edge to the contract it actually serves: the normalized result is the application's shape here,
+ * and the adapter's Meta vocabulary stays inside the adapter.
+ */
+type PortSendResult = Awaited<ReturnType<DeliverySendPort["send"]>>;
 
 export interface InstagramSenderConfig {
   readonly db: DbClient;
@@ -47,6 +62,17 @@ function humanAgentSend(authority: DeliverySendCommand["authority"]): { readonly
 }
 
 export function createInstagramDeliverySender(config: InstagramSenderConfig): DeliverySendPort {
+  /**
+   * Which credential the adapter last used for each account.
+   *
+   * Written where the token is actually read — at dispatch, by the adapter — so a rejection is judged
+   * against the credential Meta saw and not against whatever the row says afterwards. That ordering is the
+   * whole value of it: a person who re-authorizes between the dispatch and the verdict leaves a newer mint
+   * time behind, the guard in `markChannelAccountNeedsReauthorization` then fails to match, and the
+   * connection they just fixed is left alone. One entry per account, overwritten per send.
+   */
+  const lastUsed = new Map<string, { readonly credentialId: string; readonly mintedAt: Date }>();
+
   // The same registry webhook ingestion binds adapters with. Two constructions of an adapter would be two
   // answers to "is this account usable right now", and they would disagree the first time one was changed.
   const registry = createInstagramAdapterRegistry({
@@ -56,7 +82,7 @@ export function createInstagramDeliverySender(config: InstagramSenderConfig): De
         verifyToken: config.verifyToken,
         // Read per send, and only when a send is actually happening: a revoked token must fail the next
         // attempt, not the one after the cache expires.
-        accessToken: () => currentAccessToken(config, account.workspaceId, account.channelAccountId),
+        accessToken: () => currentAccessToken(config, account.workspaceId, account.channelAccountId, lastUsed),
       },
       humanAgentApproval: config.humanAgentApproval,
     }),
@@ -99,9 +125,10 @@ export function createInstagramDeliverySender(config: InstagramSenderConfig): De
         operationId: command.operationId,
       } as const;
 
+      const marking = { workspaceId: account.workspaceId, businessProfileId: account.businessProfileId, channelAccountId: account.id };
       const humanAgent = humanAgentSend(command.authority);
       if (humanAgent === undefined) {
-        return adapter.send(outbound);
+        return reportCredentialState(config, marking, lastUsed, await adapter.send(outbound));
       }
 
       // The conversation's own last inbound message is where the provider's clock starts, so the adapter
@@ -111,25 +138,76 @@ export function createInstagramDeliverySender(config: InstagramSenderConfig): De
         where: { workspaceId: account.workspaceId, businessProfileId: account.businessProfileId, id: command.conversationId },
         select: { lastInboundAt: true },
       });
-      return adapter.sendAsHumanAgent(
-        outbound,
-        { userId: humanAgent.approvedByUserId, actedAt: humanAgent.approvedAt },
-        {
-          workspaceId: account.workspaceId,
-          channelAccountId: account.id,
-          conversationId: command.conversationId,
-          participantExternalId: command.recipientExternalId,
-          ...(conversation?.lastInboundAt === null || conversation?.lastInboundAt === undefined
-            ? {}
-            : { lastInboundAt: conversation.lastInboundAt }),
-          now: config.now(),
-        },
+      return reportCredentialState(
+        config,
+        marking,
+        lastUsed,
+        await adapter.sendAsHumanAgent(
+          outbound,
+          { userId: humanAgent.approvedByUserId, actedAt: humanAgent.approvedAt },
+          {
+            workspaceId: account.workspaceId,
+            channelAccountId: account.id,
+            conversationId: command.conversationId,
+            participantExternalId: command.recipientExternalId,
+            ...(conversation?.lastInboundAt === null || conversation?.lastInboundAt === undefined
+              ? {}
+              : { lastInboundAt: conversation.lastInboundAt }),
+            now: config.now(),
+          },
+        ),
       );
     },
   };
 }
 
-async function currentAccessToken(config: InstagramSenderConfig, workspaceId: string, channelAccountId: string): Promise<string | undefined> {
+/**
+ * Turns "Meta refused this token" into a connection an operator can see is broken.
+ *
+ * The send result itself is returned untouched, deliberately. Whether this delivery may be retried is the
+ * delivery coordinator's decision and Meta's code already answered it — code 190 is final, so the reply
+ * fails and is not retried. What was missing is the other half: every later reply would fail the same way
+ * while the account still read `CONNECTED`, so the Inbox, the setup checklist and the health probe all said
+ * the channel was fine and nobody was ever told to reconnect. The refresh loop normally gets there first;
+ * this is the path for a token the person revoked at Meta, which no refresh can anticipate.
+ */
+async function reportCredentialState(
+  config: InstagramSenderConfig,
+  account: { readonly workspaceId: string; readonly businessProfileId: string; readonly channelAccountId: string },
+  lastUsed: Map<string, { readonly credentialId: string; readonly mintedAt: Date }>,
+  result: PortSendResult,
+): Promise<PortSendResult> {
+  if (!isAccessTokenRejection(result)) {
+    return result;
+  }
+  const used = lastUsed.get(account.channelAccountId);
+  if (used === undefined) {
+    // The adapter refused before it read a token (a foreign command, unsendable text). Nothing was shown
+    // to Meta, so nothing has been learned about the credential.
+    return result;
+  }
+  const marked = await markChannelAccountNeedsReauthorization(config.db, {
+    workspaceId: account.workspaceId,
+    channelAccountId: account.channelAccountId,
+    mintedAt: used.mintedAt,
+  });
+  if (marked) {
+    config.logger.warn("instagram.credential_rejected", {
+      workspaceId: account.workspaceId,
+      businessProfileId: account.businessProfileId,
+      channelAccountId: account.channelAccountId,
+      code: result.outcome === "REJECTED" ? result.code : undefined,
+    });
+  }
+  return result;
+}
+
+async function currentAccessToken(
+  config: InstagramSenderConfig,
+  workspaceId: string,
+  channelAccountId: string,
+  lastUsed: Map<string, { readonly credentialId: string; readonly mintedAt: Date }>,
+): Promise<string | undefined> {
   // Through the relation, because that is the direction the link runs: the account names its credential,
   // and `channel_credentials` has no account column. Prisma's generated types accept the flat spelling
   // here and its query engine rejects it, so the only thing that ever proved this was a test that ran it.
@@ -142,5 +220,8 @@ async function currentAccessToken(config: InstagramSenderConfig, workspaceId: st
     return undefined;
   }
   const stored = await readChannelCredential(config.db, config.cipher, { workspaceId, credentialId: credential.id, purpose: "INSTAGRAM_ACCESS_TOKEN" });
+  if (stored !== undefined) {
+    lastUsed.set(channelAccountId, { credentialId: stored.credentialId, mintedAt: stored.mintedAt });
+  }
   return stored?.token;
 }
