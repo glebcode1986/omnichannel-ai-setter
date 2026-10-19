@@ -15,7 +15,39 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — propagating the P5-07 lead-board authorization fix into P3-01 / PR #81
+### Correction — what is true on 2026-10-19, superseding the dated statements below
+
+This file is append-only, so older sections state the position on the day they were written. Three claims
+repeated in them are **no longer true**, and are corrected here rather than deleted, because the record of
+what was believed when is worth keeping:
+
+1. **"#83 and everything below is frozen, still carrying the pre-repair #79" is false.** Every link from
+   #80 to #94 now carries the #79 repairs and everything after them. The chain was propagated link by
+   link on 2026-10-19, fifteen heads, each with its own green exact-head Actions run.
+2. **The two-live-segments description is spent.** It was measured on 2026-10-13 and was true then. Every
+   link now contains its parent, checked with `git merge-base --is-ancestor` at each step rather than
+   inferred from the PR base field.
+3. **The accepted SHAs named below are superseded.** #80 is accepted at `55e368d` and #81 at `d3ad503`,
+   both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
+   heads that have since moved. #94 is accepted at `df77cd7`.
+
+**One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
+that heading have been renamed to what they actually are, because four of them claiming to be current at
+once is how the stale statements above went unnoticed.
+
+### Current work — propagating the P5-07 lead-board authorization fix into P3-02 / PR #82
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P3-01 / PR #81
 
 PR #80 moved: a role check was added to `saveStageDisplays`, which had let an AGENT holding one
 Business Profile reconfigure the lead board every profile reads. That fix is merged into this branch by
@@ -45,6 +77,106 @@ deleted, guard after the commit, guard after validation).
 needs a fresh verdict, and the fix has to be merged down the chain one link at a time. Found while
 bounding a different authorization class on #94 and traced here, to `3c666dd`, as its origin; the owner
 directed it to this branch rather than downstream.
+### Completed — repairing PR #82 / P3-02 after CHANGES_REQUESTED
+
+Two P1 blockers, both closed on `feat/p3-02-goals-followups`. No rebase, no force-push, nothing to `main`,
+nothing into #83 or later, no Stage D. **The reviewer is Astra, temporarily, from 2026-10-13**; Antigravity
+is paused; Claude remains the only authorized author; this side publishes only
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=P3-02` and emits no verdict marker.
+
+**P1-1 — the follow-up feature had no executable path.** `dueFollowUps`, `claimFollowUp` and
+`recordFollowUpSent` were correct, tested and called by nothing, so a planned follow-up sat in the table
+for ever. `apps/worker/src/followup-sweeper.ts` is what makes one happen: a `startRecoveryLoop` that finds
+due work and hands each `READY` claim to **the same AI-draft job an inbound message enqueues**. It decides
+nothing — every gate is re-asked inside the claim, under the conversation lock. Carrying it: the
+`FOLLOW_UP` draft trigger (its own migration, because PostgreSQL will not use an enum value added in the
+same transaction), `followUpGenerationKey` exported from `application` so one key is derived one way, the
+attempt inside the queue `jobId` so a re-enqueued attempt is one job and a second allowed attempt is two,
+the tenant scope on `DueFollowUp`, and `recordFollowUpSent` called only on a disposition that actually
+scheduled — a held attempt is settled by the next claim, in one place.
+
+**P1-2 — a task could be assigned to somebody who cannot reach the Business Profile.** `createTask` and
+`assignTask` checked Workspace membership and not the profile grant. Closed with
+`canActOnBusinessProfile`, used by both paths through one refusal helper. The read side too, which the
+directive asked for in the same breath — "including when users or grants change": `listTasks` resolves an
+assignee's (and the completer's) identity through the grant **as it stands now**, on every read, in one
+query per page, so a revoked grant and a row written before the gate both stop naming a stranger while
+keeping the id an operator needs in order to take the task back. Reported and not fixed:
+`lead-store.editLead` has the same asymmetry and belongs to #80.
+
+**The recheck list's "window/template", which the claim did not ask.** `CHANNEL_INELIGIBLE` has always
+been documented as "window closed, template required, account unhealthy" and only the last was asked. The
+claim now asks an injected port, inside its transaction, with the facts read under the lock. The port
+cannot permit a send — the engine still decides twice downstream — so it answers `false` only where there
+is provably no route (outside the window on `STANDARD_ONLY`, or a conversation the customer never started)
+and leaves `HUMAN_ASSISTED_EXTENDED`, and WhatsApp, to the engine.
+
+**A third gap, found by the end-to-end test.** With all of the above correct, nothing could still be sent:
+Meta's automated-response budget — "about 25 seconds after the latest **triggering inbound**" — was applied
+to a send that answers nothing, and a follow-up's anchor is hours or days old by design. A proactive send
+now carries no dispatch deadline at either gate that reads one; the 24-hour messaging window is untouched
+and still refuses a follow-up outside it. Recorded in `GOALS_FOLLOWUPS.md` and `INSTAGRAM_ADAPTER.md`, and
+flagged for the reviewer as the one send-path behaviour this repair changes.
+
+**Two repairs landed the same day that belong to no feature, and one structural correction.**
+
+**The chain is two live segments, not one.** `git merge-base --is-ancestor origin/feat/p3-02-goals-followups
+origin/feat/p5-08-analytics-audit` answers **no**: #83 forks from `c098c18`, an older state of #82, and the
+second segment carries neither the accepted #79/#80/#81 parents nor the P3-02 repair. A repo-wide fix must
+therefore be applied in **both** segments. Its branch order is also not PR-number order — #85 is
+`fix/instagram-token-lifecycle`, #86 is `fix/dead-suspension-resolver`. Measure the graph; PR numbers and
+bases both lie about it.
+
+**PR #90 had been red since 2026-10-08** — a fixture clock overtaken by the real one against
+`channel_credentials_lifetime_check` — with the repair already present on #91 and below, applied downstream
+and never returned to the branch that owns the test. Fixed at #90 and merged down its 15 descendants, every
+link content-neutral.
+
+**Then nine more fuses of the same class**, the earliest due 2026-11-09. Six went to the branch that owns
+them (#85, #88, #89, #90, #91, #93); four belong to PASSed #64/#71 and went to the earliest *live* branch
+instead (#82 and #83, byte-identically), as a recorded exception because a PASSed branch is terminal and its
+CI never re-runs. All 24 heads green afterwards.
+
+**Actions was unavailable for ~45 minutes** that day: every run failed in 3 seconds with zero steps, which
+is the private repo's allowance rather than anything in the code. It cleared on making the repository
+public. Judge a run by its `steps` count, not only its conclusion. Sixteen heads were verified locally
+while it lasted, and every result matched the later CI run.
+
+**#82 was the current gate on 2026-10-13, and #83 and everything below was frozen** and still carried
+the pre-repair #79 *at that date*. Both facts have since changed — see the Correction at the top. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
+repairs and their markers were re-published at the new SHAs.
+
+**#26 and #49 have no workflow run and never had one:** `.github/workflows/verify.yml` first appears on
+#50, so they predate CI. Both were verified locally at their exact PASSed heads instead — `pnpm verify`
+green, 148 and 213 tests — and the evidence posted on each. Giving them real CI needs a `verify`-only
+workflow, because the `infrastructure suites` job runs `test:db`/`test:redis`/`test:e2e`, scripts those
+branches do not have; and it needs a credential with the `workflow` scope, which this one lacks.
+
+### Earlier — propagating the accepted P3-01 parent into P3-02 / PR #82
+
+`ANTIGRAVITY_REVIEW: PASS head=d9a34ffef120b7f0b171eb12f130d3848c9928cf` accepted PR #81, with a formal
+approving review. The directive on #82 merges that exact parent into `feat/p3-02-goals-followups`, **one
+branch only**: no rebase, no force-push, nothing to `main`, nothing into #83 or later, no Stage D.
+
+No conflicts. Four files were touched by both branches — both canonical documents, `schema.prisma` and
+`packages/db/src/index.ts` — and all four auto-merged. Verified rather than trusted: every line either
+side added since the merge base is present, every P3-01 and P5-07 file is byte-identical to the accepted
+parent, and P3-02's own goal, follow-up and human-task stores are untouched.
+
+**The reviewer is Astra again, temporarily, from 2026-10-13**, while the owner diagnoses the local
+Antigravity watcher. The two verdicts Antigravity already gave stand and are not to be re-reviewed to
+change a name; never launch both reviewer systems for one PR and SHA. **Claude remains the only
+authorized author.** This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>` and emits
+no verdict marker of its own.
+
+**A provenance note:** the owner's own workstation holds a local-only #82 merge commit
+(`2abb64117c2274adfbe6fc85ae7d552e23faf4b9`) from local reviewer activity. It is not in this repository
+and not a GitHub head; the propagation recorded here was performed from the remote heads in the
+programmer's environment, which is where the pushed SHA comes from.
+
+**#82 was the current gate when this was written, and #83 and everything below was frozen**, still
+carrying the pre-repair #79 *at that date*. See the Correction at the top.
+#104 and #105 sit off the chain, based on #103, and are unaffected.
 
 ### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
 
@@ -62,7 +194,7 @@ No conflicts. Five files were touched by both branches — both canonical docume
 rather than trusted: every line either side added since the merge base is present in the result, and
 every P5-04 settings/policy and P5-07 leads file is byte-identical to the accepted parent.
 
-**#81 is now the current gate. #82 and everything below is frozen** and still carries the pre-repair #79.
+**#81 PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf`, by Antigravity.
 
 ### Earlier — propagating the accepted P5-04 parent into P5-07 / PR #80
 
@@ -153,8 +285,10 @@ impact codes is not proof, because the codes are in the URL, the page and the ca
 `a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
 `d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
 missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
-**#81 is the current gate**, carrying that accepted parent and awaiting independent review; #82 and
-everything below is frozen and **not ready for review**, because they still contain the pre-repair #79.
+#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity — a head that has since moved);
+**#82 was the current gate at that date**, carrying that accepted parent and awaiting independent review,
+and #83 and everything below was frozen and **not ready for review**, because they still contained the
+pre-repair #79 *then*. See the Correction at the top.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
@@ -163,8 +297,9 @@ superseded by this test-only head, and #79 remains the current gate.
 
 **The #79 repairs are propagated exactly one step.** They exist on
 `feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
-#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
-down in turn once #80 passes.
+#80 permitted one branch, so at that date #81 and below still carried the pre-repair #79 and each needed
+this merged down in turn once #80 passed. That propagation is now complete — see the Correction at the
+top.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
@@ -364,7 +499,43 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
 
-### Current work — P3-01 / Issue #54
+### Task definition — P3-01 / Issue #54
+### Task definition — P3-02 / Issue #55
+
+**Branch `feat/p3-02-goals-followups`**, based on P3-01's accepted head
+`13212612bb0ac73b2468c1adc99b1c5e48008c16` (verified before branching, and `e15c809` — #76's human
+composer — verified as an ancestor). Conversation goals, next actions, bounded follow-ups, human tasks and
+customer opt-out. No UI.
+
+**Issue #55 named two specs that did not exist**: `docs/specs/GOALS_FOLLOWUPS.md`, written as part of this
+task, and `docs/specs/AI_ACTION_APPROVAL_MATRIX.md`, which is **not** written. A matrix for every AI action
+across the product is a larger document than this work justifies; `GOALS_FOLLOWUPS.md` carries the matrix
+for the actions this task introduces and says so. Same precedent as `MVP_RELEASE_SCOPE.md` for #58.
+
+**One deliberate reuse.** `NextAction` is `conversations.next_action` / `next_action_at`, which the leads
+work already added, rather than a new table. A lead's "what happens next" and a conversation's are the same
+question, and a second place to answer it would give two answers depending on which screen an operator
+opened. It also avoids changing core entity semantics, which needs an ADR.
+
+**What the first review found, and what it changed.** The stores above were all correct and the feature was
+unreachable: nothing called `dueFollowUps`, `claimFollowUp` or `recordFollowUpSent`, so the goal and
+follow-up tables were a complete record of intentions nobody acted on. The repair is described under
+"Current work" at the top of this file. Two details are worth carrying forward because they are general:
+
+- **A store with no caller passes its own tests.** Every follow-up case here calls the store, so none of
+  them could notice. The regressions added for the repair deliberately start from the worker and from the
+  real event — the sweeper's pass, the ingestion store's `recordActivity` and `startHumanTakeover`, and
+  `takeOver` — rather than from the helper. The first attempt hooked the inbound cancellation to
+  `appendInboundMessage`, which has no production caller, so it ran in one test and nowhere else: the same
+  defect one layer down, found by auditing for the class rather than by trusting the repair.
+- **Correct pieces can still not meet.** The provider's automated-response budget was right, the follow-up
+  path was right, and together they made a feature that could never send: the budget is counted from the
+  message being answered, and a follow-up answers none.
+
+**P5-08 / Issue #34 is next**, per the owner's directive on PR #81 — and not before. Its work is committed
+on a local `feat/p5-08-analytics-audit` branch and deliberately unpushed.
+
+### Previous — P3-01 / Issue #54
 
 **Branch `feat/p3-01-customer-identity-memory`**, based on `feat/p5-07-leads-pipeline`. The MVP customer
 identity, search and durable-memory primitives: contact points, external identities, duplicate candidates,

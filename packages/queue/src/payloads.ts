@@ -53,6 +53,21 @@ export const aiDraftTriggerSchema = z.discriminatedUnion("kind", [
     /** Each explicit request is its own generation; a retried job reuses this value. */
     requestId: identifier,
   }),
+  z.strictObject({
+    /**
+     * A scheduled follow-up attempt asking for a reply (#55).
+     *
+     * It names the attempt rather than only the follow-up, because the attempt is what identifies the
+     * work: the anchor is the same message every time a follow-up chases one silence, so an
+     * anchor-keyed job would make a second allowed attempt the same job as the first and quietly drop it.
+     *
+     * It carries no user, like `AUTOMATIC` and unlike `HUMAN_REQUEST`: a follow-up is automation, and mode
+     * OFF, a takeover and a pending review all stop it.
+     */
+    kind: z.literal("FOLLOW_UP"),
+    followUpId: identifier,
+    attempt: z.number().int().min(1).max(5),
+  }),
 ]);
 
 export const aiDraftGenerationJobSchema = z.strictObject({
