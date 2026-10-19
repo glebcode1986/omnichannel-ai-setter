@@ -7,14 +7,27 @@
 **This section is the live instruction. Everything under "Historical launch plan" below is kept for the
 record and is not a current task.**
 
-Phase 1 and Phase 2 are implemented as one stacked chain of unmerged PRs, each branch based on its parent
-and each awaiting independent review in dependency order:
+Everything implemented so far is one stacked chain of unmerged PRs, each branch based on its parent and
+each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
 
 Nothing is merged to `main`.
 
-### Current work — the shared lead board had no role check (2026-10-19)
+### Current work — propagating the P5-07 lead-board authorization fix into P3-01 / PR #81
+
+PR #80 moved: a role check was added to `saveStageDisplays`, which had let an AGENT holding one
+Business Profile reconfigure the lead board every profile reads. That fix is merged into this branch by
+ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`, nothing into
+#82 or later. The merge touched only the two canonical documents, which both branches append to; the
+three code files came across unchanged.
+
+**#80's earlier `ANTIGRAVITY_REVIEW: PASS head=bd1c039…` no longer covers its new head**, so the verdict
+this branch inherited has moved too. The fix and its evidence are described in the section below, which
+came across with it.
+
+### The fix this branch inherited — the shared lead board had no role check (2026-10-19)
 
 `lead_stage_displays` has **no `business_profile_id` column** — keyed `(workspace_id, stage)` and read by
 Workspace alone — so it is the board every Business Profile sees. `saveStageDisplays` deleted and
@@ -33,7 +46,25 @@ needs a fresh verdict, and the fix has to be merged down the chain one link at a
 bounding a different authorization class on #94 and traced here, to `3c666dd`, as its origin; the owner
 directed it to this branch rather than downstream.
 
-### Current work — propagating the accepted P5-04 parent into P5-07 / PR #80
+### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
+
+`ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` accepted PR #80. The directive on
+#81 merges that exact parent into `feat/p3-01-customer-identity-memory`, **one branch only**: no rebase,
+no force-push, nothing to `main`, nothing into #82 or later, and no P3-02/P5-08/Stage D work.
+
+**The independent reviewer is temporarily Antigravity (Gemini 3.8 Flash)**, at the owner's direction of
+2026-10-12. Prior Astra verdicts stand; the contracts are unchanged; the verdict marker is
+`ANTIGRAVITY_REVIEW: …`. This side keeps publishing `CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which
+the owner accepted for backward compatibility, and emits neither reviewer's marker itself.
+
+No conflicts. Five files were touched by both branches — both canonical documents, `schema.prisma`,
+`packages/db/src/index.ts` and `constraints.integration.test.ts` — and all five auto-merged. Verified
+rather than trusted: every line either side added since the merge base is present in the result, and
+every P5-04 settings/policy and P5-07 leads file is byte-identical to the accepted parent.
+
+**#81 is now the current gate. #82 and everything below is frozen** and still carries the pre-repair #79.
+
+### Earlier — propagating the accepted P5-04 parent into P5-07 / PR #80
 
 `ASTRA_REVIEW: PASS head=a1b46cb7789091f7782f039fdbf148631a77e3ea` accepted PR #79. The directive on #80
 propagates that exact parent into `feat/p5-07-leads-pipeline` by ordinary merge commit, **one branch
@@ -47,7 +78,8 @@ head. `presenceMode`/`presenceTypingLeadMs`, which the directive named, do not e
 with P4-05 (`6ac04a3`), below #80 in the chain, so that collision is a later branch's problem and is
 recorded as such.
 
-**#80 is now the current gate. #81 and everything below is frozen** and still carries the pre-repair #79.
+**#80 PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c`, by Antigravity under the owner's temporary
+reviewer route.
 
 ### Completed — P5-04 / Issue #30, the blockers on PR #79
 
@@ -120,9 +152,9 @@ impact codes is not proof, because the codes are in the URL, the page and the ca
 **Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79 PASSED at
 `a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
 `d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
-missing default policy); **#80 is the current gate**, carrying that accepted parent and awaiting
-independent review; #81 and everything below is frozen and **not ready for review**, because they still
-contain the pre-repair #79.
+missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
+**#81 is the current gate**, carrying that accepted parent and awaiting independent review; #82 and
+everything below is frozen and **not ready for review**, because they still contain the pre-repair #79.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
@@ -332,53 +364,30 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
 
-Note on ordering: this branch does **not** yet contain the newer heads of #76 (`68cb3ac`, the Review
-queue's pagination) or #77 (`b8d0eea`, the P5-05 blockers). Propagation waits for #77's verdict, because
-merging into #77 would change the exact head being reviewed; when it lands, the whole chain gets one pass.
+### Current work — P3-01 / Issue #54
 
-### Blocker repair — P5-03 / Issue #29, after `CHANGES_REQUESTED`
+**Branch `feat/p3-01-customer-identity-memory`**, based on `feat/p5-07-leads-pipeline`. The MVP customer
+identity, search and durable-memory primitives: contact points, external identities, duplicate candidates,
+`CustomerFact`, `CustomerPreference` and an assistive-only `ConversationSummary`. No UI — the issue's
+acceptance criteria ask for persisted, application-facing primitives.
 
-Astra reviewed PR #76 at `dc68334` and found that a human-composed pending delivery could neither be
-displayed nor cancelled: the Inbox's pending-send query and the cancellation lookup both reached the
-conversation through `draft: { conversationId }`, and an ADR-018 Option B delivery has no draft. Correct,
-and the worse half is that the row still went out after the operator had been told it was not queued.
+**Issue #54 named `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which did not exist.** The issue's own
+Required behavior / Tests / Acceptance criteria were detailed enough to implement from, so this task writes
+that spec as part of its output — the same precedent as `LOCALIZATION.md` for #58.
 
-Fixed by giving both queries one shared predicate, `deliveryOfConversation` in
-`packages/db/src/delivery-origin.ts`, so there is a single place that knows what "belongs to this
-conversation" means for either origin. A third instance surfaced during the repair — the reconciliation
-sweep's orphaned-row select — where the consequence was an ambiguous send that could never be raised for
-investigation, and that is disclosed on the PR rather than folded in silently.
+**One reading the issue left open, resolved as follows.** It lists message text among the searchable
+fields "as supported by current storage", while P5-02's Inbox search deliberately never searches message
+text. Both are honoured: `searchCustomers` searches it only when the caller passes
+`includeMessageText: true`, and message hits rank after identity hits. A business searching its own
+correspondence is ordinary, but it is a different question from *who is this*, so it is a decision at the
+call site rather than something that happens to every customer's words whenever an operator types a name.
 
-### Repair in progress — P5-10 / Issue #58, after `CHANGES_REQUESTED`
+**One deliberate tightening.** The migration first gave the new tables `ON DELETE CASCADE` from the
+contact. `constraints.integration.test.ts` — which predates this task — allows only login data and grants
+to cascade, and that guard is right: every new foreign key is now `ON DELETE RESTRICT`, so `forgetCustomer`
+is the only way memory goes away and a stray `contact.delete()` fails loudly.
 
-Astra reviewed PR #74 at `d422f755efa4ab294b2ec933117dbbe34ce28f3c` and returned two blocking findings,
-both correct.
-
-**Russian readers saw English role names.** `"Ваша роль: {role}"` was localized and
-`workspace.role.toLowerCase()` was interpolated into it. Fixed with `role.*` keys in both locales,
-translated before interpolation, and a test driven off the domain's `WORKSPACE_ROLES` so a role added
-later cannot fall through.
-
-**The enforcement guard was bypassable by ordinary JSX formatting** — multiline text, a string literal
-rendered as a child, a single-quoted accessible name. It now uses the TypeScript compiler's parser, so the
-whole class is gone along with the `|`/`=>` heuristics the regex needed. Each bypass has an adversarial
-test, and the suite was checked against a file containing all three.
-
-**A lesson worth carrying.** I wrote that guard and defended its narrowness as deliberate. Narrow in
-*what it judges* was the right call; narrow because *a regex could not see* the code was not, and only an
-outside reader found the difference.
-
-Separately, the two long-disclosed worker flakes are fixed in their own commit on this branch — at the
-root, in the clients we construct, with `process-guards.ts` left alone because it argues correctly against
-exempting rejections by error code.
-
-That fix then failed CI while passing locally, which was the more useful finding: local verification
-exports `TEST_REDIS_URL` and `TEST_DATABASE_URL`, CI's `verify` job exports neither, so the worker's
-no-infrastructure tests — the ones these flakes live in — had never been run the way CI runs them. The
-allowlists in `main.test.ts` and `bundle.test.ts` now admit `queue.client_error` with its reason, and a
-clean-environment `pnpm verify` is part of verifying a head.
-
-### Original gate — P5-10 / Issue #58 (Stage D)
+### Previous — P5-10 / Issue #58 (Stage D)
 
 **Branch `feat/p5-10-localization`**, based on `feat/p5-01-app-shell-onboarding`. EN and RU as first-class
 production locales, per-user and independent of the language customers are answered in.

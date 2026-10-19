@@ -41,19 +41,30 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**Stage D has started with P5-01 (Issue #27)**, on branch `feat/p5-01-app-shell-onboarding`, based on the
-accepted #72 head. Everything before it in the chain has an independent PASS at its published head,
-including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**. Everything before it in the chain
-has an independent PASS at its published head, including **#71 / P2-09 at
+**Stage D's Phase 5 surfaces are implemented** as PRs #73–#80, each stacked on its predecessor and each
+CI-green with evidence posted. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
 `4c9f496d805316ded56311e41bdd4c3c39ff5a43`** and **#68 / P2-06 at
-`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. #72 is the last branch in the
-chain, nothing is merged to `main`, and Stage D has not started.
+`fb35665209b90c82bc10f3068450111e75f83299`**; all are propagated downstream. Nothing is merged to `main`.
 
-Phase 1 and Phase 2 are one stacked chain of unmerged PRs, each branch based on its parent:
+Everything is one stacked chain of unmerged PRs, each branch based on its parent:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81`
+
+| PR | Task | Issue |
+| --- | --- | --- |
+| #73 | P5-01 app shell + resumable onboarding | #27 |
+| #74 | P5-10 localization foundation | #58 |
+| #75 | P5-02 unified Inbox | #28 |
+| #76 | P5-03 review operations + human composer | #29 |
+| #77 | P5-05 Knowledge Library | #31 |
+| #78 | P5-06 Style Training | #32 |
+| #79 | P5-04 AI settings + no-send simulation | #30 |
+| #80 | P5-07 Leads pipeline | #33 |
+| #81 | P3-01 customer identity, search and memory | #54 |
 
 The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
 under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
@@ -236,8 +247,17 @@ which is current.
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
 | #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
-| #80 | `feat/p5-07-leads-pipeline` | **The current gate.** The accepted #79 parent `a1b46cb7789091f7782f039fdbf148631a77e3ea` is merged in by ordinary merge commit, and this is the only branch it has been propagated into. Awaiting independent review. |
-| #81 and below | `feat/p3-01-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. The propagation directive on #80 permits one step only, so nothing below #80 may receive this parent until #80 itself passes. |
+| #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
+| #81 | `feat/p3-01-customer-identity-memory` | **The current gate.** The accepted #80 parent `bd1c039998fb41fe339af97ae2dc5e515810aa6c` is merged in by ordinary merge commit, and this is the only branch below #80 it has been propagated into. Awaiting independent review. |
+| #82 and below | `feat/p3-02-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. Each propagation directive permits one step only, so nothing below #81 may receive this parent until #81 itself passes. |
+
+**The independent reviewer is temporarily Antigravity (Gemini 3.8 Flash), not Astra**, at the owner's
+direction of 2026-10-12. Every previously accepted Astra verdict stands and the review contracts are
+unchanged; what changed is who executes the next one, and the verdict marker — `ANTIGRAVITY_REVIEW: PASS`
+or `ANTIGRAVITY_REVIEW: CHANGES_REQUESTED`. The readiness marker this side publishes keeps its spelling,
+`CLAUDE_READY_FOR_ASTRA head=<sha> task=<task>`, which the owner accepted for backward compatibility; it
+routes to whoever is currently reviewing. Astra's own marker is never to be emitted from this side, and
+neither is Antigravity's.
 
 The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
 and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
@@ -807,11 +827,31 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    *add* stages, which would require `LeadStage` to stop being an enum — and the draft engine returns one
    in its structured output, so that is a decision, not a display preference.
 4. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+
+1. **#54 / P3-01 is the latest work**, as PR #81 on `feat/p3-01-customer-identity-memory`, stacked on
+   P5-07. It adds the customer identity and durable-memory primitives with no UI; see
+   `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`, which the issue referenced and the repository did not have.
+2. **PRs #73–#81 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+   the earliest affected branch and merge down the chain.
+3. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+   owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
+   all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
+   order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
+   `git merge-base --is-ancestor <parent> <child>`.
+4. **P5-08 / Issue #34 (Analytics + Audit) is the next Phase 5 surface**, and #35 P5-09 (E2E,
+   accessibility, responsive) follows it. Analytics must count the human-composed send path as well as the
+   automated one, which is the reason the repair above came first.
+5. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+   require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
+   so that is a decision, not a display preference.
+6. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
-   or names a provider payload type.
-5. No rebases, no force-pushes, and no merges to `main`.
-4. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+   or names a provider payload type. New tables are held by the cascade guard in
+   `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
+   foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
+7. No rebases, no force-pushes, and no merges to `main`.
+8. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
