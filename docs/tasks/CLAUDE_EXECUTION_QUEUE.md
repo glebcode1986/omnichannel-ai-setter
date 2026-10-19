@@ -23,6 +23,26 @@ numbering.
 
 Nothing is merged to `main`.
 
+### Correction — what is true on 2026-10-19, superseding the dated statements below
+
+This file is append-only, so older sections state the position on the day they were written. Three claims
+repeated in them are **no longer true**, and are corrected here rather than deleted, because the record of
+what was believed when is worth keeping:
+
+1. **"#83 and everything below is frozen, still carrying the pre-repair #79" is false.** Every link from
+   #80 to #94 now carries the #79 repairs and everything after them. The chain was propagated link by
+   link on 2026-10-19, fifteen heads, each with its own green exact-head Actions run.
+2. **The two-live-segments description is spent.** It was measured on 2026-10-13 and was true then. Every
+   link now contains its parent, checked with `git merge-base --is-ancestor` at each step rather than
+   inferred from the PR base field.
+3. **The accepted SHAs named below are superseded.** #80 is accepted at `55e368d` and #81 at `d3ad503`,
+   both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
+   heads that have since moved. #94 is accepted at `df77cd7`.
+
+**One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
+that heading have been renamed to what they actually are, because four of them claiming to be current at
+once is how the stale statements above went unnoticed.
+
 ### Current work — propagating the P5-07 lead-board authorization fix into P5-09 / PR #84
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
@@ -91,7 +111,7 @@ bounding a different authorization class on #94 and traced here, to `3c666dd`, a
 directed it to this branch rather than downstream.
 ### Earlier — repairing PR #82 / P3-02 after CHANGES_REQUESTED
 ### Earlier — the accepted #82, propagated into #83 and nowhere else
-### Current work — the accepted #83, propagated into #84 and nowhere else
+### Earlier — the accepted #83, propagated into #84 and nowhere else
 
 **PR #83 / P5-08 is accepted.** Gemini (Google Antigravity) published a formal exact-head GitHub review on
 2026-10-14T12:07:55Z — state `APPROVED`, commit `c7b02267e183b58a54814c0b4663ee69d5608612`, carrying
@@ -236,8 +256,8 @@ is the private repo's allowance rather than anything in the code. It cleared on 
 public. Judge a run by its `steps` count, not only its conclusion. Sixteen heads were verified locally
 while it lasted, and every result matched the later CI run.
 
-**#82 is still the current gate. #83 and everything below stays frozen**, still carrying the pre-repair
-#79. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
+**#82 was the current gate on 2026-10-13, and #83 and everything below was frozen** and still carried
+the pre-repair #79 *at that date*. Both facts have since changed — see the Correction at the top. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
 repairs and their markers were re-published at the new SHAs.
 
 **#26 and #49 have no workflow run and never had one:** `.github/workflows/verify.yml` first appears on
@@ -268,7 +288,8 @@ no verdict marker of its own.
 and not a GitHub head; the propagation recorded here was performed from the remote heads in the
 programmer's environment, which is where the pushed SHA comes from.
 
-**#82 is now the current gate. #83 and everything below is frozen** and still carries the pre-repair #79.
+**#82 was the current gate when this was written, and #83 and everything below was frozen**, still
+carrying the pre-repair #79 *at that date*. See the Correction at the top.
 #104 and #105 sit off the chain, based on #103, and are unaffected.
 
 ### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
@@ -378,9 +399,10 @@ impact codes is not proof, because the codes are in the URL, the page and the ca
 `a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
 `d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
 missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
-#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity); **#82 is the current gate**,
-carrying that accepted parent and awaiting independent review; #83 and everything below is frozen and
-**not ready for review**, because they still contain the pre-repair #79.
+#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity — a head that has since moved);
+**#82 was the current gate at that date**, carrying that accepted parent and awaiting independent review,
+and #83 and everything below was frozen and **not ready for review**, because they still contained the
+pre-repair #79 *then*. See the Correction at the top.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
@@ -389,8 +411,9 @@ superseded by this test-only head, and #79 remains the current gate.
 
 **The #79 repairs are propagated exactly one step.** They exist on
 `feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
-#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
-down in turn once #80 passes.
+#80 permitted one branch, so at that date #81 and below still carried the pre-repair #79 and each needed
+this merged down in turn once #80 passed. That propagation is now complete — see the Correction at the
+top.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
@@ -590,8 +613,8 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
 
-### Current work — P3-01 / Issue #54
-### Current work — P3-02 / Issue #55
+### Task definition — P3-01 / Issue #54
+### Task definition — P3-02 / Issue #55
 ### Blocker repair — P5-01 / Issue #27, propagated to every branch
 
 Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:
@@ -609,7 +632,7 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — P5-09 / Issue #35
+### Task definition — P5-09 / Issue #35
 
 **Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
 repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.
