@@ -43,7 +43,21 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
+### Current work — propagating the P5-07 lead-board authorization fix into P4-01 / PR #87
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
+
+### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -142,6 +156,48 @@ directed it to this branch rather than downstream.
 ### Earlier — the accepted #83, propagated into #84 and nowhere else
 ### Earlier — the accepted #84, propagated into #85 and nowhere else
 ### Earlier — the accepted #85, propagated into #86 and nowhere else
+### Earlier — the accepted #86, propagated into #87 and nowhere else
+
+**PR #86 is accepted.** Gemini/Antigravity formal GitHub review, `APPROVED`, 2026-10-14T18:50:34Z,
+commit `3f6a7e48cda96417332c2f11e0918329e865b6de`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=3f6a7e48cda96417332c2f11e0918329e865b6de`.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#87 / P4-01 is the sole gate;
+#88 onwards are frozen** — no broader Phase 4 propagation and no unrelated work until #87 has its own
+exact-head PASS.
+
+**The ancestry repair.** #87 named #86 as its base while its live base SHA was the pre-acceptance #86
+head `67846521f682693d27b4fe5438b4898cb0821994`, also the merge base — GitHub compared them as 9 ahead /
+24 behind. Ordinary non-rebase merge; `--is-ancestor` of the accepted head now succeeds.
+
+**Zero conflicts and zero fixes.** #87 is additive — a new `packages/channel-whatsapp`, 2,560 insertions
+against 7 deletions — and new files do not conflict, so the zero says little by itself. What was checked
+instead: `pnpm lint:boundaries` (a fresh package is how a forbidden edge arrives), `pnpm install
+--frozen-lockfile` first because the branch moves the lockfile, and the P4-01 contract item by item.
+
+**The P4-01 invariants, verified in the merged code rather than inferred from a green run:** raw-body
+HMAC-SHA256 with `timingSafeEqual` and a length pre-check, failing closed on an empty app secret and
+refusing to normalize an unverified webhook; `display_phone_number` used **only** to recognise a
+coexistence echo (ADR-013) and never as identity or idempotency — that is `sourceEventId(kind, …parts)`,
+with a deterministic SHA-256 digest when the key would overflow; send outcomes confined to
+`ACCEPTED | REJECTED | AMBIGUOUS`; and the accepted #86 invariants intact (dead suspension resolver still
+deleted, guarded kill-switch path authoritative, `proactive`/`dispatchDeadline` present, both loops
+starting, reporting and closing with the shutdown prose still saying six).
+
+**Meta re-verification, 2026-10-15.** `v26.0` remains current — released 2026-07-29, expiration TBD, and
+**no v27.0 exists** — so `DEFAULT_GRAPH_VERSION` is unchanged from the 2026-10-04 note. The signature
+contract is confirmed as `X-Hub-Signature-256` with a `sha256=` prefix, keyed by the app secret. Meta's
+own guidance notes that the signature is computed over the **escaped-unicode** payload rather than
+decoded bytes, which breaks implementations that parse and re-serialize; this adapter is unaffected
+because `readBody` passes `new Uint8Array(await request.arrayBuffer())` and the *same* bytes are both
+hashed and parsed.
+
+**Reported, not fixed:** `packages/channel-whatsapp/src/config.ts:103` illustrates the endpoint as
+`…/v23.0/<phone_number_id>/messages` while the constant is `v26.0`. It is a doc comment only — the URL is
+built from `config.graphVersion` — and it predates this merge, so correcting it would be the unrelated
+cleanup these directives forbid.
+
+### Superseded — the accepted #85, propagated into #86 and nowhere else
 
 **PR #85 / FIX-ISSUE-9 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-14T17:25:58Z, commit `5f56302f8101b1512f9d46a4263643b36f3bbce6`, carrying
@@ -715,6 +771,24 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
+
+### Task definition — P3-01 / Issue #54
+### Task definition — P3-02 / Issue #55
+### Task definition — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
+
+Started at the owner's word, with Stage D's chain still in review. `packages/channel-whatsapp` now
+implements the shared `ChannelAdapter`: raw-body verification, deterministic normalization of text, media,
+voice notes, replies, interactive replies and statuses, the four window states, free-form text and
+approved-template sending, and the read/typing presence effect. 65 tests, fixture-driven.
+
+Branched from the chain tip (`fix/dead-suspension-resolver`), so it carries every Stage D repair.
+
+Meta's live docs were re-checked rather than trusted from the baseline, as Issue #18 requires: the current
+Graph API version is v26.0, and the typing indicator's 25-second lifetime is why presence belongs near the
+send rather than at scheduling time.
+
+Next in Stage E: #19 Embedded Signup and account lifecycle, then #20 templates and outside-window policy.
+
 
 ### Task definition — P3-01 / Issue #54
 ### Task definition — P3-02 / Issue #55

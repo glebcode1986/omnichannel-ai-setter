@@ -1036,6 +1036,31 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
 1. **#34 / P5-08 is the current work**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
 1. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
+**Stage E has started.** Its gate — the Stage D handoff recorded on Issue #36, plus the owner advancing it —
+is satisfied; the owner asked for Stage E to begin while the Stage D chain is in review.
+
+1. **P4-01 / Issue #18: the WhatsApp Cloud API transport adapter is implemented**
+   (`packages/channel-whatsapp`, 65 tests). It mirrors the Instagram adapter's shape deliberately — the two
+   packages may not import each other, so the similarity is in structure and not in shared code.
+
+   **What is genuinely different from Instagram, and why:**
+
+   - **Four window states instead of two.** Outside the 24-hour customer-service window a WhatsApp
+     conversation is not closed, it is `TEMPLATE_ONLY`: an approved template may still reach the customer.
+     Collapsing that into `NOT_ELIGIBLE` would discard the only business-initiated route the platform has.
+     The adapter reports the state; whether to use a template is product policy.
+   - **Two provider identifiers, kept apart.** `phone_number_id` is the sending asset and the webhook's
+     `metadata.phone_number_id`; the WABA owns the subscription and the template catalogue. The display
+     phone number is deliberately not an identity — the verification note is explicit that it must not be a
+     tenant or idempotency key — and it is used for exactly one thing: recognizing a coexistence echo.
+   - **The status-event dedupe key carries the state.** One `wamid` produces sent, delivered and read; a
+     bare-`wamid` key would let the first arrival silence the rest and the Inbox would never leave "sent".
+
+   **Two corrections from re-verifying Meta's live docs today**, which the issue asks for: the current Graph
+   API version is v26.0 (the draft default was v23.0), and the typing indicator disappears after a reply or
+   **25 seconds**, while the product's delay is 30–120 — so presence must be emitted near the send, which
+   the adapter now says out loud rather than leaving to a future reader.
+
 1. **The Instagram token lifecycle had no caller, and now does (#9).**
    `refreshInstagramCredential` lived in `apps/web/src/server/`, was covered by eight tests, and was
    called by no route, no action and no loop. A 60-day token therefore expired with
@@ -1403,6 +1428,81 @@ each was checked rather than assumed:
 **No retries and no failures on this link** — the first time that has been true. `--maxWorkers=2` remains
 deliberate and disclosed, and the 50 skipped files are the PostgreSQL and Redis suites declining to run
 without their service variables, counted in full in the rows above.
+
+## PR #86 accepted, and joined to #87 / P4-01 — 2026-10-15
+
+**#86 is accepted at `3f6a7e48cda96417332c2f11e0918329e865b6de`** — Gemini/Antigravity formal GitHub
+review, `APPROVED`, 2026-10-14T18:50:34Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=3f6a7e48cda96417332c2f11e0918329e865b6de`, verified through
+`GET /pulls/86/reviews`.
+
+**Routing unchanged.** **#87 / P4-01 is the sole gate; #88 onwards are frozen.**
+
+**Ancestry repair.** #87 reported #86 as its base while its live base SHA was the pre-acceptance #86 head
+`67846521f682693d27b4fe5438b4898cb0821994`, also the merge base; GitHub compared them as 9 ahead / 24
+behind. Ordinary non-rebase merge — no rebase, force-push, squash, merge to `main`, or propagation into
+#88+. `git merge-base --is-ancestor 3f6a7e48… HEAD` succeeds.
+
+### Zero conflicts, zero fixes — and why that needed more checking here, not less
+
+#87 is **additive**: a new `packages/channel-whatsapp`, 2,560 insertions against 7 deletions. New files
+never conflict, so a zero conflict count on this link carries almost no information. Two things were run
+because of that rather than despite it: **`pnpm lint:boundaries`** — a fresh package is precisely how a
+forbidden dependency edge enters a layered workspace — and **`pnpm install --frozen-lockfile`** before
+anything else, because the branch moves `pnpm-lock.yaml`.
+
+### The P4-01 contract, verified in the merged code
+
+- **Signature.** `createHmac("sha256", appSecret).update(rawBody)` compared with `timingSafeEqual` after
+  a length pre-check (`timingSafeEqual` throws on a length mismatch, and both lengths are attacker-visible
+  anyway). It fails closed on an empty app secret, and `normalize` refuses outright to run on an
+  unverified webhook.
+- **Tenant isolation and identity.** `display_phone_number` appears in exactly one behavioural place: to
+  recognise that a message came from the business's own number, which is a **coexistence echo** rather
+  than a customer message (ADR-013 — the adapter records the fact and leaves takeover attribution to the
+  application). It is never an identity or idempotency key. That is `sourceEventId(kind, …parts)`, which
+  falls back to a deterministic SHA-256 digest rather than truncating, because truncation would cut the
+  trailing parts that make the key unique.
+- **Send outcomes** are confined to `ACCEPTED | REJECTED | AMBIGUOUS`, with ambiguity preserved rather
+  than made retryable for convenience.
+- **Accepted #86 invariants intact:** the dead suspension resolver stays deleted, the guarded kill-switch
+  claim path stays authoritative, `proactive` and its `dispatchDeadline` branch are present, and both
+  background loops still start, report and close — with the shutdown prose still stating six.
+
+### Meta re-verification — 2026-10-15
+
+| what | finding | source |
+|---|---|---|
+| current Graph API version | **v26.0**, released **2026-07-29**, expiration TBD. **No v27.0 exists.** So `DEFAULT_GRAPH_VERSION` is unchanged from the 2026-10-04 note. | [Graph API versions](https://developers.facebook.com/docs/graph-api/changelog/versions/) |
+| signature header | `X-Hub-Signature-256`, value prefixed `sha256=`, generated from the payload with the **App Secret** | [Webhooks getting started](https://developers.facebook.com/docs/graph-api/webhooks/getting-started) |
+| the escaped-unicode trap | Meta computes the signature over an **escaped-unicode** payload (`äöå` → `äöå`), not decoded bytes, so implementations that parse and re-serialize produce a different hash | Meta webhooks guidance |
+
+**That last one is the reason this check was worth doing, and this adapter is unaffected.**
+`apps/web/src/server/webhooks.ts` reads the body as `new Uint8Array(await request.arrayBuffer())` before
+any parsing, and **the same bytes are both hashed and parsed** — `parseWebhook(input.rawBody)` — so
+whatever Meta put on the wire is exactly what is verified. Nothing re-serializes in between.
+
+**Reported and deliberately not fixed:** `packages/channel-whatsapp/src/config.ts:103` illustrates the
+endpoint as `https://graph.facebook.com/v23.0/<phone_number_id>/messages` while the constant is `v26.0`.
+The URL is built from `config.graphVersion`, so behaviour is correct and only the comment is stale — and
+it predates this merge, so changing it would be the unrelated cleanup these directives forbid.
+
+### Verification of this head
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries / production build | exit 0, exit 0, exit 0 |
+| `@omnichannel/channel-whatsapp` | 5 files, **65/65** — signature, duplicate inbound, media/audio/reply, reordered status, send ambiguity, window, malformed payloads, coexistence, tenant isolation |
+| PostgreSQL suites (`--maxWorkers=2`, `REQUIRE_DB_TESTS=1`) | 35 files, **721/721**, no skips |
+| Redis suites (`--maxWorkers=2`, `REQUIRE_REDIS_TESTS=1`) | 3 files, **53/53** |
+| worker + web | 86 files, **954/954** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| no-infrastructure path (`env -i … CI=1 pnpm verify`) | exit 0, 114 files passed / 50 skipped, **1576 passed** / 881 skipped |
+
+**No retries and no failures on this link**, the second such in a row. `--maxWorkers=2` stays deliberate
+and disclosed; the 50 skipped files are the PostgreSQL and Redis suites declining to run without their
+service variables and are counted in full above.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 
