@@ -15,7 +15,38 @@ each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — propagating the accepted P5-07 parent into P3-01 / PR #81
+### Current work — propagating the P5-07 lead-board authorization fix into P3-01 / PR #81
+
+PR #80 moved: a role check was added to `saveStageDisplays`, which had let an AGENT holding one
+Business Profile reconfigure the lead board every profile reads. That fix is merged into this branch by
+ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`, nothing into
+#82 or later. The merge touched only the two canonical documents, which both branches append to; the
+three code files came across unchanged.
+
+**#80's earlier `ANTIGRAVITY_REVIEW: PASS head=bd1c039…` no longer covers its new head**, so the verdict
+this branch inherited has moved too. The fix and its evidence are described in the section below, which
+came across with it.
+
+### The fix this branch inherited — the shared lead board had no role check (2026-10-19)
+
+`lead_stage_displays` has **no `business_profile_id` column** — keyed `(workspace_id, stage)` and read by
+Workspace alone — so it is the board every Business Profile sees. `saveStageDisplays` deleted and
+recreated every row for `context.workspaceId` from a single-profile context with no role check at any
+layer, so **an AGENT with one profile could rename, reorder and hide the lead stages on every other
+profile's board**. It also never called `profileScopeOf`, so the branded-context validation never ran
+there.
+
+Fixed by requiring `WORKSPACE_ADMIN_ROLES` **before** the input validation, restoring `profileScopeOf` in
+both stage functions, and gating the `StageConfig` render on `canConfigure` the way the channels and setup
+screens already do. Four cases, each refusal reading the rows back; mutations caught 3 / 2 / 1 (guard
+deleted, guard after the commit, guard after validation).
+
+**This head moves, so #80's `ANTIGRAVITY_REVIEW: PASS head=bd1c039…` no longer covers it** — the branch
+needs a fresh verdict, and the fix has to be merged down the chain one link at a time. Found while
+bounding a different authorization class on #94 and traced here, to `3c666dd`, as its origin; the owner
+directed it to this branch rather than downstream.
+
+### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
 
 `ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` accepted PR #80. The directive on
 #81 merges that exact parent into `feat/p3-01-customer-identity-memory`, **one branch only**: no rebase,
