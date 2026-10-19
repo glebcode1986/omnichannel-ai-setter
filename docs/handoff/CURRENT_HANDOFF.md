@@ -54,7 +54,7 @@ Everything is unmerged PRs stacked by base — but **not one chain. Two live seg
 on 2026-10-13 and had been assumed otherwise until then:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
 
 `#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
 
@@ -94,6 +94,7 @@ parent: check every link with `git merge-base --is-ancestor <parent> <child>` be
 | #81 | P3-01 customer identity, search and memory | #54 |
 | #82 | P3-02 goals, follow-ups and human tasks | #55 |
 | #83 | P5-08 operational analytics and searchable audit | #34 |
+| #84 | P5-09 UX end-to-end, accessibility and responsive pass | #35 |
 
 The Phase 1 tasks named in the launch plan are all implemented and sit in that chain; the per-PR detail is
 under "Phase 1 implementation stack" below. What the architecture review of PR #26 settled is still binding
@@ -141,7 +142,7 @@ Implemented as stacked PRs awaiting independent review, in dependency order:
 4. #51 (#5): BullMQ delay primitives.
 5. #52 (#6): channel-neutral webhook ingestion with a transactional outbox, scoped to the Business Profile resolved from the channel account (see `docs/specs/ARCHITECTURE.md` implementation notes).
 
-6. #62 (#37): the GitHub Actions `pnpm verify` gate, staged at `docs/ci/verify.yml` because the implementation credential cannot write `.github/workflows/`.
+6. #62 (#37): the GitHub Actions `pnpm verify` gate. It is **live** at `.github/workflows/verify.yml` and green on every pull request in this chain; the owner pushed the activation commit after the implementation credential was refused the `workflow` scope. What is still open on Issue #37 is only that `main` has no `push` run yet, because nothing is merged there by design.
 
 Nothing is merged yet.
 
@@ -1034,6 +1035,21 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
 3. **PRs #73–#82 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
 1. **#34 / P5-08 is the current work**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
+1. **#35 / P5-09 is the current work**, as PR #84 on `feat/p5-09-product-ux-e2e`, stacked on the repaired
+   #83. The full operator journey, an accessibility pass and responsive verification; see
+   `docs/specs/UX_VERIFICATION.md`, which the contract asks for and which states the limitations as
+   plainly as the coverage.
+   - **The journeys drive the real server path**, not a DOM. Each enters through
+     `resolveBusinessProfileContext` — session check included — and then the same stores the server
+     actions drive, against a migrated database. Every journey has an authorization probe and a
+     stale-state probe, because the contract asks for those rather than a happy path.
+   - **Contrast is computed, not eyeballed.** WCAG ratios come from the stylesheet's own tokens in both
+     themes. It found a real defect: `--border-strong` was 1.91:1 light and 1.86:1 dark against the
+     surface a `.button` actually sits on, where SC 1.4.11 wants 3:1 for a control's own boundary.
+   - **jsdom evaluates no media queries and lays nothing out**, so no test here claims a page *looks*
+     right at 375px. What the responsive tests hold is that the narrow-screen rules exist and still name
+     what the components render — which is how this breaks in practice.
+2. **#34 / P5-08 is complete**, as PR #83 on `feat/p5-08-analytics-audit`, stacked on P3-02.
    Operational metrics and a searchable, append-only audit log; see `docs/specs/ANALYTICS_DEFINITIONS.md`,
    which is the definition of record for every metric on the page.
    - **Application state and provider state are never summed.** "Handed to the provider" is our claim;
@@ -1044,13 +1060,13 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    - **`audit_events` is append-only by trigger.** `BEFORE UPDATE`/`BEFORE DELETE` raise; a correction is
      a new row. Sensitivity is derived from the kind, never passed by the caller.
    - Where a metric has no denominator it reports `null`, never zero.
-2. **#55 / P3-02 is complete**, as PR #82. Conversation goals, bounded follow-ups and human tasks; see
+3. **#55 / P3-02 is complete**, as PR #82. Conversation goals, bounded follow-ups and human tasks; see
    `docs/specs/GOALS_FOLLOWUPS.md`. Attempts are bounded by CHECK constraints (1–5), every follow-up is
    revalidated at execution, and `human_tasks` has no column a send path could attach to.
-3. **#54 / P3-01 is accepted**; see `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
-4. **PRs #73–#83 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
+4. **#54 / P3-01 is accepted**; see `docs/specs/CUSTOMER_IDENTITY_SEARCH.md`.
+5. **PRs #73–#84 are awaiting review.** All are CI-green with evidence posted. Fixes for any of them go to
    the earliest affected branch and merge down the chain.
-5. **PR #73 was repaired on 2026-10-03 after an independent review, and the fix is in every branch here.**
+6. **PR #73 was repaired on 2026-10-03 after an independent review, and the fix is in every branch here.**
    Astra returned `CHANGES_REQUESTED` at `98895f4344ca3a0a2582ba69b497e9271dc263fc`: activation was
    permitted while the STYLE step was unfinished and had not been deliberately skipped.
    `ONBOARDING_UX.md` requires "style configured **or** intentionally skipped" — a gate with two ways to
@@ -1072,23 +1088,23 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    needed fixing at #73 and re-propagating: the new fixture wrote an unapproved `ACTIVE` style example,
    which `style_examples_verified_check` refuses from P5-06 onward, so the test passed at #73 and failed
    everywhere it was merged to.
-6. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
+7. **The chain was repaired on 2026-09-30.** PR #76 gained its second commit — the human composer, on the
    owner's `FINISH_HUMAN_COMPOSER` directive — *after* #77 had been cut from it, so #77 through #81 were
    all missing the human-composed send path. It has been merged down through #77, #78, #79, #80 and #81 in
    order, each verified and pushed. Check ancestry, not just the PR base, before building on a branch:
    `git merge-base --is-ancestor <parent> <child>`.
-7. **#35 / P5-09 (E2E, accessibility, responsive) is the next Phase 5 surface** after #83.
-8. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
+8. **Stage D's Phase 5 surfaces are complete with #84.** Nothing further is queued in MASTER #61's Stage D order; the next task is the owner's to name.
+9. One product question is open from P5-07: the spec allows a Workspace to *add* lead stages, which would
    require `LeadStage` to stop being an enum — and the draft engine returns one in its structured output,
    so that is a decision, not a display preference.
-9. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
+10. Every surface must take its text from `apps/web/src/i18n/catalogue.ts`; `no-unlocalized-strings.test.ts`
    fails the build otherwise. New Inbox panes are also held by
    `apps/web/src/ui/inbox/no-provider-payloads.test.ts`, which fails if a pane imports a channel package
    or names a provider payload type. New tables are held by the cascade guard in
    `packages/db/src/constraints.integration.test.ts`: only login data and grants may cascade, so a new
    foreign key is `ON DELETE RESTRICT` and removal is an explicit, auditable act.
-10. No rebases, no force-pushes, and no merges to `main`.
-11. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
+11. No rebases, no force-pushes, and no merges to `main`.
+12. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
@@ -1168,6 +1184,79 @@ are the same suites counted in full in the rows above.
 One environment note, not a code defect: `packages/billing-stripe` left on disk by a checkout of a later
 branch breaks `scripts/verification/gate.test.ts` with ENOENT on branches that do not have that package.
 It was removed before the run above.
+
+## PR #83 accepted, and joined to #84 — 2026-10-14
+
+**#83 / P5-08 is accepted at `c7b02267e183b58a54814c0b4663ee69d5608612`.** Gemini (Google Antigravity)
+published a formal exact-head GitHub review on 2026-10-14T12:07:55Z: state `APPROVED` on that commit,
+carrying `ANTIGRAVITY_REVIEW: PASS head=c7b02267e183b58a54814c0b4663ee69d5608612`. Verified through
+`GET /pulls/83/reviews` rather than from a coordination comment — state, `commit_id` and the marker all
+match.
+
+**Routing unchanged:** Gemini/Antigravity temporary **primary**, Astra **secondary advisory-only** until
+it has a working PostgreSQL/Redis/Linux runner of its own and the owner re-routes. Claude is the sole
+author. The marker keeps the `CLAUDE_READY_FOR_ASTRA` spelling for parser compatibility.
+
+**#84 / P5-09 is the sole propagation and review gate. #85 onwards are frozen** — no Phase 4
+propagation, no Stage E, no new feature work until #84 has its own exact-head PASS.
+
+**The ancestry repair.** #84 reported #83 as its base while its live base SHA was the *pre-acceptance*
+#83 head `8f84deebf92c1ee204cacb80654a9a228759db07`, which was also the merge base; GitHub compared them
+as 16 ahead / 21 behind, so #84 held none of the accepted work. Joined by an **ordinary non-rebase
+merge** — no rebase, force-push, squash, merge to `main`, or propagation into #85+.
+`git merge-base --is-ancestor c7b02267e183b58a54814c0b4663ee69d5608612 HEAD` succeeds on the new head.
+
+This is the second link of the shape #82→#83 had, and it was **measured in advance**: a throwaway local
+probe predicted zero conflicts and three typecheck errors in one file. That is exactly what occurred,
+which is the useful part — a clean merge is not a working merge, and both links so far compiled only
+after fixing files that had no textual conflict at all.
+
+### What the merge reconciled
+
+Zero conflicts. Three pieces of integration fallout, all in
+`apps/web/src/journeys/operator-journey.integration.test.ts` and all from accepted #83 behaviour:
+
+1. **`savePolicy` requires `expectedVersion`.** The journey now reads the profile default's live version
+   and posts it back, which is what the real screen does. The requirement exists so that no caller can
+   decide not to care, and it was not weakened.
+2. **`listPolicyAudits` answers a `PolicyAuditPage`, not an array.** `audits[0]` became
+   `audits.entries[0]`. The change history is paged because the spec wants old and new values kept rather
+   than capped.
+3. **A Business Profile is born with its default policy.** The journey's hand-written
+   `automationPolicy.create` violated `automation_policies_profile_default_key`; it is gone, and
+   `MANDATORY_REVIEW_REASON_CODES` left the import with it. This is the same fallout #83's audit suite
+   had — the second place it surfaced, and worth expecting at every further link.
+
+Accepted #83 behaviour was re-verified here rather than assumed: the human takeover still retains both
+the `TAKEOVER_STARTED` audit row and `cancelPendingFollowUps` inside one transaction, policy
+`expectedVersion` concurrency and default-policy creation are intact, and the analytics/audit
+tenant-isolation, append-only and sensitive-event invariants all pass.
+
+### Verification of this head
+
+Commands as run, with their real numbers and limits. No assertion or timeout was changed.
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0, 0 errors |
+| lint + boundaries | `pnpm lint` | exit 0 |
+| production build | `pnpm build` | exit 0 |
+| PostgreSQL suites | `vitest run --project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 34 files, **709/709**, exit 0, no skips |
+| Redis suites | `vitest run --project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53**, exit 0 |
+| worker + web E2E | `vitest run --project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 84 files, **941/941**, exit 0 |
+| P5-09 coverage specifically | the same, narrowed to `a11y` and `journeys` | 3 files, **42/42** — contrast, semantics, the operator journey |
+| evals | `pnpm evals` | **20/20 passed, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 107 files passed / 49 skipped, 1501 passed / 866 skipped |
+
+**Retries and failures, disclosed.** The first `pnpm typecheck` after the merge failed with the three
+predicted errors. The first full worker+web run then failed one file — the journey's `beforeAll` hitting
+the profile-default unique constraint, which the typecheck could not see. Both were fixed as described and
+re-run clean. `--maxWorkers=2` is deliberate and disclosed: unbounded local runs on this machine give a
+different load-sensitive failure set each attempt in files a change cannot have touched. The 49 skipped
+files in the last row are the PostgreSQL and Redis suites declining to run without
+`TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full in the rows
+above.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 

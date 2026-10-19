@@ -4,7 +4,7 @@
 
 ## Decision
 
-Keep all model-provider SDKs behind `packages/ai`. Application/domain code consumes a normalized structured draft/result contract validated with Zod.
+Keep all model-provider SDKs behind `packages/ai`. `packages/application` owns the provider-neutral boundary contract and validates model output against it with Zod; `packages/domain` consumes only the semantic values that validation maps the result into, and never the contract itself. The amendment below states the ownership in full.
 
 ### Amendment — package ownership (PR #26 architecture review)
 
