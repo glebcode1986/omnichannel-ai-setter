@@ -8,15 +8,25 @@
  */
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { pendingHumanReply, readConversation } from "@omnichannel/db";
+import {
+  listAssignableMembers,
+  listLeads,
+  pendingHumanReply,
+  readConversation,
+  readQualification,
+  readStageDisplays,
+  readStageHistory,
+} from "@omnichannel/db";
 
 import { ConversationList } from "@/ui/inbox/conversation-list";
 import { MessageThread } from "@/ui/inbox/message-thread";
 import { ContextPanel } from "@/ui/inbox/context-panel";
+import { LeadPanel } from "@/ui/leads/lead-panel";
 import { ConversationControls } from "@/ui/inbox/conversation-controls";
 import { Composer } from "@/ui/inbox/composer";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { cancelSendAction, composeReplyAction, handBackAction, takeOverAction } from "@/server/review-actions";
+import { editLeadAction, recordAnswerAction } from "@/server/lead-actions";
 import { getDb } from "@/server/db";
 import { loadInboxScreen } from "@/server/inbox-page";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -35,13 +45,21 @@ export default async function ConversationPage({
 }) {
   const { workspaceId, businessProfileId, conversationId } = await params;
   const screen = await loadInboxScreen(workspaceId, businessProfileId, await searchParams);
-  const [conversation, pending] = await Promise.all([
+  // The lead beside the conversation, through the same panel the board uses: "edit a lead from the
+  // conversation" and "edit it from the board" have to be one edit, or they become two behaviours.
+  const [conversation, pending, stages, members, history, qualification, leads] = await Promise.all([
     readConversation(getDb(), screen.context, conversationId),
     pendingHumanReply(getDb(), screen.context, conversationId),
+    readStageDisplays(getDb(), screen.context),
+    listAssignableMembers(getDb(), screen.context),
+    readStageHistory(getDb(), screen.context, conversationId),
+    readQualification(getDb(), screen.context, conversationId),
+    listLeads(getDb(), screen.context),
   ]);
   if (conversation === undefined) {
     notFound();
   }
+  const lead = leads.find((candidate) => candidate.conversationId === conversationId);
 
   return (
     <div className="inbox" data-pane="thread">
@@ -84,7 +102,22 @@ export default async function ConversationPage({
           actions={{ takeOver: takeOverAction, handBack: handBackAction, cancelSend: cancelSendAction }}
         />
       </div>
-      <ContextPanel t={screen.t} conversation={conversation} />
+      <div className="inbox-context-column">
+        <ContextPanel t={screen.t} conversation={conversation} />
+        {lead === undefined ? undefined : (
+          <LeadPanel
+            t={screen.t}
+            lead={lead}
+            stages={stages}
+            members={members}
+            history={history}
+            qualification={qualification}
+            target={{ workspaceId, businessProfileId }}
+            editAction={editLeadAction}
+            answerAction={recordAnswerAction}
+          />
+        )}
+      </div>
     </div>
   );
 }

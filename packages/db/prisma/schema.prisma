@@ -92,6 +92,13 @@ enum LeadStage {
   LOST
 }
 
+/// Who supplied a lead value. The AI's reading and a person's decision are never the same claim.
+enum LeadValueSource {
+  AI_SUGGESTED
+  HUMAN_CONFIRMED
+  HUMAN_SET
+}
+
 enum TakeoverState {
   NONE
   REVIEW_REQUIRED
@@ -332,6 +339,9 @@ model User {
   composedDeliveries        DeliveryJobRecord[]   @relation("ComposedDeliveries")
   onboardingSkips           OnboardingSkip[]
   policyChangeAudits        PolicyChangeAudit[]
+  assignedLeads             Conversation[]            @relation("LeadAssignee")
+  leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
+  leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
   styleExampleDecisions     StyleExample[]         @relation("StyleExampleDecider")
   styleDecisionsMade        StyleExampleDecision[]
@@ -394,6 +404,9 @@ model Workspace {
   styleProfiles      StyleProfile[]
   policyChangeAudits PolicyChangeAudit[]
   styleExampleDecisions StyleExampleDecision[]
+  leadStageDisplays  LeadStageDisplay[]
+  leadStageTransitions LeadStageTransition[]
+  leadQualificationAnswers LeadQualificationAnswer[]
 
   @@map("workspaces")
 }
@@ -673,14 +686,24 @@ model Conversation {
   lastOutboundAt            DateTime?          @map("last_outbound_at")
   /// Inbox ordering: latest message activity (creation time until the first message).
   lastMessageAt             DateTime           @default(now()) @map("last_message_at")
+  /// The person who owns this lead. Distinct from `takeoverActorUser`, which is who is holding the
+  /// conversation right now: an assignee stays after they hand the thread back to automation.
+  assignedUserId            String?            @map("assigned_user_id")
+  leadTags                  String[]           @default([]) @map("lead_tags")
+  leadNote                  String?            @map("lead_note")
+  nextAction                String?            @map("next_action")
+  nextActionAt              DateTime?          @map("next_action_at")
   createdAt                 DateTime           @default(now()) @map("created_at")
   updatedAt                 DateTime           @updatedAt @map("updated_at")
 
   channelIdentity   ChannelIdentity @relation(fields: [workspaceId, businessProfileId, channelAccountId, channelIdentityId], references: [workspaceId, businessProfileId, channelAccountId, id], onDelete: Restrict, onUpdate: Restrict)
   contact           Contact         @relation(fields: [workspaceId, businessProfileId, contactId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
   takeoverActorUser User?           @relation(fields: [takeoverActorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  assignedUser      User?           @relation("LeadAssignee", fields: [assignedUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "conversations_assigned_user_fkey")
   messages          Message[]
   aiDrafts          AiDraft[]
+  leadStageTransitions LeadStageTransition[]
+  leadQualificationAnswers LeadQualificationAnswer[]
   composedDeliveries DeliveryJobRecord[]
 
   @@unique([workspaceId, businessProfileId, id])
@@ -690,6 +713,69 @@ model Conversation {
   @@index([workspaceId, businessProfileId, status, lastMessageAt(sort: Desc)], map: "conversations_profile_inbox_idx")
   @@index([channelAccountId, lastInboundAt])
   @@map("conversations")
+}
+
+/// How one Workspace shows one stage. A missing row means the product default (LEADS_ANALYTICS_UX.md).
+model LeadStageDisplay {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String   @map("workspace_id")
+  stage       LeadStage
+  label       String
+  position    Int
+  /// Hidden, never deleted: leads already sitting in a hidden stage must stay reachable.
+  hidden      Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "lead_stage_displays_workspace_fkey")
+
+  @@unique([workspaceId, stage], map: "lead_stage_displays_stage_key")
+  @@unique([workspaceId, position], map: "lead_stage_displays_position_key")
+  @@map("lead_stage_displays")
+}
+
+/// Every stage change, with who caused it. A CHECK pairs the actor with the source.
+model LeadStageTransition {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id")
+  businessProfileId String          @map("business_profile_id")
+  conversationId    String          @map("conversation_id")
+  /// NULL for the first recorded transition: earlier history predates this table.
+  fromStage         LeadStage?      @map("from_stage")
+  toStage           LeadStage       @map("to_stage")
+  source            LeadValueSource
+  /// Set exactly when a person did it; an AI suggestion has no actor to name.
+  actorUserId       String?         @map("actor_user_id")
+  changedAt         DateTime        @default(now()) @map("changed_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "lead_stage_transitions_workspace_fkey")
+  conversation Conversation @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "lead_stage_transitions_conversation_fkey")
+  actor        User?        @relation("LeadStageActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "lead_stage_transitions_actor_fkey")
+
+  @@index([workspaceId, businessProfileId, conversationId, changedAt(sort: Desc)], map: "lead_stage_transitions_history_idx")
+  @@map("lead_stage_transitions")
+}
+
+/// What the business learned about a lead, one row per criterion per source — so the AI's reading and a
+/// person's confirmation coexist rather than one silently replacing the other.
+model LeadQualificationAnswer {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId       String          @map("workspace_id")
+  businessProfileId String          @map("business_profile_id")
+  conversationId    String          @map("conversation_id")
+  criterion         String
+  value             String
+  source            LeadValueSource
+  actorUserId       String?         @map("actor_user_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "lead_qualification_answers_workspace_fkey")
+  conversation Conversation @relation(fields: [workspaceId, businessProfileId, conversationId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict, map: "lead_qualification_answers_conversation_fkey")
+  actor        User?        @relation("LeadQualificationActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "lead_qualification_answers_actor_fkey")
+
+  @@unique([workspaceId, businessProfileId, conversationId, criterion, source], map: "lead_qualification_answers_criterion_key")
+  @@map("lead_qualification_answers")
 }
 
 model Message {

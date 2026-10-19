@@ -235,14 +235,33 @@ which is current.
 | PR | Branch | Status |
 | --- | --- | --- |
 | #78 | `feat/p5-06-style-training` | **PASSED** at `8692d8f35d16256beb819488da9ae5a263a1a3e1`. Head untouched since. |
-| #79 | `feat/p5-04-ai-settings-simulation` | **Still the current gate.** CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Every earlier review request is **superseded** by the head that closes those two blockers. Awaiting independent re-review. |
-| #80 and below | `feat/p5-07-…` through `feat/p7-02-…` | **Held**, not ready for review, until #79 passes. They contain #79, so a finding there is a finding in all of them. |
+| #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
+| #80 | `feat/p5-07-leads-pipeline` | **The current gate.** The accepted #79 parent `a1b46cb7789091f7782f039fdbf148631a77e3ea` is merged in by ordinary merge commit, and this is the only branch it has been propagated into. Awaiting independent review. |
+| #81 and below | `feat/p3-01-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They still carry the pre-repair #79. The propagation directive on #80 permits one step only, so nothing below #80 may receive this parent until #80 itself passes. |
 
-The #79 repairs are summarised under "P5-04" below. They live **only** on
-`feat/p5-04-ai-settings-simulation` and are deliberately **not propagated**: the repair directive on that
-PR forbids merging them into #80 or later until #79 has an independent PASS, so #80 and below still carry
-the pre-repair #79. Do not read the #78 propagation described in the next paragraph as covering these —
-that one is #78's and it is finished. No rebase, no force-push, no merge to `main`.
+The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
+and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
+parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
+merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
+started.
+
+**The propagation into #80 found no semantic collision, which is worth recording because the dry run had
+predicted where one would be.** Exactly four files were touched by both branches: `catalogue.ts`,
+`schema.prisma` and `packages/db/src/index.ts` auto-merged (both sides only added — keys, models, exports
+— and every added line from both sides is present in the result, checked line by line), and
+`apps/web/src/ui/outcome-notice.tsx` conflicted because both appended to one `OUTCOMES` array. Resolved by
+keeping both: P5-07's `MOVED`/`STALE_STAGE`/`UNCHANGED_STAGE` and P5-04's `FORBIDDEN`/`TOO_LONG`/the three
+`TIMING_*`/the two `TAKEOVER_*`. The `REFUSALS` set below it auto-merged and already held both. Every
+P5-04 settings, policy and simulation file is byte-identical to the accepted head.
+
+The directive asked specifically that no part of the policy proposal state be dropped, naming
+`presenceMode` and `presenceTypingLeadMs`. **Those two fields do not exist at #80**: they arrive with
+P4-05 (commit `6ac04a3`, `feat/p4-05-whatsapp-presence`), which is below #80 in the chain, so the
+collision the directive is guarding against becomes material when this parent reaches the P4-05 branches
+and not before. What #80 does carry is the complete proposal state the confirm/refuse flow uses, and it is
+built in exactly one place (`proposalFrom`) and converted to the store's edit in exactly one place
+(`editFrom`); both are unchanged from the accepted head.
 
 **PR #78 has an independent PASS at `8692d8f35d16256beb819488da9ae5a263a1a3e1`, and the hold is lifted.**
 That PASS was the condition every one of these notes was waiting on. The P5-06 repairs are now merged
@@ -797,3 +816,81 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
+
+## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
+
+**Found while bounding a different authorization class on PR #94 (P3-04), and traced back to this branch
+as its origin (`3c666dd`).** The owner directed the fix here rather than downstream, so this head moves and
+the `ANTIGRAVITY_REVIEW: PASS head=bd1c039998fb41fe339af97ae2dc5e515810aa6c` no longer covers it: #80 needs
+a fresh verdict, and the chain below it needs this merged down one link at a time.
+
+### What was wrong
+
+`lead_stage_displays` has **no `business_profile_id` column**. It is keyed `(workspace_id, stage)`, and
+`readStageDisplays` reads it by Workspace alone, so the labels, order and hidden flags are the board
+**every** Business Profile in the Workspace sees. `saveStageDisplays` took a `BusinessProfileContext`, then
+inside one transaction deleted every row for `context.workspaceId` and recreated them from the submitted
+form — with no role check at any layer. `saveStagesAction` called only `requireBusinessProfileContext`, and
+the Leads page rendered the `StageConfig` form unconditionally.
+
+**So an AGENT granted a single Business Profile could rename, reorder and hide the lead stages on every
+other profile's board**, and hiding a stage takes those leads off everyone's board view.
+
+A second defect in the same function: it reached for `context.workspaceId` directly and never called
+`profileScopeOf`, so the branded-context validation in `tenancy.ts` — the check that a context was issued
+by `authorizeBusinessProfileAccess` rather than assembled as a plain object — never ran on that path. It
+and `readStageDisplays` were the only two functions in `lead-store.ts` that skipped it; the other six call
+it.
+
+### The fix
+
+- `saveStageDisplays` requires `WORKSPACE_ADMIN_ROLES`, **before the input validation**: whether a member
+  may reconfigure the shared board does not depend on whether their form was well formed, and an
+  unauthorized post should not be able to probe the validation rules. That ordering matches
+  `createStyleExample`, which guards before it validates.
+- Both `saveStageDisplays` and `readStageDisplays` now call `profileScopeOf(context)` and use
+  `scope.workspaceId`. The read keeps no role check — every role sees the board.
+- `leads/page.tsx` computes `canConfigure = WORKSPACE_ADMIN_ROLES.includes(context.role)` and renders
+  `StageConfig` only for an admin or owner, the same gate the channels and setup screens use. The store
+  refuses it either way; hiding the form is so an agent is answered by the page rather than by an error
+  boundary — the doctrine `settings-actions.ts` states.
+
+### Tests, and why they read the rows back
+
+Four cases: an AGENT refused with the `lead_stage_displays` rows asserted **unchanged**; an AGENT posting
+*invalid* input still refused with the permission error rather than a validation message; the **same**
+AGENT still moving a lead and still reading the board; an ADMIN succeeding with the configuration asserted
+to have really landed.
+
+The control is a different shape from the knowledge and style ones on #94: `LeadStageDisplay` has no
+profile column, so there is **no profile-scoped variant** to fall back on. What must still work is the
+ordinary pipeline, which is what the third case asserts.
+
+The rows are read back rather than the exception being trusted, which is the lesson from #94's own round
+two — there, refusal tests that asserted only the thrown error passed 52/52 and 50/50 while the write
+committed. Measured here, each mutation applied alone:
+
+| mutation | result |
+|---|---|
+| guard deleted | **3 failed** |
+| guard moved after the transaction commits | **2 failed**, including "the board every profile reads does not move" |
+| guard moved after the input validation | **1 failed**, the probe case |
+
+### Verification
+
+Real PostgreSQL 17 + pgvector and Redis 7; `--maxWorkers=2`; dedicated shadow database for the drift check.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 — 13 packages, 452 source files, no cycles |
+| unit suites | 138 files, **2039/2039** |
+| PostgreSQL suites | 27 files, **492/492**, no skips |
+| Redis suites | **51/51** |
+| worker + web E2E | **832/832** |
+| evals | **20/20**, 0 quality regressions |
+| production build | exit 0 |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0; **1424 passed / 615 skipped** |
+
+These line up with the numbers the accepted review recorded for `bd1c039` — 488 PostgreSQL cases and
+1424/611 — plus exactly the four cases this change adds, which skip without infrastructure.

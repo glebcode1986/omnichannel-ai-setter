@@ -44,6 +44,9 @@ const OUTCOMES = [
   "RESTORED",
   "CONFLICT",
   "REFUSED",
+  "MOVED",
+  "STALE_STAGE",
+  "UNCHANGED_STAGE",
   // Settings answer two refusals of their own: a role that may not change them, and a field too long to
   // travel back in a refused proposal. Both are refusals, and both have to survive a reload — a person
   // who was silently not allowed to save reads the screen as a screen that does nothing.
@@ -71,6 +74,7 @@ const REFUSALS = new Set<string>([
   "ALREADY_PENDING",
   "NOT_OPEN",
   "REFUSED",
+  "STALE_STAGE",
   // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
   // their edit or their publish landed.
   "CONFLICT",

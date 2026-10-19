@@ -920,3 +920,188 @@ a {
 .style-examples .message-text {
   margin: 2px 0 8px;
 }
+
+/* ---- leads pipeline ----------------------------------------------------------------------------- */
+
+.lead-board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(16rem, 1fr);
+  gap: var(--gap);
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: var(--gap);
+}
+
+.lead-column {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  min-width: 16rem;
+}
+
+.lead-column h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.lead-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lead-column li {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lead-column .muted {
+  margin: 0;
+  font-size: 13px;
+}
+
+.lead-move {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.lead-move select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/*
+ * The table is the board's accessible fallback, so it is always in the document. Below the board's
+ * width it is the only view — a horizontally scrolling kanban on a phone is a way to lose leads.
+ */
+.lead-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.lead-table caption {
+  text-align: left;
+  padding-bottom: 8px;
+  color: var(--text-muted);
+}
+
+.lead-table th,
+.lead-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (max-width: 900px) {
+  .lead-board {
+    display: none;
+  }
+}
+
+.lead-panel {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  margin-top: var(--gap);
+}
+
+.lead-panel h3 {
+  margin: 0 0 8px;
+}
+
+.lead-panel h4 {
+  margin: var(--gap) 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.lead-answers,
+.lead-history {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lead-answers {
+  list-style: none;
+  padding-left: 0;
+}
+
+.lead-answers p,
+.lead-history p {
+  margin: 0;
+}
+
+/* A claim the assistant made, not one a person confirmed: visibly provisional. */
+.lead-answers li[data-source="AI_SUGGESTED"] {
+  border-left: 2px dashed var(--border-strong);
+  padding-left: 8px;
+}
+
+.stage-config {
+  margin-bottom: var(--gap);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.stage-config summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.stage-config table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.stage-config th,
+.stage-config td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-config input[type="text"],
+.stage-config input[type="number"] {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.inbox-context-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+}

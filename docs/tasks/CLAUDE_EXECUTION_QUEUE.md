@@ -14,7 +14,42 @@ and each awaiting independent review in dependency order:
 
 Nothing is merged to `main`.
 
-### Current work — P5-04 / Issue #30, the blockers on PR #79
+### Current work — the shared lead board had no role check (2026-10-19)
+
+`lead_stage_displays` has **no `business_profile_id` column** — keyed `(workspace_id, stage)` and read by
+Workspace alone — so it is the board every Business Profile sees. `saveStageDisplays` deleted and
+recreated every row for `context.workspaceId` from a single-profile context with no role check at any
+layer, so **an AGENT with one profile could rename, reorder and hide the lead stages on every other
+profile's board**. It also never called `profileScopeOf`, so the branded-context validation never ran
+there.
+
+Fixed by requiring `WORKSPACE_ADMIN_ROLES` **before** the input validation, restoring `profileScopeOf` in
+both stage functions, and gating the `StageConfig` render on `canConfigure` the way the channels and setup
+screens already do. Four cases, each refusal reading the rows back; mutations caught 3 / 2 / 1 (guard
+deleted, guard after the commit, guard after validation).
+
+**This head moves, so #80's `ANTIGRAVITY_REVIEW: PASS head=bd1c039…` no longer covers it** — the branch
+needs a fresh verdict, and the fix has to be merged down the chain one link at a time. Found while
+bounding a different authorization class on #94 and traced here, to `3c666dd`, as its origin; the owner
+directed it to this branch rather than downstream.
+
+### Current work — propagating the accepted P5-04 parent into P5-07 / PR #80
+
+`ASTRA_REVIEW: PASS head=a1b46cb7789091f7782f039fdbf148631a77e3ea` accepted PR #79. The directive on #80
+propagates that exact parent into `feat/p5-07-leads-pipeline` by ordinary merge commit, **one branch
+only**: no rebase, no force-push, nothing to `main`, nothing into #81 or later, and Stage D not started.
+
+One conflict, additive: both branches appended to `OUTCOMES` in `apps/web/src/ui/outcome-notice.tsx`, and
+the resolution keeps both sides. `catalogue.ts`, `schema.prisma` and `packages/db/src/index.ts` were the
+other three files both branches touched; all three auto-merged, and every line either side added is
+present in the result. Every P5-04 settings, policy and simulation file is byte-identical to the accepted
+head. `presenceMode`/`presenceTypingLeadMs`, which the directive named, do not exist at #80 — they arrive
+with P4-05 (`6ac04a3`), below #80 in the chain, so that collision is a later branch's problem and is
+recorded as such.
+
+**#80 is now the current gate. #81 and everything below is frozen** and still carries the pre-repair #79.
+
+### Completed — P5-04 / Issue #30, the blockers on PR #79
 
 **Reviewed head:** `0b62c9e870b260642cb07d386198870c1f1e659f`, CHANGES_REQUESTED on 2026-10-08. The
 persisted exact-head run was green and did not cover any of the seven cases.
@@ -82,20 +117,22 @@ page came to say "tick the box" with no box.
 and the impacts shown; the save accepts an acknowledgement only with a seal it minted. Comparing public
 impact codes is not proof, because the codes are in the URL, the page and the catalogue.
 
-**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79
-CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at `d67da89…` (four closed, three kept) and at
-`c4ebadb…` (two contract blockers: allowlist widening, and the missing default policy), all repaired,
-awaiting independent re-review; #80 and everything below held and **not ready for review** until #79
-passes, because they contain #79.
+**Review gate, in one place:** #78 PASSED at `8692d8f35d16256beb819488da9ae5a263a1a3e1`; #79 PASSED at
+`a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
+`d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
+missing default policy); **#80 is the current gate**, carrying that accepted parent and awaiting
+independent review; #81 and everything below is frozen and **not ready for review**, because they still
+contain the pre-repair #79.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
 observably blocked on the holding transaction's own id. The review request issued against `ef8b0d4f…` is
 superseded by this test-only head, and #79 remains the current gate.
 
-**The #79 repairs are not propagated.** They exist only on `feat/p5-04-ai-settings-simulation`; the repair
-directive forbids merging them into #80 or later until #79 passes, so every branch below still carries the
-pre-repair #79 and will need this merged down once the PASS lands.
+**The #79 repairs are propagated exactly one step.** They exist on
+`feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
+#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
+down in turn once #80 passes.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
