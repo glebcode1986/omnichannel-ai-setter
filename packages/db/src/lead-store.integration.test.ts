@@ -21,8 +21,9 @@ import {
   saveStageDisplays,
   transitionLeadStage,
 } from "./lead-store";
+import { WorkspacePermissionError } from "./errors";
 import { addWorkspaceMember } from "./repositories/workspaces";
-import { authorizeWorkspaceAccess } from "./tenancy";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
@@ -125,6 +126,89 @@ describe.skipIf(!databaseTestsEnabled())("the lead pipeline", () => {
 
       const mine = await readStageDisplays(db(), profile.context);
       expect(mine.map((display) => display.label)).not.toContain("Their name for it");
+    }, 180_000);
+  });
+
+  describe("who may reconfigure the board every profile sees", () => {
+    /**
+     * `lead_stage_displays` has **no `business_profile_id` column** — it is keyed
+     * `(workspace_id, stage)`, and `readStageDisplays` reads it by Workspace alone — so the labels,
+     * order and hidden flags are the board every Business Profile in the Workspace sees.
+     * `saveStageDisplays` took a `BusinessProfileContext`, then deleted every row for
+     * `context.workspaceId` and recreated them from the submitted form, with no role check at any layer:
+     * `saveStagesAction` called only `requireBusinessProfileContext` and the Leads page rendered the form
+     * unconditionally. So an AGENT granted a single profile could rename, reorder and hide the stages on
+     * every other profile's board — and hiding one takes those leads off everyone's board.
+     *
+     * The refusal asserts the **rows**, not only the exception. This function's write is a
+     * `$transaction`, so a misplaced guard would roll back — but a guard is not the only way this can
+     * regress, and a refusal means "the configuration did not move", which is a claim about the table.
+     */
+    const member = async (name: string, role: "AGENT" | "ADMIN") => {
+      const user = await database.db.user.create({ data: { name, email: `${name.replace(/\W/gu, "-").toLowerCase()}@example.test` } });
+      const owner = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: profile.context.workspaceId });
+      await addWorkspaceMember(database.db, owner, { userId: user.id, role, businessProfileScope: "ALL" });
+      return authorizeBusinessProfileAccess(database.db, { userId: user.id, workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId });
+    };
+
+    const board = async () =>
+      database.db.leadStageDisplay.findMany({
+        where: { workspaceId: profile.context.workspaceId },
+        select: { stage: true, label: true, position: true, hidden: true },
+        orderBy: { position: "asc" },
+      });
+
+    const configuration = [
+      { stage: "NEW" as const, label: "Agent's name for it", position: 0, hidden: false },
+      { stage: "LOST" as const, label: "Hidden by an agent", position: 1, hidden: true },
+    ];
+
+    it("refuses an agent, and the board every profile reads does not move", async () => {
+      await saveStageDisplays(db(), profile.context, [{ stage: "NEW", label: "The owner's name for it", position: 0, hidden: false }]);
+      const before = await board();
+      const agent = await member("Stage Agent", "AGENT");
+
+      await expect(saveStageDisplays(db(), agent, configuration)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect(await board()).toEqual(before);
+    }, 180_000);
+
+    it("refuses before it validates, so an unauthorized post cannot probe the rules", async () => {
+      // Invalid input *and* the wrong role. The answer has to be the permission error: whether this member
+      // may reconfigure the shared board does not depend on whether their form was well formed.
+      const agent = await member("Stage Probe Agent", "AGENT");
+
+      await expect(saveStageDisplays(db(), agent, [{ stage: "NEW", label: "   ", position: 0, hidden: false }])).rejects.toBeInstanceOf(
+        WorkspacePermissionError,
+      );
+    }, 180_000);
+
+    it("still lets that same agent do the lead work that is theirs", async () => {
+      // The control, and it is a different shape from the knowledge and style ones: there is no
+      // profile-scoped variant of a stage configuration to fall back on, because the model has no profile
+      // column. So what must still work is the ordinary pipeline — moving a lead and editing it — which is
+      // what would have been lost had the guard been put on the wrong function.
+      const agent = await member("Stage Own Agent", "AGENT");
+      await setStage("NEW");
+
+      await expect(saveStageDisplays(db(), agent, configuration)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect(
+        await transitionLeadStage(db(), agent, { conversationId: profile.conversationId, toStage: "ENGAGED", expectedStage: "NEW", source: "HUMAN_SET" }),
+      ).toEqual({ status: "MOVED", stage: "ENGAGED" });
+      expect((await readStageDisplays(db(), agent)).length).toBe(7);
+    }, 180_000);
+
+    it("allows an admin, and the configuration really lands", async () => {
+      const admin = await member("Stage Admin", "ADMIN");
+
+      expect(await saveStageDisplays(db(), admin, configuration)).toEqual({ status: "SAVED" });
+
+      // Without this the refusals above would also pass if the write were broken for everyone.
+      expect(await board()).toEqual([
+        { stage: "NEW", label: "Agent's name for it", position: 0, hidden: false },
+        { stage: "LOST", label: "Hidden by an agent", position: 1, hidden: true },
+      ]);
     }, 180_000);
   });
 
