@@ -1347,6 +1347,63 @@ runs on this machine give a different load-sensitive failure set each attempt. T
 last row are the PostgreSQL and Redis suites declining to run without
 `TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is that path's purpose; they are counted in full above.
 
+## PR #85 accepted, and joined to #86 — 2026-10-14
+
+**#85 / FIX-ISSUE-9 is accepted at `5f56302f8101b1512f9d46a4263643b36f3bbce6`** — Gemini/Antigravity
+formal GitHub review, `APPROVED`, 2026-10-14T17:25:58Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=5f56302f8101b1512f9d46a4263643b36f3bbce6`. Verified through
+`GET /pulls/85/reviews`.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#86 is the sole gate; #87
+onwards are frozen.**
+
+**The ancestry repair.** #86 reported #85 as its base while its live base SHA was the pre-acceptance #85
+head `36314e2068e8fb3a7bc2cbdb4ba79e1bc014ac55`, also the merge base; GitHub compared them as 11 ahead /
+23 behind. Ordinary non-rebase merge — no rebase, force-push, squash, merge to `main`, or propagation into
+#87+. `git merge-base --is-ancestor 5f56302f… HEAD` succeeds.
+
+### The first costless link, and why that still had to be checked
+
+**Zero conflicts and zero fixes.** This is the first link of the propagation that needed no edit at all,
+and it is worth saying why that was not obvious in advance.
+
+#86 changes exactly one file — `apps/worker/src/delivery-policy.ts`, **−42/+11**, deleting the dead
+suspension resolver — and the accepted chain had modified **that same file**, adding the `proactive`
+handling that keeps a provider dispatch deadline off a follow-up. Git reporting no conflict means only
+that the two edits did not overlap textually. That is the shape where a clean merge can be wrong in
+**either** direction: the deletion silently undone, or the addition left orphaned. Neither happened, and
+each was checked rather than assumed:
+
+1. **`createSuspensionResolver` and its wiring are still deleted** — zero occurrences anywhere in
+   `apps/` or `packages/`.
+2. **The guarded kill-switch path in `delivery-store.ts` remains authoritative** — `activeSuspension` is
+   read there, and `suspensionLockKeysFor` still supplies the keys that protect the claim against the
+   transaction race.
+3. **`proactive` and its `dispatchDeadline` branch are intact** in `delivery-policy.ts`: still set
+   upstream on a `FOLLOW_UP` trigger, still consumed, deadline logic unchanged.
+4. **Both worker loops still start, report and close** — token refresh conditional on its runner's
+   `running` state, `follow_ups` unconditional, both `.close()` calls present, and the shutdown comment
+   still states six.
+
+### Verification of this head
+
+| what | command | result |
+|---|---|---|
+| migration drift | `pnpm --filter @omnichannel/db db:check-drift` | **No difference detected.** |
+| typecheck | `pnpm typecheck` | exit 0 |
+| lint + boundaries | `pnpm lint` | exit 0 |
+| production build | `pnpm build` | exit 0 |
+| the suites this directive names | `vitest run --project @omnichannel/worker --maxWorkers=2 kill-switch reliability main bundle instagram-token followup-sweeper delivery-policy` | 9 files, **76/76** |
+| PostgreSQL suites | `--project @omnichannel/db --maxWorkers=2`, `REQUIRE_DB_TESTS=1` | 35 files, **721/721**, no skips |
+| Redis suites | `--project @omnichannel/queue --maxWorkers=2`, `REQUIRE_REDIS_TESTS=1` | 3 files, **53/53** |
+| worker + web | `--project @omnichannel/worker --project @omnichannel/web --maxWorkers=2` | 86 files, **954/954** |
+| evals | `pnpm evals` | **20/20, 0 failed, 0 quality regressions** |
+| no-infrastructure path | `env -i … CI=1 pnpm verify` | exit 0, 109 passed / 50 skipped files, 1511 passed / 881 skipped |
+
+**No retries and no failures on this link** — the first time that has been true. `--maxWorkers=2` remains
+deliberate and disclosed, and the 50 skipped files are the PostgreSQL and Redis suites declining to run
+without their service variables, counted in full in the rows above.
+
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 
 **Found while bounding a different authorization class on PR #94 (P3-04), and traced back to this branch

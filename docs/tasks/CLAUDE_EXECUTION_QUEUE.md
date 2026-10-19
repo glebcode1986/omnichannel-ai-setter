@@ -43,7 +43,21 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
+### Current work — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
+
+### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -127,6 +141,38 @@ directed it to this branch rather than downstream.
 ### Earlier — the accepted #82, propagated into #83 and nowhere else
 ### Earlier — the accepted #83, propagated into #84 and nowhere else
 ### Earlier — the accepted #84, propagated into #85 and nowhere else
+### Earlier — the accepted #85, propagated into #86 and nowhere else
+
+**PR #85 / FIX-ISSUE-9 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-14T17:25:58Z, commit `5f56302f8101b1512f9d46a4263643b36f3bbce6`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=5f56302f8101b1512f9d46a4263643b36f3bbce6`.
+
+**Reviewer routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#86 /
+FIX-DEAD-SUSPENSION-RESOLVER is the sole gate; #87 onwards are frozen.**
+
+**The ancestry repair.** #86 named #85 as its base while its live base SHA was the pre-acceptance #85 head
+`36314e2068e8fb3a7bc2cbdb4ba79e1bc014ac55`, also the merge base — GitHub compared them as 11 ahead / 23
+behind. Joined by an ordinary non-rebase merge; `--is-ancestor` of the accepted head now succeeds.
+
+**Zero conflicts, and zero fixes — the first costless link of the propagation.** That is the finding
+rather than the absence of one: #86 changes exactly one file, `apps/worker/src/delivery-policy.ts`
+(−42/+11, deleting the dead suspension resolver), and the accepted chain had modified **that same file**
+to add the `proactive` handling. Git reporting no conflict means the edits did not overlap textually,
+which is precisely the shape where a clean merge can still be wrong **in either direction** — the deletion
+undone or the addition orphaned.
+
+**Four behaviours verified individually rather than inferred from a green exit code**, as the directive
+required:
+
+- `createSuspensionResolver` and its wiring are **still deleted** — zero occurrences repository-wide.
+- The guarded kill-switch path in `delivery-store.ts` remains authoritative: `activeSuspension` is read
+  there and `suspensionLockKeysFor` still supplies the keys that protect the claim race.
+- `proactive` and the `dispatchDeadline` branch it guards are **intact** in `delivery-policy.ts`.
+- Both worker loops still start, report and close: the token refresh conditional on its runner's
+  `running` state, `follow_ups` unconditional, both `.close()` calls present, and the shutdown prose still
+  says six.
+
+### Superseded — the accepted #84, propagated into #85 and nowhere else
 
 **PR #84 / P5-09 is accepted.** Gemini/Antigravity published a formal exact-head GitHub review on
 2026-10-14T13:27:18Z — state `APPROVED`, commit `ca86e7d7877b8ab2deb1fb280956d2306224e898`, carrying
