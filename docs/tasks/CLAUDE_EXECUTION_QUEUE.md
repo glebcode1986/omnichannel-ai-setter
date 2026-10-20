@@ -38,13 +38,78 @@ what was believed when is worth keeping:
 3. **The accepted SHAs named below are superseded.** #80 is accepted at `55e368d` and #81 at `d3ad503`,
    both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
    heads that have since moved. #94 is accepted at `852f855871ca48ad88c3799f8c0dd05636dfd700`, by formal exact-head review on
-   2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved.
+   2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved. **#95 is accepted
+   at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #94 into P6-01 / PR #95
+### Current work — propagating the accepted #95 into P6-02 / PR #96
+
+#95 was accepted at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`, so this branch is the next link: that
+head is merged in by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to
+`main`, and nothing into #97 or below, which stay untouched.
+
+#96 was **73 commits behind** while carrying 9 of its own, the same shape as the link before it.
+
+**The conflict was `apps/worker/src/main.ts` and its test, which is the most consequential resolution in
+this whole propagation, and the markers showed two of the six edits it needed.** Both sides add a
+background loop the other lacks: this branch starts the usage-reservation sweeper, the accepted parent
+starts the follow-up sweeper. Keeping either side would silently stop a loop that is wired and running —
+the Issue #9 defect arriving through a merge rather than through code. The six places:
+
+1. the loops the report names — a union of three, in the order `main.ts` prints them;
+2. the comment above it, which enumerated the unconditional loops and had to gain `usage_reservations`;
+3. **the count stated in prose** — "seven independent closes" over what is now eight, which conflicted
+   with nothing and would have merged clean and wrong;
+4. the expected list in `main.test.ts`, asserted as the *whole* list on purpose;
+5. that test's explanatory comment, same reason as 2;
+6. **the sibling case** that checks the unconditional loops when the token refresh cannot start, which
+   pinned `follow_ups` and `retention` but not `usage_reservations` — and whose own comment says a loop
+   checked only in the fully-configured case is one it would not notice losing. It conflicted with
+   nothing either.
+
+Git merged the declarations and the eight `close()` calls correctly on its own; the array was counted by
+bracket depth rather than by eye, because a first attempt to count it with a line range ran past the end
+and reported eleven.
+
+`packages/db/prisma/schema.prisma`, `packages/db/src/index.ts` and `apps/web/src/server/simulation.ts`
+merged **clean**, and were checked rather than trusted: 56 models against 56 `CREATE TABLE` statements,
+no duplicate name across the barrel's 51 export lines, and no drift.
+
+### Task definition — P6-02 / Issue #39, the usage ledger and quota reservations
+
+**Branch `feat/p6-02-usage-ledger`**, based on `feat/p6-01-plan-entitlements`. Recorded here now: the
+work was implemented and reviewed-ready on the branch but neither canonical document named it, which is
+an omission in the record rather than in the code.
+
+**Two kinds of counting, kept apart deliberately.** An *internal metric* exists for unit economics,
+fair-use, anomaly alerting and capacity planning and **can never refuse work**; a *customer-facing quota*
+is an allowance a plan sells, and exhausting it stops the thing it pays for. Core AI replies are included
+and unmetered in the initial plans, and `AI_GENERATION_CYCLES` being internal is how the code *states*
+that rather than merely documenting it: `reserve` against an internal metric is refused outright with
+`NOT_A_QUOTA`, in the store and again by a CHECK, so no path exists by which an exhausted allowance could
+hold a reply.
+
+**One logical operation is counted once, enforced by the database and not by care.** Every write names a
+`usageOperationId` derived from facts fixed before the work began, and `usage_ledger_operation_key` is
+unique on `(workspace, metric, operation, kind)`. A duplicate worker, a provider retry and a requeued job
+cannot double-count — not because a caller checked first, which a second worker can lose a race against,
+but because the second insert is refused.
+
+**The last unit of an allowance cannot be sold twice.** `reserveUsage` locks the counter row, resolves the
+entitlement and decides *inside* that lock, so the read, the judgement and the write describe one instant.
+Settlement is `commitReservation` or `releaseReservation`, and `d5c563d` races two settlements of one hold
+specifically to prove the lock does what the prose claims.
+
+**Ingestion never calls it.** Nothing in this file can stop an inbound message being persisted.
+
+The domain half holds no clock, database or provider: a cycle boundary (`usageCycleFor`,
+`nextUsageCycle`) and a reservation decision are arithmetic, testable in isolation. Stale holds expire
+through `expireStaleReservations`, swept by the worker's `usage_reservations` loop with a 30-minute TTL.
+
+### Earlier — propagating the accepted #94 into P6-01 / PR #95
 
 The P5-07 lead-board propagation finished and was **accepted** at #94
 (`852f855871ca48ad88c3799f8c0dd05636dfd700`, formal exact-head review on 2026-10-20). This branch is the

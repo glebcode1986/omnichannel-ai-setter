@@ -9,6 +9,7 @@ export * from "./ai-draft";
 export * from "./automation-policy";
 export * from "./deletion";
 export * from "./entitlements";
+export * from "./usage";
 export * from "./presence-mode";
 export {
   CONFIDENCE_PRESETS,

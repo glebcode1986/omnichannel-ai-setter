@@ -2796,3 +2796,110 @@ client generated on a different branch. Run `db:generate` before any targeted da
 branch change, and never read such a failure as evidence about the branch until the client's provenance
 is established. Related: [[vitest-green-tsc-red]], which is the same gap seen from the other side —
 Vitest transpiles without typechecking, so neither tool alone tells you the generated code matches.
+
+## P6-02 usage ledger, and the accepted #95 propagated into it — PR #96 — 2026-10-21
+
+#95 was accepted at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67` (formal exact-head review, 2026-10-20),
+and the directive propagated that head into `feat/p6-02-usage-ledger`, which was at
+`d5c563d0d920a51664e4882f246ef9fbccde9cca` — **73 commits behind** while carrying 9 of its own.
+
+### What P6-02 is, recorded here for the first time
+
+The work was on the branch and verified there, but neither canonical document named it. That is a gap in
+the record, not in the code, and it is closed now.
+
+**Two kinds of counting, and keeping them apart is the point.** An *internal metric* serves unit
+economics, fair use, anomaly alerting and capacity planning, and **can never refuse work**. A
+*customer-facing quota* is an allowance a plan sells, and exhausting it stops the thing it pays for. Core
+AI replies are included and unmetered in the initial plans, and `AI_GENERATION_CYCLES` being internal is
+how the code *states* that rather than merely documenting it: `reserve` against an internal metric is
+refused with `NOT_A_QUOTA`, in the store and again by a CHECK, so there is no path by which an exhausted
+allowance could hold a reply.
+
+**One logical operation is counted once, and the database enforces it.** Every write names a
+`usageOperationId` built from facts fixed before the work started, and `usage_ledger_operation_key` is
+unique on `(workspace, metric, operation, kind)`. A duplicate worker, a provider retry or a requeued job
+cannot double-count — not because a caller checked first, which a second worker can lose a race against,
+but because the second insert is refused.
+
+**The last unit of an allowance cannot be sold twice.** `reserveUsage` locks the counter row, resolves the
+entitlement and decides *inside* that lock, so the read, the judgement and the write describe one instant.
+Commit and release settle a hold; `d5c563d` races two settlements of one hold precisely to prove the lock
+does what the prose claims. Stale holds expire via `expireStaleReservations` on a 30-minute TTL, swept by
+the worker's `usage_reservations` loop.
+
+**Ingestion never calls any of it**, so nothing here can stop an inbound message being persisted.
+
+### The merge, and the one resolution that mattered
+
+`apps/worker/src/main.ts` and `main.test.ts` conflicted. **This is the most consequential resolution of
+the whole propagation, and the conflict markers showed two of the six edits it needed** — because both
+sides add a background loop the other lacks. This branch starts the usage-reservation sweeper; the
+accepted parent starts the follow-up sweeper. Keeping either side would have silently stopped a loop that
+is wired and running: the Issue #9 defect arriving through a merge instead of through code.
+
+| # | place | shown by a marker? |
+|---|---|---|
+| 1 | the `loops:` report — a union of three, in the order `main.ts` prints them | yes |
+| 2 | the comment enumerating the unconditional loops | yes |
+| 3 | **the count in prose** — "seven independent closes" over what is now eight | **no** |
+| 4 | the expected list in `main.test.ts`, asserted as the *whole* list on purpose | yes |
+| 5 | that test's explanatory comment | yes |
+| 6 | **the sibling case** pinning the unconditional loops when the token refresh cannot start — it had `follow_ups` and `retention` but not `usage_reservations`, and its own comment says a loop checked only in the fully-configured case is one it would not notice losing | **no** |
+
+Git merged the eight declarations and the eight `close()` calls correctly by itself. The array was counted
+by bracket depth rather than by eye, after a first attempt with a line range overran the end and reported
+eleven — a reminder that a count is evidence only if the thing counted is the thing bounded.
+
+`packages/db/prisma/schema.prisma`, `packages/db/src/index.ts` and `apps/web/src/server/simulation.ts`
+merged **clean**. Checked rather than trusted: **56 models against 56 `CREATE TABLE` statements** (52 at
+#95 plus P6-02's `UsageCycle`, `UsageLedgerEntry`, `UsageCounter`, `UsageReservation`), no duplicate name
+across the barrel's 51 export lines, and no drift. P6-02's own `usage.ts` and `usage.test.ts` are
+byte-identical to the pre-merge head.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 193 files, **3033/3033** |
+| PostgreSQL suites | 43 files, **910/910**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | **1106/1106** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1886 passed / 1147 skipped**, zero infrastructure variables in the environment |
+
+Run by name, so that "it executed" is measured rather than inferred from a total:
+
+| suite | result |
+|---|---|
+| `apps/worker` `main.test.ts` — where the six-edit resolution lives | **10/10** |
+| `packages/domain` `usage.test.ts` (P6-02) | **24/24** |
+| `packages/db` `usage-store.integration.test.ts` (P6-02) | **27/27** |
+| `apps/worker` `usage-sweeper.test.ts` (P6-02) | **3/3** |
+| `packages/db` `entitlements.integration.test.ts` — the parent's P6-01 | **23/23** |
+
+Against #95's accepted numbers (193 vs 190 files, 3033 vs 2976 tests; PG 43 vs 42 files, 910 vs 880
+cases; E2E 1106 vs 1103) the deltas are exactly P6-02's own suites.
+
+### The resolution was mutation-checked, because "it passes" was the weakest possible evidence here
+
+The whole risk was a loop silently vanishing, so a passing suite proves nothing unless it would have
+failed. Each loop removed from the report, one at a time, against the restored file:
+
+| mutation | result |
+|---|---|
+| drop `"usage_reservations"` | **2 failed**, 8 passed |
+| drop `"follow_ups"` | **2 failed**, 8 passed |
+| drop `"retention"` | **2 failed**, 8 passed |
+| control, unmutated | **10 passed** |
+
+**And edit 6 was then shown to carry its own weight rather than being tidy-up.** With the sibling case's
+new `toContain("usage_reservations")` reverted, dropping that loop fails **one** test instead of two — the
+whole-list assertion only. The second failure is the no-credential-key configuration, which the full-list
+case never exercises. That is precisely the gap the test's own comment warned about.
+
+Both files were restored from scratchpad copies and verified by `git hash-object` rather than by
+`git checkout --`, which discards uncommitted work.
