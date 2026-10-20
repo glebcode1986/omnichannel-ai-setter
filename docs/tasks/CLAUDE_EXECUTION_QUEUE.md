@@ -23,6 +23,26 @@ numbering.
 
 Nothing is merged to `main`.
 
+### Correction — what is true on 2026-10-19, superseding the dated statements below
+
+This file is append-only, so older sections state the position on the day they were written. Three claims
+repeated in them are **no longer true**, and are corrected here rather than deleted, because the record of
+what was believed when is worth keeping:
+
+1. **"#83 and everything below is frozen, still carrying the pre-repair #79" is false.** Every link from
+   #80 to #94 now carries the #79 repairs and everything after them. The chain was propagated link by
+   link on 2026-10-19, fifteen heads, each with its own green exact-head Actions run.
+2. **The two-live-segments description is spent.** It was measured on 2026-10-13 and was true then. Every
+   link now contains its parent, checked with `git merge-base --is-ancestor` at each step rather than
+   inferred from the PR base field.
+3. **The accepted SHAs named below are superseded.** #80 is accepted at `55e368d` and #81 at `d3ad503`,
+   both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
+   heads that have since moved. #94 is accepted at `df77cd7`.
+
+**One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
+that heading have been renamed to what they actually are, because four of them claiming to be current at
+once is how the stale statements above went unnoticed.
+
 ### Current work — propagating the P5-07 lead-board authorization fix into P4-05 / PR #91
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
@@ -34,6 +54,8 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
 
@@ -49,6 +71,8 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-03 / PR #89
 
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-03 / PR #89
+
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -58,6 +82,8 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
 
@@ -73,6 +99,8 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-01 / PR #87
 
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-01 / PR #87
+
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -82,6 +110,8 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
 
@@ -97,6 +127,8 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
 
+### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
+
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -106,6 +138,8 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P5-09 / PR #84
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P5-09 / PR #84
 
@@ -182,7 +216,7 @@ directed it to this branch rather than downstream.
 ### Earlier — the accepted #87, propagated into #88 and nowhere else
 ### Earlier — the accepted #88, propagated into #89 and nowhere else
 ### Earlier — the accepted #89, propagated into #90 and nowhere else
-### Current work — the accepted #90, propagated into #91 and nowhere else
+### Earlier — the accepted #90, propagated into #91 and nowhere else
 
 **PR #90 / P4-04 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T13:00:07Z, commit `07ce360c09999e83a6a882fdd79152df535865b6`, carrying
@@ -845,8 +879,8 @@ is the private repo's allowance rather than anything in the code. It cleared on 
 public. Judge a run by its `steps` count, not only its conclusion. Sixteen heads were verified locally
 while it lasted, and every result matched the later CI run.
 
-**#82 is still the current gate. #83 and everything below stays frozen**, still carrying the pre-repair
-#79. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
+**#82 was the current gate on 2026-10-13, and #83 and everything below was frozen** and still carried
+the pre-repair #79 *at that date*. Both facts have since changed — see the Correction at the top. #104 and #105 sit off the chain, based on #103, and are unaffected — their heads moved with the
 repairs and their markers were re-published at the new SHAs.
 
 **#26 and #49 have no workflow run and never had one:** `.github/workflows/verify.yml` first appears on
@@ -877,7 +911,8 @@ no verdict marker of its own.
 and not a GitHub head; the propagation recorded here was performed from the remote heads in the
 programmer's environment, which is where the pushed SHA comes from.
 
-**#82 is now the current gate. #83 and everything below is frozen** and still carries the pre-repair #79.
+**#82 was the current gate when this was written, and #83 and everything below was frozen**, still
+carrying the pre-repair #79 *at that date*. See the Correction at the top.
 #104 and #105 sit off the chain, based on #103, and are unaffected.
 
 ### Earlier — propagating the accepted P5-07 parent into P3-01 / PR #81
@@ -987,9 +1022,10 @@ impact codes is not proof, because the codes are in the URL, the page and the ca
 `a1b46cb7789091f7782f039fdbf148631a77e3ea` after CHANGES_REQUESTED at `0b62c9e…` (seven blockers), at
 `d67da89…` (four closed, three kept) and at `c4ebadb…` (two contract blockers: allowlist widening, and the
 missing default policy); #80 PASSED at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` (Antigravity);
-#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity); **#82 is the current gate**,
-carrying that accepted parent and awaiting independent review; #83 and everything below is frozen and
-**not ready for review**, because they still contain the pre-repair #79.
+#81 PASSED at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` (Antigravity — a head that has since moved);
+**#82 was the current gate at that date**, carrying that accepted parent and awaiting independent review,
+and #83 and everything below was frozen and **not ready for review**, because they still contained the
+pre-repair #79 *then*. See the Correction at the top.
 
 **The concurrency barrier is state-based, not timed.** The regression proving `savePolicy`'s row lock waited
 on `setTimeout(250)` and was intermittently wrong under the full suite; it now waits until a backend is
@@ -998,8 +1034,9 @@ superseded by this test-only head, and #79 remains the current gate.
 
 **The #79 repairs are propagated exactly one step.** They exist on
 `feat/p5-04-ai-settings-simulation` and on `feat/p5-07-leads-pipeline`, and nowhere else: the directive on
-#80 permits one branch, so #81 and below still carry the pre-repair #79 and will each need this merged
-down in turn once #80 passes.
+#80 permitted one branch, so at that date #81 and below still carried the pre-repair #79 and each needed
+this merged down in turn once #80 passed. That propagation is now complete — see the Correction at the
+top.
 
 ### Sixth blocker repair — P5-06 / Issue #32, the six findings on PR #78
 
@@ -1136,7 +1173,7 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
-### Current work — P4-05 / Issue #22, read and typing presence timing
+### Task definition — P4-05 / Issue #22, read and typing presence timing
 
 **Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of
 presence: the transport call already existed from P4-01, and what was missing was deciding *when* to make
@@ -1167,7 +1204,8 @@ and presence announces only on the same `SCHEDULE` answer that would let the rep
 Also fixed: the incident reporter never mapped the `media-transcription` queue to a component (left
 unmapped by #21), and `DELAY_ENGINE.md`'s job table was missing that family.
 
-### Current work — P4-04 / Issue #21, media and voice-note transcription
+### Task definition — P4-04 / Issue #21, media and voice-note transcription
+### Task definition — P4-04 / Issue #21, media and voice-note transcription
 
 **Branch `feat/p4-04-whatsapp-media`**, based on `feat/p4-03-whatsapp-templates`. Fetching a customer's
 recording safely, reading it through an application-owned port, and keeping the reading apart from the
@@ -1202,7 +1240,8 @@ passed an unresolved config where a resolved one was required, and `vitest` tran
 typechecking, so the suite was green while `pnpm -r typecheck` was not. Resolving the config the way
 production does is what made the `connectionState` gap visible.
 
-### Current work — P4-03 / Issue #20, template catalogue and outside-window policy
+### Task definition — P4-03 / Issue #20, template catalogue and outside-window policy
+### Task definition — P4-03 / Issue #20, template catalogue and outside-window policy
 
 **Branch `feat/p4-03-whatsapp-templates`**, based on `feat/p4-02-whatsapp-embedded-signup`. ADR-016's three
 outside-window modes, the template catalogue they decide from, and the eligibility rules in between.
@@ -1216,7 +1255,8 @@ payload builder could not send a named template at all.
 template today, so the composing/delivery/record path would be unreachable code; the eligibility,
 validation and policy pieces it needs are in place and tested. See the note in `WHATSAPP_ADAPTER.md`.
 
-### Current work — P4-02 / Issue #19, WhatsApp Embedded Signup
+### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
+### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
 
 **Branch `feat/p4-02-whatsapp-embedded-signup`**, based on `feat/p4-01-whatsapp-adapter`. Multi-tenant
 WhatsApp onboarding through Meta's official Embedded Signup, and the account lifecycle around it.
@@ -1295,9 +1335,9 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
 
-### Current work — P3-01 / Issue #54
-### Current work — P3-02 / Issue #55
-### Current work — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
+### Task definition — P3-01 / Issue #54
+### Task definition — P3-02 / Issue #55
+### Task definition — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
 
 Started at the owner's word, with Stage D's chain still in review. `packages/channel-whatsapp` now
 implements the shared `ChannelAdapter`: raw-body verification, deterministic normalization of text, media,
@@ -1313,6 +1353,8 @@ send rather than at scheduling time.
 Next in Stage E: #19 Embedded Signup and account lifecycle, then #20 templates and outside-window policy.
 
 
+### Task definition — P3-01 / Issue #54
+### Task definition — P3-02 / Issue #55
 ### Blocker repair — P5-01 / Issue #27, propagated to every branch
 
 Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:
@@ -1330,7 +1372,7 @@ independent review. And a fixture valid at #73 was invalid from P5-06 onward, be
 `style_examples_verified_check` requires an `ACTIVE` style example to name its approver; a test that only
 runs green on the branch it was written on is not coverage for the chain.
 
-### Current work — Issue #9, the Instagram token lifecycle had no caller
+### Task definition — Issue #9, the Instagram token lifecycle had no caller
 
 Found while auditing the repository's open work after Stage D, and reported on Issue #9 before being
 fixed, because the PR that owns the defect is accepted.
@@ -1346,6 +1388,7 @@ the other recovery loops, the send path marks a credential Meta refused, and `wo
 loops that are actually running so a loop wired to nothing is visible as an absence rather than as silence.
 
 ### Previous — P5-09 / Issue #35
+### Task definition — P5-09 / Issue #35
 
 **Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker
 repair reached #83 green, as that directive required, then brought onto it by an ordinary merge.
