@@ -5,6 +5,7 @@
 import type { ChannelAdapter, NormalizedChannelEventType } from "@omnichannel/channel-core";
 import type {
   ChannelAccountStatus,
+  ChannelCapabilities,
   ChannelType,
   ConversationStatus,
   HumanTakeoverState,
@@ -36,6 +37,25 @@ export interface WebhookAccount {
    * and a workspace with two accounts would be free to pick the wrong one.
    */
   readonly externalAccountId: string;
+  /**
+   * The provider account this one belongs to, when the channel has two levels.
+   *
+   * WhatsApp does: a number is owned by a messaging account, the webhook names that account in
+   * `entry.id`, and the subscription and template catalogue live on it rather than on the number. It is
+   * here for the same reason `externalAccountId` is — binding an adapter is synchronous, so a value the
+   * adapter needs must arrive with the account rather than be fetched while binding.
+   *
+   * Absent for a channel with one level, which is every channel but WhatsApp today.
+   */
+  readonly parentExternalAccountId?: string;
+  /**
+   * What this account can carry, as recorded when it was connected.
+   *
+   * Carried so ingestion can act on a capability without a second read — specifically whether replies a
+   * person sends outside this product are visible to it (#23). Absent when nothing was recorded, which
+   * reads as no capabilities rather than as every capability.
+   */
+  readonly capabilities?: ChannelCapabilities;
 }
 
 export interface ChannelAdapterProvider {

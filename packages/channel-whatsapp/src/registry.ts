@@ -35,6 +35,13 @@ export interface RegistryAccount {
   readonly status: ChannelAccountStatus;
   /** The `phone_number_id` this account sends from. From the resolved account row, never from a payload. */
   readonly externalAccountId: string;
+  /**
+   * The messaging account that owns this number, when the caller already knows it.
+   *
+   * Optional because the binding may supply it instead; the registry prefers the binding's, so a
+   * composition that resolves it from configuration and one that carries it on the account both work.
+   */
+  readonly parentExternalAccountId?: string;
 }
 
 export interface WhatsAppBinding {

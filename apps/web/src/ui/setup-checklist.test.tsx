@@ -21,7 +21,7 @@ const text = (key: MessageKey) => catalogues.en[key];
 afterEach(cleanup);
 
 const facts = (overrides: Partial<OnboardingFacts> = {}): OnboardingFacts => ({
-  channels: [{ channel: "INSTAGRAM", status: "CONNECTED", canCarryText: true, mode: "DRAFT", outboundSuspended: false }],
+  channels: [{ channel: "INSTAGRAM", status: "CONNECTED", canCarryText: true, mode: "DRAFT", outboundSuspended: false, caveats: [] }],
   policyConfigured: true,
   timingConfigured: true,
   channelPolicyConfigured: true,
@@ -136,7 +136,7 @@ describe("the activation checklist", () => {
   it("refuses to activate while a channel is waiting for re-authorization", () => {
     renderChecklist({
       onboardingFacts: {
-        channels: [{ channel: "INSTAGRAM", status: "NEEDS_REAUTH", canCarryText: true, mode: "DRAFT", outboundSuspended: false }],
+        channels: [{ channel: "INSTAGRAM", status: "NEEDS_REAUTH", canCarryText: true, mode: "DRAFT", outboundSuspended: false, caveats: [] }],
       },
     });
 

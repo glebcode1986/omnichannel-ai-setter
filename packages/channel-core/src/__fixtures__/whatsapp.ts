@@ -57,6 +57,8 @@ export const WHATSAPP_FIXTURE_CAPABILITIES: ChannelCapabilities = {
   reactions: true,
   readReceipts: true,
   typingIndicator: true,
+  // Coexistence fixture: the business app's own sends arrive on `smb_message_echoes`.
+  nativeOutboundVisible: true,
 };
 
 export function createWhatsappFixtureAdapter(config: FixtureAdapterConfig): ChannelAdapter {

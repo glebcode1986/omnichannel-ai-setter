@@ -46,6 +46,8 @@ export const INSTAGRAM_FIXTURE_CAPABILITIES: ChannelCapabilities = {
   reactions: true,
   readReceipts: true,
   typingIndicator: true,
+  // Instagram echoes every outbound message, including ones a person sent from the native app.
+  nativeOutboundVisible: true,
 };
 
 export function createInstagramFixtureAdapter(config: FixtureAdapterConfig): ChannelAdapter {

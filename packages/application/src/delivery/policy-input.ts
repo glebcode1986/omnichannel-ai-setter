@@ -9,6 +9,8 @@
  * It is a pure function of the context, the channel facts derived from that same context, and one instant.
  * Nothing here reads anything.
  */
+import { NO_CAPABILITIES } from "@omnichannel/domain";
+
 import type { PolicyInput } from "../policy/inputs";
 
 import type { DeliveryChannelStatePort, DeliverySendContext } from "./ports";
@@ -38,7 +40,10 @@ export function policyInputFor(
     retrieval: { suppliedSourceIds: [], corpusReachable: true },
     limits: context.limits,
     account: context.account,
-    capabilities: { text: true, image: false, video: false, audio: false, document: false, interactive: false, templates: false, reactions: false, readReceipts: false, typingIndicator: false },
+    // Hardcoded, and only `text` is read by any gate this call reaches. A send that has already been
+    // drafted and approved is not the place to re-ask what the channel can carry — that was decided when
+    // the draft was made — so these are the shape the type requires rather than facts about the account.
+    capabilities: { ...NO_CAPABILITIES, text: true },
     window: channelState.window,
     humanAgent: channelState.humanAgent,
     ...(channelState.dispatchDeadline === undefined ? {} : { dispatchDeadline: channelState.dispatchDeadline }),

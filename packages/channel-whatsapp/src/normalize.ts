@@ -42,6 +42,15 @@ const MEDIA_KINDS: Readonly<Record<string, Extract<MessageKind, "IMAGE" | "VIDEO
   sticker: "IMAGE",
 };
 
+/**
+ * The webhook fields this adapter turns into conversation events.
+ *
+ * `smb_message_echoes` carries the business's own native sends under coexistence and is the only signal
+ * Meta publishes for them. Account-level fields — template status, quality, `account_update` — are not
+ * conversation events and are applied elsewhere, which is why they are absent here rather than forgotten.
+ */
+const HANDLED_FIELDS: ReadonlySet<string> = new Set(["messages", "smb_message_echoes"]);
+
 export function normalizeWhatsAppWebhook(input: RawWebhook, config: ResolvedWhatsAppConfig): NormalizedChannelEvent[] {
   const payload = parseWebhook(input.rawBody);
   if (payload === undefined) {
@@ -61,7 +70,7 @@ export function normalizeWhatsAppWebhook(input: RawWebhook, config: ResolvedWhat
       if (value === undefined) {
         continue;
       }
-      if (change.field !== undefined && change.field !== "messages") {
+      if (change.field !== undefined && !HANDLED_FIELDS.has(change.field)) {
         // Template status, quality rating and account updates arrive on other fields. They are real events
         // that later tasks consume; this adapter records that it saw one rather than pretending otherwise.
         config.logger?.info("whatsapp.unhandled_field", { channelAccountId: config.binding.channelAccountId, field: change.field });
@@ -77,6 +86,14 @@ export function normalizeWhatsAppWebhook(input: RawWebhook, config: ResolvedWhat
           events.push(event);
         }
       }
+      // Coexistence: everything the business sent from the WhatsApp Business App or one of its linked
+      // companion devices. A separate webhook field, and the only signal Meta publishes for a native send.
+      for (const echo of value.message_echoes ?? []) {
+        const event = normalizeEcho(echo, config);
+        if (event !== undefined) {
+          events.push(event);
+        }
+      }
       for (const status of value.statuses ?? []) {
         const event = normalizeStatus(status, config);
         if (event !== undefined) {
@@ -86,6 +103,48 @@ export function normalizeWhatsAppWebhook(input: RawWebhook, config: ResolvedWhat
     }
   }
   return events;
+}
+
+/**
+ * One echo of a message the business sent natively.
+ *
+ * It is reported as an echo and nothing more. Whether it means a person took the conversation over is the
+ * application's decision, made by correlating the message id against this product's own sends (ADR-013) —
+ * and it has to be, because the payload cannot answer it: Meta publishes no device, operator or origin
+ * field, so a send by the owner on the phone and one by staff on a linked laptop are indistinguishable,
+ * and so, as far as any field goes, is one this product made itself.
+ */
+function normalizeEcho(message: WhatsAppMessage, config: ResolvedWhatsAppConfig): NormalizedChannelEvent | undefined {
+  const platformMessageId = message.id;
+  const occurredAt = providerTime(message.timestamp);
+  if (platformMessageId === undefined || occurredAt === undefined) {
+    // No id means nothing to correlate against our own sends, and no timestamp means no instant to
+    // measure a takeover from. Either way there is no event worth emitting.
+    config.logger?.warn("whatsapp.echo_unusable", { channelAccountId: config.binding.channelAccountId });
+    return undefined;
+  }
+  // The customer is named on the echo itself. Without one there is no conversation to attribute it to,
+  // and emitting an event with an empty recipient would fail the contract's own validation and be
+  // counted as rejected — a native send silently lost rather than a takeover.
+  const recipient = message.to;
+  if (recipient === undefined || recipient === "") {
+    config.logger?.warn("whatsapp.echo_without_recipient", { channelAccountId: config.binding.channelAccountId });
+    return undefined;
+  }
+  const text = textOf(message);
+  return {
+    workspaceId: config.binding.workspaceId,
+    businessProfileId: config.binding.businessProfileId,
+    channel: "WHATSAPP",
+    channelAccountId: config.binding.channelAccountId,
+    occurredAt,
+    type: "OUTBOUND_ECHO",
+    sourceEventId: sourceEventId("echo", platformMessageId),
+    platformMessageId,
+    recipientExternalId: recipient,
+    messageKind: kindOf(message),
+    ...(text === undefined ? {} : { text }),
+  } satisfies OutboundEchoEvent;
 }
 
 /**
@@ -104,15 +163,17 @@ function belongsToThisAsset(value: WhatsAppChangeValue, config: ResolvedWhatsApp
  *
  * `from` arrives as a `wa_id`: digits only. `display_phone_number` is Meta's *display* field, and the Graph
  * `/phone_numbers` edge spells the same number `+1 555-000-0001` — a spelling this system already stores
- * during onboarding. Comparing the raw strings would make echo detection depend on which spelling a payload
- * carries, and a missed echo is not a cosmetic loss: it falls through to `INBOUND_MESSAGE` with the
- * business's own number as the sender, which the draft path would then answer.
+ * during onboarding. So the two values can name one number and not match as strings.
  *
- * This guards the `messages` field only. Meta documents a coexistence business's app-sent and
+ * Used by the one place that compares them: the refusal of a `messages` entry claiming to come from the
+ * business itself. A missed refusal is not a cosmetic loss — the entry falls through to `INBOUND_MESSAGE`
+ * with the business's own number as the sender, and the draft path answers it. Keyed on raw equality the
+ * refusal would miss in exactly the cases the spellings differ, which is the same mismatch that made the
+ * classification it replaced unreliable.
+ *
+ * Authorship itself is not decided here. Meta publishes a coexistence business's app-sent and
  * companion-device messages under a webhook field of their own, `smb_message_echoes`, where arrival under
- * that field is itself the authorship signal — so this comparison is the belt-and-braces path for a
- * `messages` entry that names the business as sender, not the documented coexistence mechanism, which a
- * later task in this chain consumes.
+ * that field is the signal; `normalizeEcho` consumes it.
  */
 function sameNumber(left: string, right: string | undefined): boolean {
   if (right === undefined) {
@@ -160,21 +221,24 @@ function normalizeMessage(
     } satisfies ReactionEvent;
   }
 
-  // Coexistence: a message the business itself sent from the WhatsApp Business App arrives here with the
-  // business's own number as the sender. It is an echo, not a customer message, and the application
-  // correlates it against stored sends to decide whether a human took over (ADR-013). Deciding that here
-  // would be this adapter guessing at takeover, which is not its job.
+  // The `messages` field carries customer-to-business traffic only; a native send by the business arrives
+  // on `smb_message_echoes` instead (re-verified 2026-10-05). So an entry here claiming to come from the
+  // business's own number is something the provider's contract says cannot happen, and the safe answer is
+  // to refuse it rather than to interpret it.
+  //
+  // This used to classify such an entry as an echo. Two things were wrong with that. It was not where Meta
+  // publishes native sends, so it never fired on a real one; and when it failed to fire — the two fields
+  // are formatted differently, `from` being a wa_id and `display_phone_number` a formatted string — the
+  // business's own message became an inbound message from a "customer" who is the business, which starts a
+  // reply cycle answering ourselves. Refusing costs nothing: the real echo has its own field.
+  //
+  // The comparison is canonical rather than literal, which is what makes the refusal reliable: the
+  // spelling mismatch above is precisely why the old classification missed, so a refusal keyed on raw
+  // equality would miss in the same cases and leave the phantom-inbound behaviour this comment describes
+  // still reachable. `sameNumber` compares digits, and refuses to call two spellings with no digits equal.
   if (message.from !== undefined && sameNumber(message.from, value.metadata?.display_phone_number)) {
-    const recipient = value.contacts?.[0]?.wa_id;
-    return {
-      ...base,
-      type: "OUTBOUND_ECHO",
-      sourceEventId: sourceEventId("echo", platformMessageId),
-      platformMessageId,
-      recipientExternalId: recipient ?? "",
-      messageKind: kindOf(message),
-      ...(textOf(message) === undefined ? {} : { text: textOf(message) }),
-    } satisfies OutboundEchoEvent;
+    config.logger?.warn("whatsapp.message_from_self", { channelAccountId: config.binding.channelAccountId });
+    return undefined;
   }
 
   const sender = message.from;

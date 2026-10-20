@@ -242,59 +242,139 @@ describe("what must never be normalized into this account", () => {
   });
 });
 
-describe("a coexistence echo", () => {
-  /**
-   * Every case states both wire values rather than drawing them from one constant.
-   *
-   * The earlier version of this block set `from` to the same constant `envelope` put in
-   * `metadata.display_phone_number`, so one value sat on both sides of the comparison and the case passed
-   * whatever the code did about punctuation — which is the only way this detection realistically breaks.
-   */
-  const echo = (from: string, displayPhoneNumber: string | null) =>
+/**
+ * Coexistence: what the business sends from the WhatsApp Business App (#23).
+ *
+ * Meta publishes these on their own webhook field, `smb_message_echoes`, and nowhere else — the `messages`
+ * field carries customer-to-business traffic only. The adapter reports an echo and stops there: whether it
+ * means a person took the conversation over is the application's decision, made by correlating the message
+ * id against this product's own sends (ADR-013), and it has to be, because no field in the payload can
+ * answer it.
+ */
+describe("a message the business sent from its own app", () => {
+  const nativeSend = (overrides: Readonly<Record<string, unknown>> = {}) =>
+    envelope(
+      {
+        message_echoes: [
+          {
+            from: BUSINESS_DISPLAY_NUMBER,
+            to: CUSTOMER_WA_ID,
+            id: "wamid.nativeSend1",
+            timestamp: seconds(AT),
+            type: "text",
+            text: { body: "Yes, from 10 until 6." },
+            ...overrides,
+          },
+        ],
+      },
+      { field: "smb_message_echoes" },
+    );
+
+  it("normalizes it as an echo, naming the customer it went to", () => {
+    const [event] = normalize(nativeSend());
+
+    expect(event).toMatchObject({
+      type: "OUTBOUND_ECHO",
+      platformMessageId: "wamid.nativeSend1",
+      // From the echo itself. The `contacts` array is not populated on this field, and reading the
+      // recipient from there is how the previous implementation produced an event with an empty
+      // recipient that the contract then rejected — a native send silently lost rather than a takeover.
+      recipientExternalId: CUSTOMER_WA_ID,
+      text: "Yes, from 10 until 6.",
+      occurredAt: AT,
+    });
+  });
+
+  it("carries no claim about who sent it", () => {
+    const [event] = normalize(nativeSend());
+
+    // Meta publishes no device, operator or origin field: a send by the owner on the phone and one by
+    // staff on a linked laptop are indistinguishable, and so is one this product made itself. The event
+    // therefore says what happened and not who did it.
+    expect(event).not.toHaveProperty("senderExternalId");
+    expect(Object.keys(event ?? {})).not.toContain("sendingApplicationId");
+  });
+
+  it("drops an echo with no recipient rather than emitting one the contract refuses", () => {
+    // `recipientExternalId` is a non-empty identifier in the shared schema, so an event with `""` is
+    // counted as rejected during ingestion and never reaches the takeover path — while the webhook still
+    // answers 200, so the provider never sends it again.
+    expect(normalize(nativeSend({ to: undefined }))).toEqual([]);
+  });
+
+  it("drops an echo with no id, because there is nothing to correlate against our own sends", () => {
+    expect(normalize(nativeSend({ id: undefined }))).toEqual([]);
+  });
+
+  it("drops an echo with no timestamp, because a takeover is measured from an instant", () => {
+    expect(normalize(nativeSend({ timestamp: undefined }))).toEqual([]);
+  });
+
+  it("refuses a `messages` entry that claims to come from the business itself", () => {
+    // The provider's contract says this cannot happen on that field. It used to be read as an echo, which
+    // never fired on a real native send and, when the two differently formatted numbers failed to match,
+    // turned the business's own message into a customer message and started a reply cycle answering
+    // ourselves. Refusing costs nothing now that the real echo has a field of its own.
+    const impossible = envelope({
+      contacts: [{ wa_id: CUSTOMER_WA_ID }],
+      messages: [{ from: BUSINESS_DISPLAY_NUMBER, id: "wamid.impossible", timestamp: seconds(AT), type: "text", text: { body: "hello" } }],
+    });
+
+    expect(normalize(impossible)).toEqual([]);
+  });
+
+  it("still reads ordinary customer messages on the same payload", () => {
+    const mixed = envelope({
+      contacts: [{ wa_id: CUSTOMER_WA_ID }],
+      messages: [{ from: CUSTOMER_WA_ID, id: "wamid.fromCustomer", timestamp: seconds(AT), type: "text", text: { body: "Are you open?" } }],
+    });
+
+    expect(normalize(mixed)).toMatchObject([{ type: "INBOUND_MESSAGE", senderExternalId: CUSTOMER_WA_ID }]);
+  });
+});
+
+/**
+ * The spelling the refusal above depends on, which is not obvious from reading it.
+ *
+ * `envelope` puts the digits-only spelling in `metadata.display_phone_number`, because that is what Meta's
+ * webhook carries, while `BUSINESS_DISPLAY_NUMBER` is the punctuated form the Graph `/phone_numbers` edge
+ * returns. So the refusal case above already compares two different spellings of one number and passes
+ * only because the comparison is canonical — restore raw equality and it fails.
+ *
+ * These three cover what that case cannot: the plain spelling, and the two ways a canonical comparison
+ * could refuse something it must not.
+ */
+describe("recognising the business's own number whichever way it is spelled", () => {
+  const fromSelf = (from: string, displayPhoneNumber: string | null) =>
     envelope(
       {
         contacts: [{ wa_id: CUSTOMER_WA_ID }],
-        messages: [{ from, id: "wamid.nativeSend1", timestamp: seconds(AT), type: "text", text: { body: "Yes, from 10 until 6." } }],
+        messages: [{ from, id: "wamid.self", timestamp: seconds(AT), type: "text", text: { body: "hello" } }],
         // `null` means the field is absent altogether, which overriding the whole metadata object expresses.
         ...(displayPhoneNumber === null ? { metadata: { phone_number_id: BINDING.phoneNumberId } } : {}),
       },
       displayPhoneNumber === null ? {} : { displayPhoneNumber },
     );
 
-  it("normalizes a message the business sent from the app as an echo, not as a customer message", () => {
-    // The application correlates it against stored sends to decide whether a human took over (ADR-013).
-    // Deciding that here would be the transport guessing at takeover.
-    const [event] = normalize(echo("15550000001", "15550000001"));
-
-    expect(event).toMatchObject({
-      type: "OUTBOUND_ECHO",
-      platformMessageId: "wamid.nativeSend1",
-      recipientExternalId: CUSTOMER_WA_ID,
-      text: "Yes, from 10 until 6.",
-    });
+  it("refuses it when both sides carry the plain webhook spelling", () => {
+    expect(normalize(fromSelf(BUSINESS_WA_ID, "15550000001"))).toEqual([]);
   });
 
-  it("recognises it when the metadata carries the punctuated spelling the Graph edge returns", () => {
-    // The same number on two Meta surfaces: a `wa_id` against `+1 555-000-0001`. Raw string equality misses
-    // it, and the business's own message then arrives as an inbound one from the business's own number —
-    // a sender the draft path would answer.
-    expect(normalize(echo(BUSINESS_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({ type: "OUTBOUND_ECHO" });
-  });
-
-  it("still reads a customer message as inbound when the numbers genuinely differ", () => {
-    // The control the two cases above need: comparing by digits must not turn every message into an echo.
-    expect(normalize(echo(CUSTOMER_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({
+  it("does not refuse a customer message when the numbers genuinely differ", () => {
+    // The control the refusal needs: comparing by digits must not swallow real customers.
+    expect(normalize(fromSelf(CUSTOMER_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({
       type: "INBOUND_MESSAGE",
       senderExternalId: CUSTOMER_WA_ID,
     });
   });
 
-  it("does not treat an absent display number as a match", () => {
-    expect(normalize(echo(BUSINESS_WA_ID, null))[0]?.type).toBe("INBOUND_MESSAGE");
+  it("does not refuse when the payload states no display number at all", () => {
+    expect(normalize(fromSelf(BUSINESS_WA_ID, null))[0]?.type).toBe("INBOUND_MESSAGE");
   });
 
-  it("does not treat two spellings that carry no digits as a match", () => {
-    // Both reduce to the empty string, which equality on the reduced form alone would call a match.
-    expect(normalize(echo("anonymous", "unknown"))[0]?.type).toBe("INBOUND_MESSAGE");
+  it("does not treat two spellings that carry no digits as the same number", () => {
+    // Both reduce to the empty string, which equality on the reduced form alone would call a match — and
+    // would then refuse a message from a sender the payload simply did not name.
+    expect(normalize(fromSelf("anonymous", "unknown"))[0]?.type).toBe("INBOUND_MESSAGE");
   });
 });
