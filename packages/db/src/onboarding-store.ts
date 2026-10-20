@@ -37,7 +37,16 @@ export interface ConnectedAccountRef {
   readonly credentialId: string | undefined;
 }
 
-export interface InstagramOnboardingStore {
+/**
+ * The part of channel onboarding that is not about any one channel.
+ *
+ * Extracted when WhatsApp arrived (Issue #19) and no behaviour changed with it: the connect state, the
+ * account lookups, the status write and the credential lifecycle are identical for both channels because
+ * none of them knows what a messaging account or a professional account is. What differs is connecting
+ * and disconnecting, which each channel declares for itself — WhatsApp has provider assets and a webhook
+ * subscription to write in the same transaction, and Instagram does not.
+ */
+export interface ChannelOnboardingStore {
   createConnectState(
     context: BusinessProfileContext,
     input: {
@@ -57,34 +66,7 @@ export interface InstagramOnboardingStore {
   ): Promise<ConnectedAccountRef | undefined>;
   findAccountById(context: BusinessProfileContext, channelAccountId: string): Promise<ConnectedAccountRef | undefined>;
 
-  /**
-   * Stores the credential and connects (or reconnects) the account in one transaction, so an account never
-   * points at a credential that was not written, and a written credential is never orphaned.
-   */
-  connectAccount(
-    context: BusinessProfileContext,
-    input: {
-      readonly channel: ChannelType;
-      readonly externalAccountId: string;
-      readonly displayName?: string;
-      readonly capabilities: ChannelCapabilities;
-      readonly purpose: CredentialPurpose;
-      readonly token: string;
-      readonly expiresAt: Date;
-      readonly now: Date;
-    },
-  ): Promise<{ readonly channelAccountId: string }>;
-
   setAccountStatus(context: BusinessProfileContext, channelAccountId: string, status: ChannelAccountStatusValue): Promise<void>;
-  /**
-   * Disconnects an account and destroys its stored secret in **one** transaction.
-   *
-   * The two writes cannot be separated. Done apart, a failure between them leaves an account that reads
-   * as disconnected — its live slot freed, its UI saying the connection is gone — while the encrypted
-   * token is still there and still usable. That is the worst of the two possible half-states, because it
-   * is the one nobody goes looking for.
-   */
-  disconnectAccount(context: BusinessProfileContext, channelAccountId: string, now: Date): Promise<void>;
 
   readCredential(
     context: BusinessProfileContext,
@@ -107,6 +89,36 @@ export interface InstagramOnboardingStore {
     context: BusinessProfileContext,
     input: { readonly credentialId: string; readonly purpose: CredentialPurpose; readonly now: Date },
   ): Promise<void>;
+}
+
+export interface InstagramOnboardingStore extends ChannelOnboardingStore {
+  /**
+   * Stores the credential and connects (or reconnects) the account in one transaction, so an account never
+   * points at a credential that was not written, and a written credential is never orphaned.
+   */
+  connectAccount(
+    context: BusinessProfileContext,
+    input: {
+      readonly channel: ChannelType;
+      readonly externalAccountId: string;
+      readonly displayName?: string;
+      readonly capabilities: ChannelCapabilities;
+      readonly purpose: CredentialPurpose;
+      readonly token: string;
+      readonly expiresAt: Date;
+      readonly now: Date;
+    },
+  ): Promise<{ readonly channelAccountId: string }>;
+
+  /**
+   * Disconnects an account and destroys its stored secret in **one** transaction.
+   *
+   * The two writes cannot be separated. Done apart, a failure between them leaves an account that reads
+   * as disconnected — its live slot freed, its UI saying the connection is gone — while the encrypted
+   * token is still there and still usable. That is the worst of the two possible half-states, because it
+   * is the one nobody goes looking for.
+   */
+  disconnectAccount(context: BusinessProfileContext, channelAccountId: string, now: Date): Promise<void>;
 }
 
 export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialCipher): InstagramOnboardingStore {

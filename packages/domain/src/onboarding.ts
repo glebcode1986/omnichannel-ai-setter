@@ -133,11 +133,15 @@ export interface OnboardingState {
 
 /** How far this channel got, as one of the ladder's rungs. */
 export function channelReadiness(facts: ChannelOnboardingFacts): ChannelReadiness {
-  if (facts.status !== "CONNECTED") {
+  if (facts.status === "NEEDS_REAUTH" || facts.status === "DISCONNECTED") {
     // A row exists, so the channel is configured; it just cannot be used until the person re-authorizes.
     return "CONFIGURED";
   }
-  if (!facts.canCarryText || facts.mode === "OFF") {
+  // A degraded account stops here too, and for a different reason than the rung above: the provider still
+  // honours the connection, so calling it merely "configured" would understate it — but the policy layer
+  // holds every unattended reply for a flagged account, so calling it `SENDABLE` would be a promise the
+  // next send does not keep.
+  if (facts.status === "DEGRADED" || !facts.canCarryText || facts.mode === "OFF") {
     // Connected to the provider, but nothing automated may leave: either the channel cannot carry a reply
     // or the business has switched automation off. Both are states, not errors.
     return "CONNECTED";
@@ -222,7 +226,10 @@ function firstUnfinished(steps: readonly OnboardingStepStatus[]): OnboardingStep
  */
 function blockersFor(facts: OnboardingFacts, deliberatelySkipped: ReadonlySet<OnboardingStep>): ActivationBlocker[] {
   const blockers: ActivationBlocker[] = [];
-  if (!facts.channels.some((channel) => channel.status === "CONNECTED")) {
+  // A flagged channel still counts: this blocker asks whether the profile has a channel at all, and a
+  // degraded one does speak to customers — under review rather than unattended. Refusing activation for
+  // it would answer a question nobody asked here, and the holding happens in the policy engine anyway.
+  if (!facts.channels.some((channel) => channel.status === "CONNECTED" || channel.status === "DEGRADED")) {
     blockers.push("NO_CONNECTED_CHANNEL");
   }
   if (facts.knowledgeDocumentCount === 0) {

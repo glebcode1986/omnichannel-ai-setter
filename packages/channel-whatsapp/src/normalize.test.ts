@@ -14,6 +14,7 @@ import {
   AT,
   BINDING,
   BUSINESS_DISPLAY_NUMBER,
+  BUSINESS_WA_ID,
   CUSTOMER_NAME,
   CUSTOMER_WA_ID,
   config,
@@ -242,23 +243,28 @@ describe("what must never be normalized into this account", () => {
 });
 
 describe("a coexistence echo", () => {
+  /**
+   * Every case states both wire values rather than drawing them from one constant.
+   *
+   * The earlier version of this block set `from` to the same constant `envelope` put in
+   * `metadata.display_phone_number`, so one value sat on both sides of the comparison and the case passed
+   * whatever the code did about punctuation — which is the only way this detection realistically breaks.
+   */
+  const echo = (from: string, displayPhoneNumber: string | null) =>
+    envelope(
+      {
+        contacts: [{ wa_id: CUSTOMER_WA_ID }],
+        messages: [{ from, id: "wamid.nativeSend1", timestamp: seconds(AT), type: "text", text: { body: "Yes, from 10 until 6." } }],
+        // `null` means the field is absent altogether, which overriding the whole metadata object expresses.
+        ...(displayPhoneNumber === null ? { metadata: { phone_number_id: BINDING.phoneNumberId } } : {}),
+      },
+      displayPhoneNumber === null ? {} : { displayPhoneNumber },
+    );
+
   it("normalizes a message the business sent from the app as an echo, not as a customer message", () => {
     // The application correlates it against stored sends to decide whether a human took over (ADR-013).
     // Deciding that here would be the transport guessing at takeover.
-    const echo = envelope({
-      contacts: [{ wa_id: CUSTOMER_WA_ID }],
-      messages: [
-        {
-          from: BUSINESS_DISPLAY_NUMBER,
-          id: "wamid.nativeSend1",
-          timestamp: seconds(AT),
-          type: "text",
-          text: { body: "Yes, from 10 until 6." },
-        },
-      ],
-    });
-
-    const [event] = normalize(echo);
+    const [event] = normalize(echo("15550000001", "15550000001"));
 
     expect(event).toMatchObject({
       type: "OUTBOUND_ECHO",
@@ -266,5 +272,29 @@ describe("a coexistence echo", () => {
       recipientExternalId: CUSTOMER_WA_ID,
       text: "Yes, from 10 until 6.",
     });
+  });
+
+  it("recognises it when the metadata carries the punctuated spelling the Graph edge returns", () => {
+    // The same number on two Meta surfaces: a `wa_id` against `+1 555-000-0001`. Raw string equality misses
+    // it, and the business's own message then arrives as an inbound one from the business's own number —
+    // a sender the draft path would answer.
+    expect(normalize(echo(BUSINESS_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({ type: "OUTBOUND_ECHO" });
+  });
+
+  it("still reads a customer message as inbound when the numbers genuinely differ", () => {
+    // The control the two cases above need: comparing by digits must not turn every message into an echo.
+    expect(normalize(echo(CUSTOMER_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({
+      type: "INBOUND_MESSAGE",
+      senderExternalId: CUSTOMER_WA_ID,
+    });
+  });
+
+  it("does not treat an absent display number as a match", () => {
+    expect(normalize(echo(BUSINESS_WA_ID, null))[0]?.type).toBe("INBOUND_MESSAGE");
+  });
+
+  it("does not treat two spellings that carry no digits as a match", () => {
+    // Both reduce to the empty string, which equality on the reduced form alone would call a match.
+    expect(normalize(echo("anonymous", "unknown"))[0]?.type).toBe("INBOUND_MESSAGE");
   });
 });

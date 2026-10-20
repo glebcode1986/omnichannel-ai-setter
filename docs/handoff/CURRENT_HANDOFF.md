@@ -916,6 +916,38 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P4-02 / Issue #19 — WhatsApp Embedded Signup is implemented.** Branch
+   `feat/p4-02-whatsapp-embedded-signup`, based on #87.
+
+   **Two live findings shaped it, not just the PR body.** Embedded Signup v2 and v3 — including their
+   public previews — are deprecated on **2026-10-15**, so the implementation targets v4 only. And Meta is
+   splitting the WhatsApp Business Account into a WhatsApp Account (numbers, identity) and a Messaging
+   Account (templates, billing, webhook subscriptions): existing `waba_id` values keep working and now
+   **denote the messaging account**. Keeping `wabaId` a separate field in #18 turned out to be the right
+   call, and the store keeps the business portfolio as a third identifier.
+
+   **The code lives 30 seconds.** That one number decides the shape of the flow: the exchange happens in
+   the request that receives the code, nothing persists or queues it, and an expiry is a refusal the
+   operator resumes from.
+
+   **Nothing the browser says about assets is believed.** The `phone_number_id` is looked up *on* the
+   `waba_id` with the exchanged token, and the token is checked against this app with `debug_token`. Those
+   two checks are what stop a customer's own browser connecting someone else's number — both identifiers
+   arrive from a page.
+
+   **A failed provider step persists nothing.** Subscription and registration must both succeed before any
+   row is written, so there is no half-connected account; both calls are idempotent, so retrying is free.
+   `connected_at` is the claim and CHECK constraints hold it, with the coexistence exemption from phone
+   registration written out in the constraint rather than implied in code.
+
+   **New status value: `DEGRADED`.** The onboarding spec asks for it, and it means the provider flagged the
+   number — a red quality rating. The credential and the assets are fine, so a person may still approve a
+   reply and the policy engine holds every unattended one. **Found while wiring it:** both channel
+   registries mapped `status === "CONNECTED" ? "CONNECTED" : "DISCONNECTED"`, so a degraded account would
+   have been refused by the *transport* — a human-approved reply would have got a retryable "account is not
+   connected" and never left. Fixed in both.
+
+   **Not stored: the two-step PIN.** Used once for registration, never logged, returned or persisted.
 1. **Four P5-05 blockers about reachability and atomicity (#31 / PR #77).** Astra's fourth pass on this
    branch. The previous repair was correct on every path its own tests walked; all four findings were
    about paths they did not.
@@ -1503,6 +1535,116 @@ it predates this merge, so changing it would be the unrelated cleanup these dire
 **No retries and no failures on this link**, the second such in a row. `--maxWorkers=2` stays deliberate
 and disclosed; the 50 skipped files are the PostgreSQL and Redis suites declining to run without their
 service variables and are counted in full above.
+
+## PR #87 accepted, and joined to #88 / P4-02 — 2026-10-16
+
+**#87 is accepted at `c13d32dea988daf38a6a4a6b03a612553c26c72b`** — Gemini/Antigravity formal GitHub
+review `5529023598`, `APPROVED`, 2026-10-15T06:25:13Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=c13d32dea988daf38a6a4a6b03a612553c26c72b`, verified through
+`GET /pulls/87/reviews` (state, `commit_id` and marker all read independently).
+
+**Routing unchanged.** **#88 / P4-02 is the sole gate; #89 onwards are frozen.**
+
+**Ancestry repair.** #88 reported `feat/p4-01-whatsapp-adapter` as its base while its live merge base was
+the pre-acceptance #87 head `48fd78a93d626ea56b2ada97c24a25ccd2595e14`; GitHub reported `diverged`, 9
+ahead / 25 behind. Ordinary non-rebase merge at `6bac028d3c658ca4e2ea01fbaf4f74fa1acdb8cb` — no rebase,
+force-push, squash, merge to `main`, or propagation into #89+. `git merge-base --is-ancestor c13d32de… HEAD`
+succeeds, and the prior #88 head `960f7174abaa732a183624defcc5c1104af262da` is still an ancestor.
+
+### Zero conflicts, and the change that does not announce itself
+
+77 files, 7,976 insertions against 311 deletions, no conflict markers. On this link the zero was the thing
+to distrust: **#88 widens a channel-account status union**, and widening a union breaks exhaustive consumers
+*without* ever producing a conflict. So the merge was followed by `pnpm install --frozen-lockfile` (the
+branch moves the lockfile), then `pnpm typecheck` — clean across all 14 packages — and `lint:boundaries`,
+clean at 535 package source files with no cycles. Nothing had to be adapted; this is the second costless
+link in a row, and it was still measured rather than assumed.
+
+### The one authored change, and the defect I shipped into it before catching it
+
+The directive's step 3 scoped exactly one post-review source risk into this cycle: the coexistence echo
+comparison this author had disclosed on #87 after that PR's own review had already passed.
+
+`normalize.ts` matched an echo with `message.from === value.metadata?.display_phone_number`. Two Meta
+surfaces, two spellings: `from` is a `wa_id` (digits only), while the Graph `/phone_numbers` edge returns
+the same number as `+1 631-555-5555` — the spelling this product stores at onboarding and already carries
+in its own fixtures as `"+1 555 0100"`. Meta's **webhook** metadata uses the digits-only spelling, so
+nothing was broken in production. What made it worth repairing is where a miss lands: not in "ignored" but
+in `INBOUND_MESSAGE`, with the business's own number as the sender, on a thread the draft path would answer.
+
+`sameNumber` now compares canonical digits and refuses a match when either side reduces to no digits. The
+test that covered this was **powerless** — `from` and `metadata.display_phone_number` came from the same
+fixture constant, so one value sat on both sides of the `===`. The fixture now declares `BUSINESS_WA_ID`
+and `BUSINESS_DISPLAY_NUMBER` as separate constants with genuinely different values, `envelope()` takes a
+`displayPhoneNumber` override, and five cases state both wire values independently. Each clause of the fix
+is killed by exactly one case under mutation; the empty-digits guard earned its place only after a second
+case was written for it, because the first one survived the mutation.
+
+**The defect I introduced:** the helper's first placement split `belongsToThisAsset`'s doc comment from its
+function, leaving one comment documenting the wrong thing. Typecheck, lint and 102 passing tests all stayed
+green — none of them read doc comments. Found by re-reading the file I had just edited, and fixed by moving
+the helper below that function.
+
+### Meta re-verification — 2026-10-15 and 2026-10-16
+
+Recorded in full, dated and sourced, in `docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`. This is the
+file the previous link deferred that record to, and it is now current.
+
+**Embedded Signup v4 remains latest** (expiry TBD) and `onboarding.ts` has always targeted v4 only. The v2
+deprecation date **passed while Meta's own pages still read "will be deprecated on October 15, 2026" in the
+future tense**, with no changelog entry recording the cutover — so enforcement is announced-and-reached, not
+observed, and this handoff does not claim otherwise. A precision correction to the 2026-10-04 baseline: the
+versions table gives v3 only `"October, 2026"`, a month with no day; the sole primary source naming 15
+October for v3 is Meta's blog post of 2026-05-14.
+
+`v26.0` is still the current Graph version and **no v27.0 exists**, so `DEFAULT_GRAPH_VERSION` is unchanged
+and `config.ts`'s illustrative `v23.0` names a version supported until 2027-10-08. The 30-second code TTL,
+the six-digit PIN on `register`, the Allowed-Domains-**and**-Valid-OAuth-Redirect-URIs conjunction, and the
+24-hour window with `131047` are confirmed verbatim and unchanged.
+
+**Four documented risks were checked against this code and found absent**, which is why the pass changed no
+behaviour beyond the echo repair: no `sessionInfoVersion` is sent (Meta does not corroborate `4` for v4); no
+`subscribed_fields` is sent (the `subscribed_apps` reference documents no such parameter);
+`code_verification_status` and `quality_rating` are plain `string` end to end, so the contradictory
+enumerations Meta publishes on sibling pages cannot break a parse; and the adapter reads neither
+`conversation` nor `pricing` from a status, which Graph v24.0+ drops.
+
+**One finding that reframes the repaired branch without being a defect.** Meta documents a coexistence
+business's app-sent and companion-device messages under a field of their own — `smb_message_echoes` →
+`value.message_echoes[]` — where arrival under that field *is* the authorship signal. At this head the
+adapter records `whatsapp.unhandled_field` and drops every non-`messages` change, so a real echo is logged
+and dropped here; consuming that field belongs to the later coexistence task in this chain. The repair still
+earns its place, because `message_echoes[].from` is documented as the business *display* phone number — the
+same spelling trap, waiting for whatever consumes echoes next. The code comment now states this so the
+branch is not mistaken for the coexistence mechanism.
+
+Also recorded: a hard date of **2026-12-31** to migrate `paid_messaging_account_id` → `messaging_account_id`
+under Meta's account-model split. **This repository uses neither identifier**, so there is nothing to
+migrate; it is written down because Phase 2 (H1 2027) will require `messaging_account_id` in multi-account
+setups, and because the Embedded Signup session-info field names under the new model are not yet published.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; every suite bounded to `--maxWorkers=2`.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries / production build | exit 0, exit 0, exit 0 |
+| `@omnichannel/channel-whatsapp` | 6 files, **102/102** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 36 files, **743/743**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **53/53** |
+| worker + web E2E | 88 files, **1002/1002** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0, 117 files passed / 51 skipped, **1661 passed** / 903 skipped |
+
+**No retries, no reruns, no flakes on this link.** `--maxWorkers=2` stays deliberate and disclosed. The 51
+skipped files in the no-infrastructure run are the PostgreSQL and Redis suites declining to start without
+`TEST_DATABASE_URL` / `TEST_REDIS_URL` — the behaviour CI depends on — and are the same suites reported in
+full above. One environment note worth recording: those variables are `TEST_DATABASE_URL` and
+`TEST_REDIS_URL`, not `DATABASE_URL`; a first run with the wrong names failed 31 suites loudly rather than
+skipping them silently, which is the right design and is why it was caught immediately. Local runs are
+macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 

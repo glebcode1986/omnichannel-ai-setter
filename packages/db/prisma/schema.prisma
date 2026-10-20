@@ -72,8 +72,17 @@ enum OnboardingStep {
 
 enum ChannelAccountStatus {
   CONNECTED
+  /// Verified, but something the provider reports needs attention: quality, or a catalogue we could not read.
+  DEGRADED
   NEEDS_REAUTH
   DISCONNECTED
+}
+
+enum WhatsAppOnboardingMode {
+  NEW_OR_MIGRATED_CLOUD_NUMBER
+  COEXISTENCE_EXISTING_BUSINESS_APP
+  /// Meta finished the flow without telling us which of the two it was; never assumed to be either.
+  UNKNOWN
 }
 
 enum ConversationStatus {
@@ -607,6 +616,7 @@ model BusinessProfile {
 
   auditEvents        AuditEvent[]
   humanTasks           HumanTask[]
+  whatsappConnections WhatsAppConnection[]
   @@unique([workspaceId, id])
   @@index([workspaceId, status])
   @@map("business_profiles")
@@ -704,6 +714,7 @@ model ChannelAccount {
   channelIdentities  ChannelIdentity[]
   inboundEvents      InboundEvent[]
   automationPolicies AutomationPolicy[]
+  whatsappConnection WhatsAppConnection?
 
   @@unique([workspaceId, businessProfileId, id])
   @@unique([workspaceId, credentialId])
@@ -1781,4 +1792,91 @@ model QueueOutbox {
 
   @@index([availableAt], where: raw("dispatched_at IS NULL"), map: "queue_outbox_pending_idx")
   @@map("queue_outbox")
+}
+
+/**
+ * WhatsApp's own provider assets for one connected number (Issue #19, ADR-015, WHATSAPP_ONBOARDING.md).
+ *
+ * A separate table rather than columns on `channel_accounts`, because none of this is channel-neutral:
+ * Instagram has no messaging account, no business portfolio and no two-step verification. The neutral row
+ * keeps the sending asset as its `external_account_id`; everything Meta-shaped lives here, which is what
+ * lets Meta's account model keep moving without touching contact or conversation identity.
+ *
+ * `waba_id` is the **messaging account** ID. Meta is splitting the WhatsApp Business Account into a
+ * WhatsApp Account for numbers and identity and a Messaging Account for templates, billing and webhook
+ * subscriptions; existing `waba_id` values keep working and now denote the latter (re-verified
+ * 2026-10-04). The business portfolio is a third identifier and is not derivable from either.
+ */
+model WhatsAppConnection {
+  id                String                 @id @default(uuid(7))
+  workspaceId       String                 @map("workspace_id")
+  businessProfileId String                 @map("business_profile_id")
+  channelAccountId  String                 @map("channel_account_id")
+  /// Messaging account: owns the webhook subscription and the template catalogue.
+  wabaId            String                 @map("waba_id")
+  businessPortfolioId String?              @map("business_portfolio_id")
+  /// Human-readable only. Never an identity: a payload can claim any display number it likes.
+  displayPhoneNumber String?               @map("display_phone_number")
+  verifiedName      String?                @map("verified_name")
+  qualityRating     String?                @map("quality_rating")
+  codeVerificationStatus String?           @map("code_verification_status")
+  platformType      String?                @map("platform_type")
+  onboardingMode    WhatsAppOnboardingMode @default(UNKNOWN) @map("onboarding_mode")
+  /// Set when Meta confirmed `{"success": true}` for `POST /<WABA_ID>/subscribed_apps`.
+  webhookSubscribedAt DateTime?            @map("webhook_subscribed_at")
+  /// Set when Meta confirmed the Cloud API registration of the number with its two-step PIN.
+  phoneRegisteredAt DateTime?              @map("phone_registered_at")
+  templatesSyncedAt DateTime?              @map("templates_synced_at")
+  /// False when the bootstrap stopped at its page bound, so the catalogue is known to be partial.
+  templatesComplete Boolean?               @map("templates_complete")
+  /// Set in the same transaction that marks the account connected; the CHECKs below hang off it.
+  connectedAt       DateTime?              @map("connected_at")
+  /// Fixed reason code for the account's current health. Never provider prose.
+  healthReason      String?                @map("health_reason")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  updatedAt         DateTime               @updatedAt @map("updated_at")
+
+  businessProfile BusinessProfile @relation(fields: [workspaceId, businessProfileId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+  channelAccount  ChannelAccount  @relation(fields: [workspaceId, businessProfileId, channelAccountId], references: [workspaceId, businessProfileId, id], onDelete: Restrict, onUpdate: Restrict)
+  templates       WhatsAppMessageTemplate[]
+
+  /// One connection per account, which is what makes the relation above one-to-one.
+  @@unique([workspaceId, businessProfileId, channelAccountId])
+  @@unique([workspaceId, channelAccountId])
+  @@unique([workspaceId, id])
+  @@index([wabaId])
+  @@map("whatsapp_connections")
+}
+
+/**
+ * The approved/pending/rejected template catalogue for one connection.
+ *
+ * Meta identifies a template by name **and** language, so that pair is unique here too: a send names both,
+ * and a catalogue that allowed two rows for one pair would let a delivery match the wrong one. The
+ * provider ID is unique as well, so a rename is an update rather than a duplicate.
+ *
+ * `synced_at` exists because a cached template is never eligible forever (WHATSAPP_ADAPTER.md): delivery
+ * policy rechecks current-enough status, and it needs to know how old this row is to do that.
+ */
+model WhatsAppMessageTemplate {
+  id                 String   @id @default(uuid(7))
+  workspaceId        String   @map("workspace_id")
+  connectionId       String   @map("connection_id")
+  providerTemplateId String   @map("provider_template_id")
+  name               String
+  language           String
+  category           String?
+  status             String
+  /// Provider JSON, kept as sent: the catalogue is an audit record and re-modelling it would lose detail.
+  components         Json?
+  syncedAt           DateTime @map("synced_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  connection WhatsAppConnection @relation(fields: [workspaceId, connectionId], references: [workspaceId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, connectionId, providerTemplateId])
+  @@unique([workspaceId, connectionId, name, language])
+  @@index([workspaceId, connectionId, status])
+  @@map("whatsapp_message_templates")
 }

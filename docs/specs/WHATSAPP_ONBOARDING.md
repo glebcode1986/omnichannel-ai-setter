@@ -1,6 +1,46 @@
 # WhatsApp Onboarding — Embedded Signup Specification
 
-**Status:** Architecture prepared; current Meta onboarding must be re-verified at implementation time.
+**Status:** Implemented in `packages/channel-whatsapp` (provider calls), `packages/db` (persistence) and
+`apps/web/src/server/whatsapp-onboarding.ts` (the flow) — P4-02 / Issue #19, 2026-10-04. Meta's Embedded
+Signup process, scopes and deadlines were re-verified the same day; see the Issue #19 section of
+`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`.
+
+## Implementation-time decisions
+
+These are decisions the architecture above left open, recorded where the next reader will look for them.
+
+**Embedded Signup v4 only.** Versions 2 and 3, including their public previews, are deprecated on
+2026-10-15. There is no compatibility path worth building for a flow that stops working.
+
+**The exchangeable code is never persisted.** Meta gives it a 30-second life, so the exchange happens in
+the request that receives it; an expiry is a refusal the operator resumes from, not background work.
+
+**The two-step verification PIN is not stored.** It is used once, for `POST /<phone_number_id>/register`,
+and keeping it would add a second secret at rest for a value the operator already has. The operator
+supplies it when they connect, and nothing logs, returns or persists it.
+
+**The browser is believed about nothing.** `phone_number_id` is looked up *on* the `waba_id` with the
+exchanged token, and the token is checked against this app with `debug_token`. A pair that does not belong
+together is refused; so is a token minted for another application.
+
+**A failed provider step persists nothing at all.** Webhook subscription and — outside coexistence — phone
+registration must both succeed before any row is written, so there is no half-connected account to repair.
+Both calls are idempotent, so retrying costs nothing.
+
+**`connected_at` is the claim, and the database checks it.** CHECK constraints refuse a connected
+connection whose webhook subscription is missing, and — outside
+`COEXISTENCE_EXISTING_BUSINESS_APP` — one whose phone registration is missing. The coexistence exemption
+is written out in the constraint rather than implied in code.
+
+**`DEGRADED` means the provider flagged the number**, specifically a red quality rating. The credential and
+the assets are fine, so a person may still approve a reply; the policy engine holds every *unattended* one
+(`ACCOUNT_UNHEALTHY`). A template catalogue this deployment could not read is deliberately **not**
+degradation: free-form care is unaffected, the transport refuses a template send naming a template it
+cannot find, and delivery policy rechecks template status anyway.
+
+**Completion is a same-origin POST**, not a provider redirect, because Embedded Signup hands its result to
+our own page through Meta's JavaScript SDK. The state cookie is therefore `SameSite=Strict`, and nothing
+Meta sends ever reaches the browser as markup or as a redirect target.
 
 ## Goal
 
