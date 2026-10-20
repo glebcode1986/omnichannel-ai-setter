@@ -173,13 +173,15 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     });
 
     expectGracefulShutdown(result);
-    // `follow_ups` joins the list with the accepted P3-02 head, which starts the sweeper that gave
+    // `follow_ups` joined the list with the accepted P3-02 head, which starts the sweeper that gave
     // `dueFollowUps` and `claimFollowUp` their first caller — the same defect this case guards, in a
-    // second loop. Asserted as the whole list rather than by `toContain`, because the point is that
-    // nothing is missing from it.
+    // second loop. `retention` joins it with P3-04, which sweeps the short-lived rows nothing else
+    // removes. Asserted as the whole list rather than by `toContain`, because the point is that nothing
+    // is missing from it, and the order is the order `main.ts` reports them in.
     expect(startedFields(result.stdout).loops).toEqual([
       "outbox",
       "reconciliation",
+      "retention",
       "instagram_tokens",
       "follow_ups",
       "backlog_guard",
@@ -200,9 +202,12 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
 
     expectGracefulShutdown(result);
     expect(startedFields(result.stdout).loops).not.toContain("instagram_tokens");
-    // And the unconditional loop is still reported, which is the whole difference between the two: the
-    // sweeper always starts, so its absence would be a defect rather than a configuration.
+    // And the unconditional loops are still reported, which is the whole difference between them and
+    // `instagram_tokens`: these sweepers always start, so an absence here would be a defect rather than a
+    // configuration. Both are asserted — `retention` joined them with P3-04, and a loop that is only
+    // checked in the fully-configured case above is a loop this case would not notice losing.
     expect(startedFields(result.stdout).loops).toContain("follow_ups");
+    expect(startedFields(result.stdout).loops).toContain("retention");
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {

@@ -43,7 +43,36 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into P4-07 / PR #93
+### Current work — propagating the P5-07 lead-board authorization fix into P3-04 / PR #94
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+This is the **last** link of that propagation: it began at the fix's origin on #80 and moved one branch
+per directive, fifteen heads in all. The merge carries **nothing** under `apps/` or `packages/` — every
+code change the fix needed had already arrived at #93 and was verified there, so this link carries only
+the record. That emptiness was measured against the merge base, not presumed from the absence of a
+conflict, and both live segments were then re-checked file by file and contract by contract.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+**Thirty-three dangling headings were removed from this file in the same commit, and one of them was
+created by this very merge.** A `### ` heading with an empty body renders as a title owning nothing, and
+they had been accumulating one or two per link: a conflict region that covers only the heading line —
+which is what happens when both sides' bodies are identical and git matches them — resolves to *two*
+headings and *one* body, and renaming a heading to "Earlier" left the old line behind as well. Twelve
+had collected in a single consecutive run. The removal was verified not to lose anything: every
+non-blank line that is not a `### ` heading is byte-identical to before, all twenty `#### ` headings
+survive, and each removed title still names a section that exists elsewhere **with** a body. The two
+remaining body-less headings are `## First task — HISTORICAL` and `## Second task — HISTORICAL`, which
+are genuine parents of the `### ` sections beneath them and were left alone.
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-07 / PR #93
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -54,8 +83,6 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
-
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-06 / PR #92
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-06 / PR #92
 
@@ -71,8 +98,6 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-05 / PR #91
 
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-05 / PR #91
-
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -82,8 +107,6 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
-
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
 
@@ -99,8 +122,6 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-03 / PR #89
 
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-03 / PR #89
-
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -110,8 +131,6 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
-
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
 
@@ -127,8 +146,6 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P4-01 / PR #87
 
-### Earlier — propagating the P5-07 lead-board authorization fix into P4-01 / PR #87
-
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -138,8 +155,6 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
-
-### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into the dead suspension resolver fix / PR #86
 
@@ -155,8 +170,6 @@ merge base is present below, apart from headings deliberately renamed to keep on
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
 
-### Earlier — propagating the P5-07 lead-board authorization fix into the Instagram token lifecycle fix / PR #85
-
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
 has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
@@ -166,8 +179,6 @@ and nothing into the links below this one.
 The merge conflicted only on this document, where both branches append their own section. Resolved as
 a union rather than a choice, and checked rather than assumed: every line either side added since the
 merge base is present below, apart from headings deliberately renamed to keep one "Current work".
-
-### Earlier — propagating the P5-07 lead-board authorization fix into P5-09 / PR #84
 
 ### Earlier — propagating the P5-07 lead-board authorization fix into P5-09 / PR #84
 
@@ -235,18 +246,254 @@ deleted, guard after the commit, guard after validation).
 needs a fresh verdict, and the fix has to be merged down the chain one link at a time. Found while
 bounding a different authorization class on #94 and traced here, to `3c666dd`, as its origin; the owner
 directed it to this branch rather than downstream.
-### Earlier — repairing PR #82 / P3-02 after CHANGES_REQUESTED
-### Earlier — the accepted #82, propagated into #83 and nowhere else
-### Earlier — the accepted #83, propagated into #84 and nowhere else
-### Earlier — the accepted #84, propagated into #85 and nowhere else
-### Earlier — the accepted #85, propagated into #86 and nowhere else
-### Earlier — the accepted #86, propagated into #87 and nowhere else
-### Earlier — the accepted #87, propagated into #88 and nowhere else
-### Earlier — the accepted #88, propagated into #89 and nowhere else
-### Earlier — the accepted #89, propagated into #90 and nowhere else
-### Earlier — the accepted #90, propagated into #91 and nowhere else
-### Earlier — the accepted #91, propagated into #92 and nowhere else
-### Earlier — the accepted #92, propagated into #93 and nowhere else
+
+### Completed — PR #94, round two: the refusal tests were vacuous, and are not now
+
+The remediation was right in the source and **proved nothing in the tests**, found by adversarially
+re-checking my own work. Every refusal asserted only that `WorkspacePermissionError` was thrown; nothing
+read the row back. `archiveKnowledge` and `saveStyleProfile` are **not transactional**, so a guard moved
+*below* its write throws the same error while the write commits — measured at **52/52 and 50/50 passing**
+with an AGENT actually archiving a shared knowledge source and rewriting the Workspace voice. Both
+mutations now fail.
+
+Also fixed: five bundled assertions in one `it` (the first failure ended the case, so later guards were
+pinned only while earlier ones held — removing all three knowledge guards reported *one* failure); the
+fact that `publishKnowledge` **is** `restoreKnowledge`, so three of those assertions shared one guard;
+controls that used a *second* user while claiming "the same agent"; `approvedByUserId` asserted nowhere
+although provenance is the central argument; and a `restoreStyleExample` doc comment asserting the
+opposite of what `decide` implements.
+
+**The lesson, since it generalises:** guard *sensitivity* — remove the guard, does a test fail — is not the
+same question as "does a refusal change nothing", and only the second is the behaviour. Assert the effect.
+
+**A live instance of the same class, upstream.** `saveStageDisplays` (`lead-store.ts:76`) wipes and
+recreates every `LeadStageDisplay` row in the workspace from a single-profile context with no role check
+at any layer, so an AGENT with one profile can rename, reorder and hide the lead stages on every other
+profile's board. Introduced by `3c666dd` = **#80 / P5-07, upstream of #94** — it belongs at #80 and then
+merged down, as its own directive, not here. The earlier "class bounded" claim missed it because the bound
+grepped the `{ OR: [{ businessProfileId: null }, …] }` idiom, which cannot see a model that has **no**
+`businessProfileId` column.
+
+### Completed — PR #94 `CHANGES_REQUESTED`, remediated on this branch
+
+**PR #94 / P3-04 received a formal `CHANGES_REQUESTED`** (Gemini/Antigravity review `5563757640`) at exact
+head `5da1213cce104bf21ff0d697021db97867da7c58`. The reviewer independently reproduced the authorization
+finding this branch had disclosed and named three scenarios — Knowledge Hijack, Knowledge Denial of
+Service, Style Governance Bypass — then specified remediation matching the patch already prepared locally.
+The owner's `CLAUDE_FIX_DIRECTIVE_FROM_PR94_CHANGES_REQUESTED` directed that patch onto the branch.
+
+**Routing unchanged.** **#94 / P3-04 remains the sole gate; #95 onwards are frozen.** No rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+**What was unguarded.** `createKnowledge` and `createStyleExample` each require `WORKSPACE_ADMIN_ROLES` to
+*make* a Workspace-scoped row. Changing or retiring one required nothing beyond access to any single
+Business Profile, because every lifecycle call resolved its row through `scopeFilter(undefined, …)` /
+`exampleScopeFilter(undefined, …)` — whose `null` branch **is** the Workspace-scoped row — and applied no
+role check. Five call sites, one shape of mistake.
+
+| path | act | now |
+|---|---|---|
+| `editKnowledge` | rewrite the facts every profile answers from | `requireRole` when the row is Workspace-scoped |
+| `archiveKnowledge` | retire it from every profile's retrieval | ownership read added, then `requireRole` |
+| `restoreKnowledge` / `publishKnowledge` | put it back into every profile's retrieval | `requireRole` above the act check |
+| `decide` (approve / reject / archive / restore) | decide a shared style example, **stamping the approver** | one guard covering all four |
+| `saveStyleProfile` | rewrite the voice every profile replies in | fixed earlier, at `5da1213` |
+
+`archiveKnowledge` needed more than a line: it wrote through a blind `updateMany` and never read the row,
+so there was nothing to check the scope against. The guard sits above the `act` check in the publish path
+deliberately — a refusal that depended on `act` would leave whichever screen omitted it unguarded.
+
+**The approver stamp is why this is not only an integrity question.** Approve and restore both record
+`approvedByUserId`. A CHECK requires that name for anything `ACTIVE`, which is the database insisting a
+human verified it. Unguarded, an agent could supply that provenance for content every profile's voice
+draws on.
+
+**Tests, and the control each one needs.** Fifteen cases across the two integration suites: an `AGENT`
+refused for every listed Workspace-scoped mutation, the **same agent still performing the corresponding
+profile-scoped operation** as the control, and an `ADMIN` allowed for each act the agent was refused.
+Without that last row the refusals would also pass if the lifecycle were simply broken for everyone.
+
+Each guard was then removed one at a time and the suite rerun — the honest check, since a refusal test
+that passes with the guard gone is theatre. All five are individually pinned; no removal was silent.
+
+**Reachability, stated rather than implied.** Approve and reject start from `SUGGESTED`, and **no writer in
+this repository produces a Workspace-scoped suggestion**: `suggestStyleExample`, the composer's learning
+write and `recordEditedDraft` all stamp `profileScopeOf(context).businessProfileId`, while
+`createStyleExample` lands a Workspace example straight in `ACTIVE`. Those two rows are therefore inserted
+directly in the tests, and the guard on those two transitions is defensive. Archive, restore, publish and
+the knowledge paths are all reachable through ordinary product screens.
+
+**Still open, and deliberately not taken here.** The ADMIN + `SELECTED`-scope half — wiring
+`requireWorkspaceWideWrite` through three web actions that would each need a `WorkspaceContext` — is
+outside this directive's scope by its own step 4. The gap it leaves is unchanged: an ADMIN holding only
+`SELECTED` profiles can still create Workspace-scoped knowledge or style examples that profiles they were
+never granted will read.
+
+### Earlier — the accepted #93, propagated into #94 and nowhere else
+
+**PR #93 / P4-07 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-18T12:59:07Z, commit `f3243dea3674d28242a812c8feb49013282d5cdf`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=f3243dea3674d28242a812c8feb49013282d5cdf` (review `5563083113`). **Phase 4 is
+complete**: #87 through #93 each carry their own exact-head verdict.
+
+**Routing unchanged.** **#94 / P3-04 is now the sole gate; #95 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `e439f39ab2a402707978f5c9cd58bbf16c9ff1e1`: the accepted #93
+segment ran 38 commits ahead of it, #94's own authored segment 10 — genuinely `diverged`, 10 ahead / 38
+behind. Ordinary non-rebase merge at `449696ba9271cab97c76c0cda261b0e8d25db363`; `--is-ancestor` succeeds
+for the accepted #93 head and the prior #94 head `4bdc0daf8ebea00e03280d150e7e38305abed549` alike.
+
+#### The worker lifecycle: two conflicts, and a third place that conflicted with nothing
+
+Both conflicts were measured in advance from the #93 gate with `git merge-tree`, and reported before this
+directive existed. The directive's step 3 states the required outcome — seven loop entries, seven close
+calls, prose saying "seven" — and that is what the merge produced, but only the first two were conflicts.
+
+**`apps/worker/src/main.ts`** conflicted on the `loops` array alone: #94 had added `"retention"` to a list
+that did not yet contain `"follow_ups"`, and the accepted #93 head had `"follow_ups"` in a reformatted
+multi-line list. Resolved as the union, seven entries, with #93's explanatory comment widened to cover both
+unconditional sweepers.
+
+**The close block conflicted with nothing, and that is where the defect was.** Git merged both additions
+cleanly, so the shutdown list correctly gained `retention.close()` alongside `followUpSweeper.close()` —
+seven calls — while the comment above it still read **"six independent closes"**. #94's own diff had bumped
+that word from "five" to "six" because its base lacked the follow-up sweeper, and the accepted side also
+said "six", so git had no reason to stop. Nothing typechecks a number in a comment and no test reads one.
+Corrected to "seven", and the three counts are now checked against each other rather than asserted: seven
+`close()` calls, seven loop entries, the word "seven".
+
+**`apps/worker/src/main.test.ts`** conflicted on the whole-list assertion, resolved to the seven-entry list
+in the order `main.ts` reports them.
+
+**And its sibling case needed a change that was not a conflict either.** The case that boots without the
+credential key asserts `not.toContain("instagram_tokens")` and then `toContain("follow_ups")`, with a
+comment calling that "the unconditional loop" — singular, and true when `follow_ups` was the only one.
+`retention` is unconditional too, so it is now asserted there as well: a loop checked only in the
+fully-configured case above is a loop this case would not notice losing.
+
+#### Step 4 — deletion and export reachability, re-measured and resolved
+
+Re-measured on the merged head, with bare re-exports and migration comments excluded as the directive
+requires. **`requestDeletion`, `requestProfileDeletion`, `executeDeletion`, `listDeletionRequests` and
+`exportContact` have no real caller.** The single remaining hit is `executeDeletion` named in a migration
+comment. The branch's own retention sweeper calls only `deleteExpiredConnectStates`, and no file under
+`apps/web` references any of the five.
+
+**Reconciled against the live issue, the intended scope is store-only**, and the evidence is on the record
+rather than inferred:
+
+- **Issue #57 is titled "Implement security/privacy, export, retention and deletion *foundations*".**
+- Its *Required behavior* enumerates capabilities, authorization rules and durable workflow states —
+  `REQUESTED -> PROCESSING -> COMPLETED | PARTIAL_FAILURE` — and never a screen, a route or an operator
+  action in a UI.
+- Its *Tests* section lists cross-BP authorization attacks, member revocation, export permission, redaction,
+  the deletion workflow, partial external-system failure and memory/search cleanup. No interface test.
+- Its *Acceptance criteria* are that "MVP deletion/export **flows** are durable and auditable; unauthorized
+  data is non-discoverable; derived data is not left available for future AI/search after successful
+  deletion" — every one of which the store layer and its suites satisfy.
+- Two of the four specs Issue #57 names, `MVP_RELEASE_SCOPE.md` and `TEAM_ROLES_UX.md`, **do not exist
+  anywhere under `docs/`** — and those are precisely the documents that would define an operator surface and
+  the role UX for one.
+- `PRIVACY_RETENTION_DELETION.md` describes *who may* perform these actions ("Admin or owner only"), which
+  is the authorization model the store enforces, and it demonstrably knows how to record a missing surface
+  when it means one: it says of a different flag that "there is no notification surface in this product …
+  The flag belongs with the first surface that would honour it." It says nothing of the kind about deletion
+  or export.
+
+So the capability is complete and correct at the layer this task owns, and nothing about that is left
+ambiguous. What was ambiguous — and is the reason this section exists — is **who owns the surface**.
+
+#### The owning follow-up task, named rather than implied
+
+**It is not P7-01.** Issue #59 builds a *platform operator* console and states the separation itself: "Keep
+internal SUPPORT / BILLING / OPERATIONS / PLATFORM_ADMIN permissions separate from customer OWNER / ADMIN /
+AGENT roles." Deletion and export are **customer** admin-or-owner actions per the privacy spec, so putting
+them in the platform console would violate that issue's own role boundary. Its MVP surface list does not
+include them, and neither the P7-01 nor the P7-02 branch references any of the five functions.
+
+The customer-facing UI line is Phase 5, which runs P5-01 through P5-10 and is complete without a privacy
+screen. **So no existing task owns this, and the next free customer-facing designation is P5-11.**
+
+**Proposed task — P5-11, "Customer-facing privacy surface: deletion requests and contact export".** Scope:
+an OWNER/ADMIN-only screen under workspace settings that creates a deletion request at one of the four
+specified scopes, lists requests with their durable state, and exports a contact's data; every action
+tenant-scoped through the existing authorization context and written to the customer audit; no new store
+capability, because all four functions and `exportContact` already exist, are tested, and are exported.
+Acceptance: an AGENT cannot reach it, a deletion request appears with its scope and state, a `PARTIAL_FAILURE`
+is shown as terminal rather than retryable, and an export is audited and carries no secret.
+
+**Creating the GitHub issue is the owner's action, not mine** — this entry is the record the directive asks
+for, and the designation should be confirmed when that issue is opened.
+
+#### A missing authorization check on a cross-profile write, found and fixed in this cycle
+
+Checking that the merge preserved the tenancy invariants step 2 names, rather than assuming a clean merge
+had, turned up something this propagation did not introduce and should not have carried forward silently.
+
+#94 adds `requireWorkspaceWideWrite` to `tenancy.ts`, and its doc comment states the rule exactly: a write
+every Business Profile reads needs an admin or owner **and** `ALL` scope, because "somebody granted two
+profiles out of five has not been given the authority to change what the other three read." **It is called
+from nowhere**, and is not re-exported from the package index.
+
+Tracing where that rule is actually applied found three workspace-scoped writes and one of them
+unprotected:
+
+| write | role checked | `ALL` scope checked |
+|---|---|---|
+| `createKnowledge` with `scope: "WORKSPACE"` | yes | no — delegated in a comment to "the caller that holds a Workspace context" |
+| `createStyleExample` with `scope: "WORKSPACE"` | yes | no — same delegation |
+| **`saveStyleProfile` with `scopeLevel: "WORKSPACE"`** | **no** | no |
+
+`saveStyleProfile` writes the base voice every Business Profile inherits. It authorized only that the caller
+may act on *that* profile and then wrote the row with `businessProfileId = null`, with no role check at all —
+so **a member granted a single profile, including an `AGENT`, could rewrite the voice every profile replies
+in**, from that profile's Style page. No test covered it. This is not the deliberate delegation its siblings
+document: they enforce the role half and delegate only the scope half, and
+`PRIVACY_RETENTION_DELETION.md` assigns "writing a Workspace-scoped knowledge source or style example" to an
+admin or owner.
+
+**Fixed here, mirroring the sibling twenty lines below it** — the same
+`requireRole(context, WORKSPACE_ADMIN_ROLES, …)` for the `WORKSPACE` case. Judged to be inside step 5's
+carve-out rather than new scope, because Issue #57's first required behaviour is that "authorization is
+Workspace + role + BP-scope + action specific", and a workspace-wide write with no role check does not meet
+it. Three cases pin it: an `AGENT` is refused, the **same agent still writes their own profile's layer**
+(the control — the guard is about the workspace layer, not about agents), and an `ADMIN` is allowed.
+Removing the guard fails the agent case alone.
+
+**Not fixed, and proposed instead:** the `ALL`-scope half. Wiring `requireWorkspaceWideWrite` means the three
+web actions obtaining a `WorkspaceContext` — `requireWorkspaceContext` already exists for that — and it
+reaches into a layer this propagation never touched, so it is a scope call rather than mine. The gap it
+leaves open: `addWorkspaceMember`'s own comment confirms "an ADMIN with SELECTED scope" is a supported
+state, and such an admin can today create a Workspace-scoped knowledge source or style example that
+profiles they were never granted will read. Recommended as the first item of whatever cycle follows, or as
+an amendment to this one on a word.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, focused
+packages run separately with their own labels, `db:generate` before typecheck. Per the directive, any
+unexplained skip is treated as a failure — with the service variables present, nothing skipped.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 585 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **166 passed** (9 files) |
+| `apps/worker` lifecycle `main.test.ts` | **10 passed** (1 file) |
+| `pnpm test:db` | **836 passed** (41 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1103 passed** (96 files), no skips |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1844 passed, 1073 skipped |
+
+**Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass. The new
+`startRetentionSweeper` has no dedicated test file — its startup is covered through the worker lifecycle
+case that now asserts the `retention` loop — which matches `backlog-guard` and `reconciliation-sweeper`
+while the follow-up, outbox and Instagram-token sweepers each have one.
+
+### Superseded — the accepted #92, propagated into #93 and nowhere else
 
 **PR #92 / P4-06 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T17:21:42Z, commit `fddf0a2f0154135fce7c3d62cbc91c67e0651fe0`, carrying
@@ -1401,6 +1648,45 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+
+### Task definition — P3-04 / Issue #57, privacy, retention and deletion
+
+**Branch `feat/p3-04-privacy-deletion`**, based on `feat/p4-07-whatsapp-slice`.
+
+**The contract the issue referenced did not exist**, so it is written now:
+`docs/specs/PRIVACY_RETENTION_DELETION.md`, from what the code actually does, with the deliberate gaps
+named.
+
+**Deletion is a durable request, not a function call.** `DeletionRequest` carries the scope, the state
+machine (`REQUESTED → PROCESSING → COMPLETED | PARTIAL_FAILURE`) and per-table counts written as the
+work proceeds, so a crash leaves evidence of how far it got. CHECKs tie the clock to the state and
+refuse to call a run with failures complete.
+
+**Derived data is the point.** Ninety-six of the schema's ninety-nine foreign keys are `RESTRICT`, so
+the purge names every table in an order the database accepts — including breaking the
+`messages ⇄ ai_drafts` cycle with an update first. Transcripts, summaries, facts, preferences and
+style examples go with the correspondence; a reply engine that still held them would not have
+forgotten anybody.
+
+**Two rules that fell out of the data rather than from the issue:**
+
+- **You cannot both forget somebody and remember never to message them.** `followup_suppressions` has
+  a non-null contact reference, so an opt-out cannot be stripped of its person. A contact with a
+  standing one is anonymised instead: names, numbers, correspondence and derived data go, the contact
+  row and the provider's id for them stay, and so does the opt-out.
+- **A fact belongs to the person, not the thread.** A conversation-scoped deletion removes only what
+  was derived *from that conversation*; a contact-scoped one removes everything.
+
+**Least privilege, where there was none.** `requireRole` existed and was called from nowhere outside
+`packages/db`. Export, deletion and `forgetCustomer` are now admin-or-owner, and so is writing a
+Workspace-scoped knowledge source or style example — those are read by every Business Profile, so an
+agent granted one profile could change what the others read.
+
+**The export is audited in the same transaction as the read**, with counts and never content.
+
+Also fixed: `deleteExpiredChannelConnectStates` had existed since onboarding with no caller — exported,
+tested, never run, the same shape as Issue #9. It is a worker loop now.
+
 ### Task definition — P4-07 / Issue #24, the WhatsApp vertical slice
 
 **Branch `feat/p4-07-whatsapp-slice`**, based on `feat/p4-06-whatsapp-coexistence`.
@@ -1428,7 +1714,6 @@ rather than quietly downgraded.
 covering onboarding, the window, presence timing, coexistence takeover, disconnect/reconnect, voice
 notes, rejection versus ambiguity, and duplicates.
 
-### Task definition — P4-06 / Issue #23, coexistence and native-human takeover
 ### Task definition — P4-06 / Issue #23, coexistence and native-human takeover
 
 **Branch `feat/p4-06-whatsapp-coexistence`**, based on `feat/p4-05-whatsapp-presence`.
@@ -1464,7 +1749,6 @@ binding.
 `NATIVE_REPLIES_INVISIBLE` caveat on its channel card, in both locales.
 
 ### Task definition — P4-05 / Issue #22, read and typing presence timing
-### Task definition — P4-05 / Issue #22, read and typing presence timing
 
 **Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of
 presence: the transport call already existed from P4-01, and what was missing was deciding *when* to make
@@ -1495,7 +1779,6 @@ and presence announces only on the same `SCHEDULE` answer that would let the rep
 Also fixed: the incident reporter never mapped the `media-transcription` queue to a component (left
 unmapped by #21), and `DELAY_ENGINE.md`'s job table was missing that family.
 
-### Task definition — P4-04 / Issue #21, media and voice-note transcription
 ### Task definition — P4-04 / Issue #21, media and voice-note transcription
 
 **Branch `feat/p4-04-whatsapp-media`**, based on `feat/p4-03-whatsapp-templates`. Fetching a customer's
@@ -1532,7 +1815,6 @@ typechecking, so the suite was green while `pnpm -r typecheck` was not. Resolvin
 production does is what made the `connectionState` gap visible.
 
 ### Task definition — P4-03 / Issue #20, template catalogue and outside-window policy
-### Task definition — P4-03 / Issue #20, template catalogue and outside-window policy
 
 **Branch `feat/p4-03-whatsapp-templates`**, based on `feat/p4-02-whatsapp-embedded-signup`. ADR-016's three
 outside-window modes, the template catalogue they decide from, and the eligibility rules in between.
@@ -1546,7 +1828,6 @@ payload builder could not send a named template at all.
 template today, so the composing/delivery/record path would be unreachable code; the eligibility,
 validation and policy pieces it needs are in place and tested. See the note in `WHATSAPP_ADAPTER.md`.
 
-### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
 ### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
 
 **Branch `feat/p4-02-whatsapp-embedded-signup`**, based on `feat/p4-01-whatsapp-adapter`. Multi-tenant
@@ -1626,8 +1907,6 @@ and fixed at the owner's request. Both example lists paged at 25 in the store an
 Two lists on one page is what distinguishes it: each gets its own cursor parameter, and the next link
 carries the other list's cursor through, so paging the suggestions cannot move the verified library.
 
-### Task definition — P3-01 / Issue #54
-### Task definition — P3-02 / Issue #55
 ### Task definition — Stage E, P4-01 / Issue #18, the WhatsApp Cloud API transport adapter
 
 Started at the owner's word, with Stage D's chain still in review. `packages/channel-whatsapp` now
@@ -1643,9 +1922,6 @@ send rather than at scheduling time.
 
 Next in Stage E: #19 Embedded Signup and account lifecycle, then #20 templates and outside-window policy.
 
-
-### Task definition — P3-01 / Issue #54
-### Task definition — P3-02 / Issue #55
 ### Blocker repair — P5-01 / Issue #27, propagated to every branch
 
 Astra returned `CHANGES_REQUESTED` for PR #73 at `98895f4344ca3a0a2582ba69b497e9271dc263fc`:
@@ -1678,7 +1954,6 @@ would have moved the head that twenty-one accepted PRs stand on. The policy now 
 the other recovery loops, the send path marks a credential Meta refused, and `worker.started` lists the
 loops that are actually running so a loop wired to nothing is visible as an absence rather than as silence.
 
-### Previous — P5-09 / Issue #35
 ### Task definition — P5-09 / Issue #35
 
 **Branch `feat/p5-09-product-ux-e2e`**, stacked on the repaired #83. Held back until the P5-01 blocker

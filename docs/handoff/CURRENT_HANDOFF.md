@@ -916,6 +916,43 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P3-04 / Issue #57 — privacy, retention and deletion.** Branch
+   `feat/p3-04-privacy-deletion`, based on #93.
+
+   **The contract the issue referenced did not exist**, so it is written now:
+   `docs/specs/PRIVACY_RETENTION_DELETION.md`, from what the code actually does, with the deliberate gaps
+   named.
+
+   **Deletion is a durable request, not a function call.** `DeletionRequest` carries the scope, the state
+   machine (`REQUESTED → PROCESSING → COMPLETED | PARTIAL_FAILURE`) and per-table counts written as the
+   work proceeds, so a crash leaves evidence of how far it got. CHECKs tie the clock to the state and
+   refuse to call a run with failures complete.
+
+   **Derived data is the point.** Ninety-six of the schema's ninety-nine foreign keys are `RESTRICT`, so
+   the purge names every table in an order the database accepts — including breaking the
+   `messages ⇄ ai_drafts` cycle with an update first. Transcripts, summaries, facts, preferences and
+   style examples go with the correspondence; a reply engine that still held them would not have
+   forgotten anybody.
+
+   **Two rules that fell out of the data rather than from the issue:**
+
+   - **You cannot both forget somebody and remember never to message them.** `followup_suppressions` has
+     a non-null contact reference, so an opt-out cannot be stripped of its person. A contact with a
+     standing one is anonymised instead: names, numbers, correspondence and derived data go, the contact
+     row and the provider's id for them stay, and so does the opt-out.
+   - **A fact belongs to the person, not the thread.** A conversation-scoped deletion removes only what
+     was derived *from that conversation*; a contact-scoped one removes everything.
+
+   **Least privilege, where there was none.** `requireRole` existed and was called from nowhere outside
+   `packages/db`. Export, deletion and `forgetCustomer` are now admin-or-owner, and so is writing a
+   Workspace-scoped knowledge source or style example — those are read by every Business Profile, so an
+   agent granted one profile could change what the others read.
+
+   **The export is audited in the same transaction as the read**, with counts and never content.
+
+   Also fixed: `deleteExpiredChannelConnectStates` had existed since onboarding with no caller — exported,
+   tested, never run, the same shape as Issue #9. It is a worker loop now.
+
 1. **P4-07 / Issue #24 — the WhatsApp vertical slice.** Branch
    `feat/p4-07-whatsapp-slice`, based on #92.
 
@@ -2257,6 +2294,318 @@ that is the one place a skip count is expected, and it is 59 files rather than 5
 slice suite to them. With the services present nothing skips at all. Local runs are macOS; the authoritative
 Linux evidence is the exact-head GitHub Actions run.
 
+## PR #93 accepted, and joined to #94 / P3-04 — 2026-10-18
+
+**#93 is accepted at `f3243dea3674d28242a812c8feb49013282d5cdf`** — Gemini/Antigravity formal GitHub review
+`5563083113`, `APPROVED`, 2026-10-18T12:59:07Z. **Phase 4 is complete**: #87 through #93 each carry their own
+exact-head verdict.
+
+**Routing unchanged.** **#94 / P3-04 is the sole gate; #95 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `e439f39ab2a402707978f5c9cd58bbf16c9ff1e1` — the accepted #93 segment
+38 commits ahead of it, #94's authored segment 10 — so #94 against accepted #93 was genuinely `diverged`, 10
+ahead / 38 behind. Ordinary non-rebase merge at `449696ba9271cab97c76c0cda261b0e8d25db363`; no rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+### The worker lifecycle, and the count that merged cleanly while being wrong
+
+Both conflicts were measured from the #93 gate before this directive existed, with `git merge-tree` and no
+checkout, and reported there. The directive then stated the required outcome — seven loop entries, seven
+close calls, prose saying "seven" — which is what this merge produced. The useful part is that **only two of
+the three places were conflicts**.
+
+`main.ts` conflicted on the `loops` array: #94 had added `"retention"` to a list that did not yet contain
+`"follow_ups"`, while the accepted head had `"follow_ups"` in a reformatted multi-line list. Resolved as the
+union, with #93's comment widened to cover both unconditional sweepers.
+
+**The shutdown block conflicted with nothing.** Git merged both additions cleanly, so the list correctly
+gained `retention.close()` beside `followUpSweeper.close()` — seven calls — while the comment above still
+read "six independent closes". #94's diff had bumped that word from "five" to "six" because its base lacked
+the follow-up sweeper, and the accepted side also said "six", so there was nothing for git to stop on.
+Nothing typechecks a number in a comment and no test reads one. It now says "seven", and the three counts
+are compared against each other rather than trusted.
+
+`main.test.ts` conflicted on the whole-list assertion and was resolved to the seven-entry list in the order
+`main.ts` reports. **Its sibling case also needed a change that was not a conflict:** the boot-without-key
+case asserts `not.toContain("instagram_tokens")` then `toContain("follow_ups")`, calling that "the
+unconditional loop" — singular, and correct when `follow_ups` was the only one. `retention` is unconditional
+too, so it is asserted there now; a loop checked only in the fully-configured case is a loop that case would
+not notice losing.
+
+### Deletion and export are reachable from nothing, and that is now owned rather than open
+
+Re-measured on the merged head with bare re-exports and migration comments excluded:
+`requestDeletion`, `requestProfileDeletion`, `executeDeletion`, `listDeletionRequests` and `exportContact`
+have **no real caller**. The retention sweeper this branch adds calls only `deleteExpiredConnectStates`, and
+nothing under `apps/web` references any of the five.
+
+**Reconciled against Issue #57, store-only is the intended scope of P3-04**, and the evidence is recorded in
+`docs/tasks/CLAUDE_EXECUTION_QUEUE.md` rather than summarised here: the issue is titled "…deletion
+*foundations*", its required behaviour and tests describe capabilities and workflow states rather than any
+interface, its acceptance criteria are satisfied by the store layer, two of the four specs it names
+(`MVP_RELEASE_SCOPE.md`, `TEAM_ROLES_UX.md`) do not exist in the repository at all, and the privacy spec
+describes *who may* act while demonstrably knowing how to flag an absent surface when it means one.
+
+**What was genuinely ambiguous was ownership of the surface, and it now has a name.** It is not P7-01: Issue
+#59 builds a platform operator console and states the boundary itself — internal SUPPORT / BILLING /
+OPERATIONS / PLATFORM_ADMIN roles kept "separate from customer OWNER / ADMIN / AGENT roles" — while deletion
+and export are customer admin-or-owner actions, so placing them there would breach that issue's own role
+separation. Its MVP surface list excludes them, and neither P7 branch references any of the five functions.
+Phase 5 runs P5-01 to P5-10 and completes without a privacy screen, so **P5-11** is proposed and specified in
+the queue document. Opening that issue is the owner's action; the specification is the record this directive
+asked for.
+
+### A missing authorization check on a cross-profile write, found and fixed in this cycle
+
+Checking that the merge preserved the tenancy invariants rather than assuming it had: #94 adds
+`requireWorkspaceWideWrite` to `tenancy.ts` and calls it from nowhere. Tracing where its rule is actually
+applied found three workspace-scoped writes, and `saveStyleProfile` — the base voice every Business Profile
+inherits — had **no role check at all**, so a member granted a single profile, including an `AGENT`, could
+rewrite the voice every profile replies in. Its siblings `createKnowledge` and `createStyleExample` do
+enforce the role half, and the privacy spec assigns these acts to an admin or owner, so this was an omission
+rather than a delegation. Untested.
+
+Fixed by mirroring the sibling: `requireRole(context, WORKSPACE_ADMIN_ROLES, …)` for the `WORKSPACE` case,
+with three cases pinning it — an `AGENT` refused, the same agent still writing their own profile's layer as
+the control, an `ADMIN` allowed — and the guard's removal failing the agent case alone. Judged inside step
+5's carve-out because Issue #57's first required behaviour is that authorization be "Workspace + role +
+BP-scope + action specific".
+
+The `ALL`-scope half is **proposed, not done**: wiring `requireWorkspaceWideWrite` needs three web actions to
+obtain a `WorkspaceContext`, which reaches into a layer this propagation never touched. The gap it leaves:
+an ADMIN with `SELECTED` scope — a state `addWorkspaceMember`'s own comment confirms is supported — can
+create Workspace-scoped knowledge or style examples that profiles they were never granted will read.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; focused packages run
+separately with their own labels; `db:generate` before typecheck. **Any unexplained skip treated as a
+failure**, per the directive.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **585** source files, 0 cycles |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/application` | 14 files, **294/294** |
+| `@omnichannel/channel-whatsapp` | 9 files, **166/166** |
+| `apps/worker` lifecycle (`main.test.ts`) | 1 file, **10/10** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 41 files, **836/836**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 96 files, **1103/1103**, **no skips** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1073 skipped |
+
+**Disclosed limitations.** No retries, no reruns, no flakes, and nothing skipped to make a gate pass. **With
+the service variables present nothing skipped at all**, which is the condition the directive set. The 1070
+skips in the no-infrastructure run are the PostgreSQL and Redis suites declining to start without
+`TEST_DATABASE_URL` / `TEST_REDIS_URL` — the behaviour CI relies on — and the file count is 61 rather than
+58 because this head adds the deletion and privacy suites to them. One honest note on the branch's own code:
+the new `startRetentionSweeper` has no dedicated test file, and its startup is covered only through the
+worker lifecycle case that now asserts the loop. That matches `backlog-guard` and `reconciliation-sweeper`,
+which have none either, while the follow-up, outbox and Instagram-token sweepers do — a mixed pattern in the
+repository rather than something this merge introduced. Local runs are macOS; the authoritative Linux
+evidence is the exact-head GitHub Actions run.
+
+## PR #94 `CHANGES_REQUESTED`, remediated — 2026-10-18
+
+**Review `5563757640`, state `CHANGES_REQUESTED`, at exact head
+`5da1213cce104bf21ff0d697021db97867da7c58`.** Gemini/Antigravity independently reproduced the
+authorization finding this branch had disclosed, naming three scenarios — Knowledge Hijack, Knowledge
+Denial of Service, Style Governance Bypass — and specified remediation matching the patch already prepared
+locally. The owner's `CLAUDE_FIX_DIRECTIVE_FROM_PR94_CHANGES_REQUESTED` directed it onto the branch.
+
+**Routing unchanged.** **#94 / P3-04 remains the sole gate; #95 onwards are frozen.** No rebase,
+force-push, squash, merge to `main`, or propagation into #95+.
+
+### One shape of mistake, five call sites
+
+Making a Workspace-scoped row required `WORKSPACE_ADMIN_ROLES`; changing or retiring one required nothing
+beyond access to any single Business Profile. Every lifecycle call resolved its row through
+`scopeFilter(undefined, …)` or `exampleScopeFilter(undefined, …)`, whose `null` branch **is** the
+Workspace-scoped row, and applied no role check.
+
+- `editKnowledge` — rewrite the facts every profile answers from.
+- `archiveKnowledge` — retire it from every profile's retrieval. This one wrote through a blind
+  `updateMany` and never read the row, so an ownership read had to be added before a guard had anything to
+  check.
+- `restoreKnowledge` / `publishKnowledge` (the same function under two buttons) — put it back into every
+  profile's retrieval. The guard sits **above** the `act` check: a refusal that depended on `act` would
+  leave whichever screen omitted it unguarded.
+- `decide` — approve, reject, archive and restore a shared style example, through one private helper, so
+  one guard covers all four. Its selected row gained `businessProfileId`, which it had not read.
+- `saveStyleProfile` — rewrite the voice every profile replies in. Fixed earlier, at `5da1213`.
+
+Approve and restore both stamp `approvedByUserId`, and a CHECK requires that name for anything `ACTIVE` —
+the database insisting a human verified it. Unguarded, an agent could supply that provenance for content
+every profile's voice draws on, which is why this was more than an integrity question.
+
+### Reachability, stated rather than implied
+
+Approve and reject start from `SUGGESTED`, and **no writer in this repository produces a Workspace-scoped
+suggestion**: `suggestStyleExample`, the composer's learning write and `recordEditedDraft` all stamp
+`profileScopeOf(context).businessProfileId`, while `createStyleExample` lands a Workspace example straight
+in `ACTIVE`. Those two rows are inserted directly by the tests and the guard on those transitions is
+defensive. Archive, restore, publish and all four knowledge paths are reachable from ordinary screens.
+
+### Tests, and the control each one needs
+
+Fifteen cases across the two integration suites: an `AGENT` refused for every listed Workspace-scoped
+mutation, the **same agent still performing the corresponding profile-scoped operation** as the control,
+and an `ADMIN` allowed for each act the agent was refused. Without that last row the refusals would also
+pass if the lifecycle were simply broken for everyone.
+
+Each guard was then removed one at a time and the owning suite rerun, because a refusal test that still
+passes with its guard gone proves nothing:
+
+| guard removed | suite result |
+|---|---|
+| `editKnowledge` | 1 failed / 51 passed — the knowledge refusal case |
+| `archiveKnowledge` | 1 failed / 51 passed — same case |
+| `restoreKnowledge` / `publishKnowledge` | 1 failed / 51 passed — same case |
+| `decide` | **4 failed** / 45 passed — archive, approve, reject and restore refusals |
+| `saveStyleProfile` | the voice refusal case failed |
+
+All five are individually pinned. The knowledge refusals share one `it`, so a failure names the case rather
+than the guard; each was still isolated by removing one guard at a time with the others present.
+
+**A mistake worth recording.** The first mutation loop restored each file with `git checkout --`, which
+reverted the *uncommitted* patch instead of only the mutation, so runs two through five measured a file
+with no guards at all rather than one missing guard. The reverted work was recovered from the patch
+artifact and the loop rerun against a scratchpad snapshot. Never restore an uncommitted working tree from
+git.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2`; a dedicated shadow database for the
+drift check. **Any unexplained skip treated as a failure.**
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 |
+| unit suites (`pnpm test`) | 188 files, **2932/2932** |
+| PostgreSQL suites (`pnpm test:db`) | 41 files, **851/851**, no skips |
+| Redis suites (`pnpm test:redis`) | 3 files, **55/55** |
+| worker + web E2E (`pnpm test:e2e`) | 96 files, **1103/1103** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify` under `env -i`) | exit 0; 127 files passed / 61 skipped, **1844 passed** / 1088 skipped |
+
+The two suites this change touches are **52/52** (knowledge) and **50/50** (style), up by 3 and 12
+cases — 15 in all, which is also the +15 in the `pnpm test:db` total above.
+
+**Disclosed limitations.** No retries, no reruns, no flakes, nothing skipped to make a gate pass; with the
+service variables present nothing skipped at all. The 1088 skips in the no-infrastructure run are the
+PostgreSQL and Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`, the
+behaviour CI relies on. The ADMIN + `SELECTED`-scope half remains open by this directive's own step 4: an
+ADMIN holding only `SELECTED` profiles can still create Workspace-scoped knowledge or style examples that
+profiles they were never granted will read. Local runs are macOS; the authoritative Linux evidence is the
+exact-head GitHub Actions run.
+
+## PR #94 round two — the refusal tests were green and proved nothing — 2026-10-18
+
+The remediation above was correct in the source and **vacuous in the tests**, which I established by
+adversarially re-checking my own work rather than by being told. Both halves are now fixed on the same
+branch.
+
+### What was wrong with tests that all passed
+
+Every refusal case asserted only `rejects.toBeInstanceOf(WorkspacePermissionError)`. Nothing read the row
+back. Two of the five guarded functions — `archiveKnowledge` and `saveStyleProfile` — are **not
+transactional**, so a guard that fired *after* its write would throw exactly the same error while the write
+committed anyway. Measured, with the guard moved below its `updateMany` and nothing else changed:
+
+| mutation | before this round | now |
+|---|---|---|
+| `archiveKnowledge` guard moved below its write | **52/52 passed** — and the shared source committed as `ARCHIVED` | **1 failed**, the archive refusal |
+| `saveStyleProfile` guard moved after the write *and* the audit | **50/50 passed** — the agent's persona committed to the `businessProfileId = null` layer, audit row claiming the save | **1 failed**, the voice refusal |
+
+So an `AGENT` archived a Workspace-wide knowledge source out of every profile's retrieval, and rewrote the
+voice every profile inherits, with the whole suite green. I had checked guard *sensitivity* — remove the
+guard, does a test fail — and never checked that a refusal **changes nothing**. Those are different
+questions and only the second one is the behaviour.
+
+### What else the re-check found, all now fixed
+
+- **Bundled assertions hid three guards behind one.** The knowledge refusals were five `await expect`s in
+  one `it`; the first failure ends the case, so the later acts were pinned only while the earlier guard
+  held. Removing all three knowledge guards reported exactly **one** failure. Now one act per case.
+- **`publishKnowledge` *is* `restoreKnowledge`** (`export const publishKnowledge = restoreKnowledge`), so
+  three of those five assertions shared one guard and differed only in `act`. Stated in the test now
+  instead of reading as five independent acts.
+- **"The same agent" was not the same agent.** Every control created a second user — `"Knowledge Agent"`
+  refused, `"Knowledge Agent Two"` allowed. Equivalent principals, so the risk was low, but the claim was
+  false as written. Each control now refuses the shared row **and** performs the profile-scoped act as one
+  principal, which also made each guard removal fail more cases.
+- **The provenance argument was asserted nowhere.** The commit's central claim is that an unguarded approve
+  lets an agent supply the verified-human stamp a CHECK requires. No case read `approvedByUserId`. The
+  refusal now asserts the row stays `SUGGESTED` **and** unstamped; the admin case asserts the admin is
+  stamped.
+- **A doc comment asserted the opposite of the code.** `restoreStyleExample` said "The approver is
+  re-stamped rather than left as it was"; `decide` writes `approvedByUserId` only when the row has none,
+  and its own comment calls re-stamping the bug that was removed. Verified against the implementation and
+  the comment corrected. My own test comment repeated the false claim and is corrected too — what a
+  restore actually protects is the *retrieval* half.
+
+**Not a finding, recorded so it is not re-litigated:** the `?? ""` id fallbacks are safe. A missed lookup
+yields `""`, which matches no row and returns `GONE` — a resolved promise, so every refusal case fails
+loudly rather than passing for the wrong reason.
+
+### Guard sensitivity at this head
+
+| guard removed | cases failed |
+|---|---|
+| `editKnowledge` | 1 |
+| `archiveKnowledge` | 2 |
+| `restoreKnowledge` / `publishKnowledge` | 1 |
+| `decide` | **7** |
+| `saveStyleProfile` | 2 |
+
+### Verification
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint / boundaries | exit 0 / exit 0 / exit 0 |
+| unit suites | **2934/2934** |
+| PostgreSQL suites | 41 files, **853/853**, no skips |
+| Redis suites | **55/55** |
+| worker + web E2E | 96 files, **1103/1103** |
+| evals | **20/20**, 0 quality regressions |
+| production build | exit 0 |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0; 1844 passed / 1090 skipped |
+
+The two suites are **54/54** (knowledge) and **50/50** (style).
+
+### A live instance of the same class, upstream — disclosed, not fixed here
+
+Re-bounding the class across every write in `packages/db` — rather than trusting the earlier bound — found
+**`saveStageDisplays` (`lead-store.ts:76`)**: `LeadStageDisplay` has **no `businessProfileId` column**, is
+keyed `@@unique([workspaceId, stage])`, and `readStageDisplays` reads it by `workspaceId` alone, so it is
+the lead board every profile sees. The function takes a `BusinessProfileContext` and then
+`deleteMany({ where: { workspaceId: context.workspaceId } })`, recreating every stage row. No role check at
+any layer: `saveStagesAction` calls only `requireBusinessProfileContext`, and the Leads page renders the
+form with no role conditional. **An AGENT with one profile can rename, reorder and hide the lead stages on
+every other profile's board.** It also never calls `profileScopeOf`, so the branded-context validation
+never runs there.
+
+**Introduced by `3c666dd`, which is #80 / P5-07 — upstream of this branch.** Fixing it here would sit
+downstream of its own origin and leave #80→#93 carrying the hole, so it belongs at #80 as its own
+directive.
+
+**Why the earlier bound missed it:** that bound was built by grepping the idiom
+`{ OR: [{ businessProfileId: null }, { businessProfileId }] }`, which **structurally cannot see a model
+with no `businessProfileId` column**. Enumerate by write and ask "can more than one Business Profile read
+this row?" — a grep for a scope filter answers a narrower question than the one that matters.
+
+Also unguarded and currently unreachable: `recordIndexingResult` (`knowledge-store.ts:608`) can flip a
+shared source to `ARCHIVED` with no role check, and `seedKnowledge` / `seedStyleExample`
+(`retrieval/seed.ts:44`, `:100`) default to Workspace-wide, bypass the guarded writers, and
+`seedStyleExample` writes `ACTIVE` with `approved_by_user_id = context.userId` — minting exactly the
+provenance `decide`'s guard withholds. Both exported from `index.ts`.
+
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 
 **Found while bounding a different authorization class on PR #94 (P3-04), and traced back to this branch
@@ -2334,3 +2683,85 @@ Real PostgreSQL 17 + pgvector and Redis 7; `--maxWorkers=2`; dedicated shadow da
 
 These line up with the numbers the accepted review recorded for `bd1c039` — 488 PostgreSQL cases and
 1424/611 — plus exactly the four cases this change adds, which skip without infrastructure.
+
+## The P5-07 propagation reaches its last link — P3-04 / PR #94 — 2026-10-20
+
+The directive on #93 propagated the accepted `feat/p4-07-whatsapp-slice` head
+`8a84f3109c5468ddf80ddb0c4dc2e9d1e0cdbdea` into `feat/p3-04-privacy-deletion`, whose head was
+`df77cd717c68104333942bc077e44b4b27f2c689`. This is the **fifteenth and final** link of the lead-board
+authorization propagation, which began at its origin on #80 and moved one branch per directive.
+
+### What the merge actually carried
+
+**Nothing under `apps/` or `packages/`.** `git diff $(git merge-base T P) P` names exactly two files,
+both documentation:
+
+| file | why it differed |
+|---|---|
+| `docs/handoff/CURRENT_HANDOFF.md` | merged cleanly |
+| `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` | three conflict regions, resolved as unions |
+
+That is the expected shape at the end of a propagation: every code change the fix needed had already
+arrived at #93 and was verified there, so the last link carries only the record of it. The emptiness was
+**measured, not assumed** — the diff was taken against the merge base, never two-way against the target,
+which is the error that makes a propagation look larger than it is.
+
+Both live segments were then checked by name rather than by the absence of a conflict, because
+[[merge-fallout-without-conflict]] is this chain's recurring failure mode — five shapes merge clean and
+still break. Every file below is byte-identical to the pre-merge target:
+
+`knowledge-store.ts`, `style-store.ts`, `deletion-store.ts`, `tenancy.ts`, `lead-store.ts`,
+`apps/worker/src/main.ts`, `apps/worker/src/draft-disposition.ts`.
+
+And the individual contracts each segment owns are all present: four `requireRole` guards in the
+knowledge store and three in the style store; `requireWorkspaceWideWrite` defined in `tenancy.ts` and
+still — deliberately — with no caller; the lead-board role check; `transcription: producer` in
+`dispatchOutbox`; both presence spreads keyed on `presenceAnnouncer === undefined`; and the three-part
+automated-response budget union that keeps a follow-up sendable.
+
+### The queue conflict
+
+Three regions, one of them 247 lines that exist only on this side. Resolved by exact conflict-marker line
+numbers rather than by a regex over the file — an earlier attempt at the latter miscounted the regions
+and captured a `>>>>>>>` that belonged inside one side. The union was then checked mechanically in both
+directions: the child contributes 220 lines over the base with 4 lines missing, all four being headings
+renamed on purpose so that the file keeps exactly **one** `### Current work`; the parent contributes 46
+lines with **nothing** missing.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database for the drift check.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 188 files, **2938/2938** |
+| PostgreSQL suites | 41 files, **857/857**, **no skips** |
+| Redis suites | **55/55** |
+| worker + web E2E | **1103/1103** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1844 passed / 1094 skipped**, with zero infrastructure variables in the environment |
+
+The two suites this branch exists for were run by name to confirm they execute rather than skip:
+`deletion.integration.test.ts` and `privacy.integration.test.ts` — **2 files, 29/29**. The P4-07 slice
+that arrived from the parent was likewise run by name: **13/13**. The P3-04 knowledge and style suites:
+**2 files, 104/104**.
+
+### A failure that was mine, not the code's — disclosed because the first run was red
+
+Those deletion and privacy suites **first failed, 17 errors**, every one
+`TypeError: Cannot read properties of undefined (reading 'create')`. That is not a defect in this head
+and not a flake. The generated Prisma client in my working copy was stale after a day of branch
+switching, so the client had no model for tables this branch adds.
+`pnpm --filter @omnichannel/db db:generate` fixed it and the suites then passed 29/29.
+
+This is worth recording rather than quietly re-running, for a reason that is general: the `typecheck`
+script **begins** with `prisma generate`, so `pnpm verify` regenerates the client every time. On the
+previous fourteen links I ran `verify` first and the staleness could never surface. Here I ran the
+targeted suites first, in isolation, and got a red result that said nothing about the code.
+
+**The rule:** a suite invoked directly through Vitest, outside `pnpm verify`, can be running against a
+client generated on a different branch. Run `db:generate` before any targeted database suite after a
+branch change, and never read such a failure as evidence about the branch until the client's provenance
+is established. Related: [[vitest-green-tsc-red]], which is the same gap seen from the other side —
+Vitest transpiles without typechecking, so neither tool alone tells you the generated code matches.

@@ -252,6 +252,26 @@ export function profileScopeOf(context: BusinessProfileContext): {
 export const WORKSPACE_ADMIN_ROLES: readonly WorkspaceRole[] = ["OWNER", "ADMIN"];
 
 /** Role check for an issued context (validated first); returns nothing, throws WorkspacePermissionError. */
+/**
+ * Whether this caller may write something that reaches beyond their own Business Profile (#57).
+ *
+ * A Workspace-scoped knowledge document or style example is read by *every* profile, so creating or
+ * editing one from a single-profile screen is a cross-profile write — and until this existed any member
+ * who could open the Knowledge page could make one, including an agent granted a single profile. The
+ * check is the one `createBusinessProfile` already applies to the other workspace-wide act: admin or
+ * owner, and `ALL` scope, because somebody granted two profiles out of five has not been given the
+ * authority to change what the other three read.
+ *
+ * It takes a `WorkspaceContext` because a profile context cannot answer it: `BusinessProfileContext`
+ * deliberately carries no scope, so a caller holding only one has to go and get the wider one.
+ */
+export function requireWorkspaceWideWrite(context: WorkspaceContext, operation: string): void {
+  requireRole(context, WORKSPACE_ADMIN_ROLES, operation);
+  if (context.businessProfileScope.kind !== "ALL") {
+    throw new WorkspacePermissionError(operation);
+  }
+}
+
 export function requireRole(
   context: WorkspaceContext | BusinessProfileContext,
   allowed: readonly WorkspaceRole[],

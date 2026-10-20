@@ -26,6 +26,11 @@ export const AUDIT_EVENT_KINDS = [
   "TEMPLATE_POLICY_CHANGED",
   "AMBIGUOUS_SEND_RESOLVED",
   "MEMBER_CHANGED",
+  /// Somebody read a customer's data out of the product. The read itself is the event (#57).
+  "DATA_EXPORTED",
+  /// Somebody asked for data to be deleted, and what the deletion actually removed.
+  "DELETION_REQUESTED",
+  "DELETION_COMPLETED",
 ] as const;
 export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
 export const isAuditEventKind = literalGuard(AUDIT_EVENT_KINDS);
@@ -47,7 +52,17 @@ export type AuditActorKind = (typeof AUDIT_ACTOR_KINDS)[number];
  * means the rows are absent rather than redacted: a row shown as `***` still discloses that somebody's
  * access changed at 14:02, which is most of what was being withheld.
  */
-export const ADMIN_ONLY_AUDIT_KINDS: readonly AuditEventKind[] = ["MEMBER_CHANGED", "CHANNEL_CONNECTED", "CHANNEL_DISCONNECTED"];
+export const ADMIN_ONLY_AUDIT_KINDS: readonly AuditEventKind[] = [
+  "MEMBER_CHANGED",
+  "CHANNEL_CONNECTED",
+  "CHANNEL_DISCONNECTED",
+  // Exports and deletions are the two actions that move a customer's data out of, or out of existence
+  // in, this product. Who did them is exactly the question an investigation asks, and showing the rows
+  // to everybody would make "somebody exported this thread at 14:02" ordinary reading (#57).
+  "DATA_EXPORTED",
+  "DELETION_REQUESTED",
+  "DELETION_COMPLETED",
+];
 
 /** Whether this kind belongs to the workspace rather than to one Business Profile. */
 export function isWorkspaceScopedAuditKind(kind: AuditEventKind): boolean {

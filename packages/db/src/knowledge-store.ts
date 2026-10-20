@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 
 const DEFAULT_PAGE = 25;
 const MAX_PAGE = 100;
@@ -314,6 +314,14 @@ export async function createKnowledge(
   input: NewKnowledge,
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
+  if (input.scope === "WORKSPACE") {
+    // A Workspace-scoped source is read by *every* Business Profile, so writing one from a single
+    // profile's screen is a cross-profile write. Until this check existed, any member who could open the
+    // page could make one — including an agent granted a single profile (#57). Role only: a profile
+    // context deliberately carries no Business Profile scope, so the "must hold ALL profiles" half of
+    // the rule is applied by the caller that holds a Workspace context.
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "writing Workspace-wide knowledge");
+  }
   const chunks = input.chunks.map((content) => content.trim()).filter((content) => content !== "");
   if (input.title.trim() === "") {
     return { status: "REJECTED", reason: "a knowledge source needs a title" };
@@ -373,10 +381,17 @@ export async function editKnowledge(
   return db.$transaction(async (tx) => {
     const document = await tx.knowledgeDocument.findFirst({
       where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) },
-      select: { id: true, version: true, title: true, contentHash: true, status: true },
+      select: { id: true, version: true, title: true, contentHash: true, status: true, businessProfileId: true },
     });
     if (document === null) {
       return { status: "GONE" };
+    }
+    if (document.businessProfileId === null) {
+      // A Workspace-scoped source is read by *every* Business Profile, so acting on one from a single
+      // profile's screen is a cross-profile act — the same one `createKnowledge` guards when the source is
+      // made. Creating one required an admin or owner while changing one required nothing, which let a
+      // member granted a single profile rewrite or retire the factual authority all of them answer from.
+      requireRole(context, WORKSPACE_ADMIN_ROLES, "editing Workspace-wide knowledge");
     }
 
     if (input.expectedVersion !== undefined && input.expectedVersion !== document.version) {
@@ -446,8 +461,17 @@ export async function editKnowledge(
 /** Out of retrieval immediately: the query filters on ACTIVE, so this is the stop button for one source. */
 export async function archiveKnowledge(db: DbExecutor, context: BusinessProfileContext, documentId: string): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
+  const where = { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) };
+  // Read before the write only to learn whose source this is: archiving a Workspace-scoped one takes it
+  // out of every Business Profile's retrieval, so it is the same cross-profile act `createKnowledge`
+  // guards. A refusal rather than a silent `GONE`, because the source does exist and the answer is that
+  // this member may not retire it.
+  const owner = await db.knowledgeDocument.findFirst({ where, select: { businessProfileId: true } });
+  if (owner?.businessProfileId === null) {
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "archiving Workspace-wide knowledge");
+  }
   const changed = await db.knowledgeDocument.updateMany({
-    where: { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) },
+    where,
     data: { status: "ARCHIVED" },
   });
   return changed.count === 0 ? { status: "GONE" } : { status: "ARCHIVED" };
@@ -507,9 +531,14 @@ export async function restoreKnowledge(
 ): Promise<KnowledgeWriteOutcome> {
   const scope = profileScopeOf(context);
   const where = { workspaceId: scope.workspaceId, id: documentId, ...scopeFilter(undefined, scope.businessProfileId) };
-  const document = await db.knowledgeDocument.findFirst({ where, select: { indexingState: true, version: true, status: true } });
+  const document = await db.knowledgeDocument.findFirst({ where, select: { indexingState: true, version: true, status: true, businessProfileId: true } });
   if (document === null) {
     return { status: "GONE" };
+  }
+  if (document.businessProfileId === null) {
+    // Publishing or restoring a Workspace-scoped source puts it back into every Business Profile's
+    // retrieval, which is the same cross-profile act `createKnowledge` guards when it is made.
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "publishing Workspace-wide knowledge");
   }
   if (options.expectedVersion !== undefined && options.expectedVersion !== document.version) {
     // A stale screen. The operator is deciding about wording that has already been replaced, so the one
