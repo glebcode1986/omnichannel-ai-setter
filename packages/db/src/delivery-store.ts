@@ -188,6 +188,10 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
               text: true,
               needsReview: true,
               conversationId: true,
+              // What asked for this draft. A follow-up attempt answers no message of the customer's, so
+              // the provider's automated-response budget — measured from their last message — does not
+              // apply to it (#55). Everything else about the send is identical.
+              trigger: true,
               sentMessage: { select: { id: true } },
               conversation: {
                 select: {
@@ -260,6 +264,8 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
         mode: conversation.modeOverride ?? effective?.mode ?? "OFF",
         limits: limitsFrom(effective, conversation.channelIdentity.channelAccount.channel),
         ...(conversation.lastInboundAt === null ? {} : { lastInboundAt: conversation.lastInboundAt }),
+        // Set only where it is true, so a send that is an answer keeps the provider deadline it should.
+        ...(job.draft?.trigger === "FOLLOW_UP" ? { proactive: true } : {}),
         aiEnabled: conversation.aiEnabled && conversation.status === "OPEN",
         takeover: takeoverStateOf(conversation),
         authority: authorityOf(job),

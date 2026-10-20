@@ -13,6 +13,9 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { WorkspacePermissionError } from "./errors";
+import { addWorkspaceMember } from "./repositories/workspaces";
+import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess } from "./tenancy";
 import {
   approveStyleExample,
   archiveStyleExample,
@@ -694,6 +697,258 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(asFact.hits.some((hit) => hit.text.includes("fully refundable"))).toBe(false);
     }, 180_000);
   });
+
+  describe("who may decide a style example every profile draws on", () => {
+    /**
+     * All four transitions — approve, reject, archive, restore — share one private `decide`, which
+     * resolved the row through `exampleScopeFilter(undefined, …)` whose `null` branch *is* the
+     * Workspace-scoped example, and applied no role check. Making one needs an admin; deciding one needed
+     * nothing. One guard covers all four.
+     *
+     * Every refusal below reads the row back. The exception alone is not enough: `decide` happens to be
+     * transactional, so a misplaced guard rolls back, but `saveStyleProfile` in the sibling block is not,
+     * and asserting only `rejects` let a measured 50/50 pass while the Workspace voice was rewritten. The
+     * read-back is the assertion that "refused" means nothing moved.
+     */
+    const member = async (name: string, role: "AGENT" | "ADMIN") => {
+      const user = await database.db.user.create({ data: { name, email: `${name.replace(/\W/gu, "-").toLowerCase()}@example.test` } });
+      const owner = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: workspace.workspaceId });
+      await addWorkspaceMember(database.db, owner, { userId: user.id, role, businessProfileScope: "ALL" });
+      return { userId: user.id, context: await authorizeBusinessProfileAccess(database.db, { userId: user.id, workspaceId: workspace.workspaceId, businessProfileId: profile.businessProfileId }) };
+    };
+
+    const exampleFor = async (scope: "WORKSPACE" | "BUSINESS_PROFILE", marker: string) => {
+      await createStyleExample(db(), profile.context, { scope, inboundContext: "a question", outboundText: marker });
+      const listed = await listStyleExamples(db(), profile.context, { scope, status: "ACTIVE" });
+      return { id: listed.examples.find((row) => row.outboundText === marker)?.id ?? "" };
+    };
+
+    const rowOf = async (id: string) =>
+      database.db.styleExample.findFirstOrThrow({ where: { id }, select: { status: true, approvedByUserId: true, decidedByUserId: true, decision: true } });
+
+    /**
+     * Approve and reject start from `SUGGESTED`, and no writer in this repository produces a
+     * Workspace-scoped suggestion: `suggestStyleExample`, the composer's learning write and
+     * `recordEditedDraft` all stamp `profileScopeOf(context).businessProfileId`, and `createStyleExample`
+     * lands a Workspace example straight in `ACTIVE`. So the two rows below are written directly. The
+     * guard on those transitions is therefore defensive, and these cases record what it defends rather
+     * than pretending the state is reachable through a production path today.
+     */
+    const suggestedWorkspaceExample = async (marker: string) =>
+      database.db.styleExample.create({
+        data: {
+          workspaceId: workspace.workspaceId,
+          businessProfileId: null,
+          inboundContext: "a question",
+          outboundText: marker,
+          provenance: "HUMAN_TYPED",
+          status: "SUGGESTED",
+        },
+        select: { id: true },
+      });
+
+    const suggestedProfileExample = async (marker: string) => {
+      // The control's row comes from the production suggestion path, not a direct insert.
+      await suggestStyleExample(db(), profile.context, { inboundContext: "a question", outboundText: marker });
+      const listed = await listStyleExamples(db(), profile.context, { scope: "BUSINESS_PROFILE", status: "SUGGESTED" });
+      return { id: listed.examples.find((row) => row.outboundText === marker)?.id ?? "" };
+    };
+
+    it("refuses an agent archiving a Workspace-scoped example, and it stays in the shared voice", async () => {
+      const { id } = await exampleFor("WORKSPACE", "Shared voice one");
+      const agent = await member("Decide Agent", "AGENT");
+
+      await expect(archiveStyleExample(db(), agent.context, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      const after = await rowOf(id);
+      expect(after.status).toBe("ACTIVE");
+      expect(after.decidedByUserId).toBeNull();
+      expect(await database.db.styleExampleDecision.count({ where: { styleExampleId: id } })).toBe(0);
+    });
+
+    it("still lets that same agent archive their own profile's example", async () => {
+      // The control, and **the same principal** refused above — not another member who happens to share
+      // the role. The guard is about the Workspace layer, not about agents.
+      const { id } = await exampleFor("BUSINESS_PROFILE", "Own voice one");
+      const agent = await member("Decide Own Agent", "AGENT");
+      const { id: sharedId } = await exampleFor("WORKSPACE", "Shared voice control");
+
+      await expect(archiveStyleExample(db(), agent.context, sharedId)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect((await archiveStyleExample(db(), agent.context, id)).status).toBe("ARCHIVED");
+    });
+
+    it("allows an admin to archive a Workspace-scoped example", async () => {
+      const { id } = await exampleFor("WORKSPACE", "Shared voice two");
+      const admin = await member("Decide Admin", "ADMIN");
+
+      expect((await archiveStyleExample(db(), admin.context, id)).status).toBe("ARCHIVED");
+      expect((await rowOf(id)).status).toBe("ARCHIVED");
+    });
+
+    it("refuses an agent approving a Workspace-scoped suggestion, and no approver is stamped", async () => {
+      const { id } = await suggestedWorkspaceExample("Shared voice three");
+      const agent = await member("Approve Agent", "AGENT");
+
+      await expect(approveStyleExample(db(), agent.context, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      // The provenance argument, asserted rather than stated: a CHECK requires an approver for anything
+      // ACTIVE, which is the database insisting a human vouched for it. The refusal has to leave the row
+      // SUGGESTED *and* unstamped, or an agent has supplied that vouching for content every profile's
+      // voice draws on.
+      const after = await rowOf(id);
+      expect(after.status).toBe("SUGGESTED");
+      expect(after.approvedByUserId).toBeNull();
+    });
+
+    it("still lets that same agent approve their own profile's suggestion", async () => {
+      const { id } = await suggestedProfileExample("Own voice two");
+      const agent = await member("Approve Own Agent", "AGENT");
+      const { id: sharedId } = await suggestedWorkspaceExample("Shared voice three-b");
+
+      await expect(approveStyleExample(db(), agent.context, sharedId)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect((await approveStyleExample(db(), agent.context, id)).status).toBe("ACTIVATED");
+      expect((await rowOf(id)).approvedByUserId).toBe(agent.userId);
+    });
+
+    it("allows an admin to approve a Workspace-scoped suggestion, and stamps them as its approver", async () => {
+      const { id } = await suggestedWorkspaceExample("Shared voice four");
+      const admin = await member("Approve Admin", "ADMIN");
+
+      expect((await approveStyleExample(db(), admin.context, id)).status).toBe("ACTIVATED");
+
+      const after = await rowOf(id);
+      expect(after.status).toBe("ACTIVE");
+      expect(after.approvedByUserId).toBe(admin.userId);
+    });
+
+    it("refuses an agent rejecting a Workspace-scoped suggestion, and it stays pending", async () => {
+      const { id } = await suggestedWorkspaceExample("Shared voice five");
+      const agent = await member("Reject Agent", "AGENT");
+
+      await expect(rejectStyleExample(db(), agent.context, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect((await rowOf(id)).status).toBe("SUGGESTED");
+    });
+
+    it("still lets that same agent reject their own profile's suggestion", async () => {
+      const { id } = await suggestedProfileExample("Own voice three");
+      const agent = await member("Reject Own Agent", "AGENT");
+      const { id: sharedId } = await suggestedWorkspaceExample("Shared voice five-b");
+
+      await expect(rejectStyleExample(db(), agent.context, sharedId)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect((await rejectStyleExample(db(), agent.context, id)).status).toBe("REJECTED_EXAMPLE");
+    });
+
+    it("allows an admin to reject a Workspace-scoped suggestion", async () => {
+      const { id } = await suggestedWorkspaceExample("Shared voice eight");
+      const admin = await member("Reject Admin", "ADMIN");
+
+      expect((await rejectStyleExample(db(), admin.context, id)).status).toBe("REJECTED_EXAMPLE");
+      expect((await rowOf(id)).status).toBe("REJECTED");
+    });
+
+    it("refuses an agent restoring a Workspace-scoped example an admin archived", async () => {
+      const { id } = await exampleFor("WORKSPACE", "Shared voice six");
+      const admin = await member("Restore Admin", "ADMIN");
+      expect((await archiveStyleExample(db(), admin.context, id)).status).toBe("ARCHIVED");
+
+      const agent = await member("Restore Agent", "AGENT");
+
+      // What this one protects is the *retrieval* half: a restore puts an archived example back into
+      // every profile's voice. It does **not** re-stamp the approver — `decide` writes
+      // `approvedByUserId` only when the row has none, and this row was stamped when it was created — so
+      // the approver is asserted here as the thing that must stay untouched, not as the thing at risk.
+      await expect(restoreStyleExample(db(), agent.context, id)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      const after = await rowOf(id);
+      expect(after.status).toBe("ARCHIVED");
+      expect(after.approvedByUserId).toBe(workspace.ownerUserId);
+    });
+
+    it("still lets that same agent restore their own profile's archived example", async () => {
+      const { id } = await exampleFor("BUSINESS_PROFILE", "Own voice four");
+      const agent = await member("Restore Own Agent", "AGENT");
+      expect((await archiveStyleExample(db(), agent.context, id)).status).toBe("ARCHIVED");
+
+      expect((await restoreStyleExample(db(), agent.context, id)).status).toBe("RESTORED");
+      expect((await rowOf(id)).status).toBe("ACTIVE");
+    });
+
+    it("allows an admin to restore a Workspace-scoped example", async () => {
+      const { id } = await exampleFor("WORKSPACE", "Shared voice seven");
+      const admin = await member("Restore Admin Two", "ADMIN");
+      expect((await archiveStyleExample(db(), admin.context, id)).status).toBe("ARCHIVED");
+
+      expect((await restoreStyleExample(db(), admin.context, id)).status).toBe("RESTORED");
+      expect((await rowOf(id)).status).toBe("ACTIVE");
+    });
+  });
+
+  describe("who may write the voice every profile inherits", () => {
+    /**
+     * The Workspace layer is read by every Business Profile, so writing it from one profile's screen is a
+     * cross-profile act — the same one `createStyleExample` guards for a workspace-scoped example, and the
+     * one the privacy spec assigns to an admin or owner. `saveStyleProfile` was the single workspace-scoped
+     * write in this file with no role check at all, so a member granted one profile could rewrite the voice
+     * all of them reply in. These cases exist because nothing failed when that check was absent.
+     */
+    const contextFor = async (name: string, role: "AGENT" | "ADMIN") => {
+      const user = await database.db.user.create({ data: { name, email: `${name.replace(/\W/gu, "-").toLowerCase()}@example.test` } });
+      const owner = await authorizeWorkspaceAccess(database.db, { userId: workspace.ownerUserId, workspaceId: workspace.workspaceId });
+      await addWorkspaceMember(database.db, owner, { userId: user.id, role, businessProfileScope: "ALL" });
+      return authorizeBusinessProfileAccess(database.db, {
+        userId: user.id,
+        workspaceId: workspace.workspaceId,
+        businessProfileId: profile.businessProfileId,
+      });
+    };
+
+    const voice = { persona: "Rewritten", tone: null, replyLength: null, emoji: null, greeting: null, signOff: null, preferredPhrases: [], avoidedPhrases: [], language: null };
+
+    const workspaceLayer = async () => {
+      const layers = await readStyleProfiles(db(), profile.context);
+      return layers.find((layer) => layer.scope === "WORKSPACE");
+    };
+
+    it("refuses an agent, who may answer in this profile but not change what every profile sounds like", async () => {
+      const agent = await contextFor("Style Agent", "AGENT");
+      const before = await workspaceLayer();
+
+      await expect(saveStyleProfile(database.db, agent, "WORKSPACE", voice)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      // **This function is not transactional**, and that is why the row is read back rather than the
+      // rejection being taken as proof. With the guard moved below its `updateMany` — a plausible
+      // regression, since nothing structural holds it in place — the refusal still throws, the agent's
+      // persona is committed to the layer every profile inherits, an audit row claims the save happened,
+      // and the suite was measured passing 50/50. The exception is not the behaviour; the unchanged layer
+      // is.
+      expect(await workspaceLayer()).toEqual(before);
+      expect(await database.db.styleProfile.count({ where: { workspaceId: workspace.workspaceId, businessProfileId: null, persona: voice.persona } })).toBe(0);
+    });
+
+    it("still lets that same agent write their own profile's layer, which is theirs to write", async () => {
+      // The control, and the same principal refused above. The guard is about the workspace layer, not
+      // about agents, and narrowing it to both would have taken the profile voice away from the people
+      // who use it.
+      const agent = await contextFor("Style Own Agent", "AGENT");
+
+      await expect(saveStyleProfile(database.db, agent, "WORKSPACE", voice)).rejects.toBeInstanceOf(WorkspacePermissionError);
+
+      expect((await saveStyleProfile(database.db, agent, "BUSINESS_PROFILE", voice)).status).toBe("SAVED");
+    });
+
+    it("allows an admin, because the privacy spec gives them this act", async () => {
+      const admin = await contextFor("Style Admin", "ADMIN");
+
+      expect((await saveStyleProfile(database.db, admin, "WORKSPACE", voice)).status).toBe("SAVED");
+      // The write really landed, so the refusals above are about the role and not about a broken path.
+      expect((await workspaceLayer())?.persona).toBe(voice.persona);
+    });
+  });
+
 });
 
 function blank() {
