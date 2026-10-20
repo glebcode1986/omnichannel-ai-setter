@@ -8,10 +8,12 @@ import {
   aiDraftGenerationJobSchema,
   deliveryJobSchema,
   inboundDebounceJobSchema,
+  mediaTranscriptionJobSchema,
   reconciliationJobSchema,
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
+  type MediaTranscriptionJob,
   type ReconciliationJob,
 } from "./payloads";
 
@@ -52,6 +54,27 @@ export const INBOUND_DEBOUNCE: JobFamily<InboundDebounceJob> = {
   jobId: (job) => buildJobId("inbound-debounce", 1, job.workspaceId, job.businessProfileId, job.conversationId, job.anchorMessageId),
   // Safe to retry: firing only hands the reply cycle to AI draft generation, which is itself idempotent.
   jobOptions: { ...RETENTION, attempts: 3, backoff: { type: "exponential", delay: 1_000 } },
+};
+
+export const MEDIA_TRANSCRIPTION: JobFamily<MediaTranscriptionJob> = {
+  queueName: "media-transcription",
+  jobName: "media-transcription.v1",
+  schema: mediaTranscriptionJobSchema,
+  // One job per message: a redelivered webhook — which the provider sends for up to seven days — must not
+  // queue a second reading of the same recording.
+  jobId: (job) => buildJobId("media-transcription", 1, job.workspaceId, job.businessProfileId, job.messageId),
+  /**
+   * Retried, because every failure that reaches the queue is one that might not repeat: a throttled
+   * provider, an outage, a download that timed out. The failures that *will* repeat — an unsupported
+   * container, a recording too large, a refused credential — are recorded as terminal by the handler and
+   * never thrown, so they do not consume attempts.
+   *
+   * The backoff is long by comparison with the other families. Nothing is waiting on a reading the way a
+   * customer waits on a reply: the draft that needs it holds for a person in the meantime, and reading a
+   * recording a minute later costs nothing, while hammering a rate-limited transcriber costs the next
+   * recording too.
+   */
+  jobOptions: { ...RETENTION, attempts: 4, backoff: { type: "exponential", delay: 15_000 } },
 };
 
 export const AI_DRAFT_GENERATION: JobFamily<AiDraftGenerationJob> = {
@@ -102,7 +125,7 @@ export const RECONCILIATION: JobFamily<ReconciliationJob> = {
   jobOptions: { ...RETENTION, attempts: 5, backoff: { type: "exponential", delay: 30_000 } },
 };
 
-export const JOB_FAMILIES = [INBOUND_DEBOUNCE, AI_DRAFT_GENERATION, DELIVERY, RECONCILIATION] as const;
+export const JOB_FAMILIES = [INBOUND_DEBOUNCE, MEDIA_TRANSCRIPTION, AI_DRAFT_GENERATION, DELIVERY, RECONCILIATION] as const;
 
 /**
  * How much work one worker process may have in flight per queue, and how fast it may start it.
@@ -129,6 +152,13 @@ export interface QueueExecutionLimits {
 export const DEFAULT_QUEUE_LIMITS: Readonly<Record<string, QueueExecutionLimits>> = {
   // Database-only and short. Running these in parallel is how a burst of webhooks stops being a backlog.
   [INBOUND_DEBOUNCE.queueName]: { concurrency: 8 },
+  /**
+   * One provider, charged per minute of audio and rate-limited by tier — 500 requests a minute on the
+   * lowest paid tier, which is far above anything this concurrency can produce. The limit here is about
+   * the *uploads*: each job downloads a recording and posts it again, so the cost of running many at once
+   * is bandwidth and memory rather than tokens.
+   */
+  [MEDIA_TRANSCRIPTION.queueName]: { concurrency: 2, rateLimit: { max: 60, durationMs: 60_000 } },
   // One provider, charged per token and rate-limited by tier. Concurrency here is the storm risk.
   [AI_DRAFT_GENERATION.queueName]: { concurrency: 2, rateLimit: { max: 30, durationMs: 60_000 } },
   // Bounded by the platform's own send limits; exceeding them is charged to the account, not the request.

@@ -22,6 +22,27 @@ Instagram capability/config metadata may include whether Human Agent approval is
 
 `conversation_id`, `channel_message_id`, `direction (IN|OUT)`, `source (PARTICIPANT|AI|HUMAN|AUTOMATION|SYSTEM)`, `type`, text, media reference/metadata, timestamps and delivery/read state. Outbound metadata records whether the send used a normal transport path or an explicitly human-initiated approved Human Agent path.
 
+## MessageTranscript
+
+One reading of one recording on one message (P4-04): `message_id`, `provider_media_id`, `state
+(PENDING|READY|FAILED|UNSUPPORTED)`, the words, and the provenance that says where they came from —
+`provider`, `model`, `model_revision`, `language`, `duration_seconds`, `provider_request_id`, `latency_ms`,
+`attempt_count`, `requested_at`, `completed_at` — plus `failure_reason`/`failure_code` and `media_deleted_at`.
+
+Kept apart from the recording's reference on `messages` on purpose: the reading is a claim about the
+recording with its own provenance and its own failure modes, and one message can carry several recordings.
+`UNIQUE(workspace_id, message_id, provider_media_id)` is what makes a redelivered webhook — which the
+provider sends for up to seven days — a no-op rather than a second reading of the same words.
+
+CHECKs: a `READY` row has non-blank text with a provider and a model; nothing else carries text at all; a
+`FAILED` or `UNSUPPORTED` row names its reason; a `confidence` exists if and only if a `confidence_source`
+does, and only in 0..1; measurements move forward and cannot be negative; and `state = PENDING` if and only
+if `completed_at` is null. The one that matters most is the second: a half-written reading reaching a
+customer's reply as though the recording had been understood is the failure the table exists to prevent.
+
+The foreign key to `messages` is `ON DELETE RESTRICT`, because a transcript is a record of what a customer
+said and a deleted message would take it with it silently.
+
 ## AiDraft
 
 `conversation_id`, `anchor_message_id`, `draft_text`, `structured_output_json`, `confidence`, `reason_codes`, `status`, model metadata and timestamps.

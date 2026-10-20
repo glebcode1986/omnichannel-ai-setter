@@ -1,9 +1,17 @@
-import type { DebounceScheduler, IngestionStore, LogPort } from "./ports";
+import type { DebounceScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler } from "./ports";
 import { outboxRetryDelayMs } from "./rules";
 
 export interface OutboxDispatchDependencies {
   readonly store: IngestionStore;
   readonly scheduler: DebounceScheduler;
+  /**
+   * Where a reading job goes (Issue #21).
+   *
+   * Required rather than optional, even in a deployment with no transcriber configured. The queue accepts
+   * the job either way and the handler is what reports "not configured" — an optional scheduler here would
+   * instead leave the entry undispatchable, retrying until its lease expires, forever.
+   */
+  readonly transcription: MediaTranscriptionScheduler;
   readonly log: LogPort;
   readonly now: () => Date;
 }
@@ -25,7 +33,7 @@ export async function dispatchOutbox(
   dependencies: OutboxDispatchDependencies,
   options: { readonly ids?: readonly string[]; readonly limit?: number } = {},
 ): Promise<OutboxDispatchResult> {
-  const { store, scheduler, log, now } = dependencies;
+  const { store, scheduler, transcription, log, now } = dependencies;
   const claimedAt = now();
   const entries = await store.claimOutboxEntries({
     now: claimedAt,
@@ -47,7 +55,12 @@ export async function dispatchOutbox(
     // The debounce window counts from when the message was stored, so a late dispatch fires sooner.
     const delayMs = Math.max(0, entry.createdAt.getTime() + entry.delayMs - current.getTime());
     try {
-      await scheduler.scheduleInboundDebounce(entry.payload, { delayMs });
+      // Dispatched by kind, which the union makes exhaustive: a payload cannot reach the wrong queue.
+      if (entry.kind === "MEDIA_TRANSCRIPTION") {
+        await transcription.scheduleMediaTranscription(entry.payload, { delayMs });
+      } else {
+        await scheduler.scheduleInboundDebounce(entry.payload, { delayMs });
+      }
     } catch (error) {
       failed += 1;
       const retryAt = new Date(current.getTime() + outboxRetryDelayMs(entry.attempts));

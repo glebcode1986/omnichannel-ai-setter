@@ -10,6 +10,7 @@ import {
   DELIVERY,
   DEFAULT_QUEUE_LIMITS,
   INBOUND_DEBOUNCE,
+  MEDIA_TRANSCRIPTION,
   RECONCILIATION,
   type JobFamily,
   type QueueExecutionLimits,
@@ -20,6 +21,7 @@ import {
   type AiDraftGenerationJob,
   type DeliveryJob,
   type InboundDebounceJob,
+  type MediaTranscriptionJob,
   type ReconciliationJob,
 } from "./payloads";
 import { closeAll } from "./close-all";
@@ -49,6 +51,14 @@ export interface QueueHandlers {
     job: InboundDebounceJob,
     context: JobContext & { readonly replyCycle: Exclude<ReplyCycleOwnership, "SUPERSEDED"> },
   ): Promise<void>;
+  /**
+   * Reads the recordings on one inbound message (Issue #21).
+   *
+   * May throw only for a failure worth another attempt. Every terminal failure is recorded on the
+   * transcript row and returns normally, because throwing one would spend the family's attempts reaching
+   * the same answer while a person waits for the review item it produced.
+   */
+  transcribeMedia(job: MediaTranscriptionJob, context: JobContext): Promise<void>;
   generateAiDraft(job: AiDraftGenerationJob, context: JobContext): Promise<void>;
   /**
    * Must claim the operation before sending and must not throw after a send may have happened; a thrown
@@ -185,6 +195,11 @@ export function createQueueWorkers(options: QueueWorkersOptions): QueueWorkers {
         return "SUPERSEDED";
       }
       await handlers.onInboundDebounceElapsed(job, { ...context, replyCycle });
+      return "HANDLED";
+    }),
+
+    worker(MEDIA_TRANSCRIPTION, async (job, context) => {
+      await handlers.transcribeMedia(job, context);
       return "HANDLED";
     }),
 

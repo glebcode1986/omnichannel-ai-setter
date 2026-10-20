@@ -4,6 +4,20 @@ import { describe, expect, it } from "vitest";
 import { createVoyageEmbeddingProvider, embeddingProfileId, VOYAGE_EMBEDDINGS_URL } from "./embedding-provider";
 import type { ModelHttpPort, ModelHttpRequest, ModelHttpResult } from "./transport";
 
+/**
+ * The request body as text.
+ *
+ * The transport carries `string | Uint8Array` since the audio transcription adapter arrived (Issue #21),
+ * and every request this suite makes is JSON — so this asserts that rather than casting it away.
+ */
+function bodyText(body: string | Uint8Array | undefined): string {
+  if (body === undefined) {
+    return "{}";
+  }
+  return typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+}
+
+
 const API_KEY = "pa-fake-key-for-tests";
 const DIMENSIONS = 1_024;
 
@@ -43,9 +57,9 @@ describe("request shape", () => {
 
     expect(requests[0]?.url).toBe(VOYAGE_EMBEDDINGS_URL);
     expect(requests[0]?.headers["authorization"]).toBe(`Bearer ${API_KEY}`);
-    expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({ input_type: "query", output_dimension: DIMENSIONS, model: "voyage-3.5" });
+    expect(JSON.parse(bodyText(requests[0]?.body))).toMatchObject({ input_type: "query", output_dimension: DIMENSIONS, model: "voyage-3.5" });
     // Using one intent for both sides costs recall silently: nothing fails, the answers are just worse.
-    expect(JSON.parse(requests[1]?.body ?? "{}")).toMatchObject({ input_type: "document" });
+    expect(JSON.parse(bodyText(requests[1]?.body))).toMatchObject({ input_type: "document" });
   });
 
   it("caps input length and never puts the key anywhere but the header", async () => {
@@ -53,9 +67,9 @@ describe("request shape", () => {
 
     await embeddings.embed(["x".repeat(20_000)], "DOCUMENT");
 
-    const body = JSON.parse(requests[0]?.body ?? "{}") as { input: string[] };
+    const body = JSON.parse(bodyText(requests[0]?.body)) as { input: string[] };
     expect(body.input[0]?.length).toBe(8_000);
-    expect(requests[0]?.body).not.toContain(API_KEY);
+    expect(bodyText(requests[0]?.body)).not.toContain(API_KEY);
     expect(requests[0]?.url).not.toContain(API_KEY);
   });
 

@@ -27,6 +27,7 @@ const context: DraftContext = {
   channelAccountId: "ca_1",
   inbound: [{ kind: "INBOUND", provenance: "msg_1", text: "Are you open Saturday?", occurredAt: new Date() }],
   history: [],
+  unreadableAudio: false,
 };
 
 const retrievalDependencies = (overrides: Partial<DraftRetrievalDependencies> = {}): DraftRetrievalDependencies => ({
@@ -270,6 +271,21 @@ describe("ai draft handler", () => {
 
     expect(saved[0]).toMatchObject({ needsReview: true, retrieval: { status: "UNAVAILABLE" } });
     expect((saved[0] as { reasonCodes: string[] }).reasonCodes).toContain("RETRIEVAL_UNAVAILABLE");
+  });
+
+  it("carries an unread recording from the context into the generation command", async () => {
+    const { handler: unread, saved: heldBack } = harness({ context: { ...context, unreadableAudio: true } });
+    await unread(job);
+
+    const { handler: heard, saved } = harness();
+    await heard(job);
+
+    // The flag is a fact about the burst that only the context store can establish, and only this command
+    // carries it to the layer that decides. Losing it here would send a reply to a voice note nobody
+    // heard, which is exactly the invented content Issue #21 exists to prevent.
+    expect(heldBack[0]).toMatchObject({ needsReview: true });
+    expect((heldBack[0] as { reasonCodes: string[] }).reasonCodes).toContain("AUDIO_NOT_TRANSCRIBED");
+    expect((saved[0] as { reasonCodes: string[] }).reasonCodes).not.toContain("AUDIO_NOT_TRANSCRIBED");
   });
 
   it("carries the debounce job's identifiers into a draft job", () => {

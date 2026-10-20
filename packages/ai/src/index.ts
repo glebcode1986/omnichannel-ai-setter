@@ -22,3 +22,11 @@ export {
 } from "./embedding-provider";
 export { createFetchModelHttpPort, type ModelHttpPort, type ModelHttpRequest, type ModelHttpResult } from "./transport";
 export { AI_DRAFT_JSON_SCHEMA } from "./wire-schema";
+export {
+  createOpenAiTranscriptionProvider,
+  DEFAULT_TRANSCRIPTION_MODEL,
+  DOCUMENTED_TRANSCRIPTION_FORMATS,
+  MAX_TRANSCRIPTION_BYTES,
+  OPENAI_TRANSCRIPTION_URL,
+  type OpenAiTranscriptionConfig,
+} from "./transcription-provider";

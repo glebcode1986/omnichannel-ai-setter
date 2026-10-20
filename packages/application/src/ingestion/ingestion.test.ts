@@ -51,6 +51,7 @@ function dependencies(options: { account?: WebhookAccount; adapter?: ChannelAdap
     store,
     adapters: { adapterFor: () => options.adapter },
     scheduler: { scheduleInboundDebounce: vi.fn(() => Promise.resolve()) },
+    transcription: { scheduleMediaTranscription: vi.fn(() => Promise.resolve()) },
     log,
     now: () => new Date("2026-09-17T10:00:00.000Z"),
     random: () => 0,
@@ -197,7 +198,7 @@ describe("ingestWebhook early exits", () => {
 
     expect(await ingestWebhook(deps, request())).toEqual({
       kind: "ACCEPTED",
-      summary: { received: 7, processed: 0, duplicates: 0, rejected: 7, debounceScheduled: 0, debounceDeferred: 0 },
+      summary: { received: 7, processed: 0, duplicates: 0, rejected: 7, outboxDispatched: 0, outboxDeferred: 0 },
     });
     expect(transaction).not.toHaveBeenCalled();
     // Rejections are attributed to the resolved scope, never to the forged one.

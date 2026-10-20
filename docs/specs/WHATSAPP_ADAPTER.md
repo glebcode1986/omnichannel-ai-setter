@@ -140,6 +140,27 @@ Expose optional adapter operations/capabilities for read receipt and text typing
 
 Inbound audio normalizes as `AUDIO` with media reference. Media download and transcription are separate application/provider services, not the transport adapter's AI responsibility.
 
+### Media retrieval (implemented, P4-04)
+
+The adapter owns the provider calls and nothing about transcripts:
+
+- `resolveMediaUrl` (`GET /<MEDIA_ID>`) then `downloadMedia` against the returned URL. Two requests, because
+  that is the documented shape. The resolved URL lives five minutes and is never persisted; a media ID from
+  a webhook lives seven days, so a reading attempted after that is refused locally rather than retried.
+- `phone_number_id` is sent on every media call. It is the provider's own tenancy check on an ID that
+  arrived from an untrusted webhook, not a convenience.
+- Type and size are refused **before** the transfer, on the provider's own `mime_type` and `file_size`, and
+  the actual length is re-checked afterwards: a stated size is a claim the response can break.
+- Per-type platform limits are used rather than one limit of our own, because they differ by a factor of
+  twenty and the document limit would admit an audio file six times what the platform allows.
+- Every media call is refused when the channel account is not `CONNECTED`, exactly as a send is. A stored
+  token outlives the authorization it was granted under, so leaving this to the provider would keep
+  downloading a business's customers' recordings after that business removed the integration.
+- `deleteMedia` (`DELETE /<MEDIA_ID>`) is the retention hook that reaches the provider's own storage.
+- Each failure carries a reason in this codebase's vocabulary, never the provider's prose, and the caller
+  judges retryability from the reason: `EXPIRED` is worth another attempt because its documented remedy is
+  re-resolution; `UNSUPPORTED_TYPE`, `TOO_LARGE`, `MIME_MISMATCH` and `NOT_FOUND` never are.
+
 ## Reliability invariants
 
 - stable provider message IDs are persisted/correlated;

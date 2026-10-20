@@ -27,6 +27,24 @@ export {
 } from "./config";
 export { isAccessTokenRejection, OUTSIDE_SERVICE_WINDOW_CODE } from "./errors";
 export { createFetchHttpPort, type WhatsAppHttpPort, type WhatsAppHttpRequest, type WhatsAppHttpResult } from "./http";
+export {
+  deleteMedia,
+  downloadMedia,
+  MAX_MEDIA_BYTES,
+  MEDIA_LIMITS,
+  MEDIA_URL_TTL_MS,
+  mediaIdUsable,
+  mediaLimitFor,
+  mediaSupported,
+  resolveMediaUrl,
+  TRANSCRIBABLE_MIME_TYPES,
+  transcribableMimeType,
+  WEBHOOK_MEDIA_ID_TTL_MS,
+  type DownloadedMedia,
+  type MediaFailureReason,
+  type MediaLocation,
+  type MediaResult,
+} from "./media";
 export { normalizeWhatsAppWebhook } from "./normalize";
 export {
   coexistenceCorroborated,

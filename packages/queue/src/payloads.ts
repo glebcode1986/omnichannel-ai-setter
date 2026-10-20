@@ -34,6 +34,21 @@ export const inboundDebounceJobSchema = z.strictObject({
 });
 export type InboundDebounceJob = z.output<typeof inboundDebounceJobSchema>;
 
+/**
+ * One inbound message whose recordings are owed a reading (Issue #21).
+ *
+ * The message, not the media. The pending rows were written in the same transaction as the message, and
+ * the handler reads them from there — a payload listing the media would be a second copy of that list,
+ * and two copies of a list eventually disagree.
+ */
+export const mediaTranscriptionJobSchema = z.strictObject({
+  ...envelope,
+  channelAccountId: identifier,
+  conversationId: identifier,
+  messageId: identifier,
+});
+export type MediaTranscriptionJob = z.output<typeof mediaTranscriptionJobSchema>;
+
 export const AI_DRAFT_TRIGGERS = ["AUTOMATIC", "HUMAN_REQUEST"] as const;
 
 /**
