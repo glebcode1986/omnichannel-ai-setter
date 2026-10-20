@@ -8,9 +8,10 @@
  * Retrieval of knowledge and style belongs to P2-04 and is deliberately absent.
  */
 import type { ConversationSegment, DraftConversationSnapshot } from "@omnichannel/application";
-import type { AiMode } from "@omnichannel/domain";
+import { commercialAccessOf, type AiMode } from "@omnichannel/domain";
 
 import { resolveEffectiveMode } from "./automation-mode";
+import { readEntitlement } from "./entitlement-store";
 import type { DbClient } from "./client";
 import { readMessageTranscripts, type MessageTranscriptRecord } from "./transcript-store";
 
@@ -23,6 +24,13 @@ export interface DraftContextQuery {
   /** The newest inbound message the draft answers. */
   readonly anchorMessageId: string;
   readonly historyLimit?: number;
+  /**
+   * When the commercial state is resolved.
+   *
+   * Explicit, like every other clock in this package: a plan's validity is a question about a moment, and
+   * a store that read its own would answer it at a different one from the gate that uses the answer.
+   */
+  readonly at?: Date;
 }
 
 export interface DraftContext {
@@ -124,6 +132,9 @@ export function createDraftContextStore(db: DbClient): DraftContextStore {
           mode: await resolveMode(db, scope, conversation.channelAccountId, conversation.modeOverride),
           stateVersion: conversation.stateVersion,
           anchorSuperseded: newerInbound !== null,
+          // Resolved in the same read as the rest of the snapshot (#40), and before retrieval or the
+          // model call, so a workspace that may not do paid work is refused before either is paid for.
+          commercial: commercialAccessOf(await readEntitlement(db, scope.workspaceId, query.at ?? new Date())),
         },
         channelAccountId: conversation.channelAccountId,
         inbound: ordered.slice(burstStart).map(toSegment),

@@ -14,9 +14,10 @@ import { appendInboundMessage } from "./repositories/messages";
 import { createChannelAccount } from "./repositories/channel-accounts";
 import { createContactWithChannelIdentity } from "./repositories/contacts";
 import { createConversation } from "./repositories/conversations";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import { createBusinessProfile } from "./repositories/workspaces";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
+import { createPaidWorkspace } from "./testing/fixtures";
 
 const T0 = new Date("2026-03-01T10:00:00.000Z");
 const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
@@ -35,7 +36,7 @@ describe.skipIf(!databaseTestsEnabled())("the unified Inbox", () => {
     const db = database.db;
     const owner = await db.user.create({ data: { name: "Inbox Owner", email: "inbox-owner@example.test" } });
     userId = owner.id;
-    const { workspaceId } = await createWorkspaceWithOwner(db, { name: "Inbox Workspace", ownerUserId: userId });
+    const { workspaceId } = await createPaidWorkspace(db, { name: "Inbox Workspace", ownerUserId: userId });
     const workspace = await authorizeWorkspaceAccess(db, { userId, workspaceId });
 
     const main = await createBusinessProfile(db, workspace, { name: "Main" });

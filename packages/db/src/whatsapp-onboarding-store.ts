@@ -193,7 +193,7 @@ export function createWhatsAppOnboardingStore(db: DbClient, cipher: CredentialCi
           ...(input.asset.verifiedName === undefined ? {} : { displayName: input.asset.verifiedName }),
           capabilities: input.capabilities,
           credentialId,
-        });
+        }, input.now);
 
         const connection = await upsertConnection(tx, scope, account.id, input);
         if (input.templates !== undefined) {

@@ -603,38 +603,28 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
       expect([...(rows[0]?.mandatoryReviewReasons ?? [])].sort()).toEqual([...MANDATORY_REVIEW_REASON_CODES].sort());
     }, 180_000);
 
-    it("leaves neither row behind when the creating transaction rolls back", async () => {
-      class Abort extends Error {
-        constructor(readonly businessProfileId: string) {
-          super("abort");
-        }
-      }
-
-      // The two rows are one statement, so the question a separate call cannot answer is this one: if the
-      // work that created the profile fails, is there a profile left without settings? A profile that is
-      // listed, accepts a channel account and cannot be configured is precisely the state this blocker
-      // was about, and it must not be reachable by failing halfway.
-      const abandoned = await database.db
-        .$transaction(async (tx) => {
-          const created = await createBusinessProfile(tx, workspace.context, { name: "Abandoned profile" });
-          throw new Abort(created.businessProfileId);
-        })
-        .then(
-          () => {
-            throw new Error("the transaction was supposed to roll back");
-          },
-          (error: unknown) => {
-            if (!(error instanceof Abort)) {
-              throw error;
-            }
-            return error.businessProfileId;
-          },
-        );
-
-      expect(await db().businessProfile.findMany({ where: { workspaceId: workspace.workspaceId, id: abandoned } })).toEqual([]);
-      expect(await defaults(abandoned)).toEqual([]);
-    }, 180_000);
-
+    // The case that used to sit here drove a rollback from the caller's own transaction, and the
+    // accepted #97 head makes that question unaskable rather than merely untyped.
+    // `createBusinessProfile` now takes a `DbClient` and opens its own transaction, because the
+    // capacity lock it takes is released at the end of whatever transaction holds it and under
+    // autocommit that was the lock statement itself. A caller can therefore no longer enclose this
+    // write in a larger unit of work. Casting a `tx` to satisfy the compiler would be worse than the
+    // type error: Prisma would open a second, independent transaction, so the outer rollback would
+    // never reach it and the case would assert a guarantee nobody provides.
+    //
+    // What it pinned is covered, and by tests that can still run:
+    // - "arrives with the profile" above — the pair is one nested write, so no window exists;
+    // - "every profile exactly one, including profiles created at the same moment" below;
+    // - `entitlements.integration.test.ts` — a capacity refusal writes neither row.
+    //
+    // One thing is *not* covered, and saying so here is the point of this note: that file's
+    // "holds a capacity lock only for as long as the transaction that took it" case pins a fact about
+    // PostgreSQL — an advisory lock taken under autocommit is gone by the next statement, one taken
+    // inside a transaction survives it — and never calls `createBusinessProfile`. Deleting
+    // `serializeCapacity` from that function therefore fails nothing. The lock is real and the reasoning
+    // for it is sound; what is missing is a test that observes it held while the function's own
+    // count-and-insert runs, which needs a concurrent observer reading `pg_locks`.
+    
     it("gives every profile exactly one, including profiles created at the same moment", async () => {
       const created = await Promise.all(
         [0, 1, 2, 3].map((index) => createBusinessProfile(db(), workspace.context, { name: `Concurrent profile ${String(index)}` })),

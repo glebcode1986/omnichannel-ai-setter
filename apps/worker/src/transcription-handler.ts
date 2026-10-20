@@ -25,7 +25,17 @@
 import type { TranscriptionProvider } from "@omnichannel/application";
 import { transcriptionRetryable } from "@omnichannel/application";
 import type { DbClient } from "@omnichannel/db";
-import { loadTranscriptionWork, markTranscriptMediaDeleted, recordTranscript, recordTranscriptionFailure } from "@omnichannel/db";
+import {
+  commitReservation,
+  loadTranscriptionWork,
+  markTranscriptMediaDeleted,
+  readEntitlement,
+  recordTranscript,
+  recordTranscriptionFailure,
+  releaseReservation,
+  reserveUsage,
+} from "@omnichannel/db";
+import { featureAllowed } from "@omnichannel/domain";
 import type { Logger } from "@omnichannel/observability";
 import type { MediaTranscriptionJob } from "@omnichannel/queue";
 
@@ -109,6 +119,48 @@ export function createTranscriptionHandler(dependencies: TranscriptionHandlerDep
   };
 }
 
+/**
+ * What one reading holds before the provider answers.
+ *
+ * Deliberately a fixed ceiling rather than an estimate derived from the byte count. The only measurement
+ * available before the call is the size of the download, and bytes become seconds only through a bitrate
+ * assumption that is wrong for every codec it was not chosen for — so a wrong estimate would either hold
+ * far too little, letting an allowance be overspent, or far too much, refusing readings a business had
+ * paid for. Five minutes is longer than any voice note either provider accepts, and the commit that
+ * follows replaces it with the truth.
+ */
+export const TRANSCRIPTION_RESERVE_SECONDS = 300;
+
+/**
+ * Hands the hold over for what the reading actually consumed.
+ *
+ * Logged rather than raised: the words are already read and recorded, and failing the job here would
+ * transcribe the same recording again — paying twice for one reading to fix an accounting row. The
+ * reservation expires on its own if this never lands, so the error is a lost measurement rather than a
+ * lost allowance.
+ */
+async function commitTranscriptionUsage(
+  dependencies: TranscriptionHandlerDependencies,
+  work: { readonly workspaceId: string; readonly transcriptId: string },
+  fields: Readonly<Record<string, unknown>>,
+  seconds: number,
+): Promise<void> {
+  try {
+    await commitReservation(dependencies.db, {
+      workspaceId: work.workspaceId,
+      metric: "VOICE_TRANSCRIPTION_SECONDS",
+      usageOperationId: work.transcriptId,
+      amount: seconds,
+      at: dependencies.now(),
+    });
+  } catch (error) {
+    dependencies.logger.warn("worker.transcription_usage_not_committed", {
+      ...fields,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
 /** Reads one recording. Returns a reason when the queue should try again, and `undefined` otherwise. */
 async function readOne(
   dependencies: TranscriptionHandlerDependencies,
@@ -130,6 +182,73 @@ async function readOne(
     return undefined;
   }
 
+  // The plan's own answer, asked before a byte is downloaded (#40). A workspace that does not buy
+  // transcription should not have our bandwidth spent on it either, and the recording stays in the Inbox
+  // exactly as it arrived — the message was persisted long before this handler ran.
+  const entitlement = await readEntitlement(dependencies.db, work.workspaceId, dependencies.now());
+  if (!featureAllowed(entitlement, "VOICE_TRANSCRIPTION")) {
+    // One reason for both halves of it: the plan does not sell this, or the workspace may not do paid
+    // work at all. `featureAllowed` answers the combined question, and a surface that needs to tell the
+    // two apart reads the entitlement itself rather than this row.
+    // `FAILED`, not `UNSUPPORTED`: `permanentlyUnsupported` means the bytes can never be read, and that
+    // is a claim about the recording. This one is about the plan, which can change — so the state says
+    // the reading failed and the reason says why, and a later feature can find these rows by it.
+    await settle(dependencies, work, { reason: "BILLING_FEATURE_OFF", retryable: false, permanent: false });
+    dependencies.logger.info("worker.transcription_not_entitled", fields);
+    return undefined;
+  }
+
+  // Allowance held before the paid call and settled after it. The estimate is deliberately fixed: the
+  // only thing known before the provider answers is a byte count, and turning bytes into seconds needs a
+  // bitrate assumption that is wrong for every codec it was not chosen for. So it holds a conservative
+  // ceiling and commits the truth — which is exactly the shape `USAGE_METERING.md` describes.
+  //
+  // The transcript row's own id is the operation identity: one row per (workspace, message, media object)
+  // by unique index, fixed before the work starts, so a queue redelivery or a restarted worker replays
+  // the same identity and gets back the hold it already has instead of taking a second one.
+  const held = await reserveUsage(dependencies.db, {
+    workspaceId: work.workspaceId,
+    metric: "VOICE_TRANSCRIPTION_SECONDS",
+    usageOperationId: work.transcriptId,
+    amount: TRANSCRIPTION_RESERVE_SECONDS,
+    subjectType: "message_transcripts",
+    subjectId: work.transcriptId,
+    at: dependencies.now(),
+  });
+  if (held.status !== "RESERVED") {
+    // The allowance is spent. Recorded as a billing limit and never retried: the words do not become
+    // available by asking again, and a reply written as though the recording had been heard is the
+    // invented content this refusal exists to prevent. The draft path turns the missing transcript into
+    // `AUDIO_NOT_TRANSCRIBED` and holds the reply for a person.
+    // Not retryable and not unsupported: asking again does not buy minutes, and the recording itself is
+    // perfectly readable — it is the allowance that ran out.
+    await settle(dependencies, work, { reason: "BILLING_LIMIT", retryable: false, permanent: false });
+    dependencies.logger.info("worker.transcription_allowance_exhausted", {
+      ...fields,
+      ...(held.status === "REFUSED" ? { verdict: held.verdict.kind } : { settled: held.state }),
+    });
+    return undefined;
+  }
+
+  /** Gives the hold back for work that did not happen. Logged, never raised: the reading already failed. */
+  const releaseHold = async (): Promise<void> => {
+    try {
+      await releaseReservation(dependencies.db, {
+        workspaceId: work.workspaceId,
+        metric: "VOICE_TRANSCRIPTION_SECONDS",
+        usageOperationId: work.transcriptId,
+        at: dependencies.now(),
+      });
+    } catch (error) {
+      // The sweeper gives it back when it expires, so this costs a business minutes for minutes rather
+      // than for the rest of the cycle — but it is still worth saying out loud when it happens.
+      dependencies.logger.warn("worker.transcription_hold_not_released", {
+        ...fields,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+    }
+  };
+
   const fetched = await dependencies.media.fetch({
     workspaceId: work.workspaceId,
     businessProfileId: work.businessProfileId,
@@ -144,6 +263,9 @@ async function readOne(
       ...(fetched.code === undefined ? {} : { code: fetched.code }),
     });
     dependencies.logger.warn("worker.transcription_download_failed", { ...fields, reason: fetched.reason, retryable: fetched.retryable });
+    // Nothing was transcribed, so nothing was consumed. Held allowance a dead worker never gave back is
+    // what the sweeper exists for; giving it back here is what keeps the sweeper for genuine crashes.
+    await releaseHold();
     return fetched.retryable ? `download ${fetched.reason}` : undefined;
   }
 
@@ -170,8 +292,15 @@ async function readOne(
       ...(outcome.code === undefined ? {} : { code: outcome.code }),
       retryable,
     });
+    await releaseHold();
     return retryable ? `provider ${outcome.reason}` : undefined;
   }
+
+  // What it actually cost, which is known only now. A reading whose provider reported no duration is
+  // committed at the estimate rather than at zero: the work happened and somebody paid for it, and
+  // recording zero would understate our own costs for every provider that does not measure.
+  const consumed = outcome.transcript.durationSeconds;
+  await commitTranscriptionUsage(dependencies, work, fields, Math.max(1, Math.round(consumed ?? TRANSCRIPTION_RESERVE_SECONDS)));
 
   const { recorded } = await recordTranscript(dependencies.db, {
     workspaceId: work.workspaceId,

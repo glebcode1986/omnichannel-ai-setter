@@ -39,13 +39,85 @@ what was believed when is worth keeping:
    both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
    heads that have since moved. #94 is accepted at `852f855871ca48ad88c3799f8c0dd05636dfd700`, by formal exact-head review on
    2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved. **#95 is accepted
-   at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20.
+   at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20, and
+   **#96 at `8ce410252269fb6dd5af0737df3f310290e49542`** on the same day.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #95 into P6-02 / PR #96
+### Current work — propagating the accepted #96 into P6-03 / PR #97
+
+#96 was accepted at `8ce410252269fb6dd5af0737df3f310290e49542`, so this branch is the next link. Ordinary
+merge commit, one branch only — no rebase, no force-push, nothing to `main`, and #98+ untouched. #97 was
+**74 commits behind** while carrying 11 of its own.
+
+**Three files conflicted, and none of the three was the expensive part.** `apps/web/src/server/simulation.ts`
+and `packages/db/src/testing/fixtures.ts` were both the shape where each side appends its own thing: an
+import line, and a pair of helper functions sharing one doc-comment opener. Resolved as unions, and each
+imported name was then checked to be *used* — an import union that leaves one unused fails
+`eslint --max-warnings=0`, so the union has to be measured rather than assumed. Both halves of
+`fixtures.ts` have live callers: `setProfileDefaultPolicy` in five suites, `createPaidWorkspace` in five
+more, so dropping either side would have broken real tests rather than dead code.
+
+**`packages/db/src/repositories/workspaces.ts` was a genuine semantic collision in `createBusinessProfile`.**
+This branch wraps the create in its own transaction with the capacity lock and `PlanLimitError`; the
+accepted parent writes the profile's default automation policy as a nested create in the same statement.
+Each side's version of the `create` call lacked the other's contribution, so **either side taken whole
+loses a feature**: the capacity ceiling, or the policy every new profile is born with. The union keeps
+both, with the nested policy write inside the transaction the capacity check already holds.
+
+**Two defects merged clean and only the typechecker and the suites found them** — both of the shape where
+one side changes a contract and the other side's callers never conflicted with it:
+
+1. `policy-store.integration.test.ts` called `createBusinessProfile(tx, …)`, written when the signature
+   was `DbExecutor`. This branch takes a `DbClient` and opens its own transaction. **A cast would have
+   been worse than the type error:** Prisma would open a second, independent transaction, so the test's
+   outer rollback would never reach it and the case would assert a guarantee nobody provides. The case is
+   removed with a note saying where its property is still covered, and what is not.
+2. `simulation-inputs.test.ts` built a `PolicyInput` without `commercial`, which this branch made
+   **required** precisely so the compiler names every caller. Supplied as fully permitted, with the reason
+   written down: a restrictive value there would have the billing gate refuse every case and the suite
+   would pass while proving nothing about the inputs it compares.
+
+And one defect that compiled and failed at runtime: `followup-slice.integration.test.ts` built its
+workspace with `createWorkspaceWithOwner`, so with no subscription it resolved to `INACTIVE` and three
+follow-ups stayed `PENDING`. The suite had silently become a test of the billing gate — which is the exact
+failure `apps/worker/src/testing/paid-workspace.ts` exists to prevent, and which its four sibling slice
+suites already avoid by using it. Converted.
+
+### Task definition — P6-03 / Issue #40, enforcing entitlements where the money is spent
+
+**Branch `feat/p6-03-entitlement-enforcement`**, based on `feat/p6-02-usage-ledger`. Recorded here now;
+the work was on the branch and neither canonical document named it.
+
+**The commercial fact is three booleans and it is required, not optional.** `CommercialAccess` carries
+`paidWorkAllowed`, `aiDrafts` and `autopilot`, and `PolicyInput.commercial` is a required field. Its own
+comment states why: an optional commercial fact would default to "allowed" at every site that forgot it,
+which is the one direction a billing boundary must never fail in. Required, the compiler names every
+caller that has to decide, and a caller with no snapshot says so with `NO_COMMERCIAL_ACCESS` rather than
+by omission. This propagation produced one such caller, and the compiler duly named it.
+
+**Three refusal codes rather than one, because they call for three different actions.**
+`BILLING_INACTIVE` is answered by paying and is deliberately not a claim about the plan's contents — a
+workspace on the best plan carries it the day after its card fails. `BILLING_FEATURE_OFF` is answered by
+changing plan, and the server decides it, so a business that set AUTOPILOT on a plan that does not sell it
+gets replies held for a person however the screen looked. `BILLING_LIMIT` is answered by waiting for the
+cycle or topping up, and never by inventing the thing that could not be paid for. Core AI replies cannot
+produce `BILLING_LIMIT` at all, because the initial plans do not meter them.
+
+**An approval answers these gates.** The manual path stays open while automation is held, so a workspace
+whose billing lapsed remains usable and its conversations answerable.
+
+**The `aiDrafts` check is kept at the decision even though generation refuses earlier**, where the
+provider call is paid for. Its comment gives the rule: a gate that trusts an upstream layer to have
+already checked is not a gate. It is reached by a draft generated before a downgrade.
+
+**Capacity is serialized where it is counted.** `createBusinessProfile` holds an advisory lock across its
+count-and-insert inside its own transaction, because a count followed by an insert is not atomic and no
+index caps a count. See the disclosure on PR #97 about what that lock's test does and does not prove.
+
+### Earlier — propagating the accepted #95 into P6-02 / PR #96
 
 #95 was accepted at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`, so this branch is the next link: that
 head is merged in by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to

@@ -14,6 +14,7 @@ export { createDbClient, type DbClient, type DbClientOptions, type DbExecutor } 
 export {
   BusinessProfileAccessDeniedError,
   DbInputError,
+  PlanLimitError,
   isUniqueViolation,
   TenantRecordNotFoundError,
   WorkspaceAccessDeniedError,

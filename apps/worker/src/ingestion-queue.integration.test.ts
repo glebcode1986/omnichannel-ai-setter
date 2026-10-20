@@ -13,7 +13,6 @@ import {
   createBusinessProfile,
   createChannelAccount,
   createIngestionStore,
-  createWorkspaceWithOwner,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import {
@@ -29,6 +28,7 @@ import { Queue } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createEndToEndInfrastructure, endToEndTestsEnabled, waitFor, type EndToEndInfrastructure } from "./testing/infrastructure";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 
 interface Profile {
   readonly workspaceId: string;
@@ -105,7 +105,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
     debounceQueue = new Queue(INBOUND_DEBOUNCE.queueName, { connection: infra.connect("producer"), prefix: infra.prefix });
 
     const user = await infra.db.user.create({ data: { name: "E2E Owner", email: "e2e-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "E2E Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "E2E Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const profile = async (label: string): Promise<Profile> => {
       const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: `E2E ${label}` });

@@ -37,6 +37,33 @@ export class WorkspacePermissionError extends Error {
  * The record does not exist inside the caller's Workspace and Business Profile. Records owned by other
  * Workspaces or Business Profiles are reported exactly like missing ones so their existence is not disclosed.
  */
+/**
+ * The plan will not admit one more of something (#40).
+ *
+ * Thrown rather than returned, like `WorkspacePermissionError` above it and for the same reason: every
+ * caller of these stores destructures a success value, and a refusal that changed their return type would
+ * be a refusal nobody could add without touching twenty call sites.
+ *
+ * It carries which refusal it is, because the three commercial answers are three different conversations
+ * with the business — pay, change plan, or wait — and a surface that could only say "no" would put an
+ * operator in front of a message that cannot tell them which they are looking at.
+ */
+export class PlanLimitError extends Error {
+  constructor(
+    readonly verdict:
+      | { readonly kind: "AT_LIMIT"; readonly limit: string; readonly ceiling: number; readonly current: number }
+      | { readonly kind: "FEATURE_OFF"; readonly feature: string },
+    action: string,
+  ) {
+    super(
+      verdict.kind === "AT_LIMIT"
+        ? `this plan allows ${String(verdict.ceiling)} for ${verdict.limit}, which is reached, so ${action} is refused`
+        : `this plan does not include ${verdict.feature}, so ${action} is refused`,
+    );
+    this.name = "PlanLimitError";
+  }
+}
+
 export class TenantRecordNotFoundError extends Error {
   readonly entity: string;
 

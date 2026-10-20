@@ -37,6 +37,7 @@ function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; del
     deliveryJobId: "djob_1",
     operationId: "op_1",
     workspaceId: "ws_1",
+    commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
     draftId: "draft_1",
     conversationId: "conv_1",
     channel: "INSTAGRAM",

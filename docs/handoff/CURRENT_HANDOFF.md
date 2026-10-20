@@ -2903,3 +2903,116 @@ case never exercises. That is precisely the gap the test's own comment warned ab
 
 Both files were restored from scratchpad copies and verified by `git hash-object` rather than by
 `git checkout --`, which discards uncommitted work.
+
+## P6-03 entitlement enforcement, and the accepted #96 propagated into it — PR #97 — 2026-10-21
+
+#96 was accepted at `8ce410252269fb6dd5af0737df3f310290e49542`, and the directive propagated it into
+`feat/p6-03-entitlement-enforcement`, which was at `94f37d8770e0779da3512d3b9eab8bfbecfa21ec` — **74
+commits behind** while carrying 11 of its own.
+
+### What P6-03 is, recorded here for the first time
+
+**The commercial fact is three booleans, and it is required rather than optional.** `CommercialAccess`
+carries `paidWorkAllowed`, `aiDrafts` and `autopilot`; `PolicyInput.commercial` is required, and its own
+comment says why — an optional commercial fact would default to "allowed" at every site that forgot it,
+which is the one direction a billing boundary must never fail in. Required, the compiler names every
+caller that has to decide. This propagation produced exactly such a caller and the compiler named it.
+
+**Three refusal codes, because they call for three different actions from whoever reads them.**
+`BILLING_INACTIVE` → pay, and deliberately not a claim about the plan's contents: a workspace on the best
+plan in the catalogue carries it the day after its card fails. `BILLING_FEATURE_OFF` → change plan, and
+the *server* decides it, so a business that set AUTOPILOT on a plan not selling it gets replies held for a
+person however the screen looked when they chose. `BILLING_LIMIT` → wait for the cycle or top up, and
+never invent the thing that could not be paid for; core AI replies cannot produce it, because the initial
+plans do not meter them.
+
+**An approval answers these gates**, so the manual path stays open while automation is held and a
+workspace whose billing lapsed is still usable. And the `aiDrafts` check is repeated at the decision even
+though generation refuses earlier, on the rule its comment states: a gate that trusts an upstream layer to
+have already checked is not a gate.
+
+### The merge: three conflicts, and the one that was a real collision
+
+`apps/web/src/server/simulation.ts` and `packages/db/src/testing/fixtures.ts` were both "each side appends
+its own thing" — an import line, and two helper functions sharing one doc-comment opener. Resolved as
+unions, and then every imported name was checked to be *used*, because an import union that leaves one
+unused fails `eslint --max-warnings=0`. Both halves of `fixtures.ts` have live callers
+(`setProfileDefaultPolicy` in five suites, `createPaidWorkspace` in five more), so neither side was
+droppable.
+
+**`createBusinessProfile` in `packages/db/src/repositories/workspaces.ts` was a genuine semantic
+collision.** This branch wraps the create in its own transaction with the capacity lock and
+`PlanLimitError`; the accepted parent writes the profile's default automation policy as a nested create in
+the same statement. Neither side's `create` call had the other's contribution, so **either side taken
+whole loses a feature** — the capacity ceiling, or the policy every profile is born with. The union keeps
+both, with the nested policy write inside the transaction the capacity check already holds.
+
+### Two defects that merged clean, and one that compiled and still failed
+
+| what | found by | why no conflict |
+|---|---|---|
+| `policy-store.integration.test.ts` called `createBusinessProfile(tx, …)` | `tsc` | this branch changed the signature to `DbClient`; the test lives on the other side and never conflicted |
+| `simulation-inputs.test.ts` built a `PolicyInput` with no `commercial` | `tsc` | the field became required here; the fixture is the parent's |
+| `followup-slice.integration.test.ts` left three follow-ups `PENDING` | the suite | its workspace had no subscription, so the billing gate refused every send |
+
+**On the first: a cast would have been worse than the type error.** Prisma would open a second,
+independent transaction, so the test's outer rollback would never reach the inner one and the case would
+assert a guarantee nobody provides. The case is removed with an in-file note recording where its property
+is still covered — and, explicitly, what is not.
+
+**On the third: the suite had silently become a test of the billing gate** — passing or failing for a
+reason it was not written to examine. `apps/worker/src/testing/paid-workspace.ts` exists precisely to
+prevent that, and its own doc comment says so; four sibling slice suites already used it and this one did
+not. Converted to it.
+
+### Disclosed, not fixed: the capacity lock has no test that observes it
+
+Mutation-checking my own resolution produced one result I did not expect and will not paper over.
+
+| mutation | result |
+|---|---|
+| drop the nested `automationPolicies` write | **29 of 37** `policy-store` cases fail |
+| drop the `serializeCapacity` call | `entitlements.integration` still passes **33/33** |
+
+The second is a real coverage gap, and it is mine from the earlier P6-03 work rather than anything this
+merge did. The case named *"holds a capacity lock only for as long as the transaction that took it"*
+**never calls `createBusinessProfile`**: it pins a fact about PostgreSQL — an advisory lock taken under
+autocommit is gone by the next statement, one taken inside a transaction survives it. That fact is true
+and is the premise the fix rests on, but the function's own lock is unobserved, so the line can be deleted
+with nothing going red.
+
+Two comments overclaimed on the strength of that test and both are corrected on this commit: the one in
+`workspaces.ts` which said the test "pins the lock lifetime the argument rests on", and the note I had
+just written in `policy-store.integration.test.ts`. What would close the gap is an observer reading
+`pg_locks` while the function's count-and-insert runs — not added here, because this directive bounds the
+change to the propagation, and a new concurrency test belongs in its own reviewed change.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database; every gate run after the
+documentation edits.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 194 files, **3090/3090** |
+| PostgreSQL suites | 44 files, **928/928**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 97 files, **1117/1117** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1914 passed / 1176 skipped**, zero infrastructure variables present |
+
+Run by name, the enforcement and concurrency suites the directive asks for:
+
+| suite | result |
+|---|---|
+| `delivery-store.integration` — a revocation driven through a waiting send | **49/49** |
+| `entitlements.integration` — capacity refusal and lock-lifetime | **33/33** |
+| `domain/entitlements` | **29/29** |
+| `policy/evaluate` — the billing gate inside the decision | **94/94** |
+| `ai/generate-draft` — draft-generation blockers | **44/44** |
+| `usage-store.integration` — the P6-02 settlement race | **27/27** |
+| `policy-store.integration` — the file this merge edited | **37/37** |
+| `simulation-inputs` — the fixture this merge edited | **19/19** |
+
+Totals moved 193→194 files and 3033→3090 tests, PG 43→44 files and 910→928 cases, E2E 1106→1117.

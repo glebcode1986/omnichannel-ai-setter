@@ -1,9 +1,10 @@
 /**
  * Test/seed helpers. All values are fake; nothing here resembles a real account or credential.
  */
-import { NO_CAPABILITIES, type WorkspaceRole } from "@omnichannel/domain";
+import { NO_CAPABILITIES, PLAN_FEATURES, type WorkspaceRole } from "@omnichannel/domain";
 
 import type { DbClient } from "../client";
+import { publishPlanVersion, setWorkspaceSubscription } from "../entitlement-store";
 import type { Prisma } from "../generated/prisma/client";
 import { createChannelAccount, type ChannelAccountRecord } from "../repositories/channel-accounts";
 import { createContactWithChannelIdentity } from "../repositories/contacts";
@@ -39,12 +40,26 @@ export interface SeededWorkspace {
   /** Owner's Workspace context. */
   readonly context: WorkspaceContext;
   readonly profiles: readonly SeededProfile[];
+  /**
+   * The plan version this workspace is subscribed to, so a test can move it to another state.
+   *
+   * Exposed rather than left implicit because the commercial state is now a send gate (#40): a test about
+   * a billing refusal changes the subscription, and a test about anything else must not have to know that
+   * one exists.
+   */
+  readonly planVersionId: string;
 }
 
 /**
  * A Workspace with an OWNER and one Business Profile per label. Each profile gets an Instagram account, a
  * contact + channel identity, a conversation and one inbound message. All profiles of one Workspace receive
  * the same provider user ID (`ig-user-<label>`), so cross-profile isolation is exercised by default.
+ *
+ * It is also **subscribed and paid up**, on a plan that sells everything (#40). Without that every suite
+ * in this package would really be testing the billing gate: a workspace with no subscription resolves to
+ * `INACTIVE` on no plan, and automated work is held with `BILLING_INACTIVE` before any gate a test was
+ * written to exercise is reached. A test that wants an unpaid workspace moves the subscription itself,
+ * which is both explicit and the thing it is actually asserting.
  */
 export async function seedWorkspace(
   db: DbClient,
@@ -54,6 +69,7 @@ export async function seedWorkspace(
   const ownerUserId = await createTestUser(db, `${label}-owner`);
   const { workspaceId } = await createWorkspaceWithOwner(db, { name: `Workspace ${label}`, ownerUserId });
   const context = await authorizeWorkspaceAccess(db, { userId: ownerUserId, workspaceId });
+  const planVersionId = await subscribeToTestPlan(db, context);
 
   const profiles: SeededProfile[] = [];
   for (const profileLabel of profileLabels) {
@@ -89,8 +105,60 @@ export async function seedWorkspace(
     });
   }
 
-  return { ownerUserId, workspaceId, context, profiles };
+  return { ownerUserId, workspaceId, context, profiles, planVersionId };
 }
+
+/**
+ * A workspace that may actually do paid work, for suites that do not want the whole `seedWorkspace` tree.
+ *
+ * Commercial access is a gate now (#40): connecting a channel needs the channel's plan feature, and a
+ * workspace with no subscription row resolves to `INACTIVE` with every feature false. Without this a
+ * suite about credentials or onboarding would really be asserting the billing gate.
+ */
+export async function createPaidWorkspace(
+  db: DbClient,
+  input: { readonly name: string; readonly ownerUserId: string },
+): Promise<{ readonly workspaceId: string; readonly planVersionId: string }> {
+  const { workspaceId } = await createWorkspaceWithOwner(db, input);
+  const context = await authorizeWorkspaceAccess(db, { userId: input.ownerUserId, workspaceId });
+  const planVersionId = await subscribeToTestPlan(db, context);
+  return { workspaceId, planVersionId };
+}
+
+/**
+ * The plan every seeded workspace is on: everything included, nothing metered out.
+ *
+ * One shared plan definition across the suite rather than one per workspace, because a plan is a product
+ * object and publishing hundreds of them would make `plan_versions` the slowest part of the fixture. The
+ * version is created once and reused; `publishPlanVersion` upserts the definition and adds a version, so
+ * the first caller creates it and the rest read it back.
+ */
+async function subscribeToTestPlan(db: DbClient, context: WorkspaceContext): Promise<string> {
+  const existing = await db.planVersion.findFirst({
+    where: { plan: { code: TEST_PLAN_CODE } },
+    orderBy: { version: "desc" },
+    select: { id: true },
+  });
+  const planVersionId =
+    existing?.id ??
+    (
+      await publishPlanVersion(db, {
+        code: TEST_PLAN_CODE,
+        name: "Test plan",
+        grants: {
+          features: [...PLAN_FEATURES],
+          // No ceilings and a generous allowance: a capacity or quota refusal in a test is one the test
+          // asked for, never one the fixture happened to impose.
+          limits: {},
+          quotas: { VOICE_TRANSCRIPTION_SECONDS: 100_000 },
+        },
+      })
+    ).planVersionId;
+  await setWorkspaceSubscription(db, context, { planVersionId, state: "ACTIVE" });
+  return planVersionId;
+}
+
+const TEST_PLAN_CODE = "test-everything";
 
 /**
  * Changes the Business Profile's automation default to what a case needs.

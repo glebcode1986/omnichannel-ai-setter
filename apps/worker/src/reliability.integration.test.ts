@@ -20,7 +20,6 @@ import {
   createDeliveryStore,
   createReconciliationStore,
   createSuspensionStore,
-  createWorkspaceWithOwner,
   composeHumanReply,
   findUnresolvedOperations,
   readReliabilitySnapshot,
@@ -31,6 +30,7 @@ import { NO_CAPABILITIES, outboundBlockedByHealth, overallHealth } from "@omnich
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createChannelStateResolver } from "./delivery-policy";
 import { aiProviderProbe, channelAccountProbes, databaseProbe } from "./health-probes";
 import { createOperationEvidencePort } from "./operation-evidence";
@@ -53,7 +53,7 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Reliability Owner", email: "reliability-owner@example.test" } });
     ownerUserId = user.id;
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Reliability Workspace", ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Reliability Workspace", ownerUserId });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Reliability Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: ownerUserId, workspaceId, businessProfileId });

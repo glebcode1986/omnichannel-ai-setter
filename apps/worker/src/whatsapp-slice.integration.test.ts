@@ -20,7 +20,6 @@ import {
   createContactWithChannelIdentity,
   createConversation,
   createCredentialCipher,
-  createWorkspaceWithOwner,
   scheduleAutomatedDelivery,
   writeChannelCredential,
 } from "@omnichannel/db";
@@ -29,6 +28,7 @@ import type { WhatsAppHttpPort, WhatsAppHttpResult } from "@omnichannel/channel-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createDeliveryEngine, deliverableChannels } from "./delivery-engine";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
@@ -79,7 +79,7 @@ describe.skipIf(!endToEndTestsEnabled())("WhatsApp vertical slice (end to end)",
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "WA Slice", email: "wa-slice@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "WA Slice Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "WA Slice Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "WA Slice Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });

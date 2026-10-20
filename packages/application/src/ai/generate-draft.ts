@@ -162,6 +162,23 @@ export function draftGenerationBlockers(snapshot: DraftConversationSnapshot, tri
     // The customer has said something since; drafting against the old anchor answers the wrong question.
     blockers.push("SUPERSEDED_BY_NEWER_INBOUND");
   }
+  // Commercial access (#40). Deliberately **not** exempted for a human request, unlike every blocker
+  // above it.
+  //
+  // The others ask "should automation act here?", and a person clicking "ask AI" has answered that. This
+  // one asks "may we spend money on a provider call?", which a person clicking a button has not answered
+  // and cannot. `BILLING_ENTITLEMENTS.md` stops paid AI generation when a workspace is past its trial and
+  // past grace, and generation is paid whoever asked for it.
+  //
+  // Refused here rather than after the call, which is the only place a refusal saves anything: nothing is
+  // persisted, no provider is reached, and the conversation stays in the Inbox for a person to answer
+  // themselves — which the same spec insists remains possible.
+  if (!snapshot.commercial.paidWorkAllowed) {
+    blockers.push("BILLING_INACTIVE");
+  }
+  if (!snapshot.commercial.aiDrafts) {
+    blockers.push("BILLING_FEATURE_OFF");
+  }
   return blockers;
 }
 

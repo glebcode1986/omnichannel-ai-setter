@@ -108,6 +108,11 @@ function decide(inputs: SimulationInputs, policy: PolicyView) {
     mode: "AUTOPILOT",
     aiEnabled: true,
     takeover: { state: "NONE" },
+    // Fully permitted, deliberately. `commercial` is required on `PolicyInput` so the compiler names
+    // every caller that has to decide, and this file's cases are about a chosen *simulation input*
+    // changing the outcome. A restrictive value here would have the billing gate refuse every case, and
+    // the suite would pass while proving nothing about the inputs it exists to compare.
+    commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
     draft: {
       usable: true,
       confidence: 0.95,

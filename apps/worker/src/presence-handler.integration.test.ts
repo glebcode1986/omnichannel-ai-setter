@@ -22,7 +22,6 @@ import {
   createContactWithChannelIdentity,
   createConversation,
   createPresenceStore,
-  createWorkspaceWithOwner,
   scheduleAutomatedDelivery,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
@@ -30,6 +29,7 @@ import type { PresenceJob } from "@omnichannel/queue";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createChannelStateResolver } from "./delivery-policy";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createPresenceHandler } from "./presence-handler";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
 
@@ -48,7 +48,7 @@ describe.skipIf(!endToEndTestsEnabled())("announcing presence before a reply", (
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Presence Owner", email: "presence-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Presence Workspace", ownerUserId: user.id });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Presence Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Presence Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: user.id, workspaceId, businessProfileId });

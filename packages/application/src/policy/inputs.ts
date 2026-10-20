@@ -19,6 +19,7 @@ import type { WindowDecision } from "@omnichannel/channel-core";
 import type {
   AiMode,
   ChannelCapabilities,
+  CommercialAccess,
   HumanTakeoverState,
   InstagramAfterWindowPolicy,
   QuietHours,
@@ -137,6 +138,15 @@ export interface PolicyInput {
   readonly retrieval: PolicyRetrieval;
   readonly limits: PolicyLimits;
   readonly account: AccountHealth;
+  /**
+   * What this workspace's commercial state permits (#40).
+   *
+   * Required rather than optional, and that is the point: an optional commercial fact would default to
+   * "allowed" at every site that forgot it, which is the one direction a billing boundary must never fail
+   * in. Required, the compiler names every caller that has to decide — and a caller with no snapshot says
+   * so with `NO_COMMERCIAL_ACCESS` rather than by omission.
+   */
+  readonly commercial: CommercialAccess;
   readonly capabilities: ChannelCapabilities;
   readonly window: WindowDecision;
   readonly humanAgent: HumanAgentAvailability;

@@ -22,13 +22,14 @@ import {
   createConversation,
   createDeliveryStore,
   createSuspensionStore,
-  createWorkspaceWithOwner,
+  setWorkspaceSubscription,
   scheduleAutomatedDelivery,
 } from "@omnichannel/db";
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createChannelStateResolver } from "./delivery-policy";
 import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
 
@@ -40,14 +41,18 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
   let context: Awaited<ReturnType<typeof authorizeBusinessProfileAccess>>;
   let ownerUserId: string;
   let channelAccountId: string;
+  let workspace: Awaited<ReturnType<typeof authorizeWorkspaceAccess>>;
+  let planVersionId: string;
   let seq = 0;
 
   beforeAll(async () => {
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Race Owner", email: "race-owner@example.test" } });
     ownerUserId = user.id;
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Race Workspace", ownerUserId });
-    const workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId });
+    const paid = await createPaidWorkspace(infra.db, { name: "Race Workspace", ownerUserId });
+    const workspaceId = paid.workspaceId;
+    planVersionId = paid.planVersionId;
+    workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Race Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: ownerUserId, workspaceId, businessProfileId });
     scope = { workspaceId, businessProfileId };
@@ -71,6 +76,8 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
 
   afterEach(async () => {
     await infra.db.automationSuspension.deleteMany({});
+    // Back to paid, so one case's lapse cannot decide the next one's outcome.
+    await setWorkspaceSubscription(infra.db, workspace, { planVersionId, state: "ACTIVE" });
   });
 
   const readyToSend = async () => {
@@ -214,6 +221,92 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
   }
 
   /**
+   * An entitlement that lapses inside the same window (#40).
+   *
+   * The requirement this is the test of: "delayed AUTOPILOT sends revalidate current subscription/feature
+   * entitlement immediately before send". The window is the one the kill switch taught us about — the
+   * read has returned, the delivery is waiting at the claim — and the thing committing in it is a plan
+   * change rather than a switch.
+   *
+   * It needs its own mechanism, not the switch's. Every other fact a claim re-asserts is bound by a
+   * predicate on the row it came from, because a row has to be written to change; an entitlement also
+   * changes with the clock, so the claim re-resolves it and compares. The ordering against a concurrent
+   * writer comes from an advisory key held shared by the claim and exclusively by a trigger on both
+   * tables.
+   */
+  for (const { name, state } of [
+    { name: "lapses into INACTIVE", state: "INACTIVE" as const },
+    // `CANCELED_PENDING_END` whose paid period is already over. The state alone still permits paid work —
+    // the period end is what stops it, and nothing writes a row when a date passes, which is the whole
+    // reason the claim re-resolves the entitlement instead of comparing row versions.
+    { name: "is cancelled and its paid period has ended", state: "CANCELED_PENDING_END" as const },
+  ]) {
+    it(`stops an automated send whose subscription ${name} after the state was read`, async () => {
+      const { conversationId, operationId } = await readyToSend();
+      let go = (): void => undefined;
+      let read = (): void => undefined;
+      const release = new Promise<void>((resolve) => {
+        go = resolve;
+      });
+      const hasRead = new Promise<void>((resolve) => {
+        read = resolve;
+      });
+      const { run, sends } = deliver(conversationId, operationId, read, release);
+
+      const running = run();
+      await hasRead;
+      await setWorkspaceSubscription(infra.db, workspace, {
+        planVersionId,
+        state,
+        // A cancelled subscription whose paid period has already ended is the honest shape of the second
+        // case: `CANCELED_PENDING_END` still permits paid work until the period is over, so the state
+        // alone would not stop anything.
+        // `canceled_at` and `period_ends_at` are both required for this state by CHECK: a cancellation
+        // nobody can date is one nobody can audit.
+        ...(state === "CANCELED_PENDING_END"
+          ? { canceledAt: new Date(NOW.getTime() - 2_000), periodEndsAt: new Date(NOW.getTime() - 1_000) }
+          : {}),
+      });
+      go();
+      await running;
+
+      // Nothing reached the adapter, and the reply survived: the spec says a workspace resumes from
+      // retained state once it pays, and a cancelled reply would have nothing to resume.
+      expect(sends).toEqual([]);
+      const held = await heldStateOf(operationId);
+      expect(held.status).toBe("HELD_REVIEW");
+      // Held *for this reason*, not for one of the several other gates that would also have stopped it.
+      expect(held.lastErrorMessage).toContain("BILLING_INACTIVE");
+    }, 180_000);
+  }
+
+  it("still sends when the lapse belongs to somebody else's workspace", async () => {
+    // The control that keeps the two cases above honest: without it they would pass against a claim that
+    // refused every send whose workspace had ever been touched.
+    const other = await infra.db.user.create({ data: { name: "Race Neighbour", email: `race-neighbour-${String(seq)}@example.test` } });
+    const neighbour = await createPaidWorkspace(infra.db, { name: "Race Neighbour Workspace", ownerUserId: other.id });
+    const neighbourContext = await authorizeWorkspaceAccess(infra.db, { userId: other.id, workspaceId: neighbour.workspaceId });
+    const { conversationId, operationId } = await readyToSend();
+    let go = (): void => undefined;
+    let read = (): void => undefined;
+    const release = new Promise<void>((resolve) => {
+      go = resolve;
+    });
+    const hasRead = new Promise<void>((resolve) => {
+      read = resolve;
+    });
+    const { run, sends } = deliver(conversationId, operationId, read, release);
+
+    const running = run();
+    await hasRead;
+    await setWorkspaceSubscription(infra.db, neighbourContext, { planVersionId: neighbour.planVersionId, state: "INACTIVE" });
+    go();
+    await running;
+
+    expect(sends).toEqual([operationId]);
+  }, 180_000);
+
+  /**
    * The same window, with the writer an operator actually uses.
    *
    * `RELIABILITY_INCIDENTS.md` says this is a table people write to by hand during an incident, and there
@@ -267,7 +360,7 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
     // The same interleaving with a switch on another workspace. Without this the test above would pass
     // just as well against code that refused every delivery it had paused.
     const { conversationId, operationId } = await readyToSend();
-    const otherWorkspace = await createWorkspaceWithOwner(infra.db, { name: "Someone Else", ownerUserId });
+    const otherWorkspace = await createPaidWorkspace(infra.db, { name: "Someone Else", ownerUserId });
     let go = (): void => undefined;
     let read = (): void => undefined;
     const release = new Promise<void>((resolve) => {
@@ -319,7 +412,7 @@ describe.skipIf(!endToEndTestsEnabled())("the claim and the switch take the same
     infra = await createEndToEndInfrastructure();
     const user = await infra.db.user.create({ data: { name: "Lock Owner", email: "lock-owner@example.test" } });
     ownerUserId = user.id;
-    const { workspaceId } = await createWorkspaceWithOwner(infra.db, { name: "Lock Workspace", ownerUserId });
+    const { workspaceId } = await createPaidWorkspace(infra.db, { name: "Lock Workspace", ownerUserId });
     const workspace = await authorizeWorkspaceAccess(infra.db, { userId: ownerUserId, workspaceId });
     const { businessProfileId } = await createBusinessProfile(infra.db, workspace, { name: "Lock Profile" });
     context = await authorizeBusinessProfileAccess(infra.db, { userId: ownerUserId, workspaceId, businessProfileId });

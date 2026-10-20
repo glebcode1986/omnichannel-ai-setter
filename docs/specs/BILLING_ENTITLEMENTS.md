@@ -83,6 +83,37 @@ At minimum re-check entitlement:
 
 Entitlement loss is another final-send invalidation reason. A scheduled automated customer message must not bypass a subscription/feature change that occurred while it waited.
 
+## What stops, and what does not (P6-03)
+
+Three questions, deliberately not one, because they are enforced in different places and collapsing them
+produces a product that either overcharges or locks people out of their own data.
+
+| question | asked by | consults payment | example |
+|---|---|---|---|
+| may this be *used* now? | `featureAllowed` | yes | transcribing a recording, generating a draft, an automated send |
+| does the plan *state* this? | `snapshot.features[f]` | no | reporting what a plan includes |
+| does a chosen plan *withhold* this from configuration? | `featureWithheld` | no | connecting a channel |
+
+Configuration is not paid work. A business whose payment has lapsed may still reconnect a channel, rename a
+profile or reorganize what it already owns; what stops is generation, automation and transcription. And a
+workspace that has chosen **no plan at all** withholds nothing, because connecting its first Business
+Profile is the act that starts its trial — a gate that refused it would close the product's own front door.
+`capacityVerdict` answers the capacity question on the same terms.
+
+A permitting subscription state is not a permanent permission. `TRIALING` and `CANCELED_PENDING_END` each
+carry their own end date, and when it passes paid work stops even though no row has been written — so a
+check that read only the state would keep a cancelled workspace sending until a provider webhook happened
+to arrive. `GRACE` is left to its state: its duration is product configuration and its mechanics are
+provider retry schedules, so the transition out of it belongs to the billing adapter.
+
+Because an entitlement can therefore change with the clock as well as with a write, the delivery
+coordinator **re-resolves** it immediately before taking a send rather than binding a row version, and
+orders that read against concurrent plan changes with an advisory key held exclusively by a trigger on
+`workspace_subscriptions` and `entitlement_overrides`.
+
+A commercial refusal **holds** a reply; it never cancels one. The spec above says a workspace resumes from
+retained state once it pays, and a cancelled reply would have nothing to resume.
+
 ## Usage behavior
 
 Webhook ingestion and conversation persistence continue when a workspace is past trial, past grace, over a capacity limit or out of an explicitly metered allowance. Never drop inbound customer messages because billing is unavailable.

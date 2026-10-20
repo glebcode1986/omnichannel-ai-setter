@@ -27,7 +27,6 @@ import {
   createConversation,
   createConversationOperationStore,
   createDraftContextStore,
-  createWorkspaceWithOwner,
   dueFollowUps,
   planFollowUp,
   recordFollowUpSent,
@@ -40,6 +39,7 @@ import { Queue } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAiDraftHandler } from "./ai-draft-handler";
+import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createDraftDisposition } from "./draft-disposition";
 import { automatedRouteStillOpen } from "./followup-channel";
 import { startFollowUpSweeper } from "./followup-sweeper";
@@ -74,7 +74,10 @@ describe.skipIf(!endToEndTestsEnabled())("a follow-up from the table to a schedu
     infra = await createEndToEndInfrastructure();
     db = infra.db;
     const user = await db.user.create({ data: { name: "Follow-up Owner", email: "followup-owner@example.test" } });
-    const { workspaceId } = await createWorkspaceWithOwner(db, { name: "Follow-up Workspace", ownerUserId: user.id });
+    // Paid, like every other slice suite in this app. Commercial access is a send gate since #40: a
+    // workspace with no subscription row resolves to `INACTIVE` with every feature false, so this suite
+    // would be asserting the billing refusal rather than the follow-up path it exists to prove.
+    const { workspaceId } = await createPaidWorkspace(db, { name: "Follow-up Workspace", ownerUserId: user.id });
     const workspace = await authorizeWorkspaceAccess(db, { userId: user.id, workspaceId });
     const { businessProfileId } = await createBusinessProfile(db, workspace, { name: "Follow-up Profile" });
     context = await authorizeBusinessProfileAccess(db, { userId: user.id, workspaceId, businessProfileId });

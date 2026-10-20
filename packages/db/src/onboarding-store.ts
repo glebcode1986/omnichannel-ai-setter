@@ -173,7 +173,7 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
             ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
             capabilities: input.capabilities,
             credentialId,
-          });
+          }, input.now);
           return { channelAccountId: account.id };
         }
         // Reconnect: the credential row keeps its identity so the account's history stays attached to it.
@@ -197,7 +197,7 @@ export function createInstagramOnboardingStore(db: DbClient, cipher: CredentialC
           ...(input.displayName === undefined ? {} : { displayName: input.displayName }),
           capabilities: input.capabilities,
           credentialId: existingCredentialId,
-        });
+        }, input.now);
         return { channelAccountId: account.id };
       });
     },
