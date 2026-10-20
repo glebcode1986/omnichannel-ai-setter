@@ -212,6 +212,21 @@ automatic and usually takes minutes. Reconnection restores only an account that 
 
 An event this adapter has not been taught is ignored rather than guessed into one of the two answers.
 
+## Delivery (implemented, P4-07)
+
+One `DeliverySendPort` per channel behind one coordinator: which transport a reply leaves on is resolved
+from the channel its account names, and nothing above that boundary branches on it. The sender carries
+free-form text only — WhatsApp's route out of a closed window is an approved template, which the draft
+engine does not propose today, so a delivery that would need one is refused by the window gate rather than
+downgraded into something else.
+
+Two rules are Instagram's and do **not** apply here: the Human Agent exception, and the automated-dispatch
+deadline that requires an automated experience to answer within seconds. Applying either to WhatsApp would
+be inventing a rule — and the deadline would do visible damage, shortening the human-like delay on every
+reply.
+
+`docs/specs/WHATSAPP_SLICE_MANUAL_TEST.md` is the sandbox plan for what only a real account can show.
+
 ## Reliability invariants
 
 - stable provider message IDs are persisted/correlated;
