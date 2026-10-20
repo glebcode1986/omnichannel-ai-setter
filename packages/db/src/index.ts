@@ -175,6 +175,7 @@ export {
 } from "./credentials";
 export * from "./repositories/channel-connect-states";
 export { createInstagramOnboardingStore, type ConnectedAccountRef, type ChannelOnboardingStore, type InstagramOnboardingStore } from "./onboarding-store";
+export { applyTemplateStatusUpdate, readTemplateCatalogue, type StoredTemplate, type TemplateStatusUpdate } from "./whatsapp-template-store";
 export {
   createWhatsAppOnboardingStore,
   type ConnectWhatsAppInput,

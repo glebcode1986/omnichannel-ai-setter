@@ -8,7 +8,7 @@ import {
 } from "@omnichannel/domain";
 
 import { dispatchOutbox } from "./outbox";
-import type { ChannelAdapterProvider, DebounceScheduler, IngestionStore, LogPort } from "./ports";
+import type { ChannelAdapterProvider, DebounceScheduler, IngestionStore, LogPort, WebhookAccount } from "./ports";
 import { processEvent } from "./process-event";
 
 export interface IngestionDependencies {
@@ -21,6 +21,25 @@ export interface IngestionDependencies {
   /** Stage A window (DELAY_ENGINE.md); workspace/account policy lookup arrives with Phase 2 policy. */
   readonly debounceWindowMs?: DurationRangeMs;
   readonly takeoverPauseMs?: number;
+  /**
+   * Account-level facts some channels deliver on the same webhook endpoint (Issue #20).
+   *
+   * Optional, and absent on a channel that has none. WhatsApp's template status changes arrive this way
+   * and are not conversation events at all: they belong to the messaging account, they produce no message
+   * and nothing in them can be attributed to a contact. Routing them through the message pipeline would
+   * mean an event with no conversation, so they are applied here instead — **after verification**, by a
+   * port the composition root supplies, because the payload's shape is the channel's business and this
+   * file is channel-neutral.
+   *
+   * A failure never fails the webhook: the conversation events in the same delivery still matter, and
+   * Meta retries a non-200 for up to seven days, which would replay them too.
+   */
+  readonly accountEvents?: AccountEventPort;
+}
+
+/** Applied after a webhook has been verified; returns how many account-level facts it recorded. */
+export interface AccountEventPort {
+  apply(input: { readonly account: WebhookAccount; readonly webhook: RawWebhook }): Promise<number>;
 }
 
 export interface WebhookIngestionRequest {
@@ -96,6 +115,19 @@ export async function ingestWebhook(
       reasonCode: verification.status === "VERIFIED" ? ("VERIFIED_NON_POST" as const) : ("ADAPTER_REJECTED" as const),
     });
     return { kind: "UNAUTHORIZED" };
+  }
+
+  if (dependencies.accountEvents !== undefined) {
+    try {
+      const recorded = await dependencies.accountEvents.apply({ account, webhook: request.webhook });
+      if (recorded > 0) {
+        log.info("ingestion.account_events_recorded", { recorded });
+      }
+    } catch (error) {
+      // Never fatal: the conversation events in this same delivery still matter, and refusing the
+      // webhook would have Meta replay them for up to seven days to fix an account-level write.
+      log.warn("ingestion.account_events_failed", { errorName: error instanceof Error ? error.name : typeof error });
+    }
   }
 
   let normalized: unknown[];

@@ -15,11 +15,13 @@
  * language and its parameter values; nothing in this file composes body text, and nothing here asks a model
  * anything.
  */
-import type { OutboundMessageCommand, SendResult } from "@omnichannel/channel-core";
+import type { OutboundMessageCommand, SendResult, TemplateParameter } from "@omnichannel/channel-core";
+import { templateParameterFormatOf } from "@omnichannel/domain";
 
 import { MAX_TEXT_LENGTH, messagesUrl, type ResolvedWhatsAppConfig } from "./config";
 import { classifyWhatsAppError, formatErrorCode, OUTSIDE_SERVICE_WINDOW_CODE, parseAcceptedMessageId, parseWhatsAppError } from "./errors";
 import type { WhatsAppHttpResult } from "./http";
+
 
 const SEND_TIMEOUT_MS = 10_000;
 /** Presence is best-effort, so it gets a shorter budget than a reply: it must never delay one. */
@@ -43,10 +45,24 @@ export function buildTextPayload(command: OutboundMessageCommand, text: string):
   };
 }
 
+/**
+ * The outbound payload for an approved template.
+ *
+ * **Named and positional templates serialize differently**, which this did not distinguish until Issue
+ * #20. Meta's two parameter formats are `positional` — `{{1}}`, `{{2}}`, values in order and unnamed — and
+ * `named` — `{{snake_case}}`, every value carrying its own `parameter_name`. A named template sent with
+ * positional values is refused by the provider, so a business whose templates use names could not send at
+ * all. The format is derived from the names, because Meta's two formats partition the name space: a
+ * positional parameter's name *is* a number and a named one's cannot be.
+ *
+ * The approved template owns the wording. Nothing here composes text, and the values have already been
+ * validated against the approved shape by the application (`templateVariablesProblem`).
+ */
 export function buildTemplatePayload(
   command: OutboundMessageCommand,
-  template: { readonly templateName: string; readonly languageCode: string; readonly parameters: readonly { readonly value: string }[] },
+  template: { readonly templateName: string; readonly languageCode: string; readonly parameters: readonly TemplateParameter[] },
 ): Readonly<Record<string, unknown>> {
+  const named = templateParameterFormatOf(template.parameters) === "NAMED";
   return {
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -55,11 +71,20 @@ export function buildTemplatePayload(
     template: {
       name: template.templateName,
       language: { code: template.languageCode },
-      // Positional body parameters, which is what the Cloud API takes. The approved template owns the
-      // wording; these are the values that fill its placeholders.
       ...(template.parameters.length === 0
         ? {}
-        : { components: [{ type: "body", parameters: template.parameters.map((parameter) => ({ type: "text", text: parameter.value })) }] }),
+        : {
+            components: [
+              {
+                type: "body",
+                parameters: template.parameters.map((parameter) => ({
+                  type: "text",
+                  ...(named ? { parameter_name: parameter.name } : {}),
+                  text: parameter.value,
+                })),
+              },
+            ],
+          }),
     },
   };
 }

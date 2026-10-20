@@ -19,7 +19,7 @@
  * "connected only after required verification succeeded" true against this store, a migration, a console
  * and anything written later.
  */
-import type { ChannelCapabilities } from "@omnichannel/domain";
+import { isTemplateParameterFormat, type ChannelCapabilities, type TemplateParameterFormat } from "@omnichannel/domain";
 
 import { recordAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
@@ -59,6 +59,16 @@ export interface WhatsAppTemplateInput {
   readonly category?: string;
   readonly status: string;
   readonly components?: readonly unknown[];
+  /**
+   * The approved shape, parsed once at sync (Issue #20).
+   *
+   * Parsed here rather than at send time because the provider's two parameter formats serialize
+   * differently and a send in the wrong one is refused: deriving the shape from `components` on the way to
+   * a customer would put a parser in the dispatch path, and a parser that changed its mind would change
+   * what customers receive.
+   */
+  readonly parameterFormat?: TemplateParameterFormat;
+  readonly parameters?: readonly string[];
 }
 
 export interface WhatsAppConnectionRecord {
@@ -294,13 +304,15 @@ export function createWhatsAppOnboardingStore(db: DbClient, cipher: CredentialCi
       const rows = await db.whatsAppMessageTemplate.findMany({
         where: { workspaceId: scope.workspaceId, connection: { ...scope, channelAccountId } },
         orderBy: [{ name: "asc" }, { language: "asc" }],
-        select: { providerTemplateId: true, name: true, language: true, category: true, status: true, components: true },
+        select: { providerTemplateId: true, name: true, language: true, category: true, status: true, components: true, parameterFormat: true, parameters: true },
       });
       return rows.map((row) => ({
         providerTemplateId: row.providerTemplateId,
         name: row.name,
         language: row.language,
         status: row.status,
+        parameterFormat: (isTemplateParameterFormat(row.parameterFormat) ? row.parameterFormat : "POSITIONAL") satisfies TemplateParameterFormat,
+        parameters: row.parameters,
         ...(row.category === null ? {} : { category: row.category }),
         ...(Array.isArray(row.components) ? { components: row.components } : {}),
       }));
@@ -415,6 +427,8 @@ async function replaceTemplates(
         category: record.category ?? null,
         status: record.status,
         components: record.components === undefined ? undefined : (record.components as object),
+        parameterFormat: record.parameterFormat ?? "POSITIONAL",
+        parameters: [...(record.parameters ?? [])],
         syncedAt: input.syncedAt,
       })),
     });

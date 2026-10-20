@@ -54,8 +54,17 @@ export {
   type WhatsAppOnboardingMode,
   type WhatsAppSignupConfig,
 } from "./onboarding";
-export { providerTime } from "./payload";
+export { parseWebhook, providerTime, type WhatsAppWebhook } from "./payload";
 export { createWhatsAppAdapterRegistry, type RegistryAccount, type WhatsAppBinding, type WhatsAppRegistryOptions } from "./registry";
 export { buildTemplatePayload, buildTextPayload, checkSendable, markReadAndTyping, sendMessage } from "./send";
+export {
+  readTemplateShape,
+  readTemplateStatusChanges,
+  SENDABLE_TEMPLATE_STATUS,
+  TEMPLATE_STATUS_FIELD,
+  templateSendable,
+  UNSENDABLE_TEMPLATE_STATUSES,
+  type TemplateStatusChange,
+} from "./templates";
 export { assertVerified, verifyWhatsAppWebhook } from "./verify";
 export { evaluateServiceWindow, type WindowInputs } from "./window";

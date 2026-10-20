@@ -37,7 +37,7 @@ function adapter(overrides: Partial<ChannelAdapter> = {}): ChannelAdapter {
   };
 }
 
-function dependencies(options: { account?: WebhookAccount; adapter?: ChannelAdapter } = {}) {
+function dependencies(options: { account?: WebhookAccount; adapter?: ChannelAdapter; accountEvents?: IngestionDependencies["accountEvents"] } = {}) {
   const transaction = vi.fn(() => Promise.reject(new Error("no transaction expected")));
   const store = {
     findWebhookAccount: vi.fn(() => Promise.resolve(options.account)),
@@ -54,6 +54,7 @@ function dependencies(options: { account?: WebhookAccount; adapter?: ChannelAdap
     log,
     now: () => new Date("2026-09-17T10:00:00.000Z"),
     random: () => 0,
+    ...(options.accountEvents === undefined ? {} : { accountEvents: options.accountEvents }),
   };
   return { deps, store, transaction, log };
 }
@@ -248,5 +249,70 @@ describe("ingestion rules", () => {
     expect(sampleDelayMs({ minMs: 7_000, maxMs: 12_000 }, () => 0.999_999)).toBe(12_000);
     expect(() => sampleDelayMs({ minMs: 7_000, maxMs: 12_000 }, () => 1)).toThrow(RangeError);
     expect([1, 2, 3, 20].map(outboxRetryDelayMs)).toEqual([5_000, 10_000, 20_000, 300_000]);
+  });
+});
+
+/**
+ * Account-level webhooks (Issue #20).
+ *
+ * Some channels deliver facts about the *account* on the same endpoint as messages — WhatsApp's template
+ * status changes are the case this exists for. They are not conversation events, so the normalizer never
+ * sees them; what matters here is that they are applied only after verification and that a failure in one
+ * never costs the conversation events in the same delivery.
+ */
+describe("account-level events", () => {
+  it("applies them only after the webhook has been verified", async () => {
+    const calls: string[] = [];
+    const accountEvents = {
+      apply: () => {
+        calls.push("applied");
+        return Promise.resolve(1);
+      },
+    };
+
+    const unverified = dependencies({
+      account,
+      adapter: adapter({ verifyWebhook: () => Promise.resolve({ status: "REJECTED", reason: "bad signature" }) }),
+      accountEvents,
+    });
+    expect(await ingestWebhook(unverified.deps, request())).toEqual({ kind: "UNAUTHORIZED" });
+    // Nothing applied: a body nobody verified is a body from a stranger.
+    expect(calls).toEqual([]);
+
+    const verified = dependencies({ account, adapter: adapter(), accountEvents });
+    await ingestWebhook(verified.deps, request());
+    expect(calls).toEqual(["applied"]);
+  });
+
+  it("does not apply them to the subscription handshake", async () => {
+    const calls: string[] = [];
+    const { deps } = dependencies({
+      account,
+      adapter: adapter({ verifyWebhook: () => Promise.resolve({ status: "CHALLENGE", responseBody: "42" }) }),
+      accountEvents: {
+        apply: () => {
+          calls.push("applied");
+          return Promise.resolve(0);
+        },
+      },
+    });
+
+    expect(await ingestWebhook(deps, request())).toEqual({ kind: "CHALLENGE", responseBody: "42" });
+    expect(calls).toEqual([]);
+  });
+
+  it("never fails the webhook because an account-level write failed", async () => {
+    // Refusing would have the provider replay the whole delivery — including its conversation events —
+    // for up to seven days, to fix a write that is not what the customer is waiting for.
+    const { deps, log } = dependencies({
+      account,
+      adapter: adapter(),
+      accountEvents: { apply: () => Promise.reject(new Error("the write failed")) },
+    });
+
+    const result = await ingestWebhook(deps, request());
+
+    expect(result.kind).not.toBe("ERROR");
+    expect(log.warn).toHaveBeenCalledWith("ingestion.account_events_failed", expect.objectContaining({ errorName: "Error" }));
   });
 });

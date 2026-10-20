@@ -43,7 +43,21 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
+### Current work — propagating the P5-07 lead-board authorization fix into P4-03 / PR #89
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-02 / PR #88
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -172,6 +186,79 @@ directed it to this branch rather than downstream.
 ### Earlier — the accepted #85, propagated into #86 and nowhere else
 ### Earlier — the accepted #86, propagated into #87 and nowhere else
 ### Earlier — the accepted #87, propagated into #88 and nowhere else
+### Earlier — the accepted #88, propagated into #89 and nowhere else
+
+**PR #88 / P4-02 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-16T16:53:26Z, commit `98c2b2696f670ccc82a32252a91fa0460d2dfffa`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=98c2b2696f670ccc82a32252a91fa0460d2dfffa` (review `5550962495`). The verdict
+audited the echo canonicalization explicitly and recorded zero blocking defects.
+
+**Routing unchanged:** Gemini/Antigravity primary, Astra advisory-only. **#89 / P4-03 is now the sole gate;
+#90 onwards are frozen.**
+
+**The ancestry.** Both segments forked from `960f7174abaa732a183624defcc5c1104af262da`: the accepted #88
+segment ran 27 commits ahead of it, #89's own authored segment 9, so #89 against accepted #88 was genuinely
+`diverged` — 9 ahead / 27 behind. Joined by an **ordinary non-rebase merge** at
+`3752ae2b11cfa8dc6b53365385e2e80845e23026`; `git merge-base --is-ancestor` now succeeds for the accepted
+#88 head and the prior #89 head `f257f0a6f73e55f98d5395abce46d9f72e0bb190` alike.
+
+#### Two conflicts, both resolved as the union, and one of them mattered
+
+**`packages/application/src/policy/evaluate.ts` — a doc comment, about the one thing worth getting right.**
+Both segments had rewritten the same block above `evaluateTemplateGate`, and they disagreed on *where the
+allowlist is read*: #89's prose listed "Unattended sending needs the allowlist" among four conditions, while
+#88's said the allowlist is **not** read here and arrives as two settled booleans computed where the
+catalogue is. A comment is not a tiebreak you settle by preference, so it was settled against the code: the
+gate reads `input.templateRoute.approvedTemplateAvailable` and `input.templateRoute.automatable` and touches
+no catalogue — so #88's claim is the factual one. The resolution keeps **both**: #89's four operator-facing
+conditions, #88's `undefined`-versus-empty-refusal-list distinction, and a final paragraph naming
+`selectTemplate` as where the two booleans are decided. That last sentence is *more* true after the merge
+than before it, because `selectTemplate` is #89's own new `policy/template-route.ts`.
+
+**`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md` — both segments appended a dated section.** Kept
+both, in chronological order: #89's "Re-verification for P4-03 / Issue #20 — templates and the window,
+2026-10-04", then #88's "Re-verification 2026-10-16". Neither was discarded and neither was merged into the
+other; a missing blank line before the second heading was added so the heading renders.
+
+#### The semantic union, checked rather than assumed
+
+- **#88's echo normalization is intact**: `sameNumber` is defined and still called at the echo branch, and
+  `BUSINESS_WA_ID` / `BUSINESS_DISPLAY_NUMBER` remain separate constants across fixture and test.
+- **#89's template work is intact**: `policy/template-route.ts` and its tests, `channel-whatsapp/templates.ts`,
+  `db/whatsapp-template-store.ts`, `domain/message-template.ts`, the `reason-codes` additions, and the
+  `20261004210000_whatsapp_template_shape` migration with both of its CHECKs.
+- **The boundary the #87 review demanded still holds.** That review required that transport-owned template
+  checks not claim the then-unbuilt #20 catalogue. #89 builds that catalogue, so the boundary was re-checked
+  rather than presumed: `checkSendable` refuses only *shape* — a missing template name or language, an empty
+  parameter — and never approval status, freshness or the allowlist. Eligibility lives in `selectTemplate`.
+  No duplicated check, no contradiction.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, every suite bounded to `--maxWorkers=2`:
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 545 source files, 0 cycles |
+| `@omnichannel/application` | **138 passed** (6 files) |
+| `@omnichannel/channel-whatsapp` | **123 passed** (7 files) |
+| `@omnichannel/domain` | **266 passed** (13 files) |
+| `pnpm test:db` | **753 passed** (37 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **53 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1010 passed** (89 files) |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1733 passed, 913 skipped |
+
+**Disclosed.** No retries, no reruns, no flakes, nothing skipped to make a gate pass. `db:migrate:deploy`
+reported "No pending migrations to apply" — correct but **not evidence**, because this long-lived local
+database already had `20261004210000_whatsapp_template_shape` applied on 2026-10-05 from earlier work on
+this branch, and `db:check-drift` compares the migrations directory to `schema.prisma` rather than consulting
+the live database. The migration is demonstrated instead by the integration suites, which build a fresh
+database per run and passed 753 tests. Local runs are macOS; the authoritative Linux evidence is the
+exact-head GitHub Actions run.
+
+### Superseded — the accepted #87, propagated into #88 and nowhere else
 
 **PR #87 / P4-01 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-15T06:25:13Z, commit `c13d32dea988daf38a6a4a6b03a612553c26c72b`, carrying
@@ -834,6 +921,21 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Task definition — P4-03 / Issue #20, template catalogue and outside-window policy
+
+**Branch `feat/p4-03-whatsapp-templates`**, based on `feat/p4-02-whatsapp-embedded-signup`. ADR-016's three
+outside-window modes, the template catalogue they decide from, and the eligibility rules in between.
+
+Meta's template and window rules were re-verified from the live documentation on 2026-10-04. One finding
+fixed a defect rather than confirming anything: **`parameter_format` is `positional` or `named` and the two
+do not serialize the same way** — a named template's values each need a `parameter_name` — so P4-01's
+payload builder could not send a named template at all.
+
+**Deliberately not in this task:** dispatching an outside-window template. The draft engine proposes no
+template today, so the composing/delivery/record path would be unreachable code; the eligibility,
+validation and policy pieces it needs are in place and tested. See the note in `WHATSAPP_ADAPTER.md`.
+
+### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
 ### Task definition — P4-02 / Issue #19, WhatsApp Embedded Signup
 
 **Branch `feat/p4-02-whatsapp-embedded-signup`**, based on `feat/p4-01-whatsapp-adapter`. Multi-tenant
