@@ -271,6 +271,7 @@ describe.skipIf(!endToEndTestsEnabled())("webhook ingestion → PostgreSQL → o
             return Promise.resolve();
           },
           transcribeMedia: () => Promise.resolve(),
+          announcePresence: () => Promise.resolve(),
           generateAiDraft: () => Promise.resolve(),
           deliver: () => Promise.resolve({ status: "NOT_CLAIMED", retryable: false, reason: "e2e" }),
           reconcile: () => Promise.resolve(),

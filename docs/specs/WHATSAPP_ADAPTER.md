@@ -136,6 +136,27 @@ Capability-gated. Validation must happen before provider side effects. MVP seque
 
 Expose optional adapter operations/capabilities for read receipt and text typing indicator. Presence is controlled by application timing policy. Failure to emit presence must never cancel an otherwise valid customer reply; treat it as best-effort telemetry/UX unless current policy says otherwise.
 
+### Implemented (P4-05)
+
+`markReadAndTyping` is the whole of the adapter's part, and it is deliberately *not* on `ChannelAdapter`:
+core code takes a plain adapter and therefore cannot reach presence, because the timing is the
+application's decision and a transport must never take it on.
+
+- **One request, and the read status is not optional.** Meta documents a single payload for the indicator
+  and it carries `status: "read"` and `message_id` as required fields. There is no typing-only request, so
+  a caller asking for the indicator necessarily marks the message read. Re-sending that status for a
+  message already marked read is behaviour the documentation describes neither way; the worst case is a
+  refused presence call, which is a cosmetic loss by contract.
+- **Marking one message marks the earlier ones.** Meta cascades the receipt through the conversation, so
+  the newest inbound message covers a whole debounced burst in one call.
+- **Two platform bounds are exported** rather than restated by callers: `TYPING_INDICATOR_TTL_MS`
+  (25 s — the indicator is dismissed when the reply arrives or after that, whichever comes first) and
+  `MARK_READ_MAX_AGE_MS` (30 days). The application bounds its own lead by the first and refuses a message
+  older than the second.
+- **A number that is not connected is refused**, exactly as a send is, and before the credential is read.
+- The result is a boolean. Nothing a caller can do about a failed presence effect is worth changing a
+  reply for.
+
 ## Voice notes
 
 Inbound audio normalizes as `AUDIO` with media reference. Media download and transcription are separate application/provider services, not the transport adapter's AI responsibility.

@@ -30,6 +30,7 @@ import {
   isConfidencePreset,
   isInstagramAfterWindowPolicy,
   isTimingPreset,
+  isPresenceMode,
   isWhatsAppAfterWindowPolicy,
   policyImpactsOf,
 } from "@omnichannel/domain";
@@ -202,6 +203,9 @@ function proposalFrom(formData: FormData, expectedVersion: number): PolicyPropos
   const takeoverHours = Number.parseInt(field(formData, "takeoverPauseHours").trim(), 10);
   const customSeconds = customSecondsFrom(formData);
   const custom = timingPreset === "CUSTOM" && customTimingProblem(customSeconds) === undefined ? timingFromSeconds(customSeconds) : undefined;
+  const presenceMode = field(formData, "presenceMode");
+  const presenceLeadSeconds = Number.parseInt(field(formData, "presenceTypingLeadSeconds"), 10);
+  const allowlist = lines(formData, "allowlist");
 
   return {
     ...(isAiMode(mode) ? { mode } : {}),
@@ -220,7 +224,11 @@ function proposalFrom(formData: FormData, expectedVersion: number): PolicyPropos
     takeoverPauseHours: takeoverHours,
     ...(isInstagramAfterWindowPolicy(instagram) ? { instagramAfterWindowPolicy: instagram } : {}),
     ...(isWhatsAppAfterWindowPolicy(whatsapp) ? { whatsappAfterWindowPolicy: whatsapp } : {}),
-    whatsappTemplateAutomationAllowlist: lines(formData, "allowlist"),
+    whatsappTemplateAutomationAllowlist: allowlist,
+    ...(isPresenceMode(presenceMode) ? { presenceMode } : {}),
+    // Seconds on the form, milliseconds in the policy: an owner thinks in seconds, and the ceiling is the
+    // provider's own indicator lifetime, which the domain refuses past.
+    ...(Number.isFinite(presenceLeadSeconds) && presenceLeadSeconds >= 0 ? { presenceTypingLeadMs: presenceLeadSeconds * 1_000 } : {}),
     expectedVersion,
   };
 }
@@ -265,6 +273,8 @@ function editFrom(proposal: PolicyProposal): PolicyEdit {
     ...(proposal.instagramAfterWindowPolicy === undefined ? {} : { instagramAfterWindowPolicy: proposal.instagramAfterWindowPolicy }),
     ...(proposal.whatsappAfterWindowPolicy === undefined ? {} : { whatsappAfterWindowPolicy: proposal.whatsappAfterWindowPolicy }),
     whatsappTemplateAutomationAllowlist: proposal.whatsappTemplateAutomationAllowlist,
+    ...(proposal.presenceMode === undefined ? {} : { presenceMode: proposal.presenceMode }),
+    ...(proposal.presenceTypingLeadMs === undefined ? {} : { presenceTypingLeadMs: proposal.presenceTypingLeadMs }),
   };
 }
 

@@ -55,6 +55,26 @@ function createSender(env: DeliveryEnv, db: DbClient, logger: Logger, now: () =>
   });
 }
 
+/**
+ * The channels this deployment can actually put a reply on.
+ *
+ * Derived from the same configuration `createSender` reads, and exported so that nothing else has to guess
+ * it. Presence is the caller that needs it: announcing that somebody is typing a reply this process will
+ * refuse to send is the one presence failure a customer actually notices, and the only component able to
+ * answer "can we send on this channel at all" is the one that builds the sender.
+ *
+ * WhatsApp is absent until its transport is wired (P4-07); the moment it is, it belongs here and presence
+ * follows without another decision being made anywhere else.
+ */
+export function deliverableChannels(env: DeliveryEnv): ReadonlySet<string> {
+  const instagram =
+    env.INSTAGRAM_APP_SECRET !== undefined &&
+    env.INSTAGRAM_VERIFY_TOKEN !== undefined &&
+    env.CHANNEL_CREDENTIAL_KEY_ID !== undefined &&
+    env.CHANNEL_CREDENTIAL_KEY !== undefined;
+  return new Set(instagram ? ["INSTAGRAM"] : []);
+}
+
 export function createDeliveryEngine(env: DeliveryEnv, db: DbClient, logger: Logger, overrides: DeliveryEngineOverrides = {}) {
   const now = overrides.now ?? ((): Date => new Date());
   return {

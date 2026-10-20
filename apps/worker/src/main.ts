@@ -1,5 +1,6 @@
 import { DEFAULT_BACKLOG_THRESHOLDS, dispatchOutbox, MODEL_OUTPUT_SCHEMA_VERSION } from "@omnichannel/application";
 import { createAnthropicReplyModel } from "@omnichannel/ai";
+import { MARK_READ_MAX_AGE_MS, TYPING_INDICATOR_TTL_MS } from "@omnichannel/channel-whatsapp";
 import {
   claimFollowUp,
   createAiDraftStore,
@@ -9,6 +10,7 @@ import {
   createKnowledgeRetriever,
   createReconciliationStore,
   createStyleProfileStore,
+  createPresenceStore,
   createStyleRetriever,
   createSuspensionStore,
   countUnusableGenerations,
@@ -41,7 +43,9 @@ import { createDebounceHandler } from "./debounce-handler";
 import { createTranscription } from "./transcription";
 import { createTranscriptionHandler } from "./transcription-handler";
 import { createMediaPort } from "./media-port";
-import { createDeliveryEngine } from "./delivery-engine";
+import { createPresenceHandler } from "./presence-handler";
+import { createPresenceAnnouncer } from "./presence-port";
+import { createDeliveryEngine, deliverableChannels } from "./delivery-engine";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createDraftDisposition } from "./draft-disposition";
 import { createHandlers } from "./handlers";
@@ -136,6 +140,12 @@ function main(): void {
         now: () => new Date(),
       });
       const producer = createQueueProducer({ connection, logger });
+      // One value, read once from the configuration that builds the sender, and handed to the only other
+      // component that needs it. A typing indicator for a reply this process would refuse to send is the
+      // one presence failure a customer actually notices (#22).
+      const deliverable = deliverableChannels(env);
+      const presenceAnnouncer = createPresenceAnnouncer(env, db, logger);
+      logger.info("worker.presence_mode", { announcer: presenceAnnouncer !== undefined, deliverableChannels: [...deliverable] });
       const generateDraft = createAiDraftHandler({
         engine: {
           model: replyModel,
@@ -161,6 +171,8 @@ function main(): void {
           // The same live answer the final gate below is given: one app-level capability, read once from
           // configuration, so the two gates cannot disagree about whether the exception exists at all.
           humanAgentApproval: env.INSTAGRAM_HUMAN_AGENT_APPROVAL,
+          // Absent when nothing could be announced anyway, so no job is queued that would only decline.
+          ...(presenceAnnouncer === undefined ? {} : { presence: { typingTtlMs: TYPING_INDICATOR_TTL_MS, deliverableChannels: deliverable } }),
         }),
         retrieval: {
           knowledge: createKnowledgeRetriever(db),
@@ -172,9 +184,17 @@ function main(): void {
         platformStyleFallback: resolveStyleProfile([{ persona: env.AI_PERSONA }]),
         logger,
       });
-      const deliver = createDeliveryHandler({
-        engine: createDeliveryEngine(env, db, logger),
+      const deliveryEngine = createDeliveryEngine(env, db, logger);
+      const deliver = createDeliveryHandler({ engine: deliveryEngine, logger });
+      const announcePresence = createPresenceHandler({
+        store: createPresenceStore(db),
+        ...(presenceAnnouncer === undefined ? {} : { announcer: presenceAnnouncer }),
+        // The same derivation the coordinator is given, so the two judge one set of channel facts rather
+        // than two that can disagree about whether this reply may still go out.
+        channel: deliveryEngine.channel,
+        markReadMaxAgeMs: MARK_READ_MAX_AGE_MS,
         logger,
+        now: () => new Date(),
       });
       const reconcile = createReconcileHandler({
         engine: {
@@ -233,7 +253,7 @@ function main(): void {
       const workers = createQueueWorkers({
         connection,
         logger,
-        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger }), transcribeMedia, reconcile),
+        handlers: createHandlers(generateDraft, deliver, createDebounceHandler({ producer, logger }), transcribeMedia, announcePresence, reconcile),
         // Every job failure is folded into an incident here rather than announced where it happened: one
         // provider outage is one thing an operator needs to know, not one per conversation.
         onJobFailure: (failure) => {

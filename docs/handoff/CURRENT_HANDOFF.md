@@ -916,6 +916,43 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
 
    **The lesson, again, is the premise.** Three of these five findings were a write conditional on fewer
    facts than the decision was made from. A version is not the only premise a screen renders.
+1. **P4-05 / Issue #22 — read and typing presence timing.** Branch
+   `feat/p4-05-whatsapp-presence`, based on #90.
+
+   **The platform constraint that shaped the product decision:** Meta documents one request for the typing
+   indicator and it carries `status: "read"` and `message_id` as required fields. There is no typing-only
+   payload. So read receipts and the typing indicator cannot be offered as two independent switches — the
+   setting is one three-valued `PresenceMode` (`OFF`, `READ_ON_RECEIPT`, `READ_AND_TYPING`), because a pair
+   of booleans would promise a combination no channel can perform.
+
+   **The indicator is raised shortly before the reply, never when the delay starts.** It is dismissed when
+   the reply arrives or after 25 seconds, whichever comes first, while the human-like delay is 30–120 s —
+   so announcing at scheduling time would show it, drop it, and leave the customer watching nothing for a
+   minute. The lead is bounded three ways (the business's setting, the provider's lifetime, the reply's own
+   delay) and the tightest wins.
+
+   **It rests on the send's own judgement rather than a second one.** `presenceVerdict` runs the same
+   `evaluatePolicy` call the delivery coordinator runs, over the same `DeliverySendContext`, and announces
+   only on the same `SCHEDULE` answer. `policyInputFor` was extracted into `delivery/policy-input.ts` so
+   there is literally one construction of that question. A shorter list of conditions in the presence path
+   would be a second definition of "still valid", and the drift would show up as a customer watching
+   somebody type a reply that had already been cancelled.
+
+   **Two findings worth carrying:**
+
+   - **A tenancy gap the acceptance tests found.** `loadForSend` keys on `operation_id`, which is globally
+     unique — so a presence job carrying a foreign `workspaceId` loaded a real delivery and would have
+     announced on another tenant's conversation. `PresenceStore.load` now takes the workspace and treats a
+     mismatch as "no such delivery". Mutation-checked.
+   - **Presence must not promise a reply this deployment cannot send.** There is still no WhatsApp
+     `DeliverySendPort` — delivery is Instagram-only until P4-07 — so `deliverableChannels(env)` is derived
+     from the same configuration that builds the sender and handed to the scheduler. The moment P4-07 wires
+     WhatsApp delivery, presence follows without a second decision being made anywhere.
+
+   Also fixed in passing: `COMPONENT_FOR_QUEUE` in the incident reporter had no entry for
+   `media-transcription` (left unmapped by #21, falling through to `INTEGRATION`), and `DELAY_ENGINE.md`'s
+   job table was missing that family too.
+
 1. **P4-04 / Issue #21 — media and voice-note transcription.** Branch
    `feat/p4-04-whatsapp-media`, based on #89.
 
@@ -1887,6 +1924,108 @@ reported in full above with infrastructure present. One honest note on method: i
 drift line came back blank because the summary took the last line of its output and that line was empty; it
 was re-run on its own and printed `No difference detected.` A blank line is not a pass, and it was not
 counted as one. Local runs are macOS; the authoritative Linux evidence is the exact-head GitHub Actions run.
+
+## PR #90 accepted, and joined to #91 / P4-05 — 2026-10-17
+
+**#90 is accepted at `07ce360c09999e83a6a882fdd79152df535865b6`** — Gemini/Antigravity formal GitHub review
+`5557862173`, `APPROVED`, 2026-10-17T13:00:07Z, carrying
+`ANTIGRAVITY_REVIEW: PASS head=07ce360c09999e83a6a882fdd79152df535865b6`, verified through
+`GET /pulls/90/reviews`.
+
+**Routing unchanged.** **#91 / P4-05 is the sole gate; #92 onwards are frozen.**
+
+**Ancestry.** Both segments fork from `b3fe33e775c32f5654066a11edc04e7df1ab41d8` — the accepted #90 segment
+31 commits ahead of it, #91's authored segment 8 — so #91 against accepted #90 was genuinely `diverged`, 8
+ahead / 31 behind. Ordinary non-rebase merge at `6b0613952cc01c85afc5dff7b61a579a25c371b7`; no rebase,
+force-push, squash, merge to `main`, or propagation into #92+.
+
+### Three conflicts, and five pieces of fallout that conflicted with nothing
+
+The conflicts were the easy part. `policy-store.ts` had four hunks of the same shape — #91's two presence
+fields against the accepted segment's `version`, appended at the same point in the view interface, the
+select, the row type and the row mapping — and all three fields were kept in all four.
+`settings-actions.ts` was overlapping edits rather than appends, and two of the four things that had to
+survive were only visible by reading the merged body: the accepted segment's `.trim()` on
+`takeoverPauseHours`, and its `customSeconds`/`custom` pair, which the already-merged body between the two
+hunks **references**, so discarding that side would not have compiled. The research note took a dated
+section from each side and now holds six in chronological order.
+
+**The work was in what merged cleanly and was still wrong.** The directive's step 3 asked specifically for
+a re-check of positional handler signatures and lifecycle wiring, which is exactly where two of these came
+from:
+
+1. **A stale Prisma client that looked like a source defect.** `draft-disposition.ts` failed typecheck
+   claiming a policy row lacked the presence columns, though the row comes from an unselected `findMany`.
+   The install had been a no-op — `Lockfile is up to date`, 19 ms — so `prisma generate` never ran and the
+   client still described #90's schema. `db:generate` cleared it with no source change. **Regenerate before
+   believing a merge produced a type error in code that works.**
+2. **`defaultAutomationSettings()` no longer satisfied its own type**, because
+   `AutomationPolicySettings` is `Omit<AutomationPolicy, …>` and #91 widened `AutomationPolicy`. Filled
+   from #91's own defaults, `"OFF"` and `DEFAULT_PRESENCE_TYPING_LEAD_MS` — and that is verified rather
+   than chosen: `domain.test.ts` asserts the default `toEqual`s what `createAutomationPolicy` produces, an
+   exhaustive comparison that fails on any other value.
+3. **`createHandlers` arity, for the second link running.** #91 inserted `announcePresence` fifth of six,
+   again ahead of `reconcile`, so the follow-up slice test the previous link had corrected to five
+   arguments now needed six. The comment there now carries the full parameter order and the reason types
+   cannot police it: the rejecters take no arguments, satisfy every slot, and the suite passes in any
+   order. Order read from `handlers.ts`, corroborated against the production call in `main.ts`.
+4. **The settings page used a variable the accepted segment had replaced** — `policy` where the refactor
+   introduced a single `form` object built from `edited ?? stored`. Presence now reads from `form`.
+5. **A fixture hand-wrote a profile default that already exists.** `presence-handler.integration.test.ts`
+   hit `automation_policies_profile_default_key`, failing the suite and skipping its 15 tests, because
+   `createBusinessProfile` has written that row since the accepted P3-02 head. Changed to edit the existing
+   default. The other four `automationPolicy.create` sites were checked and do not collide.
+
+### Disclosed, not fixed
+
+**A sixth breakage, found by checking a disclosure before publishing it.** I had written that presence was
+absent from the rejected-proposal round trip and that this discarded nothing, because #91 predates that
+mechanism. Tracing the save path first showed the claim was wrong: `saveSettingsAction` builds a
+`PolicyProposal` and `editFrom` maps it to the store's `PolicyEdit` field by field, with no presence in the
+mapping — so the form posted presence, `proposalFrom` read it, and it was dropped before `savePolicy`.
+**#91's presence setting could not be saved from the settings page.** #91's own head built the edit directly
+with presence included, so the accepted segment's mapper is what broke it. Typecheck could not see it —
+presence enters through conditional spreads, which evade excess-property checking — and no test asserted
+that presence reaches the store. Fixed after a failing test proved it: `PolicyProposal` now declares both
+fields, `decodeProposal` re-validates them like every other user-editable field, `editFrom` carries them,
+and the page prefers `edited ?? stored` for them as every sibling field does.
+
+Also: the two presence inputs lack `disabled={!mayEdit}`, which #91's own head lacked too
+(the server still refuses an AGENT); `presenceSettingsOf`'s coercions are unreachable from its only caller,
+because the columns are a Prisma enum and `Int NOT NULL`, and no test pins them; and
+`profileDefaultPolicyWrite()` does not map the presence columns, which changes nothing today because the
+schema defaults are the same two values.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7 in Docker; `--maxWorkers=2` throughout; each focused package run
+separately with its own label.
+
+| what | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| typecheck / lint + boundaries | exit 0, 14 packages; 13 packages, **571** source files, 0 cycles |
+| `@omnichannel/domain` | 6 files, **138/138** |
+| `@omnichannel/application` | 14 files, **294/294** |
+| `@omnichannel/channel-whatsapp` | 8 files, **152/152** |
+| PostgreSQL suites (`REQUIRE_DB_TESTS=1`) | 38 files, **793/793**, no skips |
+| Redis suites (`REQUIRE_REDIS_TESTS=1`) | 3 files, **55/55** |
+| worker + web E2E | 95 files, **1086/1086** |
+| evals | **20/20, 0 failed, 0 quality regressions** |
+| production build | exit 0 |
+| no-infrastructure path (`pnpm verify`, service variables unset) | exit 0; 126 files passed / 57 skipped, **1826 passed** / 1017 skipped |
+
+**Disclosed limitations.** The presence-handler suite **failed on the first full run** and is reported as
+fixed rather than as having passed first time: `automation_policies_profile_default_key`, one failed file
+and 15 skipped tests. It was reproduced on its own, fixed at the fixture, and re-run — the whole E2E project
+then went from 94 passed / 1 failed with 15 skipped to **95 passed with no skips**. No other
+retries, no flakes, and nothing skipped to make a gate pass. The 1017 skipped tests in the no-infrastructure
+run are the PostgreSQL and Redis suites declining to start without `TEST_DATABASE_URL` / `TEST_REDIS_URL`,
+which is what CI relies on. `db:migrate:deploy` again reported "No pending migrations to apply": correct but
+not evidence, because this long-lived local database already had `20261005160000_presence_timing` applied on
+2026-10-05 — checked in `_prisma_migrations`, not assumed — and the integration suites build a fresh
+database per run regardless. Local runs are macOS; the authoritative Linux evidence is the exact-head
+GitHub Actions run.
 
 ## P5-07 authorization fix — the shared lead board had no role check — 2026-10-19
 

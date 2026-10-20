@@ -28,6 +28,26 @@ const SEND_TIMEOUT_MS = 10_000;
 const PRESENCE_TIMEOUT_MS = 3_000;
 
 /**
+ * How long Meta shows the typing indicator (re-verified 2026-10-05).
+ *
+ * Verbatim: "The typing indicator will be dismissed once you respond, or after 25 seconds, whichever comes
+ * first." A platform number, not a preference — it is the ceiling on how far ahead of a reply presence can
+ * honestly be announced, and the same page adds "only display a typing indicator if you are going to
+ * respond". Exported because the application owns the timing and cannot import this package: the worker
+ * hands this value across the boundary.
+ */
+export const TYPING_INDICATOR_TTL_MS = 25_000;
+
+/**
+ * How late a customer's message may still be marked read (re-verified 2026-10-05).
+ *
+ * Verbatim: "Mark incoming messages as read within 30 days of receipt." A reply is normally seconds away,
+ * so this only ever bites after an outage long enough that announcing presence would be absurd anyway —
+ * which is exactly why it is worth refusing rather than discovering as a provider error.
+ */
+export const MARK_READ_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
  * The outbound payload for a free-form text reply.
  *
  * `preview_url: false` on purpose. Link previews are fetched by Meta from the customer's side and change
@@ -195,10 +215,17 @@ export function mapResult(result: WhatsAppHttpResult, config: ResolvedWhatsAppCo
  * the HTTP status is the whole verdict.
  *
  * **It must be called near the send, not at scheduling time.** Meta's own documentation (re-verified
- * 2026-10-04) says the indicator disappears when the reply arrives *or after 25 seconds*, whichever comes
+ * 2026-10-05) says the indicator disappears when the reply arrives *or after 25 seconds*, whichever comes
  * first, and the product's human-like delay is 30–120 seconds. Showing typing when the delay starts would
  * therefore display it, drop it, and leave the customer watching nothing for a minute — which is why this
  * function neither waits nor schedules and the application owns the timing.
+ *
+ * **The read receipt is not optional when typing is asked for.** Meta documents one payload for the
+ * indicator and it carries `status: "read"` and `message_id` as required fields; there is no typing-only
+ * request. So a caller that wants the indicator necessarily marks the message read, and a caller that
+ * already marked it read is re-sending that status — behaviour the documentation does not describe either
+ * way. That costs nothing here: the worst case is a refused presence call, which is a cosmetic loss by
+ * contract. Guessing at a typing-only payload Meta does not document would not be.
  */
 export async function markReadAndTyping(
   config: ResolvedWhatsAppConfig,

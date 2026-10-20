@@ -2,6 +2,7 @@ import { isAiMode, type AiMode } from "./channel";
 import { literalGuard } from "./enum";
 import { DomainValidationError } from "./errors";
 import type { AutomationPolicyId, BusinessProfileId, ChannelAccountId, WorkspaceId } from "./ids";
+import { DEFAULT_PRESENCE_TYPING_LEAD_MS, isPresenceMode, MAX_PRESENCE_TYPING_LEAD_MS, type PresenceMode } from "./presence-mode";
 import { isReasonCode, MANDATORY_REVIEW_REASON_CODES, type ReasonCode } from "./reason-codes";
 import {
   DEFAULT_DEBOUNCE_WINDOW_MS,
@@ -48,6 +49,10 @@ export interface AutomationPolicy {
   readonly whatsappAfterWindowPolicy: WhatsAppAfterWindowPolicy;
   /** Approved template names/use-cases eligible for TEMPLATE_AUTOPILOT; empty means none (ADR-016). */
   readonly whatsappTemplateAutomationAllowlist: readonly string[];
+  /** What the customer is told while a reply is being written. OFF unless a business opts in (#22). */
+  readonly presenceMode: PresenceMode;
+  /** How long before the reply the typing indicator is raised, within the provider's own bound. */
+  readonly presenceTypingLeadMs: number;
 }
 
 export interface AutomationPolicyInput {
@@ -65,6 +70,8 @@ export interface AutomationPolicyInput {
   readonly instagramAfterWindowPolicy?: InstagramAfterWindowPolicy;
   readonly whatsappAfterWindowPolicy?: WhatsAppAfterWindowPolicy;
   readonly whatsappTemplateAutomationAllowlist?: readonly string[];
+  readonly presenceMode?: PresenceMode;
+  readonly presenceTypingLeadMs?: number;
 }
 
 /**
@@ -102,6 +109,11 @@ export function defaultAutomationSettings(): AutomationPolicySettings {
     instagramAfterWindowPolicy: "STANDARD_ONLY",
     whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
     whatsappTemplateAutomationAllowlist: [],
+    // OFF, for the same reason the mode is: presence is a promise made to a customer — that their message
+    // was seen, that a reply is being written — and a profile nobody has configured has not made it. The
+    // lead is still stated, so turning presence on later does not also require choosing a number.
+    presenceMode: "OFF",
+    presenceTypingLeadMs: DEFAULT_PRESENCE_TYPING_LEAD_MS,
   };
 }
 
@@ -137,6 +149,16 @@ export function createAutomationPolicy(input: AutomationPolicyInput): Automation
   if (allowlist.some((entry) => entry.trim() === "")) {
     throw new DomainValidationError("whatsappTemplateAutomationAllowlist", "entries must be non-empty");
   }
+  const presenceMode = input.presenceMode ?? "OFF";
+  if (!isPresenceMode(presenceMode)) {
+    throw new DomainValidationError("presenceMode", "must be OFF, READ_ON_RECEIPT or READ_AND_TYPING");
+  }
+  const presenceTypingLeadMs = input.presenceTypingLeadMs ?? DEFAULT_PRESENCE_TYPING_LEAD_MS;
+  if (!Number.isSafeInteger(presenceTypingLeadMs) || presenceTypingLeadMs < 0 || presenceTypingLeadMs > MAX_PRESENCE_TYPING_LEAD_MS) {
+    // The ceiling is the provider's, not ours: a lead longer than the indicator's own lifetime would show
+    // it, drop it, and leave the customer watching nothing until the reply arrived.
+    throw new DomainValidationError("presenceTypingLeadMs", `must be between 0 and ${String(MAX_PRESENCE_TYPING_LEAD_MS)} milliseconds`);
+  }
 
   return {
     id: input.id,
@@ -157,5 +179,7 @@ export function createAutomationPolicy(input: AutomationPolicyInput): Automation
     instagramAfterWindowPolicy,
     whatsappAfterWindowPolicy,
     whatsappTemplateAutomationAllowlist: allowlist,
+    presenceMode,
+    presenceTypingLeadMs,
   };
 }

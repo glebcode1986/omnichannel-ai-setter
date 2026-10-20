@@ -49,6 +49,24 @@ export const mediaTranscriptionJobSchema = z.strictObject({
 });
 export type MediaTranscriptionJob = z.output<typeof mediaTranscriptionJobSchema>;
 
+/**
+ * One scheduled reply whose presence is to be announced (#22).
+ *
+ * The operation, not the words and not the customer's message id. Everything the announcement needs is
+ * read back from the delivery row when the job fires, because a payload written 30-120 seconds earlier
+ * would be describing a conversation that may since have been taken over, answered or cancelled — and
+ * presence exists to say nothing in exactly those cases.
+ */
+export const presenceJobSchema = z.strictObject({
+  ...envelope,
+  channelAccountId: identifier,
+  conversationId: identifier,
+  operationId: identifier,
+  /** What was planned at scheduling time; the handler re-decides, and may still announce read-only. */
+  typing: z.boolean(),
+});
+export type PresenceJob = z.output<typeof presenceJobSchema>;
+
 export const AI_DRAFT_TRIGGERS = ["AUTOMATIC", "HUMAN_REQUEST"] as const;
 
 /**

@@ -93,10 +93,17 @@ function expectNoUnexpectedStderr(stderr: string): void {
 /**
  * Everything the worker says on stdout from a clean boot to a clean stop.
  *
- * The retrieval and transcription modes are stated before `worker.started`, so an operator reading the
- * log from the top can see what this process can do without waiting for a customer question.
+ * The retrieval, presence and transcription modes are stated before `worker.started`, so an operator
+ * reading the log from the top can see what this process can do without waiting for a customer question.
  */
-const GRACEFUL_LIFECYCLE = ["worker.retrieval_mode", "worker.transcription_mode", "worker.started", "worker.stopping", "worker.stopped"] as const;
+const GRACEFUL_LIFECYCLE = [
+  "worker.retrieval_mode",
+  "worker.transcription_mode",
+  "worker.presence_mode",
+  "worker.started",
+  "worker.stopping",
+  "worker.stopped",
+] as const;
 
 /** A graceful stop: exit code 0, nothing unexpected on stderr, and exactly `expected` on stdout. */
 function expectGracefulShutdown(result: ProcessResult, expected: readonly string[] = GRACEFUL_LIFECYCLE): void {

@@ -74,7 +74,15 @@ export {
 } from "./onboarding";
 export { parseWebhook, providerTime, type WhatsAppWebhook } from "./payload";
 export { createWhatsAppAdapterRegistry, type RegistryAccount, type WhatsAppBinding, type WhatsAppRegistryOptions } from "./registry";
-export { buildTemplatePayload, buildTextPayload, checkSendable, markReadAndTyping, sendMessage } from "./send";
+export {
+  buildTemplatePayload,
+  buildTextPayload,
+  checkSendable,
+  markReadAndTyping,
+  MARK_READ_MAX_AGE_MS,
+  sendMessage,
+  TYPING_INDICATOR_TTL_MS,
+} from "./send";
 export {
   readTemplateShape,
   readTemplateStatusChanges,

@@ -43,7 +43,21 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
+### Current work — propagating the P5-07 lead-board authorization fix into P4-05 / PR #91
+
+PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
+hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
+has no `business_profile_id` column and no layer applied a role check. That fix is merged into this
+branch by ordinary merge commit, **one branch only** — no rebase, no force-push, nothing to `main`,
+and nothing into the links below this one.
+
+The merge conflicted only on this document, where both branches append their own section. Resolved as
+a union rather than a choice, and checked rather than assumed: every line either side added since the
+merge base is present below, apart from headings deliberately renamed to keep one "Current work".
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P4-04 / PR #90
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -202,6 +216,145 @@ directed it to this branch rather than downstream.
 ### Earlier — the accepted #87, propagated into #88 and nowhere else
 ### Earlier — the accepted #88, propagated into #89 and nowhere else
 ### Earlier — the accepted #89, propagated into #90 and nowhere else
+### Earlier — the accepted #90, propagated into #91 and nowhere else
+
+**PR #90 / P4-04 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
+2026-10-17T13:00:07Z, commit `07ce360c09999e83a6a882fdd79152df535865b6`, carrying
+`ANTIGRAVITY_REVIEW: PASS head=07ce360c09999e83a6a882fdd79152df535865b6` (review `5557862173`).
+
+**Routing unchanged.** **#91 / P4-05 is now the sole gate; #92 onwards are frozen.**
+
+**The ancestry.** Both segments fork from `b3fe33e775c32f5654066a11edc04e7df1ab41d8`: the accepted #90
+segment ran 31 commits ahead of it, #91's own authored segment 8 — genuinely `diverged`, 8 ahead / 31
+behind. Ordinary non-rebase merge at `6b0613952cc01c85afc5dff7b61a579a25c371b7`; `--is-ancestor` succeeds
+for the accepted #90 head and the prior #91 head `f0d89c6e3b9cc5a8a5d413d1bf2d5a00b37b22b0` alike.
+
+#### Three conflicts, resolved as unions
+
+**`packages/db/src/policy-store.ts` — four hunks, all the same shape.** #91 adds `presenceMode` and
+`presenceTypingLeadMs`; the accepted segment adds `version`. Both sides appended at the same point in four
+parallel structures: the `PolicyView` interface, the `policySelect`, the row type and the row mapping. All
+three fields kept in all four places, presence grouped with the other channel-policy fields and `version`
+with `updatedAt` as metadata.
+
+**`apps/web/src/server/settings-actions.ts` — overlapping edits, not appends.** Four things had to survive
+together, and two of them were only visible by reading the merged body: the accepted segment's `.trim()` on
+`takeoverPauseHours` (a fix, not a style change), its `customSeconds`/`custom` pair — **already referenced
+by the merged body between the two hunks**, so dropping it would not compile — its `expectedVersion` in the
+proposal, and #91's two presence reads with their seconds-to-milliseconds conversion. All four kept.
+
+**`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`** — a dated section from each side, both kept. The
+file now holds six re-verification sections in chronological order, through P4-05 of 2026-10-05 and the
+propagation re-verification of 2026-10-16.
+
+#### Five pieces of fallout that produced no conflict at all
+
+This link's real work was here, not in the conflicts. The directive asked specifically to re-check
+positional handler signatures and lifecycle wiring, and that was the right place to look.
+
+1. **A stale Prisma client, which looked like a source defect.** `apps/worker/src/draft-disposition.ts`
+   failed typecheck claiming a policy row lacked `presenceMode`/`presenceTypingLeadMs` — but the row comes
+   from an unselected `findMany`, so the columns are the schema's. The install had been a no-op
+   (`Lockfile is up to date`, 19 ms), so `prisma generate` never ran and the generated client still
+   described #90's schema. `db:generate` cleared the error with no source change. **The lesson is to
+   regenerate before believing a merge produced a type error in working code.**
+2. **`defaultAutomationSettings()` became incomplete.** `AutomationPolicySettings` is
+   `Omit<AutomationPolicy, …>`, #91 widened `AutomationPolicy` with the two presence fields, and the
+   accepted segment's default literal therefore no longer satisfied its own type. Filled from #91's own
+   defaults — `"OFF"` and `DEFAULT_PRESENCE_TYPING_LEAD_MS` — which is not a guess: `domain.test.ts`
+   asserts `defaultAutomationSettings()` **`toEqual`** the settings `createAutomationPolicy` produces, an
+   exhaustive comparison that would fail on any other value. It passes.
+3. **`createHandlers` arity, for the second consecutive link.** #91 inserted `announcePresence` as the
+   **fifth** of six parameters, again ahead of `reconcile`, and the follow-up slice test — which the
+   previous link had just corrected to five arguments — needed a sixth. Fixed, and the comment now states
+   the whole order and says why types cannot check it: the rejecters take no arguments, so they satisfy
+   every slot and the suite passes whichever order they are in. The order was read from `handlers.ts` and
+   matched against the production call in `main.ts`.
+4. **The settings page referred to a variable the accepted segment had replaced.** #91's presence inputs
+   read `policy.presenceMode`; the accepted segment had refactored the page's defaults into a single `form`
+   object built from `edited ?? stored`. Presence now comes from `form`, sourced from `stored` — see the
+   disclosure below for why not from `edited`.
+5. **A fixture hand-wrote a profile default that now already exists.**
+   `apps/worker/src/presence-handler.integration.test.ts` created an `automationPolicy` with no channel
+   account, which collides with the row `createBusinessProfile` has written since the accepted P3-02 head:
+   `Unique constraint failed on … automation_policies_profile_default_key`, failing the whole suite and
+   skipping its 15 tests. Changed to edit the existing default rather than invent a second one. The other
+   four `automationPolicy.create` sites in the suites were checked and do not collide.
+
+#### The sixth breakage: a disclosure that turned out to be a defect
+
+Written up first as a design note — "presence is absent from the rejected-proposal round trip, which
+discards nothing because #91 predates that mechanism" — and then checked against the save path before being
+published. The claim was wrong, and the thing under it is a defect **this merge created**.
+
+`saveSettingsAction` does not hand the form to the store. It builds a `PolicyProposal`, and `editFrom`
+maps that to the store's `PolicyEdit` **field by field** — with no presence in the mapping. So the form
+posted `presenceMode` and `presenceTypingLeadSeconds`, `proposalFrom` read both, `editFrom` rebuilt the
+edit without them, and `savePolicy` never saw them: **#91's presence setting could not be saved from the
+settings page.** On #91's own head there is no proposal indirection — the edit was built directly, presence
+included — so routing #91's reads through the accepted segment's mapper is what broke it. That is the
+"do not discard either segment" case exactly.
+
+Nothing caught it. Typecheck cannot: presence enters through conditional spreads, which do not trigger
+excess-property checking, so the proposal carried fields its own type never declared. And no test asserted
+that presence reaches the store.
+
+Proven before fixed, in that order: a new case asserting the mode and the lead arrive at `savePolicy`
+failed on the merged head, passes with the fix, and fails again — alone — when the fix is removed. A second
+case is the control: a form carrying neither value must send neither key, so an unrelated save cannot reset
+a business's presence to `OFF`.
+
+The fix completes the union inside the accepted segment's architecture: `PolicyProposal` declares both
+fields, because the proposal is the one thing that travels between a refusal and a sealed confirmation;
+`decodeProposal` re-validates both on the way in like every other field, since the parameter is
+user-editable; `editFrom` carries them through; and the page's `form` prefers `edited ?? stored` for them,
+consistent with every sibling field.
+
+#### Disclosed, not fixed
+
+- ~~Presence does not survive the rejected-proposal round trip, and that discards nothing.~~
+  **Withdrawn — this was wrong, and what it was hiding is the sixth breakage, recorded above.** Tracing the
+  save path before publishing the claim showed that `editFrom` dropped presence before `savePolicy`, so
+  #91's setting could not be saved at all. Fixed, with a test that fails without the fix.
+- **The two presence inputs carry no `disabled={!mayEdit}`** while every sibling input does. Checked
+  against #91's own head: they did not have it there either, so the merge lost nothing. The server still
+  refuses an AGENT, so this is a UI inconsistency rather than a permission hole.
+- **`presenceSettingsOf`'s fallbacks are unreachable from its only caller.** It coerces a non-`PresenceMode`
+  string to `"OFF"` and a non-finite or negative lead to the default, but `presence_mode` is a Prisma enum
+  column and `presence_typing_lead_ms` is `Int NOT NULL`, and the one production caller passes a full row
+  after checking it is not `undefined`. No test exercises the fallbacks. Not a defect — defensive code on
+  an exported structural signature — but worth knowing it is unpinned.
+- **`profileDefaultPolicyWrite()` does not map the presence columns.** Its own comment states the intent
+  that "the columns are set from the domain's answer", and the domain's answer now includes presence. The
+  written row is identical today because the schema defaults are the same two values, so nothing is wrong
+  at runtime; the drift the comment warns about would only appear if the domain default changed later.
+  Left alone because extending the accepted segment's reviewed writer is not what this directive asked for.
+
+**Exact-head evidence**, real PostgreSQL 17 + pgvector and Redis 7, `--maxWorkers=2` throughout, each
+focused package run separately with its own label.
+
+| Gate | Result |
+|---|---|
+| `db:check-drift` | `No difference detected.` |
+| `pnpm typecheck` | exit 0, 14 packages |
+| `pnpm lint` + `lint:boundaries` | exit 0; 13 packages, 571 source files, 0 cycles |
+| `@omnichannel/domain` | **138 passed** (6 files) |
+| `@omnichannel/application` | **294 passed** (14 files) |
+| `@omnichannel/channel-whatsapp` | **152 passed** (8 files) |
+| `pnpm test:db` | **793 passed** (38 files), 0 failures, 0 skips |
+| `pnpm test:redis` | **55 passed** (3 files) |
+| `pnpm test:e2e` (worker + web) | **1086 passed** (95 files), 0 skips |
+| `pnpm evals` | **20/20**, 0 quality regressions |
+| `pnpm build` | exit 0 |
+| `pnpm verify` with **no** infrastructure (the CI path) | exit 0; 1826 passed, 1017 skipped |
+
+**Disclosed.** The presence-handler suite failed on the first full run and is reported as fixed, not as
+green first time: one failed file and 15 skipped tests on
+`automation_policies_profile_default_key`, reproduced alone, fixed at the fixture, re-run to 95 files with no skips. No other retries or flakes. `db:migrate:deploy` reported "No pending migrations
+to apply" — correct but not evidence, since `20261005160000_presence_timing` was applied to this local
+database on 2026-10-05 (read from `_prisma_migrations`); the suites build a fresh database per run anyway.
+
+### Superseded — the accepted #89, propagated into #90 and nowhere else
 
 **PR #89 / P4-03 is accepted.** Gemini/Antigravity formal GitHub review, state `APPROVED`,
 2026-10-17T10:54:39Z, commit `cdba474caead94c87bdc5038500e8b32274a1507`, carrying
@@ -1020,6 +1173,38 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Task definition — P4-05 / Issue #22, read and typing presence timing
+
+**Branch `feat/p4-05-whatsapp-presence`**, based on `feat/p4-04-whatsapp-media`. The timing half of
+presence: the transport call already existed from P4-01, and what was missing was deciding *when* to make
+it, and when to stay silent.
+
+Meta's presence rules were re-verified from the live documentation on 2026-10-05
+(`docs/research/META_WHATSAPP_PHASE4_VERIFICATION.md`). One finding shaped the product rather than merely
+being recorded: **the typing indicator cannot be sent without `status: "read"`** — both are required fields
+of the one documented payload, and no typing-only request exists. So the setting is one three-valued mode
+rather than two booleans, because two booleans would offer a combination no channel can perform.
+
+**Presence never touches a reply.** It is scheduled after the delivery is persisted and enqueued, it fits
+inside the delay the delay engine chose, a failure to enqueue it is swallowed, and the job allows exactly
+one attempt — an announcement is worthless once the message has arrived.
+
+**It re-decides with the coordinator's own judgement**, not a copy of it: `policyInputFor` is now shared,
+and presence announces only on the same `SCHEDULE` answer that would let the reply go out.
+
+**Two findings:**
+
+- **A forged `workspaceId` loaded a real delivery.** `operation_id` is globally unique, so a lookup by it
+  alone answers for whichever tenant owns it. The presence store now takes the workspace and refuses a
+  mismatch. Mutation-checked.
+- **Presence must not promise a reply this deployment cannot send.** WhatsApp still has no
+  `DeliverySendPort` (that is P4-07), so `deliverableChannels(env)` comes from the same configuration that
+  builds the sender and gates the scheduling.
+
+Also fixed: the incident reporter never mapped the `media-transcription` queue to a component (left
+unmapped by #21), and `DELAY_ENGINE.md`'s job table was missing that family.
+
+### Task definition — P4-04 / Issue #21, media and voice-note transcription
 ### Task definition — P4-04 / Issue #21, media and voice-note transcription
 
 **Branch `feat/p4-04-whatsapp-media`**, based on `feat/p4-03-whatsapp-templates`. Fetching a customer's
