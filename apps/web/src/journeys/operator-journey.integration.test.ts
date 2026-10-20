@@ -42,6 +42,7 @@ import {
   readOnboarding,
   readStageHistory,
   saveStyleProfile,
+  readPolicies,
   savePolicy,
   searchAuditEvents,
   setPrimaryGoal,
@@ -50,7 +51,7 @@ import {
   type BusinessProfileContext,
 } from "@omnichannel/db";
 import { noRetrieval } from "@omnichannel/application";
-import { MANDATORY_REVIEW_REASON_CODES, NO_CAPABILITIES, type ReasonCode } from "@omnichannel/domain";
+import { NO_CAPABILITIES, type ReasonCode } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "../server/testing/database";
@@ -271,7 +272,10 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
         avoidedPhrases: [],
         language: "en",
       });
-      await db().automationPolicy.create({ data: { ...scope(), mandatoryReviewReasons: [...MANDATORY_REVIEW_REASON_CODES] } });
+      // No profile default is created here any more: the accepted P3-02 head makes `createBusinessProfile`
+      // write it alongside the profile, from the domain's own `profileDefaultPolicyWrite()`. Creating one
+      // by hand now violates `automation_policies_profile_default_key`, and the journey needs the default
+      // to exist rather than to have been written by this file.
 
       const snapshot = await readOnboarding(db(), context);
 
@@ -603,7 +607,15 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
     it("records the change twice over: the typed history and the searchable log", async () => {
       const context = await owner();
 
-      const saved = await savePolicy(db(), context, null, { mode: "DRAFT", businessGoal: "Fill Saturday mornings" });
+      // The version this edit is composed against, which the accepted P3-02 head makes mandatory so that
+      // no caller can decide not to care. The real screen renders it and posts it back; a journey reads
+      // the live one, because the point of this case is the audit trail rather than a conflict.
+      const current = (await readPolicies(db(), context)).find((policy) => policy.channelAccountId === null);
+      const saved = await savePolicy(db(), context, null, {
+        mode: "DRAFT",
+        businessGoal: "Fill Saturday mornings",
+        expectedVersion: current?.version ?? 1,
+      });
 
       const audits = await listPolicyAudits(db(), context, { limit: 5 });
       const workspaceContext = await authorizeWorkspaceAccess(db(), { userId: ownerId, workspaceId });
@@ -611,8 +623,10 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
 
       expect(saved.status).toBe("SAVED");
       // The typed before/after, for somebody asking what a setting used to be.
-      expect(audits[0]).toMatchObject({ actorName: "Journey Owner" });
-      expect(audits[0]?.impacts).toBeDefined();
+      // A page rather than an array from the accepted head onwards: the change history is paged because
+      // the spec wants old and new values kept, not capped.
+      expect(audits.entries[0]).toMatchObject({ actorName: "Journey Owner" });
+      expect(audits.entries[0]?.impacts).toBeDefined();
       // And the searchable log, for somebody asking when this profile started replying unattended.
       expect(events.rows[0]?.summary).toContain("Changed the mode");
       expect(events.rows[0]?.actorName).toBe("Journey Owner");
