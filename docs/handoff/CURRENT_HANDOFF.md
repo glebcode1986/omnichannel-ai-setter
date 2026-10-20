@@ -265,6 +265,18 @@ by the same policy, window, account-health, kill-switch and takeover gates. Its 
 guard, so an edit between the judgement and the claim refuses rather than sending something nobody judged.
 Idempotency is the same decision digest the review path uses.
 
+## Correction — what is true on 2026-10-19
+
+This file is append-only, so sections below state the position on the day they were written. The claims
+that **#83 and everything below is frozen** and **still carries the pre-repair #79** are no longer true:
+the chain was propagated link by link on 2026-10-19, #80 through #94, fifteen heads, each with its own
+green exact-head Actions run and each verified to contain its parent with
+`git merge-base --is-ancestor`. The accepted SHAs named in older sections are superseded too — #80 is
+accepted at `55e368d`, #81 at `d3ad503` and #94 at `df77cd7`, all by formal exact-head review.
+
+The dated statements are corrected in place rather than deleted, because what was believed when is part
+of the record.
+
 ## Immediate next actions
 
 ### Where the review gate actually stands
@@ -279,8 +291,8 @@ which is current.
 | #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
 | #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
 | #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
-| #82 | `feat/p3-02-goals-followups` | **The current gate**, and **CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is still the only branch below #81 it has been propagated into. Awaiting independent review at the repaired head. |
-| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They are the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
+| #82 | `feat/p3-02-goals-followups` | **Was the current gate when this row was written, and CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and at that date this was the only branch below #81 it had been propagated into. **Both facts have since changed:** #81 is accepted at `d3ad503` and the chain was propagated to #94 on 2026-10-19. |
+| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Was frozen** and not ready for review *at that date*, as the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. **No longer true:** every link to #94 now carries the #79 repairs and everything after them, propagated link by link on 2026-10-19, and each link contains its parent. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
 | #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
 
 **The independent reviewer is Astra again, temporarily, from 2026-10-13.** The owner routed reviews to
@@ -305,8 +317,8 @@ remote heads, and its SHA is the one on the branch.
 
 The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
 and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
-parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
-merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+parent one branch at a time, so at that date #81 and below still carried the pre-repair #79 and each
+needed this merged down in turn. That propagation completed on 2026-10-19, through #94. Do not read the #78 propagation described in the next paragraph as covering these —
 that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
 started.
 
@@ -2671,3 +2683,85 @@ Real PostgreSQL 17 + pgvector and Redis 7; `--maxWorkers=2`; dedicated shadow da
 
 These line up with the numbers the accepted review recorded for `bd1c039` — 488 PostgreSQL cases and
 1424/611 — plus exactly the four cases this change adds, which skip without infrastructure.
+
+## The P5-07 propagation reaches its last link — P3-04 / PR #94 — 2026-10-20
+
+The directive on #93 propagated the accepted `feat/p4-07-whatsapp-slice` head
+`8a84f3109c5468ddf80ddb0c4dc2e9d1e0cdbdea` into `feat/p3-04-privacy-deletion`, whose head was
+`df77cd717c68104333942bc077e44b4b27f2c689`. This is the **fifteenth and final** link of the lead-board
+authorization propagation, which began at its origin on #80 and moved one branch per directive.
+
+### What the merge actually carried
+
+**Nothing under `apps/` or `packages/`.** `git diff $(git merge-base T P) P` names exactly two files,
+both documentation:
+
+| file | why it differed |
+|---|---|
+| `docs/handoff/CURRENT_HANDOFF.md` | merged cleanly |
+| `docs/tasks/CLAUDE_EXECUTION_QUEUE.md` | three conflict regions, resolved as unions |
+
+That is the expected shape at the end of a propagation: every code change the fix needed had already
+arrived at #93 and was verified there, so the last link carries only the record of it. The emptiness was
+**measured, not assumed** — the diff was taken against the merge base, never two-way against the target,
+which is the error that makes a propagation look larger than it is.
+
+Both live segments were then checked by name rather than by the absence of a conflict, because
+[[merge-fallout-without-conflict]] is this chain's recurring failure mode — five shapes merge clean and
+still break. Every file below is byte-identical to the pre-merge target:
+
+`knowledge-store.ts`, `style-store.ts`, `deletion-store.ts`, `tenancy.ts`, `lead-store.ts`,
+`apps/worker/src/main.ts`, `apps/worker/src/draft-disposition.ts`.
+
+And the individual contracts each segment owns are all present: four `requireRole` guards in the
+knowledge store and three in the style store; `requireWorkspaceWideWrite` defined in `tenancy.ts` and
+still — deliberately — with no caller; the lead-board role check; `transcription: producer` in
+`dispatchOutbox`; both presence spreads keyed on `presenceAnnouncer === undefined`; and the three-part
+automated-response budget union that keeps a follow-up sendable.
+
+### The queue conflict
+
+Three regions, one of them 247 lines that exist only on this side. Resolved by exact conflict-marker line
+numbers rather than by a regex over the file — an earlier attempt at the latter miscounted the regions
+and captured a `>>>>>>>` that belonged inside one side. The union was then checked mechanically in both
+directions: the child contributes 220 lines over the base with 4 lines missing, all four being headings
+renamed on purpose so that the file keeps exactly **one** `### Current work`; the parent contributes 46
+lines with **nothing** missing.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database for the drift check.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 188 files, **2938/2938** |
+| PostgreSQL suites | 41 files, **857/857**, **no skips** |
+| Redis suites | **55/55** |
+| worker + web E2E | **1103/1103** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1844 passed / 1094 skipped**, with zero infrastructure variables in the environment |
+
+The two suites this branch exists for were run by name to confirm they execute rather than skip:
+`deletion.integration.test.ts` and `privacy.integration.test.ts` — **2 files, 29/29**. The P4-07 slice
+that arrived from the parent was likewise run by name: **13/13**. The P3-04 knowledge and style suites:
+**2 files, 104/104**.
+
+### A failure that was mine, not the code's — disclosed because the first run was red
+
+Those deletion and privacy suites **first failed, 17 errors**, every one
+`TypeError: Cannot read properties of undefined (reading 'create')`. That is not a defect in this head
+and not a flake. The generated Prisma client in my working copy was stale after a day of branch
+switching, so the client had no model for tables this branch adds.
+`pnpm --filter @omnichannel/db db:generate` fixed it and the suites then passed 29/29.
+
+This is worth recording rather than quietly re-running, for a reason that is general: the `typecheck`
+script **begins** with `prisma generate`, so `pnpm verify` regenerates the client every time. On the
+previous fourteen links I ran `verify` first and the staleness could never surface. Here I ran the
+targeted suites first, in isolation, and got a red result that said nothing about the code.
+
+**The rule:** a suite invoked directly through Vitest, outside `pnpm verify`, can be running against a
+client generated on a different branch. Run `db:generate` before any targeted database suite after a
+branch change, and never read such a failure as evidence about the branch until the client's provenance
+is established. Related: [[vitest-green-tsc-red]], which is the same gap seen from the other side —
+Vitest transpiles without typechecking, so neither tool alone tells you the generated code matches.
