@@ -15,7 +15,7 @@
 import type { HumanTaskKind, HumanTaskStatus } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
-import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
+import { canActOnBusinessProfile, profileScopeOf, usersWhoCanActOnBusinessProfile, type BusinessProfileContext } from "./tenancy";
 
 export type TaskOutcome =
   | { readonly status: "CREATED"; readonly id: string }
@@ -52,6 +52,7 @@ const taskSelect = {
   conversationId: true,
   assignedUserId: true,
   sourceDraftId: true,
+  completedByUserId: true,
   completedAt: true,
   dismissedReason: true,
   createdAt: true,
@@ -59,6 +60,15 @@ const taskSelect = {
   completedByUser: { select: { name: true } },
 } as const;
 
+/**
+ * Turns a row into a view, naming only the people this profile may know about.
+ *
+ * `authorized` is the set of users who may act on this Business Profile *now*. A name outside it is
+ * dropped while the id it belongs to is kept: the operator still sees that the task is assigned and to
+ * whom it is not available, which is the fact they need in order to reassign it, and they learn no
+ * stranger's name doing so. A row written before the assignment gate existed, and a row whose assignee's
+ * grant was later revoked, are the same case from this side (#55, Astra's second P1 on PR #82).
+ */
 function toView(row: {
   id: string;
   kind: HumanTaskKind;
@@ -72,9 +82,12 @@ function toView(row: {
   completedAt: Date | null;
   dismissedReason: string | null;
   createdAt: Date;
+  completedByUserId: string | null;
   assignedUser: { name: string | null } | null;
   completedByUser: { name: string | null } | null;
-}): TaskView {
+}, authorized: ReadonlySet<string>): TaskView {
+  const nameOf = (userId: string | null, user: { name: string | null } | null): string | null =>
+    userId !== null && authorized.has(userId) ? (user?.name ?? null) : null;
   return {
     id: row.id,
     kind: row.kind,
@@ -84,9 +97,11 @@ function toView(row: {
     dueAt: row.dueAt,
     conversationId: row.conversationId,
     assignedUserId: row.assignedUserId,
-    assignedName: row.assignedUser?.name ?? null,
+    assignedName: nameOf(row.assignedUserId, row.assignedUser),
     sourceDraftId: row.sourceDraftId,
-    completedByName: row.completedByUser?.name ?? null,
+    // The same rule for whoever closed it: a scoped read reveals no identity from outside its own profile,
+    // whichever column the identity reached it through.
+    completedByName: nameOf(row.completedByUserId, row.completedByUser),
     completedAt: row.completedAt,
     dismissedReason: row.dismissedReason,
     createdAt: row.createdAt,
@@ -114,6 +129,12 @@ export async function createTask(
     const conversation = await db.conversation.findFirst({ where: { ...scope, id: input.conversationId }, select: { id: true } });
     if (conversation === null) {
       return { status: "GONE" };
+    }
+  }
+  if (input.assignedUserId !== undefined) {
+    const refusal = await assigneeRefusal(db, context, input.assignedUserId);
+    if (refusal !== undefined) {
+      return refusal;
     }
   }
   const created = await db.humanTask.create({
@@ -215,8 +236,41 @@ export async function assignTask(
   assignedUserId: string | null,
 ): Promise<TaskOutcome> {
   const scope = profileScopeOf(context);
+  if (assignedUserId !== null) {
+    // Checked on the way in as well as at creation. A reassignment is the same decision made later, and a
+    // guard on only one of the two paths is a guard on neither: grants change, people leave the
+    // workspace, and the path that moves an existing task is the one somebody reaches for afterwards.
+    const refusal = await assigneeRefusal(db, context, assignedUserId);
+    if (refusal !== undefined) {
+      return refusal;
+    }
+  }
   const changed = await db.humanTask.updateMany({ where: { ...scope, id: taskId, status: "OPEN" }, data: { assignedUserId } });
   return changed.count === 0 ? { status: "GONE" } : { status: "UPDATED", id: taskId };
+}
+
+/**
+ * Refuses an assignee who cannot reach the Business Profile the task belongs to.
+ *
+ * Two failures at once, which is why this fails closed rather than warning. The task sits in a queue its
+ * assignee cannot open — so nobody does it, and the list shows it as somebody's work. And `listTasks`
+ * joins the assignee's name, so a profile-scoped read would carry the name of a person from another
+ * workspace to whoever can read this one: an identifier the reader had no business learning.
+ *
+ * Membership alone is not the test. A member whose scope is `SELECTED` without this profile is exactly as
+ * unable to act as somebody from another company, and the schema cannot tell them apart — `human_tasks`
+ * references global `users(id)`, so every foreign user id is a valid foreign key.
+ *
+ * One refusal for every reason: not a member, not granted this profile, no such user. An assignment form
+ * that answered differently would be a way to find out who exists.
+ */
+async function assigneeRefusal(db: DbExecutor, context: BusinessProfileContext, assignedUserId: string): Promise<TaskOutcome | undefined> {
+  const allowed = await canActOnBusinessProfile(db, {
+    workspaceId: context.workspaceId,
+    userId: assignedUserId,
+    businessProfileId: context.businessProfileId,
+  });
+  return allowed ? undefined : { status: "REFUSED", reason: "a task can only be assigned to somebody who works on this Business Profile" };
 }
 
 export interface TaskFilter {
@@ -247,5 +301,12 @@ export async function listTasks(
     take: Math.min(Math.max(Math.trunc(limit), 1), 500),
     select: taskSelect,
   });
-  return rows.map(toView);
+  // Asked once for the whole page, about everyone it names, and asked *now* rather than trusted from when
+  // each row was written — grants change, and a stored name does not hear about it.
+  const authorized = await usersWhoCanActOnBusinessProfile(
+    db,
+    { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId },
+    rows.flatMap((row) => [row.assignedUserId, row.completedByUserId].filter((userId): userId is string => userId !== null)),
+  );
+  return rows.map((row) => toView(row, authorized));
 }

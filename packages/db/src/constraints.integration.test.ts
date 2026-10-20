@@ -215,9 +215,19 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     const policy = (profile: SeededProfile, channelAccountId?: string) =>
       db().automationPolicy.create({ data: { ...scope(profile), channelAccountId, mandatoryReviewReasons: ["PAYMENT_DISPUTE"] } });
 
-    await expect(policy(a1)).resolves.toMatchObject({ mode: "OFF", instagramAfterWindowPolicy: "STANDARD_ONLY" });
+    // One per profile, written with the profile itself and conservative: `createBusinessProfile` is the
+    // only thing that has run here. Per *profile* is the half of the index a single row cannot show, so
+    // both profiles of this Workspace are counted.
+    await expect(
+      db().automationPolicy.findMany({ where: { ...scope(a1), channelAccountId: null }, select: { mode: true, instagramAfterWindowPolicy: true } }),
+    ).resolves.toEqual([{ mode: "OFF", instagramAfterWindowPolicy: "STANDARD_ONLY" }]);
+    await expect(
+      db().automationPolicy.count({ where: { workspaceId: a.workspaceId, channelAccountId: null } }),
+    ).resolves.toBe(2);
+
+    // So any attempt to write another default is the second one, and the partial index is what refuses it.
     await expect(policy(a1)).rejects.toMatchObject(UNIQUE_VIOLATION);
-    await expect(policy(a2)).resolves.toBeDefined();
+    await expect(policy(a2)).rejects.toMatchObject(UNIQUE_VIOLATION);
     await policy(a1, a1.channelAccount.id);
     await expect(policy(a1, a1.channelAccount.id)).rejects.toMatchObject(UNIQUE_VIOLATION);
   });

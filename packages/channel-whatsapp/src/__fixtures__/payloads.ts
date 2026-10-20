@@ -21,8 +21,18 @@ export const BINDING: WhatsAppAccountBinding = {
   wabaId: "200000000000002",
 };
 
-/** The business's own display number, which is what a coexistence echo arrives `from`. */
-export const BUSINESS_DISPLAY_NUMBER = "+15550000001";
+/**
+ * The business's own number as a `wa_id`: digits only, which is the spelling `from` carries — including on a
+ * coexistence echo, where the sender is the business itself.
+ */
+export const BUSINESS_WA_ID = "15550000001";
+/**
+ * The same number as Meta's Graph `/phone_numbers` edge spells it. Webhook `metadata` normally carries the
+ * digits-only form, but the two surfaces disagree about punctuation — this repository's own onboarding
+ * fixtures store `"+1 555 0100"` read from that edge — so echo detection must not depend on which spelling a
+ * payload happens to carry.
+ */
+export const BUSINESS_DISPLAY_NUMBER = "+1 555-000-0001";
 /** The customer's `wa_id`: a phone number without punctuation, which is what WhatsApp sends. */
 export const CUSTOMER_WA_ID = "15550000002";
 export const CUSTOMER_NAME = "Marina";
@@ -62,7 +72,10 @@ export function handshake(query: Readonly<Record<string, string>>): RawWebhook {
 }
 
 /** The webhook envelope every `messages` event arrives in. */
-export function envelope(value: Readonly<Record<string, unknown>>, overrides: { readonly wabaId?: string; readonly field?: string } = {}): unknown {
+export function envelope(
+  value: Readonly<Record<string, unknown>>,
+  overrides: { readonly wabaId?: string; readonly field?: string; readonly displayPhoneNumber?: string } = {},
+): unknown {
   return {
     object: "whatsapp_business_account",
     entry: [
@@ -73,7 +86,8 @@ export function envelope(value: Readonly<Record<string, unknown>>, overrides: { 
             field: overrides.field ?? "messages",
             value: {
               messaging_product: "whatsapp",
-              metadata: { display_phone_number: BUSINESS_DISPLAY_NUMBER, phone_number_id: BINDING.phoneNumberId },
+              // The digits-only spelling, which is what webhook metadata carries; override it to exercise the other one.
+              metadata: { display_phone_number: overrides.displayPhoneNumber ?? BUSINESS_WA_ID, phone_number_id: BINDING.phoneNumberId },
               ...value,
             },
           },
@@ -93,7 +107,7 @@ export function inboundText(overrides: { readonly id?: string; readonly body?: s
         timestamp: seconds(overrides.at ?? AT),
         type: "text",
         text: { body: overrides.body ?? "Are you open on Saturday?" },
-        ...(overrides.contextId === undefined ? {} : { context: { from: BUSINESS_DISPLAY_NUMBER, id: overrides.contextId } }),
+        ...(overrides.contextId === undefined ? {} : { context: { from: BUSINESS_WA_ID, id: overrides.contextId } }),
       },
     ],
   });

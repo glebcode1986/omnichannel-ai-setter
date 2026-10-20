@@ -61,8 +61,13 @@ describe.skipIf(!endToEndTestsEnabled())("announcing presence before a reply", (
       capabilities: { ...NO_CAPABILITIES, text: true, readReceipts: true, typingIndicator: true },
     });
     channelAccountId = account.id;
-    await infra.db.automationPolicy.create({
-      data: { ...scope, mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [], presenceMode: "READ_AND_TYPING", presenceTypingLeadMs: 8_000 },
+    // The profile default already exists: the accepted P3-02 head makes `createBusinessProfile` write it
+    // alongside the profile itself, from the domain's own `profileDefaultPolicyWrite()`. So this edits that
+    // row rather than inventing a second one — a hand-written create violates
+    // `automation_policies_profile_default_key`.
+    await infra.db.automationPolicy.updateMany({
+      where: { ...scope, channelAccountId: null },
+      data: { mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [], presenceMode: "READ_AND_TYPING", presenceTypingLeadMs: 8_000 },
     });
   }, 180_000);
 
