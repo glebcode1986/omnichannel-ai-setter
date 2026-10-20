@@ -31,6 +31,9 @@ export const AUDIT_EVENT_KINDS = [
   /// Somebody asked for data to be deleted, and what the deletion actually removed.
   "DELETION_REQUESTED",
   "DELETION_COMPLETED",
+  /// What the workspace is paying for, and any deliberate departure from it (#38).
+  "SUBSCRIPTION_CHANGED",
+  "ENTITLEMENT_OVERRIDDEN",
 ] as const;
 export type AuditEventKind = (typeof AUDIT_EVENT_KINDS)[number];
 export const isAuditEventKind = literalGuard(AUDIT_EVENT_KINDS);
@@ -62,9 +65,28 @@ export const ADMIN_ONLY_AUDIT_KINDS: readonly AuditEventKind[] = [
   "DATA_EXPORTED",
   "DELETION_REQUESTED",
   "DELETION_COMPLETED",
+  // What a business pays for, and who was given more than they pay for. An agent has no reason to read
+  // either, and an override visible to everybody is an invitation to ask why somebody else got one.
+  "SUBSCRIPTION_CHANGED",
+  "ENTITLEMENT_OVERRIDDEN",
+];
+
+/**
+ * Kinds that belong to the workspace rather than to one Business Profile.
+ *
+ * Membership was the first. Commercial state is the same shape — a workspace pays for a plan, not a
+ * profile — and so is a deletion whose scope is the whole tenant, which by definition names no profile.
+ * Filing any of them under one profile would hide them from the only view where they make sense.
+ */
+export const WORKSPACE_SCOPED_AUDIT_KINDS: readonly AuditEventKind[] = [
+  "MEMBER_CHANGED",
+  "SUBSCRIPTION_CHANGED",
+  "ENTITLEMENT_OVERRIDDEN",
+  "DELETION_REQUESTED",
+  "DELETION_COMPLETED",
 ];
 
 /** Whether this kind belongs to the workspace rather than to one Business Profile. */
 export function isWorkspaceScopedAuditKind(kind: AuditEventKind): boolean {
-  return kind === "MEMBER_CHANGED";
+  return WORKSPACE_SCOPED_AUDIT_KINDS.includes(kind);
 }

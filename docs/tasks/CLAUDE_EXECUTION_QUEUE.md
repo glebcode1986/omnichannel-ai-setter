@@ -37,13 +37,33 @@ what was believed when is worth keeping:
    inferred from the PR base field.
 3. **The accepted SHAs named below are superseded.** #80 is accepted at `55e368d` and #81 at `d3ad503`,
    both by formal exact-head review on 2026-10-19; the older `bd1c039` and `d9a34ff` verdicts belong to
-   heads that have since moved. #94 is accepted at `df77cd7`.
+   heads that have since moved. #94 is accepted at `852f855871ca48ad88c3799f8c0dd05636dfd700`, by formal exact-head review on
+   2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the P5-07 lead-board authorization fix into P3-04 / PR #94
+### Current work — propagating the accepted #94 into P6-01 / PR #95
+
+The P5-07 lead-board propagation finished and was **accepted** at #94
+(`852f855871ca48ad88c3799f8c0dd05636dfd700`, formal exact-head review on 2026-10-20). This branch is the
+next link: that accepted head is merged in by ordinary merge commit, **one branch only** — no rebase, no
+force-push, nothing to `main`, and nothing into the links below this one. #96+ remain held.
+
+This link is far larger than the fifteen before it. #95 was **72 commits behind** the accepted parent
+while carrying 10 of its own, so the merge brings the whole #80→#94 security and WhatsApp chain into a
+branch that had seen none of it: **86 files under `apps/` and `packages/` merged cleanly**, against the
+two documentation files a late propagation link usually carries.
+
+**Exactly one file conflicted — this one — and the textual conflict is the least of the work.**
+`packages/db/prisma/schema.prisma`, `packages/db/src/index.ts` and `apps/web/src/i18n/catalogue.ts` all
+merged *clean*, and those are the three shapes that break silently: an interleaved migration order that
+drifts, a barrel that re-exports two things under one name, and a localization catalogue whose missing
+key fails the web build rather than a test. Each was verified rather than assumed.
+
+
+### Earlier — propagating the P5-07 lead-board authorization fix into P3-04 / PR #94
 
 PR #80 moved: `saveStageDisplays` had let an AGENT holding one Business Profile rename, reorder and
 hide the lead stages on the board every profile in the Workspace reads, because `lead_stage_displays`
@@ -1648,6 +1668,37 @@ which then gets the version and health checks alone.
 
 Astra reviewed `fcd4983` and returned four blocking findings, all in the space between pieces that were
 individually correct.
+### Task definition — P6-01 / Issue #38, plan and entitlement primitives
+
+**Branch `feat/p6-01-plan-entitlements`**, based on `feat/p3-04-privacy-deletion`. The first of Phase 6.
+
+**The Phase 6 specs existed but were never in the chain.** `BILLING_ENTITLEMENTS.md`,
+`PRICING_PACKAGING.md`, `PHASE6_COMMERCIALIZATION_PLAN.md` and the real ADR-017 (provider-neutral
+billing — distinct from the ambiguous-send ADR-017 already in the chain) live on
+`origin/docs/phase6-commercial-billing`. They are brought in here, because an issue cannot be
+implemented against a spec the branch cannot see.
+
+**A plan version is immutable, and the database says so.** Two triggers refuse an edit and a delete;
+only withdrawal from sale is permitted. A workspace subscribes to a *version*, so editing one would
+move the terms under every workspace on it — which is exactly what grandfathering exists to prevent,
+and a rule that lived only in TypeScript is one a migration or a console session walks around.
+
+**Nothing a payment provider says reaches a feature check.** Six normalized states, the product's own
+feature/limit/quota names, and provider identifiers as opaque strings on `billing_accounts` that
+nothing parses or branches on. A snapshot is asserted to contain no provider string at all.
+
+**`PAST_DUE` and `GRACE` still permit paid work**, per the accepted policy: a renewal that failed on
+Tuesday must not stop a business answering customers on Wednesday, and the spec allows three days.
+
+**An expired override stops applying but is kept**, so a temporary concession does not become permanent
+by nobody remembering to delete it, and an operator can still see what was granted.
+
+Also fixed: `audit_events_scope_check` permitted only `MEMBER_CHANGED` to be workspace-scoped, so a
+workspace-scoped deletion audit from #94 could not have been written at all. The constraint now names
+every workspace-level kind.
+
+**Not in this issue:** the Starter/Growth/Scale catalogue itself is #43, and no payment provider is
+integrated — #38 is explicit that it comes "without integrating a payment provider yet".
 
 ### Task definition — P3-04 / Issue #57, privacy, retention and deletion
 
