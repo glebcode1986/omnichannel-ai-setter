@@ -265,6 +265,18 @@ by the same policy, window, account-health, kill-switch and takeover gates. Its 
 guard, so an edit between the judgement and the claim refuses rather than sending something nobody judged.
 Idempotency is the same decision digest the review path uses.
 
+## Correction — what is true on 2026-10-19
+
+This file is append-only, so sections below state the position on the day they were written. The claims
+that **#83 and everything below is frozen** and **still carries the pre-repair #79** are no longer true:
+the chain was propagated link by link on 2026-10-19, #80 through #94, fifteen heads, each with its own
+green exact-head Actions run and each verified to contain its parent with
+`git merge-base --is-ancestor`. The accepted SHAs named in older sections are superseded too — #80 is
+accepted at `55e368d`, #81 at `d3ad503` and #94 at `df77cd7`, all by formal exact-head review.
+
+The dated statements are corrected in place rather than deleted, because what was believed when is part
+of the record.
+
 ## Immediate next actions
 
 ### Where the review gate actually stands
@@ -279,8 +291,8 @@ which is current.
 | #79 | `feat/p5-04-ai-settings-simulation` | **PASSED** at `a1b46cb7789091f7782f039fdbf148631a77e3ea`, after CHANGES_REQUESTED three times — at `0b62c9e8…` (R5, seven blockers), at `d67da89e…` (four closed, three kept) and at `c4ebadb0…` (two contract blockers: allowlist widening, and the missing default policy) — plus two directed follow-ups in between: the stale-proposal dead end at `e3210e88…` and the test-only determinism repair of the concurrency barrier. Head untouched since the PASS. |
 | #80 | `feat/p5-07-leads-pipeline` | **PASSED** at `bd1c039998fb41fe339af97ae2dc5e515810aa6c` — by **Antigravity (Gemini 3.8 Flash)**, under the owner's temporary reviewer route, not by Astra. Head untouched since. |
 | #81 | `feat/p3-01-customer-identity-memory` | **PASSED** at `d9a34ffef120b7f0b171eb12f130d3848c9928cf` — by **Antigravity (Gemini 3.8 Flash)**, with a formal approving review. Head untouched since. |
-| #82 | `feat/p3-02-goals-followups` | **The current gate**, and **CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and this is still the only branch below #81 it has been propagated into. Awaiting independent review at the repaired head. |
-| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Frozen**, not ready for review. They are the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
+| #82 | `feat/p3-02-goals-followups` | **Was the current gate when this row was written, and CHANGES_REQUESTED, now repaired.** Two P1 blockers: the follow-up feature had no runtime caller at all, and a task could be assigned to somebody with no access to the Business Profile. Both closed, together with a third gap the end-to-end test found — the automated-response budget being applied to a send that answers nothing. The accepted #81 parent `d9a34ffef120b7f0b171eb12f130d3848c9928cf` is merged in by ordinary merge commit, and at that date this was the only branch below #81 it had been propagated into. **Both facts have since changed:** #81 is accepted at `d3ad503` and the chain was propagated to #94 on 2026-10-19. |
+| #83 and below | `feat/p5-08-…` through `feat/p7-02-…` | **Was frozen** and not ready for review *at that date*, as the chain's *second live segment*, forked from `c098c18` and still carrying the pre-repair #79. **No longer true:** every link to #94 now carries the #79 repairs and everything after them, propagated link by link on 2026-10-19, and each link contains its parent. Each propagation directive permits one step only, so nothing below #82 may receive this parent until #82 itself passes. On 2026-10-13 every head here moved twice, for two repairs that had nothing to do with their own features: #90's red CI, and the nine fixture clocks. Both are recorded below; neither advanced any feature. |
 | #104, #105 | `feat/p6-04-…`, `feat/p6-07-…` | Off the propagation chain, based on #103. #104 is the Stripe adapter (#41); #105 starts P6-07 (#44). Both await review and neither is affected by the freeze. |
 
 **The independent reviewer is Astra again, temporarily, from 2026-10-13.** The owner routed reviews to
@@ -305,8 +317,8 @@ remote heads, and its SHA is the one on the branch.
 
 The #79 repairs are summarised under "P5-04" below. They now live on `feat/p5-04-ai-settings-simulation`
 and on `feat/p5-07-leads-pipeline`, and **nowhere else**: the directive on #80 propagates the accepted
-parent one branch at a time, so #81 and below still carry the pre-repair #79 and will each need this
-merged down in turn. Do not read the #78 propagation described in the next paragraph as covering these —
+parent one branch at a time, so at that date #81 and below still carried the pre-repair #79 and each
+needed this merged down in turn. That propagation completed on 2026-10-19, through #94. Do not read the #78 propagation described in the next paragraph as covering these —
 that one is #78's and it is finished. No rebase, no force-push, no merge to `main`, and Stage D is not
 started.
 
