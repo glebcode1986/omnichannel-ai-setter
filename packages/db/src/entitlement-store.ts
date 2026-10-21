@@ -225,6 +225,120 @@ export async function setEntitlementOverride(
 }
 
 /**
+ * Cancels at the end of the period already paid for (#42).
+ *
+ * Narrow on purpose, and separate from `setWorkspaceSubscription`: a customer cancelling must not be able
+ * to move its own plan, and a general setter reached from a browser action would let it. The plan version
+ * is untouched, so the workspace keeps everything it bought until the period it paid for is over — which
+ * is the accepted default, cancel-at-period-end, rather than cancel-now.
+ *
+ * Refused where there is no period to cancel at the end of. A trial has `trialEndsAt` and a paid term has
+ * `periodEndsAt`; without either there is nothing to date the cancellation to, and a cancellation with no
+ * end is one nobody could tell from an immediate one.
+ */
+export async function requestCancellation(
+  db: DbClient,
+  context: WorkspaceContext,
+  at = new Date(),
+): Promise<{ readonly status: "CANCELING"; readonly endsAt: Date } | { readonly status: "REFUSED"; readonly reason: string }> {
+  requireRole(context, BILLING_ROLES, "cancel the subscription");
+  const workspaceId = scopeOf(context);
+
+  return db.$transaction(async (tx) => {
+    const subscription = await tx.workspaceSubscription.findUnique({
+      where: { workspaceId },
+      select: { state: true, periodEndsAt: true, trialEndsAt: true, planVersion: { select: { version: true, plan: { select: { code: true } } } } },
+    });
+    if (subscription === null) {
+      return { status: "REFUSED", reason: "there is no subscription to cancel" };
+    }
+    if (subscription.state === "CANCELED_PENDING_END") {
+      return { status: "REFUSED", reason: "this subscription is already ending" };
+    }
+    if (subscription.state === "INACTIVE") {
+      return { status: "REFUSED", reason: "this subscription has already ended" };
+    }
+    const endsAt = subscription.periodEndsAt ?? subscription.trialEndsAt;
+    if (endsAt === null || endsAt === undefined) {
+      return { status: "REFUSED", reason: "this subscription has no period end to cancel at" };
+    }
+
+    await tx.workspaceSubscription.update({
+      where: { workspaceId },
+      // The plan version is deliberately not in this write: cancelling is not moving plan, and the
+      // workspace keeps what it bought until the period ends.
+      data: { state: "CANCELED_PENDING_END", canceledAt: at, periodEndsAt: endsAt },
+    });
+    await recordWorkspaceAuditEvent(tx, context, {
+      kind: "SUBSCRIPTION_CHANGED",
+      summary: `Cancellation requested, effective ${endsAt.toISOString()}`,
+      subjectType: "Workspace",
+      subjectId: workspaceId,
+      actorUserId: context.userId,
+      detail: {
+        fromState: subscription.state,
+        toState: "CANCELED_PENDING_END",
+        planCode: subscription.planVersion.plan.code,
+        planVersion: subscription.planVersion.version,
+        effectiveAt: endsAt.toISOString(),
+      },
+    });
+    return { status: "CANCELING", endsAt };
+  });
+}
+
+/**
+ * Undoes a cancellation while the paid period is still running (#42).
+ *
+ * The spec allows it "while the paid period is still active and provider capability permits it", and this
+ * half needs no provider: the term is already paid for, so resuming is the product forgetting a request
+ * rather than taking a payment. Past the period end it is refused — what would be resumed has expired, and
+ * restoring it would grant a term nobody paid for.
+ */
+export async function resumeSubscription(
+  db: DbClient,
+  context: WorkspaceContext,
+  at = new Date(),
+): Promise<{ readonly status: "RESUMED" } | { readonly status: "REFUSED"; readonly reason: string }> {
+  requireRole(context, BILLING_ROLES, "resume the subscription");
+  const workspaceId = scopeOf(context);
+
+  return db.$transaction(async (tx) => {
+    const subscription = await tx.workspaceSubscription.findUnique({
+      where: { workspaceId },
+      select: { state: true, periodEndsAt: true, planVersion: { select: { version: true, plan: { select: { code: true } } } } },
+    });
+    if (subscription === null || subscription.state !== "CANCELED_PENDING_END") {
+      return { status: "REFUSED", reason: "this subscription is not ending" };
+    }
+    if (subscription.periodEndsAt === null || subscription.periodEndsAt.getTime() <= at.getTime()) {
+      return { status: "REFUSED", reason: "the paid period has already ended" };
+    }
+
+    await tx.workspaceSubscription.update({
+      where: { workspaceId },
+      // Back to ACTIVE with the cancellation forgotten. `periodEndsAt` stays: it is when the term ends,
+      // which the cancellation never changed.
+      data: { state: "ACTIVE", canceledAt: null },
+    });
+    await recordWorkspaceAuditEvent(tx, context, {
+      kind: "SUBSCRIPTION_CHANGED",
+      summary: "Cancellation withdrawn",
+      subjectType: "Workspace",
+      subjectId: workspaceId,
+      actorUserId: context.userId,
+      detail: {
+        fromState: "CANCELED_PENDING_END",
+        toState: "ACTIVE",
+        planCode: subscription.planVersion.plan.code,
+        planVersion: subscription.planVersion.version,
+      },
+    });
+    return { status: "RESUMED" };
+  });
+}
+
+/**
  * The effective entitlement for a workspace at one instant.
  *
  * Takes the workspace id rather than a context, because the callers that matter most are server-side

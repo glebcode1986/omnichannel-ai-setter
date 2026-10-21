@@ -48,6 +48,15 @@ export {
 } from "./delivery-store";
 export { channelCapabilitiesOf } from "./channel-capabilities";
 export {
+  readBillingOverview,
+  type ActiveAddOn,
+  type AllowanceSummary,
+  type BillingOverview,
+  type CapacityUse,
+  type DisplayPrice,
+  type SubscriptionSummary,
+} from "./billing-overview";
+export {
   ACCEPTED_ADDONS,
   ACCEPTED_CURRENCY,
   ACCEPTED_PLANS,
@@ -75,6 +84,8 @@ export {
 export {
   publishPlanVersion,
   readEntitlement,
+  requestCancellation,
+  resumeSubscription,
   setBillingAccount,
   setEntitlementOverride,
   setWorkspaceSubscription,

@@ -609,6 +609,16 @@ export default async function SettingsPage({
         )}
       </section>
 
+      {/* Billing lives under Settings for the reason the audit log does — PRODUCT_UX names seven sections
+          and commercial state belongs in this one — and it is reached from here, because a route nobody
+          links to is a route nobody can get to. */}
+      <section>
+        <h2>{t.t("billing.title")}</h2>
+        <p>
+          <a href={`${basePath}/billing`}>{t.t("settings.billingLink")}</a>
+        </p>
+      </section>
+
       <section className="knowledge-history">
         <h2>{t.t("settings.auditTitle")}</h2>
         {audits.entries.length === 0 ? (

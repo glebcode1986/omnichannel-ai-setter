@@ -26,6 +26,10 @@ const paneDirs = [
   path.resolve(inboxDir, "../style"),
   path.resolve(inboxDir, "../leads"),
   path.resolve(inboxDir, "../analytics"),
+  // Billing (#42). The read model drops `providerPriceId` and the billing account's opaque customer and
+  // subscription references, but it drops them in one function — and this is what notices if a later
+  // change hands a component the raw catalogue row instead.
+  path.resolve(inboxDir, "../billing"),
 ];
 
 /**
@@ -74,6 +78,12 @@ describe("the Inbox components", () => {
       "capabilities",
       "accessToken",
       "messaging_product",
+      // Opaque provider references (#42, ADR-017). They exist so a checkout can name a price and a
+      // customer; a page needs an amount and a currency, and a value that reaches a page can reach a
+      // view-source.
+      "providerPriceId",
+      "providerCustomerId",
+      "providerSubscriptionId",
     ];
     const offenders: string[] = [];
     for (const { file, source } of componentSources()) {
@@ -142,5 +152,9 @@ describe("the Inbox components", () => {
     expect(files).toContain("leads/lead-board.tsx");
     expect(files).toContain("leads/lead-panel.tsx");
     expect(files).toContain("leads/stage-config.tsx");
+    expect(files).toContain("billing/subscription-card.tsx");
+    expect(files).toContain("billing/allowance-meter.tsx");
+    expect(files).toContain("billing/plan-offers.tsx");
+    expect(files).toContain("billing/capacity-list.tsx");
   });
 });

@@ -41,13 +41,72 @@ what was believed when is worth keeping:
    2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved. **#95 is accepted
    at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20, and
    **#96 at `8ce410252269fb6dd5af0737df3f310290e49542`** on the same day, and **#97 at
-   `2aaf661574a9f2b72dbb6243111bef2e5afb0499`** on 2026-10-21.
+   `2aaf661574a9f2b72dbb6243111bef2e5afb0499`** on 2026-10-21, and **#98 at
+   `28ff22f963da6786941c654831a5e053a57185e4`** the same day.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #97 into P6-06 / PR #98
+### Current work — propagating the accepted #98 into P6-05 / PR #99
+
+#98 was accepted at `28ff22f963da6786941c654831a5e053a57185e4`, so this branch is the next link. Ordinary
+merge commit, one branch only — no rebase, no force-push, nothing to `main`, #100+ untouched. #99 was
+**76 commits behind** while carrying 12 of its own.
+
+**Zero conflicts and zero application-code edits, for the second link running.** The merged tree was
+typechecked before anything else — 0 TypeScript errors — because two links before that merged clean and
+then did not compile. Same cause as #98: this branch had been tracking its parent, so its callers were
+already adapted.
+
+Checked rather than trusted: 62 models against 62 `CREATE TABLE` statements, no duplicate name in the
+barrel, no drift, and the worker loop registry still 8 loops / 8 `close()` calls / prose saying "eight",
+counted by bracket depth.
+
+**The guard this link mattered most for is the provider boundary**, because P6-05 is the first UI that
+displays money. `billing-screen.integration.test.ts` holds it directly: *"hands no provider identifier to
+the page"* serialises the whole screen and asserts it contains no `providerPriceId`. It passes, along with
+the three `apps/web/src/i18n` gates that fail a build rather than a test.
+
+**The capacity-lock record is carried forward unchanged**, per the directive's point 5: Gemini accepted
+the implementation as architecturally sound, the direct `createBusinessProfile` observer/interleaving test
+**remains absent**, and that gap is **not** closed here.
+
+### Task definition — P6-05 / Issue #42, the billing and usage settings screen
+
+**Branch `feat/p6-05-billing-settings-ui`**, based on `feat/p6-06-commercial-catalog`. Recorded here now;
+neither canonical document named it.
+
+**The browser is never the authority.** A checkout return parameter is read, and all it decides is which
+*sentence* to show. The plan, the state and the dates are the server's answer at `at`, so a page reached
+with `?checkout=success` after a payment no webhook has confirmed shows the subscription as it actually is
+and says a confirmation is pending — rather than claiming an upgrade the system has not seen.
+
+**A downgrade is explained before it is offered.** The accepted behaviour is that nothing is deleted and
+the person is shown *which* of their resources exceed the new plan, so every offer carries its own
+consequences instead of a yes-or-no. `planChangeConsequences` therefore names the excess: *"you are over"*
+is not something anybody can act on, *"these three Business Profiles are over"* is.
+
+**The arithmetic lives in the domain, not in a component.** `packages/domain/src/plan-change.ts` holds
+both the change consequences and `ALLOWANCE_HEALTHS` (`OK` / `WARNING` / `EXHAUSTED`), on the stated
+ground that a number a business is about to make a decision on should not be computed somewhere nothing
+can test it.
+
+**`CHECKOUT_AVAILABLE` is one named constant, deliberately `false`.** It stays false until a billing
+provider is chosen and its adapter exists (#41), stated once rather than as scattered conditionals, so the
+screen says "not available here" in one voice and there is a single place to change when the adapter
+lands.
+
+**No provider identifier reaches the page.** The read model copies an amount and a currency and drops the
+provider's own price object; the guard serialises the screen and asserts the absence. Mutations are
+OWNER-only with authorization re-resolved from the database on every call.
+
+**The screen is assembled away from the authenticated request path**, exactly as `style-screen.ts` is:
+`billing-page.ts` adds authorization and the translator and cannot be imported under Vitest, because
+Auth.js reaches for Next's server runtime. Everything a test needs lives on the other side of that line —
+which is why there is a 14-case integration suite over a screen at all.
+
+### Earlier — propagating the accepted #97 into P6-06 / PR #98
 
 #97 was accepted at `2aaf661574a9f2b72dbb6243111bef2e5afb0499`, so this branch is the next link. Ordinary
 merge commit, one branch only — no rebase, no force-push, nothing to `main`, #99+ untouched. #98 was **75

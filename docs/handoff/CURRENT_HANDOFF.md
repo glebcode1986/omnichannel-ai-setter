@@ -3124,3 +3124,93 @@ vitest config declares a third project, `tooling`, over `scripts/**/*.test.ts`. 
 196 files `verify` reports.
 
 Totals: 194→196 files and 3090→3123 tests, PG 44→45 files and 928→956 cases; E2E unchanged at 1117.
+
+## P6-05 billing and usage settings screen, and the accepted #98 propagated into it — PR #99 — 2026-10-21
+
+#98 was accepted at `28ff22f963da6786941c654831a5e053a57185e4`, and the directive propagated it into
+`feat/p6-05-billing-settings-ui`, which was at `be39535e74d12634fbcf4756804fe1897fbc5b0c` — **76 commits
+behind** while carrying 12 of its own.
+
+### What P6-05 is, recorded here for the first time
+
+**The browser is never the authority.** A checkout return parameter is read and all it decides is which
+*sentence* to show; the plan, the state and the dates are the server's answer at `at`. So a page reached
+with `?checkout=success` after a payment no webhook has confirmed shows the subscription as it actually is
+and says a confirmation is pending, rather than claiming an upgrade the system has not seen.
+
+**A downgrade is explained before it is offered.** Nothing is deleted, and the person is shown *which* of
+their resources exceed the new plan, so every offer carries its own consequences instead of a yes-or-no.
+`planChangeConsequences` names the excess on the stated ground that *"you are over"* is not something
+anybody can act on and *"these three Business Profiles are over"* is.
+
+**The arithmetic lives in the domain, not in a component.** `packages/domain/src/plan-change.ts` holds the
+change consequences and `ALLOWANCE_HEALTHS` (`OK` / `WARNING` / `EXHAUSTED`), because a number a business
+is about to act on should not be computed where nothing can test it.
+
+**`CHECKOUT_AVAILABLE` is one named constant and is deliberately `false`** until a provider adapter exists
+(#41) — stated once rather than as scattered conditionals, so the screen says "not available here" in one
+voice and there is a single place to change later.
+
+**No provider identifier reaches the page.** The read model copies an amount and a currency and drops the
+provider's own price object; mutations are OWNER-only with authorization re-resolved from the database on
+every call. And the screen is assembled away from the authenticated request path, exactly as
+`style-screen.ts` is — `billing-page.ts` adds authorization and the translator and cannot be imported
+under Vitest because Auth.js reaches for Next's server runtime. That line is why a *screen* has a
+14-case integration suite at all.
+
+### The merge
+
+**Zero conflicts and zero application-code edits — the second link running.** The merged tree was
+typechecked before anything else (**0 TypeScript errors**), because the two links before #98 merged clean
+and then failed to compile. The cause is the same as #98's: this branch had been tracking its parent, so
+its callers were already adapted to the contracts #97 changed.
+
+| check | result |
+|---|---|
+| models vs `CREATE TABLE` statements | **62 = 62** |
+| duplicate export name in the barrel | none |
+| migration drift | **No difference detected.** |
+| worker loop registry | **8 loops, 8 `close()` calls, prose "eight"** (bracket-depth count) |
+
+**The guard that mattered most here is the provider boundary**, since this is the first UI that displays
+money: `billing-screen.integration.test.ts` serialises the entire screen and asserts it contains no
+`providerPriceId`. It passes, as do the three `apps/web/src/i18n` gates — which fail a *build* rather than
+a test, and so are the ones a UI-heavy branch can least afford to merge blindly.
+
+### The capacity-lock record, carried forward unchanged
+
+Per the directive's point 5: the implementation was accepted as architecturally sound and the direct
+`createBusinessProfile` observer/interleaving test **remains absent**. Not closed, not claimed closed, and
+not this link's to close. #98's own review carried the same record correctly, citing the correction
+published on #97 rather than the misattributed file.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 200 files, **3196/3196** |
+| PostgreSQL suites | 46 files, **978/978**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 99 files, **1155/1155** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1956 passed / 1240 skipped**, zero infrastructure variables present |
+
+Run by name:
+
+| suite | result |
+|---|---|
+| `billing-screen.integration` — read model and the provider-leak guard | **14/14** |
+| `ui/billing/billing-panes` — the screen's components | **24/24** |
+| `billing-overview.integration` — the store read behind it | **18/18** |
+| `domain/plan-change` — downgrade consequences and allowance health | **13/13** |
+| the three `apps/web/src/i18n` gates | **34/34** |
+| `catalog.integration` — P6-06 | **28/28** |
+| `entitlements.integration` — P6-03 | **37/37** |
+| `usage-store.integration` — P6-02 | **27/27** |
+
+Totals: 196→200 files and 3123→3196 tests, PG 45→46 files and 956→978 cases, E2E 97→99 files and
+1117→1155. Note `entitlements.integration` itself moved 33→37: this branch adds four cases to it, which is
+why that suite's number differs from the one recorded for #98.
