@@ -3331,10 +3331,16 @@ why that suite's number differs from the one recorded for #98.
 The owner made **Codex/Astra the primary independent reviewer and paused Gemini/AntiGravity** (Issue #7,
 comment 6308798183; echoed on #100 as 6308804154). Earlier Gemini PASSes at their exact heads — #96
 through #99 and predecessors — **remain accepted and are not to be repeated**. New gates route to Astra
-alone with **no fallback**, and the owner reports Astra's weekly quota exhausted with a reset roughly
-three days out. So the gate after this link is `WAIT_ASTRA_QUOTA`: a deliberate hold, not a review in
-flight. The directive is explicit that this does not authorize pretending any reviewer has been launched.
-Nothing about my own work changed — the marker is `CLAUDE_READY_FOR_ASTRA`, which it has always been.
+alone with **no fallback**.
+
+**Corrected within the hour, and the correction matters the other way round** (Issue #7, comment
+6309185847): **Astra has usage available now** and no `WAIT_ASTRA_QUOTA` hold is authorized; it is
+**Gemini** whose weekly quota is exhausted, replenishing in about three days. The first routing comment
+had the two models reversed, and I repeated it here and in my #100 readiness comment before the
+correction arrived. A routing or availability statement is a claim like any other: attribute it, and
+expect it to be the kind of thing that gets corrected. Either way the directive is explicit that none of
+it authorizes pretending a reviewer has been launched, and nothing about my own work changed — the marker
+is `CLAUDE_READY_FOR_ASTRA`, which it has always been.
 
 ### What P6-08 is, recorded here for the first time
 
@@ -3441,3 +3447,112 @@ Totals: 200→204 files and 3196→3302 tests, PG 46→47 files and 978→1035 c
 No production payment provider, Merchant of Record, seller jurisdiction, tax position or financial term
 was chosen; no production route, provider account or identifier was registered; no credentials or
 production APIs were used; nothing was published, deployed or released.
+
+## PR #100 `CHANGES_REQUESTED` by Astra, remediated — 2026-10-21
+
+The first blocking verdict of this chain, and Astra's first review since the route changed. Three
+findings on `55fbf98`, all real, all in code I wrote. Each was verified by reading the code before
+anything was changed.
+
+### P1 — an older-term reversal revoked a newer paid term on the same arrangement
+
+`billing-routing-store.ts`'s `END` branch asked only whether the arrangement was still live and then
+wrote `INACTIVE`, so a February chargeback took away access paid for through April. The
+superseded-arrangement case that already existed is a *different* shape — there the two terms are two
+rows and the guard is structural. Here one arrangement holds two consecutive terms and nothing but
+attribution can tell them apart. The asymmetry had been sitting in the file: `SUBSCRIPTION_CANCELED`
+preserved a future `paidThrough`; a reversal did not.
+
+**The fix asks two questions**, because a reversal can be identified two ways and the ordinary case is
+neither missing a field nor a puzzle:
+
+1. what the provider says — a stated `periodEndsAt` ending before what is already paid for names an
+   earlier term outright;
+2. what the ledger says — where no period is stated, if the event that granted the term in force occurred
+   *later* than the payment being taken back, that term was bought separately.
+
+`writeEvent` now retains a stated period on every event row, so the audit trail can answer (2)
+afterwards rather than only at the moment of processing.
+
+**My first attempt at this was wrong, and an existing test caught it.** Treating every unstated period as
+"ambiguous, so change nothing" broke the ordinary case: refunding the only payment ever made *is* the
+current term and must still revoke it. The qualifier in the finding is "a **separately paid** current
+term", and separateness is a fact about the ledger rather than about a missing field. Worth recording
+because the wrong fix passed four of my own new tests and failed one old one.
+
+### P1 — a delayed renewal moved the paid-through date backwards
+
+The maximum the code computed guarded only the fallback used when a provider states no period of its own,
+so a provider that *does* state one — the normal case — wrote its value straight into the subscription.
+Event-id idempotency cannot help: a reordered delivery is a different event, legitimately processed,
+carrying an older term.
+
+**And the fix for it was itself incomplete — which the concurrency test Astra asked for is what found.** A
+read-then-write comparison is not concurrency-safe. Two renewals with different event ids are two
+transactions; both read the same `paidThrough`, both decide they extend it, and the one that commits
+second wins, so a renewal buying *less* time still overwrote one buying more. The racing test failed on
+`2026-12-07` where it expected `2027-01-07`.
+
+The write now carries the comparison: `extendSubscription` is a conditional `updateMany` whose predicate
+holds the term, so under READ COMMITTED the second transaction blocks on the row and re-evaluates against
+the committed value. That is the same reasoning the file already applies to
+`billing_arrangements_one_live_key` — a decision an application makes before a write is a decision another
+writer can invalidate.
+
+### P2 — a verified event was not actually immutable
+
+`Object.freeze` is shallow and the spread feeding it was shallow too, so a minted event shared its
+`settled` object and its `Date`s with the adapter that produced them. The adapter could raise the amount
+afterwards; anybody holding the event could call `periodEndsAt.setUTCFullYear`; a `WeakSet` membership
+test could see neither — while the function's own comment promised precisely that this could not happen.
+Another instance of a comment asserting the opposite of its code.
+
+Fixed in three steps, each closing a different hole: the mint **snapshots** nested money and dates, so the
+adapter's references are severed; the freeze still stops a field being replaced outright; and the
+`WeakSet` becomes a **`WeakMap` of the authenticated facts**, so `assertVerifiedBillingEvent` recomputes
+them and an event altered after minting is no longer the event that was verified. A `Date` cannot be made
+immutable, so the answer is not to try — it is to make the edit **detectable**. The file's own prose, the
+refusal message and the top-of-file description were all corrected to say what the mechanism now is.
+
+### The regressions, and their controls
+
+Fourteen new cases. Seven in `billing-routing.integration.test.ts`: both reversal kinds naming the first
+term, an unstated-period reversal, a reordered renewal, a concurrent renewal race, and **two positive
+controls** without which the whole thing could collapse into "reversals and renewals do nothing" — a
+reversal of the payment that bought the term in force still revokes, and a renewal that genuinely buys
+more time still extends.
+
+Seven more in a new `packages/db/src/billing-events.test.ts`, which needs no infrastructure and therefore
+runs in the **fast** gate rather than only the infrastructure job. Every case performs the mutation rather
+than asserting a shape: a test checking `Object.isFrozen` would have passed against the defect.
+
+| mutation | result |
+|---|---|
+| the whole store reverted to its pre-fix version | **5 failed** — exactly the new regressions; both positive controls pass |
+| the event module reverted to its pre-fix version | **4 of 7 failed** — the three that pass are the control, the forged-object refusal and the field-replacement freeze, all true before |
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` | exit 0 — 205 files, **3316/3316** |
+| PostgreSQL suites | 48 files, **1049/1049**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 100 files, **1158/1158** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **2012 passed / 1304 skipped**; the new `billing-events.test.ts` runs here, which is the point of putting it in the fast gate |
+
+Deltas against the reviewed head: 204→205 files and 3302→3316 tests (+1 file, +14 cases), PG 47→48 files
+and 1035→1049.
+
+### Astra's own stated limitations, carried forward honestly
+
+The review says so itself and it belongs in the record: PostgreSQL, Redis and the container runtime were
+unavailable to it, so it did not execute the DB/Redis concurrency suites, migration drift, full E2E,
+verify/build/lint/typecheck or evals, and it does not certify the remaining requirements. Its three
+findings were reproduced through an in-process probe with a fake adapter and a DbClient double — which
+was enough, because all three were real. The capacity-lock observer gap remains explicitly unverified and
+non-blocking.

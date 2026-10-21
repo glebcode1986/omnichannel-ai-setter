@@ -48,14 +48,79 @@ what was believed when is worth keeping:
 4. **The independent reviewer changed on 2026-10-21.** The owner made **Codex/Astra primary and paused
    Gemini/AntiGravity** (Issue #7, comment 6308798183). Earlier Gemini PASSes at their exact heads — #96
    through #99 and predecessors — remain accepted and are not to be repeated. New gates route to Astra
-   alone, with **no fallback**; the owner reports Astra's weekly quota exhausted with a reset about three
-   days out, so the gate after this link is `WAIT_ASTRA_QUOTA` rather than a reviewer in flight.
+   alone, with **no fallback**. **Corrected the same day** (Issue #7, comment 6309185847): it is
+   **Gemini** whose weekly quota is exhausted, replenishing in about three days, while **Astra has usage
+   available** — so no `WAIT_ASTRA_QUOTA` hold is authorized. The first routing comment named the two
+   models the wrong way round and this file repeated it; a routing or availability claim is a claim, and
+   this one was superseded within the hour.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #99 into P6-08 / PR #100
+### Current work — remediating Astra's three blocking findings on P6-08 / PR #100
+
+Astra returned `CHANGES_REQUESTED` on `55fbf98` — the first blocking verdict of this chain, and the first
+review by Astra since the route changed. Three findings, all of them real, all of them in code I wrote.
+Verified each by reading the code before changing anything.
+
+**P1 — an older-term reversal revoked a newer paid term on the *same* arrangement.**
+`billing-routing-store.ts`'s `END` branch asked only whether the arrangement was still live, then wrote
+`INACTIVE`. So a February chargeback took away access paid for through April. The superseded-arrangement
+case already covered was a *different* shape: there the two terms are two rows and the guard was
+structural. Here one arrangement holds two consecutive terms and nothing but attribution distinguishes
+them. The asymmetry was visible in the file all along — `SUBSCRIPTION_CANCELED` preserved a future
+`paidThrough`, a reversal did not.
+
+Fixed with two questions, because a reversal can be identified two ways and the ordinary case has neither
+field missing nor a puzzle to solve: a stated `periodEndsAt` earlier than what is already paid names an
+earlier term outright; and where the provider states no period, the retained event ledger answers it —
+if the event that granted the term in force occurred *later* than the payment being taken back, that term
+was bought separately. `writeEvent` now retains a stated period on every event row so the ledger can
+answer this afterwards too.
+
+**A first attempt at that fix was wrong and an existing test caught it.** Treating every unstated period
+as "ambiguous, change nothing" broke the ordinary case — refunding the only payment ever made *is* the
+current term and must still revoke it. The qualifier in the finding is "a **separately paid** current
+term", and separateness is a fact about the ledger, not about a missing field.
+
+**P1 — a delayed renewal moved the paid-through date backwards.** The maximum the code computed guarded
+only the fallback used when a provider states no period of its own, so a provider that *does* state one —
+the normal case — wrote its value straight into the subscription. Event-id idempotency cannot help: a
+reordered delivery is a different event, legitimately processed, carrying an older term.
+
+**And the fix for it was itself incomplete, which the concurrency test Astra asked for is what found.** A
+read-then-write comparison is not concurrency-safe: two renewals with different event ids are two
+transactions, both read the same `paidThrough`, both decide they extend it, and the one that commits
+second wins — so a renewal buying *less* time still overwrote one buying more. The write now carries the
+comparison (`extendSubscription` does a conditional `updateMany`), which is the same reasoning this file
+already applies to `billing_arrangements_one_live_key`: a decision an application makes before a write is
+a decision another writer can invalidate.
+
+**P2 — a verified event was not actually immutable.** `Object.freeze` is shallow and the spread feeding it
+was shallow too, so a minted event shared its `settled` object and its `Date`s with the adapter that
+produced them. The adapter could raise the amount afterwards, anybody holding the event could call
+`periodEndsAt.setUTCFullYear`, and a `WeakSet` membership test could see neither — while the function's own
+comment promised exactly that it could not happen.
+
+Fixed in three steps because each closes a different hole: the mint **snapshots** nested money and dates
+so the adapter's references are severed; the freeze still stops a field being replaced outright; and the
+`WeakSet` becomes a `WeakMap` of the authenticated facts, so `assertVerifiedBillingEvent` recomputes them
+and an event altered after minting is no longer the event that was verified. A `Date` cannot be made
+immutable, so the answer is not to try — it is to make the edit detectable.
+
+**Regressions, with their controls.** Seven new cases: both reversal kinds naming the first term, an
+unstated-period reversal, a reordered renewal, a concurrent renewal race, and the two positive controls
+that stop the whole thing collapsing into "reversals and renewals do nothing" — a reversal of the payment
+that bought the term in force still revokes, and a renewal that genuinely buys more time still extends.
+Seven more in a new infrastructure-free `billing-events.test.ts`, which performs the mutations rather than
+asserting shapes, because a test checking `Object.isFrozen` would have passed against the defect.
+
+Mutation-checked: against the pre-fix store exactly the five new regressions fail and both controls pass;
+against the pre-fix event module four of the seven unit cases fail, the three that pass being ones that
+were already true.
+
+### Earlier — propagating the accepted #99 into P6-08 / PR #100
 
 #99 was accepted at `9b3823f2776eb0d221c10f2cf1df8c43c947543d`, so this branch is the next link. Ordinary
 merge commit, one branch only — no rebase, no force-push, nothing to `main`, #101+ untouched. #100 was
