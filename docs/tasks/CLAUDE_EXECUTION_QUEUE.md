@@ -58,7 +58,51 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — P6-08 / PR #100, round two: both remediations had holes
+### Current work — P6-08 / PR #100, round three: what an authenticated payload can actually prove
+
+Astra confirmed the snapshot fix closed the asynchronous mutation, and confirmed the historical-reversal
+and reordered-renewal behaviour. Two findings remained, both about reversal attribution, and together they
+say something sharper than either alone: **I kept reaching for evidence the payload does not contain.**
+
+**P1 — a subscription reference is not proof of a payment.** `NormalizedBillingEvent.providerReference` is
+documented as "the provider's own subscription **or** charge object", so on a recurring arrangement two
+separately paid terms legitimately carry the same value. My comparison treated a match as identity, so a
+refund of the first charge — arriving with the shared subscription id — matched the current row and
+revoked the second term. Astra reproduced it with `providerReference='sub-shared'`.
+
+**P1 — "the most recent grant" is not the payment that bought the term in force.** Selecting
+`orderBy occurredAt desc` picks by event *time*, while the monotonic renewal rule I added in round one
+deliberately lets a **delayed** event buy a term reaching *farther* than one already applied. So a refund
+of the shorter, later-raised grant ended the longer term a delayed renewal had bought. The two fixes were
+individually right and contradicted each other — which is the shape worth remembering.
+
+**The repair is to stop guessing.** A reversal on an arrangement with more than one grant now revokes only
+when it *states* a period reaching the term in force; that is the one proof the payload carries. The
+reference comparison is gone, with the reason written down so nobody restores it, and the latest-grant
+selection is gone with it — the ledger is only *counted* now. A single grant still revokes unconditionally,
+because there is no other term it could concern. Anything else is recorded with `effect: NONE`, audited,
+and left to `reconcileProviderState`, which reads the provider instead of inferring from a field that
+cannot answer.
+
+The cost is explicit and is stated in the code: a disputed term stays live until that read. The
+alternative deletes a term somebody paid for on the strength of a guess, which is worse and, from inside
+this transaction, irreversible.
+
+**Attribution is now persisted rather than inferred**, as the review asked: `writeEvent` records the
+`appliedTermEndsAt` the grant actually put in force — read back from the arrangement inside the same
+transaction — so computed fallback terms are attributable too, not only the ones a provider chose to
+state.
+
+**And one of my own controls had to go.** "Revokes the current term when the reversal names the charge
+that bought it" encoded exactly the reference-matching Astra rejected. It is replaced by a control that
+proves the same intent with evidence that holds: a reversal stating the period the current term covers.
+Three new regressions join it — both reversal kinds sharing a subscription reference, and a refund of the
+shorter grant against a longer term bought by a delayed renewal.
+
+Mutation-checked against the exact code reviewed: those three fail, and the replaced control passes in
+both states because it rests on a proof that was always honoured.
+
+### Earlier — P6-08 / PR #100, round two: both remediations had holes
 
 Astra re-reviewed `a5efdf9` and returned `CHANGES_REQUESTED` again, with two findings — **both of them
 against my own fixes rather than against the original code.** Both were right, and neither was something

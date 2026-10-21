@@ -1426,6 +1426,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     const RENEWED_AT = new Date("2026-11-01T12:00:00.000Z");
     const TERM_TWO_END = new Date("2026-12-07T12:00:00.000Z");
     const AFTER_RENEWAL = new Date("2026-11-02T12:00:00.000Z");
+    const TERM_THREE_END = new Date("2027-01-07T12:00:00.000Z");
 
     /** Settles the first term and renews into a second one, both on a single arrangement. */
     async function twoPaidTerms(label: string) {
@@ -1604,83 +1605,171 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect((await readEntitlement(db(), workspaceId, new Date("2026-10-20T12:00:00.000Z"))).paidWorkAllowed).toBe(false);
     });
 
-    it("revokes the current term when the reversal names the charge that bought it", async () => {
-      // The other control: identity *can* be shown, so the reversal is about the term in force and takes
-      // it. Without this, refusing every unstated reversal on a multi-term arrangement would pass.
+    it("revokes the current term when the reversal states the period that term covers", async () => {
+      // The genuine current-charge control. A previous version of this suite used a matching
+      // `providerReference` as the proof, and Astra was right that it is not one: the interface permits a
+      // *subscription* id there, which two separately paid terms legitimately share. What the payload can
+      // actually prove is the period, so that is what this asserts.
+      const { workspaceId, opened } = await twoPaidTerms("states-current-term");
+
+      const reversed = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `states-current-term-${workspaceId}`,
+          kind: "REFUNDED",
+          occurredAt: AFTER_RENEWAL,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_TWO_END,
+        }),
+        AFTER_RENEWAL,
+      );
+
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "END" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "INACTIVE" });
+      // The charge path ends with it. Asserted here because this case absorbed an earlier one that
+      // checked it — see the note in the handoff: that test was removed by accident while this block
+      // replaced its neighbour, and the assertion is carried over rather than quietly dropped.
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { state: true } })).toEqual({ state: "ENDED" });
+      expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(false);
+    });
+
+    for (const kind of ["REFUNDED", "CHARGEBACK"] as const) {
+      it(`will not let a ${kind} sharing the subscription reference revoke a separately paid term`, async () => {
+        // Astra's round-three finding. `providerReference` is documented as the provider's subscription
+        // *or* charge object, so on a recurring arrangement both paid terms carry the same value and a
+        // refund of the first charge is indistinguishable from one of the second by that field alone.
+        const { context, workspaceId } = await freshWorkspace();
+        const opened = await openFor(context, request());
+        await recordVerifiedBillingEvent(
+          db(),
+          verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-settled-${kind}-${workspaceId}`,
+            kind: "PAYMENT_SETTLED",
+            occurredAt: NOW,
+            checkoutContractId: opened.checkoutContractId,
+            settled: money(4_900, "EUR"),
+            periodEndsAt: TERM_ONE_END,
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          NOW,
+        );
+        await recordVerifiedBillingEvent(
+          db(),
+          verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-renewed-${kind}-${workspaceId}`,
+            kind: "SUBSCRIPTION_RENEWED",
+            occurredAt: RENEWED_AT,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            periodEndsAt: TERM_TWO_END,
+            // The same subscription object, as a recurring provider sends it.
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          RENEWED_AT,
+        );
+
+        const reversed = await recordVerifiedBillingEvent(
+          db(),
+          verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-reversed-${kind}-${workspaceId}`,
+            kind,
+            occurredAt: AFTER_RENEWAL,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            // No period, and a reference that names the subscription rather than a charge.
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          AFTER_RENEWAL,
+        );
+
+        expect(reversed, kind).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+        expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+          state: "ACTIVE",
+          periodEndsAt: TERM_TWO_END,
+        });
+        expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(true);
+      });
+    }
+
+    it("will not let a refund of the shorter grant end the longer term a delayed renewal bought", async () => {
+      // Astra's second round-three finding, and the one that invalidates "the latest event granted the
+      // current term". The monotonic rule above deliberately lets a delayed renewal buy a term reaching
+      // *farther* than one already applied, so ordering grants by `occurredAt` picks the wrong one.
       const { context, workspaceId } = await freshWorkspace();
       const opened = await openFor(context, request());
       await recordVerifiedBillingEvent(
         db(),
         verified("test-psp", {
           routeCode: "direct-eu",
-          providerEventId: `named-settled-${workspaceId}`,
+          providerEventId: `reordered-settled-${workspaceId}`,
           kind: "PAYMENT_SETTLED",
           occurredAt: NOW,
           checkoutContractId: opened.checkoutContractId,
           settled: money(4_900, "EUR"),
           periodEndsAt: TERM_ONE_END,
-          providerReference: `charge-first-${workspaceId}`,
         }),
         NOW,
       );
-      await recordVerifiedBillingEvent(
+      // A: raised later, buys the shorter term.
+      const shorter = await recordVerifiedBillingEvent(
         db(),
         verified("test-psp", {
           routeCode: "direct-eu",
-          providerEventId: `named-renewed-${workspaceId}`,
+          providerEventId: `reordered-shorter-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: AFTER_RENEWAL,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_TWO_END,
+          providerReference: `charge-shorter-${workspaceId}`,
+        }),
+        AFTER_RENEWAL,
+      );
+      // B: raised earlier, arrives after, and buys the longer term — which the monotonic rule accepts.
+      const longer = await recordVerifiedBillingEvent(
+        db(),
+        verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reordered-longer-${workspaceId}`,
           kind: "SUBSCRIPTION_RENEWED",
           occurredAt: RENEWED_AT,
           arrangementId: opened.arrangementId,
           settled: money(4_900, "EUR"),
-          periodEndsAt: TERM_TWO_END,
-          providerReference: `charge-second-${workspaceId}`,
+          periodEndsAt: TERM_THREE_END,
+          providerReference: `charge-longer-${workspaceId}`,
         }),
         RENEWED_AT,
       );
+      expect([shorter.effect, longer.effect]).toEqual(["EXTEND", "EXTEND"]);
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { periodEndsAt: true } })).toEqual({ periodEndsAt: TERM_THREE_END });
 
+      // Now take back the shorter grant. It is the most recent grant by event time, and it is not the one
+      // paying for the term in force.
       const reversed = await recordVerifiedBillingEvent(
         db(),
         verified("test-psp", {
           routeCode: "direct-eu",
-          providerEventId: `named-refunded-${workspaceId}`,
+          providerEventId: `reordered-refund-${workspaceId}`,
           kind: "REFUNDED",
-          occurredAt: AFTER_RENEWAL,
+          occurredAt: new Date("2026-11-03T12:00:00.000Z"),
           arrangementId: opened.arrangementId,
           settled: money(4_900, "EUR"),
-          // The charge that bought the term in force, named by the provider's own reference.
-          providerReference: `charge-second-${workspaceId}`,
+          providerReference: `charge-shorter-${workspaceId}`,
         }),
-        AFTER_RENEWAL,
+        new Date("2026-11-03T12:00:00.000Z"),
       );
 
-      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "END" });
-      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "INACTIVE" });
-    });
-
-    it("still revokes when the reversal is of the payment that bought the term in force", async () => {
-      // The positive control, and the reason the two cases above are not simply "reversals do nothing".
-      // Without it, deleting the whole attribution check and returning `NONE` for every reversal would
-      // pass them both.
-      const { workspaceId, opened } = await twoPaidTerms("same-arr-current");
-
-      const reversed = await recordVerifiedBillingEvent(
-        db(),
-        verified("test-psp", {
-          routeCode: "direct-eu",
-          providerEventId: `same-arr-current-${workspaceId}`,
-          kind: "REFUNDED",
-          occurredAt: RENEWED_AT,
-          arrangementId: opened.arrangementId,
-          settled: money(4_900, "EUR"),
-          periodEndsAt: TERM_TWO_END,
-        }),
-        AFTER_RENEWAL,
-      );
-
-      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "END" });
-      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "INACTIVE" });
-      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { state: true } })).toEqual({ state: "ENDED" });
-      expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(false);
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+        state: "ACTIVE",
+        periodEndsAt: TERM_THREE_END,
+      });
+      expect((await readEntitlement(db(), workspaceId, new Date("2026-11-03T12:00:00.000Z"))).paidWorkAllowed).toBe(true);
     });
 
     it("cancels at the end of the term already paid for", async () => {

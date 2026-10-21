@@ -914,6 +914,13 @@ export async function recordVerifiedBillingEvent(db: DbClient, delivered: Verifi
       now,
     });
 
+    // Read back the term the grant actually put in force — `apply` has already written it in this
+    // transaction — so the event row records the relationship rather than leaving it to be inferred.
+    const grantedTerm =
+      (applied === "ACTIVATE" || applied === "EXTEND") && arrangement !== null
+        ? (await tx.billingArrangement.findUnique({ where: { id: arrangement.id }, select: { currentPeriodEnd: true } }))?.currentPeriodEnd ?? null
+        : null;
+
     const row = await writeEvent(tx, {
       event,
       routeId: route.id,
@@ -923,6 +930,7 @@ export async function recordVerifiedBillingEvent(db: DbClient, delivered: Verifi
       effect: applied,
       now,
       ...(decision.quote === undefined ? {} : { quote: decision.quote }),
+      ...(grantedTerm === null ? {} : { appliedTermEndsAt: grantedTerm }),
     });
     await recordSystemAuditEvent(
       tx,
@@ -1181,34 +1189,37 @@ async function apply(
     // guard exists for through — a new reversal of an old charge — which Astra demonstrated on PR #100
     // after the first version of this fix. Time cannot answer the question; identity has to.
     //
-    // So the ledger is asked how many payments have granted a term on this arrangement at all. One means
-    // there is nothing to confuse: the money being returned is the money that bought the access, whatever
-    // the provider chose to state, and it goes — which is the ordinary refund and the case an earlier
-    // attempt at this broke. More than one means the term in force may have been bought separately, and
-    // then only the provider's own charge reference can say whether this reversal is about it. Retained on
-    // every event row for exactly this (see `writeEvent`); absent or unmatched, the reversal cannot show
-    // that it concerns the term that is granting service, and a term somebody paid for is not deleted on
-    // a maybe.
+    // So the ledger is asked how many payments have granted a term on this arrangement at all — and only
+    // that, because nothing else in an authenticated payload can carry the answer.
     //
-    // Only when the provider stated no period, because a stated one that reaches the current term has
-    // already answered the question: the first check let it through precisely because it names the term in
-    // force, and asking for a charge reference as well would refuse an ordinary refund for having less
-    // metadata than it needs.
-    const granting =
+    // **One** grant means there is nothing to confuse: the money being returned is the money that bought
+    // the access, whatever the provider chose to state, and it goes. That is the ordinary refund, and an
+    // earlier attempt at this guard broke it.
+    //
+    // **More than one** means a separately paid term may be in force, and the reversal has to *show* it
+    // concerns that term. Two things that look like proof are not:
+    //
+    // - `providerReference` cannot serve. Its own contract is "the provider's own subscription **or**
+    //   charge object", so on a recurring arrangement two separately paid terms legitimately share one
+    //   subscription id, and a refund of the first charge carries it just as the second does. Matching on
+    //   it revoked a term the reversal said nothing about — Astra demonstrated that with
+    //   `providerReference='sub-shared'` after the previous version of this guard.
+    // - "the most recent grant" cannot serve either. Selecting by `occurredAt` descending picks by event
+    //   time, while the monotonic renewal rule above deliberately lets a *delayed* event buy a term that
+    //   reaches **farther** than one already applied. So the latest event is not necessarily the payment
+    //   that bought the term in force, and a refund of the shorter one would end the longer one.
+    //
+    // What remains is the one proof the payload does carry: a stated period that reaches the term in
+    // force, handled by the check above. Without it, a reversal on a multi-grant arrangement changes
+    // nothing, is recorded with `effect: NONE` and audited, and `reconcileProviderState` reads the
+    // provider to settle it. Refusing to guess costs a disputed term staying live until that read; the
+    // alternative deletes a term somebody paid for, which is worse and irreversible from here.
+    const grants =
       event.periodEndsAt !== undefined
-        ? []
-        : await tx.billingEvent.findMany({
-            where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } },
-            orderBy: { occurredAt: "desc" },
-            select: { detail: true },
-          });
-    if (granting.length > 1) {
-      const current = granting[0]?.detail;
-      const reference =
-        typeof current === "object" && current !== null && !Array.isArray(current) ? (current as Record<string, unknown>)["providerReference"] : undefined;
-      if (event.providerReference === undefined || reference !== event.providerReference) {
-        return "NONE";
-      }
+        ? 0
+        : await tx.billingEvent.count({ where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } } });
+    if (grants > 1) {
+      return "NONE";
     }
   }
 
@@ -1288,6 +1299,8 @@ async function writeEvent(
     readonly arrangementId: string | null;
     readonly effect: EntitlementEffect;
     readonly quote?: QuoteVerdict;
+    /** The term this event actually put in force, where it granted one. Computed terms included. */
+    readonly appliedTermEndsAt?: Date;
     readonly now: Date;
   },
 ): Promise<{ readonly id: string }> {
@@ -1315,6 +1328,11 @@ async function writeEvent(
         ...(input.quote === undefined ? {} : { quote: input.quote }),
         ...(input.event.periodEndsAt === undefined ? {} : { periodEndsAt: input.event.periodEndsAt.toISOString() }),
         ...(input.event.providerReference === undefined ? {} : { providerReference: input.event.providerReference }),
+        // The term this payment actually put in force, which is not always the one it stated: an event
+        // with no period of its own gets the interval computed for it, and that computed term is just as
+        // much a fact about what was bought. Recorded so the ledger can answer "which term did this
+        // payment buy" for every grant rather than only for the talkative ones.
+        ...(input.appliedTermEndsAt === undefined ? {} : { appliedTermEndsAt: input.appliedTermEndsAt.toISOString() }),
       },
     },
     select: { id: true },

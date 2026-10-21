@@ -3640,3 +3640,94 @@ Its progress notes are recorded too: the stated-term reversal and reordered-rene
 working, the seven new unit tests were confirmed to execute real mutations, and the conditional
 `updateMany` was read but **not** certified for real PostgreSQL concurrency — that remains covered only by
 my own racing test. The `createBusinessProfile` interleaving gap stays open and non-blocking.
+
+## PR #100 round three — what an authenticated payload can actually prove — 2026-10-21
+
+Astra confirmed round two closed the asynchronous `Date` mutation, and confirmed the historical-reversal
+and reordered-renewal behaviour. Two findings remained, both on reversal attribution, and together they
+say something sharper than either does alone: **I kept reaching for evidence the payload does not
+contain.**
+
+### P1 — a subscription reference is not proof of a payment
+
+`NormalizedBillingEvent.providerReference` is documented as "the provider's own subscription **or** charge
+object", so on a recurring arrangement two separately paid terms legitimately carry the same value. My
+comparison treated a match as identity, so a refund of the *first* charge — arriving with the shared
+subscription id — matched the current row and revoked the *second* term. Reproduced with
+`providerReference='sub-shared'`.
+
+### P1 — "the most recent grant" is not the payment that bought the term in force
+
+Selecting `orderBy occurredAt desc` picks by event **time**, while the monotonic renewal rule I added in
+round one deliberately lets a **delayed** event buy a term reaching *farther* than one already applied. So
+a refund of the shorter, later-raised grant ended the longer term a delayed renewal had bought.
+
+**The two fixes were individually right and contradicted each other.** That is the shape worth carrying
+forward: a guard added in one round can invalidate an assumption another round relies on, and nothing in
+the type system or the suite notices.
+
+### The repair is to stop guessing
+
+A reversal on an arrangement with more than one grant now revokes **only** when it *states* a period
+reaching the term in force — the one proof the payload carries. The reference comparison is gone, with the
+reason written into the code so nobody restores it, and the latest-grant selection is gone with it: the
+ledger is only **counted** now. A single grant still revokes unconditionally, because there is no other
+term it could concern. Anything else is recorded with `effect: NONE`, audited, and left to
+`reconcileProviderState`, which *reads the provider* rather than inferring from a field that cannot
+answer.
+
+The cost is explicit and stated in the code: a disputed term stays live until that read. The alternative
+deletes a term somebody paid for on the strength of a guess, which is worse and irreversible from inside
+the transaction.
+
+**Attribution is persisted rather than inferred**, as asked: `writeEvent` now records the
+`appliedTermEndsAt` that the grant actually put in force — read back from the arrangement inside the same
+transaction — so fallback-computed terms are attributable too, not only the ones a provider chose to
+state.
+
+### One of my own controls had to go
+
+*"Revokes the current term when the reversal names the charge that bought it"* encoded exactly the
+reference matching Astra rejected. It is replaced by a control that proves the same intent with evidence
+that holds: a reversal stating the period the current term covers.
+
+**And a second test went with it by accident, which is worth recording rather than smoothing over.** The
+replacement was applied as a block spanning to the next `it(`, and that range swallowed a neighbour —
+*"still revokes when the reversal is of the payment that bought the term in force"*, my own round-one
+positive control. The two were near-duplicates, so no behaviour lost its only cover, but the deleted one
+asserted the arrangement reaching `ENDED` and the replacement did not. That assertion is carried into the
+surviving case rather than left out. Caught by arithmetic: the suite gained two tests where the edits
+should have added three. **A block replacement anchored on "the next thing that looks like this" deletes
+whatever sits between.** Three regressions join it — both
+reversal kinds sharing a subscription reference, and a refund of the shorter grant against a longer term
+bought by a delayed renewal.
+
+| mutation | result |
+|---|---|
+| the store reverted to the reviewed `beba1f9` | **3 failed** — the two shared-reference cases and the reordered-grant case |
+| the replaced control, same mutation | **passes in both states** — it rests on a proof that was always honoured |
+
+### The pattern across three rounds, stated plainly
+
+Round one: I fixed the defects and wrote tests from the shape of my fix. Round two: both fixes had holes,
+found by cases derived from the shape of the *defect*. Round three: my own two fixes contradicted each
+other, and the evidence I reached for did not exist in the payload.
+
+The common thread is not carelessness about tests — every round was mutation-checked and every round's
+tests did fail against the code they were written for. It is that **an author's tests inherit the
+author's model of the problem.** Astra's executed evidence was narrower than mine in all three rounds, and
+more useful in all three, because it was derived from the contract rather than from my implementation.
+
+### Verification of this head (round three)
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` | exit 0 — 205 files, **3323/3323** |
+| PostgreSQL suites | 48 files, **1056/1056**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 100 files, **1158/1158** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **2012 passed / 1311 skipped** |
