@@ -3016,3 +3016,111 @@ Run by name, the enforcement and concurrency suites the directive asks for:
 | `simulation-inputs` — the fixture this merge edited | **19/19** |
 
 Totals moved 193→194 files and 3033→3090 tests, PG 43→44 files and 910→928 cases, E2E 1106→1117.
+
+## P6-06 commercial catalogue, and the accepted #97 propagated into it — PR #98 — 2026-10-21
+
+#97 was accepted at `2aaf661574a9f2b72dbb6243111bef2e5afb0499`, and the directive propagated it into
+`feat/p6-06-commercial-catalog`, which was at `c32b9fb6b15cd37a19429910ebd8b6e13909a328` — **75 commits
+behind** while carrying 12 of its own.
+
+### What P6-06 is, recorded here for the first time
+
+**The price book is data, in one file, read through the ordinary catalogue store.** The spec requires that
+public pricing come from the plan catalogue rather than duplicated constants, so a pricing page reads it
+through `readCatalog`. The consequence is the point: a price shown to a customer and a price they are
+charged **cannot drift apart, because there is only one of them.** Starter / Growth / Scale in EUR, with
+immutable versions — re-pricing or re-packaging publishes a new version, and triggers refuse an edit or a
+delete on either table.
+
+**Add-ons come in two kinds and the distinction is structural.** `RECURRING_CAPACITY` raises a limit while
+held (one more Business Profile at €25/mo, one more seat at €7/mo); `ONE_TIME_ALLOWANCE` tops up a metered
+allowance once (voice packs of 500, 2,000 and 5,000 minutes).
+
+**Two absences are load-bearing.** There is **no AI-reply quota** — core generation is customer-facing
+`UNMETERED` on every paid tier, so no `AI_GENERATION_CYCLES` entry exists to find; the ledger still counts
+generations internally, which is a different thing and must never be shown as a billable allowance. And
+there are **no provider price identifiers** — those are references a billing adapter fills once a provider
+is chosen (#41), and the catalogue is interpretable without them because a plan's entitlements come from
+its own grants, never from a provider's price object. Verified on this head: zero occurrences of
+`price_`, `prod_`, `cus_`, `sub_` or any provider name across `accepted-catalog.ts`, `catalog-store.ts`
+and `scripts/catalog/publish.ts`.
+
+**`pnpm catalog:publish` is the producer, and its absence had not been a small gap.**
+`publishAcceptedCatalog` was reachable only from tests, so a deployed database held no plan versions and
+no prices at all — and that does not fail loudly. It fails quietly in three places at once: the first
+Business Profile connects, `ensureWorkspaceTrial` finds no trial plan and silently returns
+`{ started: false }`; `readCheckoutOffer` has nothing to quote and refuses with `NO_PRICE`; the billing
+screen reads an empty catalogue, so a pricing page shows nothing to buy. Each reads like a product
+decision rather than a missing deployment step, which is why it survived review — the same shape as the
+release tables before `pnpm release:record` existed.
+
+**Publishing is deliberately not idempotent, and the script states it rather than pretending.**
+`publishPlanVersion` cuts version N+1 every time, so a repeat is "wasteful rather than wrong": a second
+identical version goes on sale while `readCatalog` still answers with one plan per code. The script
+declines by default once anything is published and reports what it found; `--republish` cuts a new version
+deliberately, which is what a changed price needs; `--dry-run` writes nothing and reports the decision.
+
+### The merge: zero conflicts, and for once that was the truth
+
+The two links before this one both merged clean in files that then failed to compile, so the merged tree
+was typechecked before anything else: **0 TypeScript errors**. The reason is in #98's own history — it had
+merged #97's earlier states four times, the last being `c32b9fb` *"Merge the capacity-lock correction"*,
+so its callers were already adapted to the required `PolicyInput.commercial` and to
+`createBusinessProfile`'s `DbClient` signature. **A branch that tracks its parent pays the propagation
+cost in instalments**, which is the first time in this chain that has shown up as a measurable saving.
+
+Checked anyway, because the absence of a conflict is not evidence:
+
+| check | result |
+|---|---|
+| models vs `CREATE TABLE` statements | **62 = 62** |
+| duplicate name across the barrel's 53 export lines | none |
+| migration drift | **No difference detected.** |
+| worker loop registry | **8 loops, 8 `close()` calls, prose says "eight"** |
+
+That last one was counted by bracket depth after a line-anchored pattern reported seven — it had missed
+the conditional `...(tokenRefresh.running ? …)` spread. Same lesson as the eleven-vs-eight miscount two
+links ago: a count is evidence only if the thing counted is the thing bounded.
+
+### The capacity-lock record, carried forward unchanged
+
+Per the directive's point 6: Gemini accepted the capacity-lock implementation as architecturally sound,
+and the direct `createBusinessProfile` observer/interleaving test **remains absent**. That gap is **not**
+closed, and nothing in this link closes it. The correction published on #97 (comment 6305293853) also
+stands: the review's §3.B cited `entitlement-lock.integration.test.ts` as proving it, and that file covers
+a *different* advisory lock — the entitlement key ordering a plan change against a delivery claim. With
+`serializeCapacity` deleted, that file still passes 6/6, `entitlements.integration` 33/33 and
+`policy-store.integration` 37/37.
+
+### Verification of this head
+
+Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` (typecheck, lint, test, build) | exit 0 — 196 files, **3123/3123** |
+| PostgreSQL suites | 45 files, **956/956**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 97 files, **1117/1117** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **1919 passed / 1204 skipped**, zero infrastructure variables present |
+
+Run by name:
+
+| suite | result |
+|---|---|
+| `catalog.integration` — versioning, add-ons, top-ups (P6-06) | **28/28** |
+| `scripts/catalog/publish.test.ts` — the producer | **5/5** |
+| `entitlements.integration` — capacity and lock lifetime (P6-03) | **33/33** |
+| `entitlement-lock.integration` — the *other* advisory lock | **6/6** |
+| `delivery-store.integration` — revocation through a waiting send | **49/49** |
+| `usage-store.integration` — the P6-02 settlement race | **27/27** |
+| `apps/worker` `main.test.ts` — the loop registry | **10/10** |
+
+**Every test file in the repository runs in `pnpm verify`**, including the root tooling ones: the root
+vitest config declares a third project, `tooling`, over `scripts/**/*.test.ts`. Verified by arithmetic —
+170 `.test.ts` plus 23 `.test.tsx` under `apps/` and `packages/`, plus 3 under `scripts/`, is exactly the
+196 files `verify` reports.
+
+Totals: 194→196 files and 3090→3123 tests, PG 44→45 files and 928→956 cases; E2E unchanged at 1117.

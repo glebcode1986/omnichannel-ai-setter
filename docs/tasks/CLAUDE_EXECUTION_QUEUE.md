@@ -40,13 +40,80 @@ what was believed when is worth keeping:
    heads that have since moved. #94 is accepted at `852f855871ca48ad88c3799f8c0dd05636dfd700`, by formal exact-head review on
    2026-10-20; the earlier `df77cd7` verdict belongs to a head that has since moved. **#95 is accepted
    at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20, and
-   **#96 at `8ce410252269fb6dd5af0737df3f310290e49542`** on the same day.
+   **#96 at `8ce410252269fb6dd5af0737df3f310290e49542`** on the same day, and **#97 at
+   `2aaf661574a9f2b72dbb6243111bef2e5afb0499`** on 2026-10-21.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #96 into P6-03 / PR #97
+### Current work — propagating the accepted #97 into P6-06 / PR #98
+
+#97 was accepted at `2aaf661574a9f2b72dbb6243111bef2e5afb0499`, so this branch is the next link. Ordinary
+merge commit, one branch only — no rebase, no force-push, nothing to `main`, #99+ untouched. #98 was **75
+commits behind** while carrying 12 of its own.
+
+**Zero conflicts, and this time that was the truth rather than a warning.** The two links before it both
+merged clean in files that then failed to compile, so the tree was typechecked before anything else:
+**0 TypeScript errors**. The reason is visible in #98's own history — it had already merged #97's earlier
+states four times, including `c32b9fb` "Merge the capacity-lock correction", so its callers were adapted
+to the required `PolicyInput.commercial` and to `createBusinessProfile`'s `DbClient` signature before this
+propagation arrived. A branch that tracks its parent pays the cost in instalments.
+
+Checked rather than trusted anyway: **62 models against 62 `CREATE TABLE` statements**, no duplicate name
+across the barrel's 53 export lines, no drift, and the worker's loop registry still reports **8 loops with
+8 `close()` calls and prose that says "eight"** — counted by bracket depth, because a first count with a
+line-anchored pattern said seven by missing the conditional spread.
+
+**The capacity-lock record is carried forward unchanged, per the directive.** Gemini accepted the
+implementation as architecturally sound; the direct `createBusinessProfile` observer test **remains
+absent** and that gap is **not** closed. It is also not this link's to close.
+
+### Task definition — P6-06 / Issue #43, the accepted commercial catalogue
+
+**Branch `feat/p6-06-commercial-catalog`**, based on `feat/p6-03-entitlement-enforcement`. Recorded here
+now; neither canonical document named it.
+
+**The price book is data, in one file, read through the ordinary catalogue store.** The spec requires that
+public pricing come from the plan catalogue and not from duplicated constants, so a pricing page reads it
+through `readCatalog` — which means a price shown to a customer and a price they are charged **cannot
+drift apart, because there is only one of them**. Starter / Growth / Scale, in EUR, with versions that are
+immutable: re-pricing or re-packaging publishes a new version, and triggers refuse an edit or a delete on
+either table.
+
+**Add-ons are two kinds, and the kinds matter.** `RECURRING_CAPACITY` raises a limit for as long as it is
+held — one more Business Profile, one more seat. `ONE_TIME_ALLOWANCE` tops up a metered allowance once —
+the 500, 2,000 and 5,000 voice-minute packs.
+
+**Two things are deliberately absent, and both are load-bearing.** There is **no AI-reply quota**: core
+generation is customer-facing `UNMETERED` on every paid tier, so no `AI_GENERATION_CYCLES` entry exists to
+find. The ledger still counts generations internally, which is a different thing and must never be shown
+as a billable allowance. And there are **no provider price identifiers**: those are references a billing
+adapter fills once a provider is chosen (#41), and the catalogue is interpretable without them, because a
+plan's entitlements come from its own grants and never from a provider's price object.
+
+**`pnpm catalog:publish` is the producer, and its absence was not a small gap.**
+`publishAcceptedCatalog` had been reachable only from tests, so a deployed database held no plan versions
+and no prices at all — which does not fail loudly. It fails quietly in three places at once: the first
+Business Profile connects and `ensureWorkspaceTrial` finds no trial plan so silently returns
+`{ started: false }`; `readCheckoutOffer` has nothing to quote and refuses with `NO_PRICE`; and the
+billing screen reads an empty catalogue, so a pricing page shows nothing to buy. Each of those reads like
+a product decision rather than a missing deployment step, which is why it survived review — the same shape
+as the release tables before `pnpm release:record` existed.
+
+**Publishing is deliberately not idempotent, and the script says so rather than pretending.**
+`publishPlanVersion` cuts version N+1 every time it is asked, so a repeat is "wasteful rather than wrong":
+a second identical version goes on sale and `readCatalog` still answers with one plan per code. The script
+therefore **declines by default** once anything is published and reports what it found; `--republish` cuts
+a new version deliberately, which is what a changed price needs, and `--dry-run` writes nothing and
+reports the decision.
+
+Its test lives at `scripts/catalog/publish.test.ts` and **does run in `pnpm verify`** — the root vitest
+config declares a third project, `tooling`, over `scripts/**/*.test.ts`. Verified by arithmetic rather
+than by assumption: 170 `.test.ts` plus 23 `.test.tsx` under `apps/` and `packages/`, plus 3 under
+`scripts/`, is exactly the 196 files `verify` reports.
+
+### Earlier — propagating the accepted #96 into P6-03 / PR #97
 
 #96 was accepted at `8ce410252269fb6dd5af0737df3f310290e49542`, so this branch is the next link. Ordinary
 merge commit, one branch only — no rebase, no force-push, nothing to `main`, and #98+ untouched. #97 was

@@ -36,6 +36,7 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { consumeTopUp, readTopUpBalance } from "./catalog-store";
 import { readEntitlement } from "./entitlement-store";
 
 /**
@@ -227,6 +228,8 @@ export async function reserveUsage(db: DbClient, input: ReserveUsageInput): Prom
     // believing an allowance had been checked when none exists.
     return { status: "REFUSED", verdict: { kind: "NOT_A_QUOTA" } };
   }
+  // Narrowed once, here, because the guard above cannot narrow a property read inside the closure below.
+  const metric = input.metric;
 
   return db.$transaction(async (tx) => {
     const cycle = await openUsageCycleWithin(tx, input.workspaceId, at);
@@ -246,11 +249,15 @@ export async function reserveUsage(db: DbClient, input: ReserveUsageInput): Prom
     // Resolved inside the lock, against the same instant the decision is written at. A snapshot read
     // before the lock could have been overtaken by a plan change, and this is a billing boundary.
     const snapshot = await readEntitlement(tx as unknown as DbClient, input.workspaceId, at);
+    // Allowance the workspace bought on top of the plan's own (#43). Read inside the lock with
+    // everything else, so a top-up arriving mid-decision cannot be counted twice or missed.
+    const purchased = await readTopUpBalance(tx, input.workspaceId, metric, at);
     const verdict = reservationVerdict({
       snapshot,
       metric: input.metric,
       committed: counter.committed,
       reserved: counter.reserved,
+      purchased: purchased.remaining,
       amount,
     });
     if (verdict.kind !== "ALLOWED") {
@@ -345,6 +352,13 @@ async function settle(
         : { status: "RELEASED", replayed: true };
     }
 
+    if (kind === "COMMIT" && amount > 0) {
+      // Which of the two allowances this spent (#43). The accepted policy is that the plan's included
+      // amount goes first, so only what spills past it is taken from a bought balance — computed from the
+      // counter before and after, which attributes a commit that straddles the boundary exactly rather
+      // than rounding it to one side.
+      await spendPurchasedAllowance(tx, input.workspaceId, input.metric, row.cycle_id, amount, at);
+    }
     const deltas = ledgerDeltas(kind, { amount, held: row.amount });
     await writeLedgerEntry(tx, {
       workspaceId: input.workspaceId,
@@ -367,6 +381,43 @@ async function settle(
     await bumpCounter(tx, input.workspaceId, row.cycle_id, input.metric, deltas);
     return kind === "COMMIT" ? { status: "COMMITTED", committed: amount, replayed: false } : { status: "RELEASED", replayed: false };
   });
+}
+
+/**
+ * Takes from the bought balance whatever this commit spends beyond the plan's included allowance.
+ *
+ * The counter tracks one total against the included amount, so the part of it that exceeds the plan is
+ * the part a top-up paid for. Comparing the overflow before and after the commit attributes a commit that
+ * straddles the boundary exactly: twenty seconds committed against an allowance with five left takes five
+ * from the plan and fifteen from the balance, rather than all twenty from one of them.
+ *
+ * Nothing left to take is not an error here. A commit records work that already happened, and the ledger's
+ * own counter is the record of it; a balance that could not cover the overflow means the *next*
+ * reservation is refused, which is the policy rather than a failure of this one.
+ */
+async function spendPurchasedAllowance(
+  tx: DbExecutor,
+  workspaceId: string,
+  metric: LedgerMetric,
+  cycleId: string,
+  amount: number,
+  at: Date,
+): Promise<void> {
+  if (!hasCustomerQuota(metric)) {
+    return;
+  }
+  const sold = metric;
+  const snapshot = await readEntitlement(tx as unknown as DbClient, workspaceId, at);
+  const included = snapshot.quotas[sold] ?? 0;
+  const counter = await tx.usageCounter.findUnique({
+    where: { workspaceId_cycleId_metric: { workspaceId, cycleId, metric } },
+    select: { committed: true },
+  });
+  const before = counter?.committed ?? 0;
+  const overflow = Math.max(0, before + amount - included) - Math.max(0, before - included);
+  if (overflow > 0) {
+    await consumeTopUp(tx, workspaceId, sold, overflow, at);
+  }
 }
 
 /**

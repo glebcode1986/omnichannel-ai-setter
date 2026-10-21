@@ -215,20 +215,186 @@ model PlanVersion {
   limits     Json     @default("{}")
   /// Period allowances, keyed by the domain's `UsageMetric`.
   quotas     Json     @default("{}")
-  /// Minor units of `currency`, so no money is ever a float. Null for a version that is not sold.
-  monthlyPriceCents Int?    @map("monthly_price_cents")
-  annualPriceCents  Int?    @map("annual_price_cents")
-  /// ISO 4217. A price book is per currency, and nothing assumes EUR for ever.
-  currency   String?
+  /// Who may still subscribe to this version (#43). `LEGACY` is grandfathered, never withdrawn.
+  availability CatalogAvailability @default(PRIVATE)
   /// When this version stopped being offered to new subscriptions. Existing ones keep it.
   retiredAt  DateTime? @map("retired_at")
   createdAt  DateTime @default(now()) @map("created_at")
 
   plan          PlanDefinition         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   subscriptions WorkspaceSubscription[]
+  prices        PlanPrice[]
 
   @@unique([planId, version])
   @@map("plan_versions")
+}
+
+/// Who may subscribe to a catalogue item (#43, PRICING_PACKAGING.md).
+enum CatalogAvailability {
+  /// Offered on the public pricing page.
+  PUBLIC
+  /// Exists and is subscribable, but is not advertised: a negotiated or pilot package.
+  PRIVATE
+  /// Withdrawn from sale. Workspaces on it keep it, and it stays interpretable for ever.
+  LEGACY
+}
+
+/// How often a price is charged. `ONE_TIME` is a top-up, which is not a subscription at all.
+enum BillingInterval {
+  MONTH
+  YEAR
+  ONE_TIME
+}
+
+/// What an add-on sells (#43).
+enum AddOnKind {
+  /// Recurring capacity: one more Business Profile, one more seat.
+  RECURRING_CAPACITY
+  /// A one-time allowance top-up, bought deliberately and never charged as overage.
+  ONE_TIME_ALLOWANCE
+}
+
+/// One price for one plan version, in one currency, at one interval (#43).
+///
+/// A child table rather than columns on the version, because the price book is per currency and per
+/// interval and the architecture has to stay multi-currency — two columns and a single `currency` could
+/// only ever describe one. The annual amount is stored outright rather than derived from the monthly one:
+/// the accepted rule is "pay ten months, receive twelve", and a product that recomputed it would be free
+/// to disagree with the invoice a customer already has.
+model PlanPrice {
+  id            String          @id @default(uuid(7))
+  planVersionId String          @map("plan_version_id")
+  /// ISO 4217. Nothing assumes EUR for ever.
+  currency      String
+  interval      BillingInterval
+  /// Minor units of `currency`, so no money is ever a float.
+  amountCents   Int             @map("amount_cents")
+  /// The billing provider's own price object, opaque: nothing parses, compares or branches on it.
+  providerPriceId String?       @map("provider_price_id")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([planVersionId, currency, interval])
+  @@map("plan_prices")
+}
+
+/// A self-serve add-on, as a product (#43).
+///
+/// Separate from the plan it is bought alongside, because an add-on grants capacity or allowance without
+/// upgrading the feature class of the base plan — a business on Starter with three extra profiles is
+/// still on Starter, and nothing about this table can change that.
+model AddOnDefinition {
+  id           String    @id @default(uuid(7))
+  /// Stable product code. Never a provider's price identifier.
+  code         String    @unique
+  name         String
+  displayOrder Int       @default(0) @map("display_order")
+  retiredAt    DateTime? @map("retired_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  versions AddOnVersion[]
+
+  @@map("addon_definitions")
+}
+
+/// An immutable snapshot of what one version of an add-on grants (#43).
+///
+/// Immutable for the same reason a plan version is: a workspace buys a *version*, so editing one would
+/// change the terms of every workspace that bought it. `kind` lives here rather than on the definition so
+/// that a CHECK can pair it with the grants — recurring capacity grants limits, a top-up grants allowance,
+/// and a row claiming both is not a product anybody priced.
+model AddOnVersion {
+  id           String              @id @default(uuid(7))
+  addOnId      String              @map("addon_id")
+  version      Int
+  kind         AddOnKind
+  availability CatalogAvailability @default(PRIVATE)
+  /// Capacity this add-on adds, keyed by the domain's `PlanLimit`. Empty for a top-up.
+  limits       Json                @default("{}")
+  /// Allowance this add-on adds, keyed by the domain's `UsageMetric`. Empty for recurring capacity.
+  quotas       Json                @default("{}")
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  addOn      AddOnDefinition  @relation(fields: [addOnId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  prices     AddOnPrice[]
+  purchases  WorkspaceAddOn[]
+  topUps     UsageTopUp[]
+
+  @@unique([addOnId, version])
+  @@map("addon_versions")
+}
+
+/// One price for one add-on version. Same shape and same reasoning as `PlanPrice`.
+model AddOnPrice {
+  id              String          @id @default(uuid(7))
+  addOnVersionId  String          @map("addon_version_id")
+  currency        String
+  interval        BillingInterval
+  amountCents     Int             @map("amount_cents")
+  providerPriceId String?         @map("provider_price_id")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  addOnVersion AddOnVersion @relation(fields: [addOnVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([addOnVersionId, currency, interval])
+  @@map("addon_prices")
+}
+
+/// A recurring add-on a workspace is actually paying for (#43).
+///
+/// `quantity` rather than one row per unit: "three extra seats" is one decision a person made, and three
+/// rows would make removing one of them ambiguous. Removal takes effect at the end of the paid period, so
+/// the row is dated rather than deleted — and the entitlement reads only the ones active at the instant
+/// it is resolved.
+model WorkspaceAddOn {
+  id             String    @id @default(uuid(7))
+  workspaceId    String    @map("workspace_id")
+  addOnVersionId String    @map("addon_version_id")
+  quantity       Int       @default(1)
+  activeFrom     DateTime  @map("active_from")
+  /// When it stops granting anything. Null means it is still being paid for.
+  activeUntil    DateTime? @map("active_until")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  addOnVersion AddOnVersion @relation(fields: [addOnVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([workspaceId, addOnVersionId])
+  @@index([workspaceId, activeUntil])
+  @@map("workspace_addons")
+}
+
+/// Allowance a workspace bought on top of its plan's included amount (#43).
+///
+/// Not part of the plan's quota, and deliberately so: the accepted policy consumes the included allowance
+/// first and only then a top-up, and the two expire differently — a plan's allowance resets with the
+/// cycle, a top-up carries through the end of the *next* billing period and then lapses. Folding them
+/// into one number would make both of those rules unexpressible.
+model UsageTopUp {
+  id             String          @id @default(uuid(7))
+  workspaceId    String          @map("workspace_id")
+  metric         UsageMetricKind
+  /// What was bought, in the metric's own units.
+  amount         Int
+  /// What has been spent out of it. Never more than `amount`, by CHECK.
+  consumed       Int             @default(0)
+  /// Which catalogue item it came from, for reconciliation. Null for a goodwill grant.
+  addOnVersionId String?         @map("addon_version_id")
+  purchasedAt    DateTime        @map("purchased_at")
+  /// End of the next billing period after purchase, under the accepted carry-over rule.
+  expiresAt      DateTime        @map("expires_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  addOnVersion AddOnVersion? @relation(fields: [addOnVersionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// Spending order: the soonest to expire is spent first, so nothing lapses that could have been used.
+  @@index([workspaceId, metric, expiresAt])
+  @@map("usage_topups")
 }
 
 /// What one workspace is subscribed to, in the product's own terms (#38).
@@ -952,6 +1118,8 @@ model Workspace {
   styleExamples      StyleExample[]
   styleProfiles      StyleProfile[]
   usageCycles        UsageCycle[]
+  workspaceAddOns    WorkspaceAddOn[]
+  usageTopUps        UsageTopUp[]
   usageLedgerEntries UsageLedgerEntry[]
   usageCounters      UsageCounter[]
   usageReservations  UsageReservation[]
