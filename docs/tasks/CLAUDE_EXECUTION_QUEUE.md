@@ -58,7 +58,56 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — remediating Astra's three blocking findings on P6-08 / PR #100
+### Current work — P6-08 / PR #100, round two: both remediations had holes
+
+Astra re-reviewed `a5efdf9` and returned `CHANGES_REQUESTED` again, with two findings — **both of them
+against my own fixes rather than against the original code.** Both were right, and neither was something
+the first round's tests could have caught, because I wrote those tests to the shape of my fix rather than
+to the shape of the problem.
+
+**P1 — I correlated a reversal by the wrong fact.** The ledger check compared the granting payment's
+`occurredAt` with the *reversal's* `occurredAt`. But a reversal's `occurredAt` is when the reversal was
+**raised**, not when the charge it reverses was made — `NormalizedBillingEvent` says exactly that — so a
+refund issued today for last month's invoice is legitimately *newer* than today's renewal and sailed
+straight through the guard. My own regression had hidden it: I gave the reversal the old payment's
+timestamp, which covers an old reversal **delivered late** and not a new reversal **of an old charge**.
+
+Time cannot answer the question, so identity does. The reversal now attributes in three steps: a stated
+period earlier than what is paid for names an earlier term; a stated period reaching the current term
+names *that* one and revokes it; and with no stated period the ledger is asked how many payments have
+granted a term on this arrangement at all. One means there is nothing to confuse — the money being
+returned bought the access, and that is the ordinary refund. More than one means only the provider's own
+charge reference can say, and `writeEvent` now retains that reference on every event row for exactly this.
+Unmatched or absent, a term somebody paid for is not deleted on a maybe.
+
+**P2 — the tamper check guarded the wrong moment.** Asserting at the entry point answers a question about
+one instant, and the store then awaits a route lookup, a transaction and several queries. A caller still
+holding the object it passed in can move a `Date` inside it while any of those are pending; Astra
+demonstrated a renewal minted for January, mutated to 2099 during a gated lookup, granting service until
+2099. Re-asserting after each await does not close it, because there is always another await.
+
+So the boundary now takes a **private snapshot**: `snapshotVerifiedBillingEvent` authenticates and returns
+a frozen deep copy, and `recordVerifiedBillingEvent` reads that copy for all nineteen of its subsequent
+`event.` accesses. The caller's object is never read again — the parameter is renamed `delivered` so that
+is visible at the signature.
+
+**Five more regressions, including the one that is hard to write.** Both reversal kinds raised *after* the
+renewal with no stated period; two controls that keep the identity check from degenerating into "a
+reversal naming nothing never does anything" — an ordinary refund of the only payment ever made still
+revokes, and a reversal naming the charge that bought the current term still revokes; and an
+**asynchronous** store-level case that gates the real route lookup against the real database, mutates the
+caller-held event while it is pending, releases it, and proves the altered year reaches neither a row nor
+the audit detail.
+
+Mutation-checked against the exact code Astra reviewed: the three new behavioural regressions fail, and
+both new controls pass.
+
+**The lesson, recorded because it is the second time this round:** I wrote the first round's tests to the
+shape of my fix. A regression written from the fix can only confirm the fix; the one worth writing comes
+from the shape of the *defect*, which is why Astra's "reversal raised after the renewal" and "mutate
+during an await" cases found what mine could not.
+
+### Earlier — remediating Astra's three blocking findings on P6-08 / PR #100
 
 Astra returned `CHANGES_REQUESTED` on `55fbf98` — the first blocking verdict of this chain, and the first
 review by Astra since the route changed. Three findings, all of them real, all of them in code I wrote.

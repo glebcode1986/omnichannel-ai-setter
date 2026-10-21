@@ -3556,3 +3556,87 @@ verify/build/lint/typecheck or evals, and it does not certify the remaining requ
 findings were reproduced through an in-process probe with a fake adapter and a DbClient double — which
 was enough, because all three were real. The capacity-lock observer gap remains explicitly unverified and
 non-blocking.
+
+## PR #100 round two — both of my remediations had holes — 2026-10-21
+
+Astra re-reviewed `a5efdf9` and returned `CHANGES_REQUESTED` again. Two findings, **both against my own
+fixes rather than the original code**, both right, and neither catchable by the tests I had written —
+because I wrote those to the shape of my fix instead of the shape of the defect.
+
+### P1 — I correlated a reversal by the wrong fact
+
+The ledger check compared the granting payment's `occurredAt` with the **reversal's** `occurredAt`. But a
+reversal's `occurredAt` is when the reversal was *raised*, not when the charge it reverses was made —
+`NormalizedBillingEvent` defines it that way — so a refund issued today for last month's invoice is
+legitimately *newer* than today's renewal, and went straight through the guard that existed to stop it.
+
+**My own regression hid it.** I gave the reversal the old payment's timestamp, which covers an old
+reversal *delivered late* and not a new reversal *of an old charge*. Astra named that distinction
+precisely.
+
+Time cannot answer the question, so identity does. Attribution is now three steps:
+
+1. a stated period ending before what is paid for → an earlier term, no revocation;
+2. a stated period reaching the current term → it names *that* term, revoke;
+3. no stated period → ask the ledger how many payments have granted a term on this arrangement. **One**
+   means there is nothing to confuse: the money being returned bought the access, which is the ordinary
+   refund. **More than one** means only the provider's own charge reference can say — retained on every
+   event row by `writeEvent` for exactly this purpose — and absent or unmatched, a term somebody paid for
+   is not deleted on a maybe.
+
+### P2 — the tamper check guarded the wrong moment
+
+The fingerprint correctly rejects a `Date` mutated *before* entry. But asserting answers a question about
+one instant, and `recordVerifiedBillingEvent` then awaits a route lookup, a transaction and several
+queries. A caller still holding the object it passed in can move a `Date` inside it while any of those are
+pending. Astra's reproduction: a renewal minted ending 2027-01-07, mutated to 2099 during a deliberately
+gated route lookup, produced `APPLIED/EXTEND` and a subscription ending **2099**-01-07.
+
+Re-asserting after each await would not close it — there is always another await. So the boundary takes a
+**private snapshot**: `snapshotVerifiedBillingEvent` authenticates and returns a frozen deep copy, and the
+store reads that copy for all nineteen of its later `event.` accesses. The caller's object is never read
+again, and the parameter is renamed `delivered` so that is visible at the signature.
+
+### Five more regressions, including the one that is hard to write
+
+| case | what it pins |
+|---|---|
+| `REFUNDED` raised **after** the renewal, no period stated | the hole in my first attribution fix |
+| `CHARGEBACK` the same | the second mapping row, which could have been wrong alone |
+| an ordinary refund of the only payment ever made | that the identity check has not degenerated into "an unstated reversal never does anything" |
+| a reversal naming the charge that bought the current term | that identity, when it *can* be shown, still revokes |
+| **the asynchronous case** — gate the real route lookup, mutate the caller-held event, release | that the altered year reaches neither a row nor the audit detail |
+
+The asynchronous one drives the real store against the real database with only the route lookup gated,
+because the window being tested exists *between* awaits rather than inside a mock.
+
+| mutation | result |
+|---|---|
+| both files reverted to the exact code Astra reviewed | **3 failed** — the two reversal cases and the interleaving case |
+| the two new controls, same mutation | **pass** — they describe behaviour that was already correct |
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` | exit 0 — 205 files, **3321/3321** |
+| PostgreSQL suites | 48 files, **1054/1054**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 100 files, **1158/1158** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **2012 passed / 1309 skipped** |
+
+### The lesson, recorded because it is the whole point of the round
+
+**A regression written from the fix can only confirm the fix.** Both holes were in tests I wrote
+immediately after making a change, from the shape of the change. The cases that found them —
+"reversal raised after the renewal" and "mutate during an await" — come from the shape of the *defect*,
+which is the thing an author is worst placed to see and an adversarial reviewer is best placed to name.
+Astra's executed evidence was again narrower than mine (no PostgreSQL, Redis, drift, E2E, verify or
+evals, stated plainly in the review) and again more useful.
+
+Its progress notes are recorded too: the stated-term reversal and reordered-renewal fixes were confirmed
+working, the seven new unit tests were confirmed to execute real mutations, and the conditional
+`updateMany` was read but **not** certified for real PostgreSQL concurrency — that remains covered only by
+my own racing test. The `createBusinessProfile` interleaving gap stays open and non-blocking.

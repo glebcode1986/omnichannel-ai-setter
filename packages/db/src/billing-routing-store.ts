@@ -52,7 +52,7 @@ import {
 
 import { recordSystemAuditEvent, recordWorkspaceAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
-import { assertVerifiedBillingEvent, type VerifiedBillingEvent } from "./billing-events";
+import { snapshotVerifiedBillingEvent, type VerifiedBillingEvent } from "./billing-events";
 import { DbInputError } from "./errors";
 import { requireRole, scopeOf, type WorkspaceContext } from "./tenancy";
 
@@ -788,16 +788,24 @@ export interface BillingEventResult {
 /**
  * Applies one verified provider event to the workspace's normalized billing state.
  *
- * The first line is the whole security model: `assertVerifiedBillingEvent` refuses anything that
- * `billing-events.ts` did not mint, so a success-page handler cannot reach this path even by
- * constructing an object of the right shape and casting it.
+ * The first line is the whole security model, and it does two things rather than one.
+ * `snapshotVerifiedBillingEvent` refuses anything `billing-events.ts` did not mint — so a success-page
+ * handler cannot reach this path even by constructing an object of the right shape and casting it — and it
+ * returns a private copy of the authenticated facts.
+ *
+ * The copy is the part that is easy to leave out, and leaving it out was a real defect: asserting answers
+ * a question about one instant, and this function then awaits a route lookup, a transaction and several
+ * queries. A caller that still holds the object it passed in can move a `Date` inside it while any of
+ * those are pending, and every read after the await would see the new value. Re-asserting after each
+ * await does not close it, because there is always another await. So nothing below reads the caller's
+ * object again: `event` here *is* the snapshot.
  *
  * Idempotent by index. A redelivered webhook is read before it is written, under an advisory lock on the
  * route and event identifier, and returns `DUPLICATE` with the effect the first delivery had — so a
  * provider retrying for an hour neither double-charges nor double-extends.
  */
-export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
-  assertVerifiedBillingEvent(event);
+export async function recordVerifiedBillingEvent(db: DbClient, delivered: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
+  const event = snapshotVerifiedBillingEvent(delivered);
 
   const route = await db.billingRoute.findUnique({
     where: { code: event.routeCode },
@@ -1165,18 +1173,42 @@ async function apply(
     if (event.periodEndsAt !== undefined && event.periodEndsAt.getTime() < paidThrough.getTime()) {
       return "NONE";
     }
-    // Second, what the ledger says, which is what makes an *unstated* period answerable instead of merely
-    // ambiguous. Every event that granted a term is retained with the instant it occurred, so if the term
-    // now in force was granted by a payment later than the one being taken back, that term was bought
-    // separately and this reversal is not about it. If the granting payment is this one — or older than
-    // it — the money being returned is the money that bought the access, and it goes.
-    const granting = await tx.billingEvent.findFirst({
-      where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } },
-      orderBy: { occurredAt: "desc" },
-      select: { occurredAt: true },
-    });
-    if (granting !== null && granting.occurredAt.getTime() > event.occurredAt.getTime()) {
-      return "NONE";
+    // Second, what the ledger says — and this is where comparing timestamps was wrong.
+    //
+    // A reversal's `occurredAt` is when the *reversal* was raised, not when the charge it reverses was
+    // made: `NormalizedBillingEvent` says so, and a refund issued today for last month's invoice is
+    // legitimately newer than today's renewal. Comparing the two therefore let exactly the case this
+    // guard exists for through — a new reversal of an old charge — which Astra demonstrated on PR #100
+    // after the first version of this fix. Time cannot answer the question; identity has to.
+    //
+    // So the ledger is asked how many payments have granted a term on this arrangement at all. One means
+    // there is nothing to confuse: the money being returned is the money that bought the access, whatever
+    // the provider chose to state, and it goes — which is the ordinary refund and the case an earlier
+    // attempt at this broke. More than one means the term in force may have been bought separately, and
+    // then only the provider's own charge reference can say whether this reversal is about it. Retained on
+    // every event row for exactly this (see `writeEvent`); absent or unmatched, the reversal cannot show
+    // that it concerns the term that is granting service, and a term somebody paid for is not deleted on
+    // a maybe.
+    //
+    // Only when the provider stated no period, because a stated one that reaches the current term has
+    // already answered the question: the first check let it through precisely because it names the term in
+    // force, and asking for a charge reference as well would refuse an ordinary refund for having less
+    // metadata than it needs.
+    const granting =
+      event.periodEndsAt !== undefined
+        ? []
+        : await tx.billingEvent.findMany({
+            where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } },
+            orderBy: { occurredAt: "desc" },
+            select: { detail: true },
+          });
+    if (granting.length > 1) {
+      const current = granting[0]?.detail;
+      const reference =
+        typeof current === "object" && current !== null && !Array.isArray(current) ? (current as Record<string, unknown>)["providerReference"] : undefined;
+      if (event.providerReference === undefined || reference !== event.providerReference) {
+        return "NONE";
+      }
     }
   }
 
@@ -1202,7 +1234,7 @@ async function apply(
  * Takes a workspace id rather than a context, for the reason `readEntitlement` does: the caller is a
  * verified webhook or a reconciliation sweep and there is no session to have. Inventing one so this would
  * type-check is how a background path acquires authority nobody granted — and the authority that matters
- * here was established by `assertVerifiedBillingEvent`, not by a role.
+ * here was established by `snapshotVerifiedBillingEvent` at the entry point, not by a role.
  */
 async function setSubscription(
   tx: DbExecutor,
@@ -1282,6 +1314,7 @@ async function writeEvent(
       detail: {
         ...(input.quote === undefined ? {} : { quote: input.quote }),
         ...(input.event.periodEndsAt === undefined ? {} : { periodEndsAt: input.event.periodEndsAt.toISOString() }),
+        ...(input.event.providerReference === undefined ? {} : { providerReference: input.event.providerReference }),
       },
     },
     select: { id: true },

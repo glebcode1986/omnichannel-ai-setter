@@ -212,16 +212,45 @@ function mint(normalized: NormalizedBillingEvent, activationSource: ActivationSo
   // fingerprint catches what neither can: a `Date` is mutable by nature, and `periodEndsAt.setUTCFullYear`
   // edits an object the freeze permits and the snapshot copied. `assertVerifiedBillingEvent` recomputes
   // this, so an event that was altered after minting is no longer the event that was verified.
-  const event = Object.freeze({
-    ...normalized,
-    occurredAt: new Date(normalized.occurredAt.getTime()),
-    ...(normalized.settled === undefined ? {} : { settled: Object.freeze({ amountMinor: normalized.settled.amountMinor, currency: normalized.settled.currency }) }),
-    ...(normalized.settledAt === undefined ? {} : { settledAt: new Date(normalized.settledAt.getTime()) }),
-    ...(normalized.periodEndsAt === undefined ? {} : { periodEndsAt: new Date(normalized.periodEndsAt.getTime()) }),
-    activationSource,
-  }) as VerifiedBillingEvent;
+  const event = snapshot({ ...normalized, activationSource });
   mintedEvents.set(event, fingerprint(event));
   return event;
+}
+
+/**
+ * A frozen copy whose nested money and dates belong to nobody else.
+ *
+ * Shared by minting and by the trust boundary, because they need the same thing for different reasons:
+ * minting severs the adapter's references, and the boundary severs the *caller's*.
+ */
+function snapshot(event: VerifiedBillingEvent): VerifiedBillingEvent {
+  return Object.freeze({
+    ...event,
+    occurredAt: new Date(event.occurredAt.getTime()),
+    ...(event.settled === undefined ? {} : { settled: Object.freeze({ amountMinor: event.settled.amountMinor, currency: event.settled.currency }) }),
+    ...(event.settledAt === undefined ? {} : { settledAt: new Date(event.settledAt.getTime()) }),
+    ...(event.periodEndsAt === undefined ? {} : { periodEndsAt: new Date(event.periodEndsAt.getTime()) }),
+  });
+}
+
+/**
+ * Authenticates a delivered event and returns the copy the caller cannot reach.
+ *
+ * This is what a trust boundary needs, and asserting alone was not it. `assertVerifiedBillingEvent`
+ * answers a question about one instant; a store that asserts and then awaits a query is holding an object
+ * its caller still has a reference to, and a `Date` inside it can be moved while that query is pending.
+ * Astra demonstrated exactly that on PR #100: a renewal minted for January, mutated to 2099 during a
+ * pending route lookup, granted service until 2099.
+ *
+ * Re-checking the same object after each await would not fix it either — there is always another await.
+ * So the authenticated facts are copied out once, here, and everything downstream reads the copy. The
+ * returned event is itself minted, so it stays a `VerifiedBillingEvent` for anything that asserts again.
+ */
+export function snapshotVerifiedBillingEvent(event: VerifiedBillingEvent): VerifiedBillingEvent {
+  assertVerifiedBillingEvent(event);
+  const copy = snapshot(event);
+  mintedEvents.set(copy, fingerprint(copy));
+  return copy;
 }
 
 /**
