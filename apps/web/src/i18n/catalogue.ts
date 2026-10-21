@@ -736,6 +736,8 @@ const en = {
   "audit.kind.DELETION_COMPLETED": "Deletion finished",
   "audit.kind.SUBSCRIPTION_CHANGED": "Subscription changed",
   "audit.kind.ENTITLEMENT_OVERRIDDEN": "Entitlement override changed",
+  "audit.kind.CHECKOUT_OPENED": "Checkout opened",
+  "audit.kind.BILLING_ARRANGEMENT_CHANGED": "Billing arrangement changed",
   // Billing, plan and usage (#42).
   "settings.billingLink": "See your plan, usage and payment",
   "billing.title": "Plan and billing",
@@ -1517,6 +1519,8 @@ const ru: Catalogue = {
   "audit.kind.DELETION_COMPLETED": "Удаление завершено",
   "audit.kind.SUBSCRIPTION_CHANGED": "Подписка изменена",
   "audit.kind.ENTITLEMENT_OVERRIDDEN": "Изменено исключение по лимитам",
+  "audit.kind.CHECKOUT_OPENED": "Открыта оплата",
+  "audit.kind.BILLING_ARRANGEMENT_CHANGED": "Изменён способ оплаты",
   // Тарифы, план и использование (#42).
   "settings.billingLink": "Посмотреть тариф, расход и оплату",
   "billing.title": "Тариф и оплата",

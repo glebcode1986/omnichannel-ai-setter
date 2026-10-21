@@ -184,6 +184,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
       "reconciliation",
       "retention",
       "usage_reservations",
+      "checkout_expiry",
       "instagram_tokens",
       "follow_ups",
       "backlog_guard",
@@ -212,6 +213,7 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(startedFields(result.stdout).loops).toContain("follow_ups");
     expect(startedFields(result.stdout).loops).toContain("retention");
     expect(startedFields(result.stdout).loops).toContain("usage_reservations");
+    expect(startedFields(result.stdout).loops).toContain("checkout_expiry");
   }, 30_000);
 
   it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {

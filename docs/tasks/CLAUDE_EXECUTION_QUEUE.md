@@ -42,13 +42,254 @@ what was believed when is worth keeping:
    at `1c23f1b107a7c20a3c2d03b4f43e0316cfc91b67`**, also by formal exact-head review, on 2026-10-20, and
    **#96 at `8ce410252269fb6dd5af0737df3f310290e49542`** on the same day, and **#97 at
    `2aaf661574a9f2b72dbb6243111bef2e5afb0499`** on 2026-10-21, and **#98 at
-   `28ff22f963da6786941c654831a5e053a57185e4`** the same day.
+   `28ff22f963da6786941c654831a5e053a57185e4`** the same day, and **#99 at
+   `9b3823f2776eb0d221c10f2cf1df8c43c947543d`** on 2026-10-21.
+
+4. **The independent reviewer changed on 2026-10-21.** The owner made **Codex/Astra primary and paused
+   Gemini/AntiGravity** (Issue #7, comment 6308798183). Earlier Gemini PASSes at their exact heads — #96
+   through #99 and predecessors — remain accepted and are not to be repeated. New gates route to Astra
+   alone, with **no fallback**. **Corrected the same day** (Issue #7, comment 6309185847): it is
+   **Gemini** whose weekly quota is exhausted, replenishing in about three days, while **Astra has usage
+   available** — so no `WAIT_ASTRA_QUOTA` hold is authorized. The first routing comment named the two
+   models the wrong way round and this file repeated it; a routing or availability claim is a claim, and
+   this one was superseded within the hour.
 
 **One heading in this file says "Current work" and it is the next one.** Earlier sections that once held
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #98 into P6-05 / PR #99
+### Current work — P6-08 / PR #100, round three: what an authenticated payload can actually prove
+
+Astra confirmed the snapshot fix closed the asynchronous mutation, and confirmed the historical-reversal
+and reordered-renewal behaviour. Two findings remained, both about reversal attribution, and together they
+say something sharper than either alone: **I kept reaching for evidence the payload does not contain.**
+
+**P1 — a subscription reference is not proof of a payment.** `NormalizedBillingEvent.providerReference` is
+documented as "the provider's own subscription **or** charge object", so on a recurring arrangement two
+separately paid terms legitimately carry the same value. My comparison treated a match as identity, so a
+refund of the first charge — arriving with the shared subscription id — matched the current row and
+revoked the second term. Astra reproduced it with `providerReference='sub-shared'`.
+
+**P1 — "the most recent grant" is not the payment that bought the term in force.** Selecting
+`orderBy occurredAt desc` picks by event *time*, while the monotonic renewal rule I added in round one
+deliberately lets a **delayed** event buy a term reaching *farther* than one already applied. So a refund
+of the shorter, later-raised grant ended the longer term a delayed renewal had bought. The two fixes were
+individually right and contradicted each other — which is the shape worth remembering.
+
+**The repair is to stop guessing.** A reversal on an arrangement with more than one grant now revokes only
+when it *states* a period reaching the term in force; that is the one proof the payload carries. The
+reference comparison is gone, with the reason written down so nobody restores it, and the latest-grant
+selection is gone with it — the ledger is only *counted* now. A single grant still revokes unconditionally,
+because there is no other term it could concern. Anything else is recorded with `effect: NONE`, audited,
+and left to `reconcileProviderState`, which reads the provider instead of inferring from a field that
+cannot answer.
+
+The cost is explicit and is stated in the code: a disputed term stays live until that read. The
+alternative deletes a term somebody paid for on the strength of a guess, which is worse and, from inside
+this transaction, irreversible.
+
+**Attribution is now persisted rather than inferred**, as the review asked: `writeEvent` records the
+`appliedTermEndsAt` the grant actually put in force — read back from the arrangement inside the same
+transaction — so computed fallback terms are attributable too, not only the ones a provider chose to
+state.
+
+**And one of my own controls had to go.** "Revokes the current term when the reversal names the charge
+that bought it" encoded exactly the reference-matching Astra rejected. It is replaced by a control that
+proves the same intent with evidence that holds: a reversal stating the period the current term covers.
+Three new regressions join it — both reversal kinds sharing a subscription reference, and a refund of the
+shorter grant against a longer term bought by a delayed renewal.
+
+Mutation-checked against the exact code reviewed: those three fail, and the replaced control passes in
+both states because it rests on a proof that was always honoured.
+
+### Earlier — P6-08 / PR #100, round two: both remediations had holes
+
+Astra re-reviewed `a5efdf9` and returned `CHANGES_REQUESTED` again, with two findings — **both of them
+against my own fixes rather than against the original code.** Both were right, and neither was something
+the first round's tests could have caught, because I wrote those tests to the shape of my fix rather than
+to the shape of the problem.
+
+**P1 — I correlated a reversal by the wrong fact.** The ledger check compared the granting payment's
+`occurredAt` with the *reversal's* `occurredAt`. But a reversal's `occurredAt` is when the reversal was
+**raised**, not when the charge it reverses was made — `NormalizedBillingEvent` says exactly that — so a
+refund issued today for last month's invoice is legitimately *newer* than today's renewal and sailed
+straight through the guard. My own regression had hidden it: I gave the reversal the old payment's
+timestamp, which covers an old reversal **delivered late** and not a new reversal **of an old charge**.
+
+Time cannot answer the question, so identity does. The reversal now attributes in three steps: a stated
+period earlier than what is paid for names an earlier term; a stated period reaching the current term
+names *that* one and revokes it; and with no stated period the ledger is asked how many payments have
+granted a term on this arrangement at all. One means there is nothing to confuse — the money being
+returned bought the access, and that is the ordinary refund. More than one means only the provider's own
+charge reference can say, and `writeEvent` now retains that reference on every event row for exactly this.
+Unmatched or absent, a term somebody paid for is not deleted on a maybe.
+
+**P2 — the tamper check guarded the wrong moment.** Asserting at the entry point answers a question about
+one instant, and the store then awaits a route lookup, a transaction and several queries. A caller still
+holding the object it passed in can move a `Date` inside it while any of those are pending; Astra
+demonstrated a renewal minted for January, mutated to 2099 during a gated lookup, granting service until
+2099. Re-asserting after each await does not close it, because there is always another await.
+
+So the boundary now takes a **private snapshot**: `snapshotVerifiedBillingEvent` authenticates and returns
+a frozen deep copy, and `recordVerifiedBillingEvent` reads that copy for all nineteen of its subsequent
+`event.` accesses. The caller's object is never read again — the parameter is renamed `delivered` so that
+is visible at the signature.
+
+**Five more regressions, including the one that is hard to write.** Both reversal kinds raised *after* the
+renewal with no stated period; two controls that keep the identity check from degenerating into "a
+reversal naming nothing never does anything" — an ordinary refund of the only payment ever made still
+revokes, and a reversal naming the charge that bought the current term still revokes; and an
+**asynchronous** store-level case that gates the real route lookup against the real database, mutates the
+caller-held event while it is pending, releases it, and proves the altered year reaches neither a row nor
+the audit detail.
+
+Mutation-checked against the exact code Astra reviewed: the three new behavioural regressions fail, and
+both new controls pass.
+
+**The lesson, recorded because it is the second time this round:** I wrote the first round's tests to the
+shape of my fix. A regression written from the fix can only confirm the fix; the one worth writing comes
+from the shape of the *defect*, which is why Astra's "reversal raised after the renewal" and "mutate
+during an await" cases found what mine could not.
+
+### Earlier — remediating Astra's three blocking findings on P6-08 / PR #100
+
+Astra returned `CHANGES_REQUESTED` on `55fbf98` — the first blocking verdict of this chain, and the first
+review by Astra since the route changed. Three findings, all of them real, all of them in code I wrote.
+Verified each by reading the code before changing anything.
+
+**P1 — an older-term reversal revoked a newer paid term on the *same* arrangement.**
+`billing-routing-store.ts`'s `END` branch asked only whether the arrangement was still live, then wrote
+`INACTIVE`. So a February chargeback took away access paid for through April. The superseded-arrangement
+case already covered was a *different* shape: there the two terms are two rows and the guard was
+structural. Here one arrangement holds two consecutive terms and nothing but attribution distinguishes
+them. The asymmetry was visible in the file all along — `SUBSCRIPTION_CANCELED` preserved a future
+`paidThrough`, a reversal did not.
+
+Fixed with two questions, because a reversal can be identified two ways and the ordinary case has neither
+field missing nor a puzzle to solve: a stated `periodEndsAt` earlier than what is already paid names an
+earlier term outright; and where the provider states no period, the retained event ledger answers it —
+if the event that granted the term in force occurred *later* than the payment being taken back, that term
+was bought separately. `writeEvent` now retains a stated period on every event row so the ledger can
+answer this afterwards too.
+
+**A first attempt at that fix was wrong and an existing test caught it.** Treating every unstated period
+as "ambiguous, change nothing" broke the ordinary case — refunding the only payment ever made *is* the
+current term and must still revoke it. The qualifier in the finding is "a **separately paid** current
+term", and separateness is a fact about the ledger, not about a missing field.
+
+**P1 — a delayed renewal moved the paid-through date backwards.** The maximum the code computed guarded
+only the fallback used when a provider states no period of its own, so a provider that *does* state one —
+the normal case — wrote its value straight into the subscription. Event-id idempotency cannot help: a
+reordered delivery is a different event, legitimately processed, carrying an older term.
+
+**And the fix for it was itself incomplete, which the concurrency test Astra asked for is what found.** A
+read-then-write comparison is not concurrency-safe: two renewals with different event ids are two
+transactions, both read the same `paidThrough`, both decide they extend it, and the one that commits
+second wins — so a renewal buying *less* time still overwrote one buying more. The write now carries the
+comparison (`extendSubscription` does a conditional `updateMany`), which is the same reasoning this file
+already applies to `billing_arrangements_one_live_key`: a decision an application makes before a write is
+a decision another writer can invalidate.
+
+**P2 — a verified event was not actually immutable.** `Object.freeze` is shallow and the spread feeding it
+was shallow too, so a minted event shared its `settled` object and its `Date`s with the adapter that
+produced them. The adapter could raise the amount afterwards, anybody holding the event could call
+`periodEndsAt.setUTCFullYear`, and a `WeakSet` membership test could see neither — while the function's own
+comment promised exactly that it could not happen.
+
+Fixed in three steps because each closes a different hole: the mint **snapshots** nested money and dates
+so the adapter's references are severed; the freeze still stops a field being replaced outright; and the
+`WeakSet` becomes a `WeakMap` of the authenticated facts, so `assertVerifiedBillingEvent` recomputes them
+and an event altered after minting is no longer the event that was verified. A `Date` cannot be made
+immutable, so the answer is not to try — it is to make the edit detectable.
+
+**Regressions, with their controls.** Seven new cases: both reversal kinds naming the first term, an
+unstated-period reversal, a reordered renewal, a concurrent renewal race, and the two positive controls
+that stop the whole thing collapsing into "reversals and renewals do nothing" — a reversal of the payment
+that bought the term in force still revokes, and a renewal that genuinely buys more time still extends.
+Seven more in a new infrastructure-free `billing-events.test.ts`, which performs the mutations rather than
+asserting shapes, because a test checking `Object.isFrozen` would have passed against the defect.
+
+Mutation-checked: against the pre-fix store exactly the five new regressions fail and both controls pass;
+against the pre-fix event module four of the seven unit cases fail, the three that pass being ones that
+were already true.
+
+### Earlier — propagating the accepted #99 into P6-08 / PR #100
+
+#99 was accepted at `9b3823f2776eb0d221c10f2cf1df8c43c947543d`, so this branch is the next link. Ordinary
+merge commit, one branch only — no rebase, no force-push, nothing to `main`, #101+ untouched. #100 was
+**77 commits behind** while carrying **19** of its own, the largest own contribution of the chain.
+
+**Zero textual conflicts, and this is the link where that was most misleading.** The merge produced three
+defects in `apps/worker/src/main.ts` and its test, none of which any gate would have caught, and all of
+the same shape: **neither side was wrong on its own.**
+
+| what the merge produced | where it came from |
+|---|---|
+| 9 loops and 9 `close()` calls under prose reading *"eight independent closes"* | the ninth loop (`checkout_expiry`, from `startBillingSweeper`) is this branch's; the word "eight" is the accepted parent's |
+| the comment enumerating the unconditional loops named three of four | same split |
+| the sibling test case pinned `follow_ups`, `retention`, `usage_reservations` but **not** `checkout_expiry` | this branch had no positive assertions there at all; the parent contributed exactly three |
+
+All three are corrected on this commit, and the correction was then mutation-checked rather than trusted:
+dropping any one loop from the report fails **2** of the 10 lifecycle cases, while reverting the new
+sibling pin and dropping `checkout_expiry` fails only **1**. So the added assertion covers the
+no-credential-key configuration that the whole-list case never reaches — the same measurement that
+justified the equivalent edit on #96.
+
+Everything else was checked and clean: **69 models against 69 `CREATE TABLE` statements**, no duplicate
+name in the barrel, no drift, 0 TypeScript errors on the merged tree.
+
+**The capacity-lock record is carried forward unchanged**: accepted as architecturally sound, the direct
+`createBusinessProfile` observer test **still absent**, gap **not** closed.
+
+### Task definition — P6-08 / Issue #46, seller profiles and billing routing
+
+**Branch `feat/p6-08-billing-routing-seller-profiles`**, based on `feat/p6-05-billing-settings-ui`;
+ADR-019. Recorded here now; neither canonical document named it.
+
+**The payment provider and the selling legal entity are two different choices**, because the market treats
+them as two. A direct processor leaves us the seller of record; a Merchant of Record *is* the seller to
+the customer and remits the tax. The same provider can serve two seller entities and the same entity can
+sell through two providers, so a `SellerProfile` and a `BillingRoute` are separate rows and a route names
+one of each. Settlement models: `DIRECT_PSP`, `MERCHANT_OF_RECORD`, `CRYPTO_PROCESSOR`.
+
+**Providers differ, and pretending otherwise is how a product ships a lie.** A route *declares* its
+capabilities; nothing assumes recurring subscriptions, proration, invoices or tax remittance. Tax
+**calculation** and tax **remittance** are deliberately two capabilities — a processor that can work out
+VAT is not thereby the Merchant of Record for it.
+
+**Two payment models normalize into one entitlement layer.** `RECURRING` and `PREPAID_TERM` both grant
+service; the difference is whether a renewal may be *assumed*, and a prepaid term therefore always
+carries an explicit end.
+
+**Money is never a float and a quote is never a price change.** Amounts are whole minor units of a named
+currency or asset. The catalogue may price a plan in EUR while a crypto route quotes the same plan in an
+asset for fifteen minutes; the quote records what was asked and settles or does not, and the plan's
+meaning is untouched either way.
+
+**The client never names a route, a provider account or a selling entity.** `openCheckoutContract` takes
+a plan version, an interval, an arrangement kind and a currency — the product facts a customer is
+entitled to choose — and the route is selected from operator configuration the customer cannot write.
+**There is no parameter in which a forged identifier could arrive, which is a stronger statement than
+validating one would be.**
+
+**A checkout is written before the customer is sent anywhere, and never edited after.** It records what
+was offered, by which seller entity, at what price, and which terms were accepted; a trigger freezes it,
+and a deferred constraint trigger refuses to let it commit without its acceptances.
+
+**Only a verified provider event or an authoritative reconciliation activates anything.** The type
+`VerifiedBillingEvent` cannot be constructed outside `billing-events.ts`, so a success-page handler has
+no way to reach the activation path even by mistake — `ACTIVATION_SOURCES` is exactly
+`VERIFIED_EVENT` and `RECONCILIATION`. **A browser redirect cannot activate paid entitlement.**
+
+**One live charge path per workspace**, enforced by a partial unique index rather than an application
+check, because the race it prevents — two checkouts completing at once — is the one an application check
+loses. A provider switch ends the old arrangement and opens the new one in a single transaction.
+
+Its route producer is `scripts/billing/publish-routes.ts` with its own 8-case suite; no production route,
+provider account or identifier was registered, and no Merchant of Record, jurisdiction, tax position or
+financial term was chosen — those stay owner-gated.
+
+### Earlier — propagating the accepted #98 into P6-05 / PR #99
 
 #98 was accepted at `28ff22f963da6786941c654831a5e053a57185e4`, so this branch is the next link. Ordinary
 merge commit, one branch only — no rebase, no force-push, nothing to `main`, #100+ untouched. #99 was

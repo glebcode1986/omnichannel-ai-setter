@@ -7,6 +7,7 @@
  */
 export * from "./ai-draft";
 export * from "./automation-policy";
+export * from "./billing-routing";
 export * from "./deletion";
 export * from "./entitlements";
 export * from "./plan-change";

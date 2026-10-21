@@ -12,6 +12,7 @@ import {
   createStyleProfileStore,
   createPresenceStore,
   deleteExpiredChannelConnectStates,
+  expireStaleCheckouts,
   expireStaleReservations,
   createStyleRetriever,
   createSuspensionStore,
@@ -41,6 +42,7 @@ import { createDeliveryResumer, createReconcileHandler } from "./reconcile-handl
 import { startInstagramTokenRefresh } from "./instagram-token-sweeper";
 import { startReconciliationSweeper } from "./reconciliation-sweeper";
 import { startRetentionSweeper } from "./retention-sweeper";
+import { startBillingSweeper } from "./billing-sweeper";
 import { startUsageSweeper } from "./usage-sweeper";
 
 import { createDebounceHandler } from "./debounce-handler";
@@ -101,6 +103,13 @@ const RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000;
  * cost them the thing they paid for.
  */
 const USAGE_SWEEP_INTERVAL_MS = 5 * 60_000;
+/**
+ * How often an abandoned checkout's charge path is released (#46).
+ *
+ * A quote's own expiry is usually minutes, so a quarter of an hour is soon enough that a customer who
+ * came back to buy is not refused for long, and rare enough that the sweep is not a poll.
+ */
+const CHECKOUT_SWEEP_INTERVAL_MS = 15 * 60_000;
 /**
  * One Ctrl+C reaches the worker several times (terminal process group plus relays by pnpm/tsx), so
  * repeats within this window are the same request. A later signal while still stopping forces exit.
@@ -291,6 +300,12 @@ function main(): void {
         logger,
         now: () => new Date(),
       });
+      const billing = startBillingSweeper({
+        intervalMs: CHECKOUT_SWEEP_INTERVAL_MS,
+        expireStaleCheckouts: (at) => expireStaleCheckouts(db, at),
+        logger,
+        now: () => new Date(),
+      });
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
@@ -366,15 +381,16 @@ function main(): void {
         // Built from what actually started, not from a list written by hand: a loop that is wired to
         // nothing has to be visible as an absence here. The Instagram token refresh was written, tested
         // and never called, and this is where that would have shown.
-        // `retention`, `usage_reservations` and `follow_ups` unconditionally and `instagram_tokens`
-        // conditionally, which is the difference between the loops rather than an inconsistency: the
-        // sweepers always start, and the token refresh only runs where it is configured, so its
-        // absence here is information.
+        // `retention`, `usage_reservations`, `checkout_expiry` and `follow_ups` unconditionally and
+        // `instagram_tokens` conditionally, which is the difference between the loops rather than an
+        // inconsistency: the sweepers always start, and the token refresh only runs where it is
+        // configured, so its absence here is information.
         loops: [
           "outbox",
           "reconciliation",
           "retention",
           "usage_reservations",
+          "checkout_expiry",
           ...(tokenRefresh.running ? ["instagram_tokens"] : []),
           "follow_ups",
           "backlog_guard",
@@ -383,13 +399,14 @@ function main(): void {
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: eight independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: nine independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
           const stopped = await Promise.allSettled([
             sweeper.close(),
             reconciliationSweeper.close(),
             retention.close(),
             usage.close(),
+            billing.close(),
             tokenRefresh.close(),
             followUpSweeper.close(),
             backlogGuard.close(),
