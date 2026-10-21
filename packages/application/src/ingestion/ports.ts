@@ -217,6 +217,12 @@ export interface IngestionTransaction {
    * Records a newly stored participant message or unmatched human outbound: advances last inbound/outbound
    * and inbox timestamps monotonically and increments the conversation state version by exactly one, in the
    * same transaction. Never called for duplicates, own echoes or status events.
+   *
+   * For an inbound message it also settles any follow-up still waiting to chase this customer's silence
+   * (#55) — in the same transaction, because "they replied" and "the chase is off" are one fact and a crash
+   * between them would leave a worker chasing a question that has moved on. Named here rather than left to
+   * the implementation: this is the only path a webhook takes, so it is the only place the cancellation can
+   * live and be real.
    */
   recordActivity(
     input: ProfileScope & {
@@ -230,7 +236,15 @@ export interface IngestionTransaction {
   isAppOriginatedMessage(
     input: ProfileScope & { readonly channelAccountId: string; readonly platformMessageId: string },
   ): Promise<boolean>;
-  /** Sets HUMAN_ACTIVE (or extends an existing human takeover) for native/manual activity. */
+  /**
+   * Sets HUMAN_ACTIVE (or extends an existing human takeover) for native/manual activity, and settles any
+   * follow-up still waiting on this conversation (#55).
+   *
+   * A person who answers from the provider's own app has taken the conversation over as surely as one who
+   * pressed the button in ours, and automation does not interrupt either. The takeover started through our
+   * UI is settled by the conversation-operations store; this is the other door into the same state, and a
+   * guard on one of two doors is a guard on neither.
+   */
   startHumanTakeover(
     input: ProfileScope & { readonly conversationId: string; readonly since: Date; readonly pausedUntil: Date },
   ): Promise<void>;

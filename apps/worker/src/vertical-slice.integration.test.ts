@@ -18,7 +18,7 @@ import { createDraftDisposition } from "./draft-disposition";
 import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createChannelStateResolver } from "./delivery-policy";
-import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
+import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
 import { createChannelAccount } from "@omnichannel/db";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, createBusinessProfile } from "@omnichannel/db";
 import { createContactWithChannelIdentity, createConversation, appendInboundMessage } from "@omnichannel/db";
@@ -66,8 +66,12 @@ describe.skipIf(!endToEndTestsEnabled())("Instagram vertical slice (end to end)"
     channelAccountId = account.id;
     ({ conversationId, anchorMessageId } = await freshConversation());
 
-    await infra.db.automationPolicy.create({
-      data: { ...scope, mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: ["MISSING_FACT"], deliveryDelayMinMs: 1_000, deliveryDelayMaxMs: 2_000 },
+    await setProfileDefaultPolicy(infra.db, scope, {
+      mode: "AUTOPILOT",
+      confidenceThreshold: 0.8,
+      mandatoryReviewReasons: ["MISSING_FACT"],
+      deliveryDelayMinMs: 1_000,
+      deliveryDelayMaxMs: 2_000,
     });
   }, 180_000);
 

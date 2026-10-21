@@ -1,0 +1,12 @@
+-- A draft can now say that a scheduled follow-up asked for it.
+--
+-- `AUTOMATIC` and `HUMAN_REQUEST` were the only two triggers, and a follow-up is neither: it answers a
+-- *silence* rather than an inbound message or a person pressing a button. Recording it as `AUTOMATIC`
+-- would lose the one fact a reader needs afterwards — whether this message was a reply or a chase — and
+-- the audit trail is where that question gets asked.
+--
+-- Its own migration, with nothing in it that uses the new value. PostgreSQL will not let a value added by
+-- `ALTER TYPE ... ADD VALUE` be used in the same transaction, so a migration that added it and inserted
+-- with it would fail on a clean database and pass on one where the value already existed — which is the
+-- kind of migration that works until somebody deploys from scratch.
+ALTER TYPE "AiDraftTrigger" ADD VALUE IF NOT EXISTS 'FOLLOW_UP';

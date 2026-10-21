@@ -8,9 +8,11 @@
  * The positive control matters as much as any of them: without `claims a follow-up nothing is wrong with`,
  * every refusal below would pass just as happily if the gate refused everything.
  */
+import { followUpGenerationKey } from "@omnichannel/application";
 import { isWithinDaypart } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createConversationOperationStore } from "./conversation-operations-store";
 import {
   cancelFollowUp,
   cancelPendingFollowUps,
@@ -26,6 +28,7 @@ import {
   suppressFollowUps,
 } from "./followup-store";
 import { closeGoal, setPrimaryGoal, suggestGoal } from "./goal-store";
+import { appendInboundMessage } from "./repositories/messages";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
@@ -481,7 +484,7 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
     it("stops when the entitlement is gone", async () => {
       const { followUpId } = await scenario();
 
-      const claim = await claimFollowUp(db(), followUpId, DUE, { mayAutomate: false });
+      const claim = await claimFollowUp(db(), followUpId, DUE, { entitlement: { mayAutomate: false } });
 
       expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "ENTITLEMENT_LOST" });
     }, 180_000);
@@ -505,6 +508,47 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
       // would say it will never happen, which is a different thing to show an operator.
       expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "CHANNEL_INELIGIBLE" });
       expect((await readFollowUps(db(), profile.context, profile.conversationId))[0]?.status).toBe("BLOCKED");
+    }, 180_000);
+
+    it("blocks rather than generating when nothing could carry the message now", async () => {
+      const { followUpId, profile } = await scenario();
+
+      // The port is injected, so this is the claim's own behaviour under test and not a provider rule:
+      // a `false` must stop the claim *before* an attempt is spent, because the whole point of asking is
+      // to avoid spending one on a message nothing can deliver.
+      const claim = await claimFollowUp(db(), followUpId, DUE, { carries: () => false });
+
+      expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "CHANNEL_INELIGIBLE" });
+      const row = (await readFollowUps(db(), profile.context, profile.conversationId))[0];
+      expect(row).toMatchObject({ status: "BLOCKED", stopReason: "CHANNEL_INELIGIBLE", attemptCount: 0 });
+    }, 180_000);
+
+    it("tells the port what it read under the lock, not what planning assumed", async () => {
+      const { followUpId, profile } = await scenario();
+      await db().automationPolicy.updateMany({
+        where: { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId, channelAccountId: null },
+        data: { instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED" },
+      });
+      const asked: unknown[] = [];
+
+      await claimFollowUp(db(), followUpId, DUE, {
+        carries: (question) => {
+          asked.push(question);
+          return true;
+        },
+      });
+
+      // The conversation's own channel and last inbound, and the profile's configured after-window
+      // choice — the facts a window question needs, read inside the transaction that holds the lock.
+      // A port given stale facts would answer a question about a world that has moved on.
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toMatchObject({
+        channel: "INSTAGRAM",
+        at: DUE,
+        instagramAfterWindowPolicy: "HUMAN_ASSISTED_EXTENDED",
+        whatsappAfterWindowPolicy: "SERVICE_WINDOW_ONLY",
+      });
+      expect((asked[0] as { lastInboundAt: Date | null }).lastInboundAt).toBeInstanceOf(Date);
     }, 180_000);
 
     it("stops on a stale anchor even with no new inbound message", async () => {
@@ -591,6 +635,166 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
       // one silence.
       expect([first, second].filter((claim) => claim.status === "READY")).toHaveLength(1);
       expect([first, second].filter((claim) => claim.status === "MISSED")).toHaveLength(1);
+    }, 180_000);
+  });
+
+  describe("the crash between scheduling and recording", () => {
+    /**
+     * Astra's first P1 on PR #82, as the window it actually is. A worker claims an attempt, schedules its
+     * delivery, and dies before `recordFollowUpSent`. The row is still `PENDING`, the lease lapses, and
+     * the next claim must not spend a fresh attempt and schedule a *second* operation — two operations are
+     * two messages about one silence, and nothing downstream can deduplicate them, because the delivery
+     * boundary is keyed on the operation and the two operations differ.
+     *
+     * So the claim asks first whether this attempt's draft already exists, and settles from what that
+     * draft did. The attempt's draft is derived with the same exported key the worker generates under, so
+     * the two cannot disagree.
+     */
+    const draftFor = async (
+      profile: SeededProfile,
+      followUpId: string,
+      attempt: number,
+      options: { readonly scheduled: boolean },
+    ) => {
+      const scope = { workspaceId: profile.context.workspaceId, businessProfileId: profile.businessProfileId };
+      const draft = await db().aiDraft.create({
+        data: {
+          ...scope,
+          conversationId: profile.conversationId,
+          anchorMessageId: profile.messageId,
+          anchorStateVersion: 1,
+          generationKey: followUpGenerationKey({
+            conversationId: profile.conversationId,
+            anchorMessageId: profile.messageId,
+            followUpId,
+            attempt,
+          }),
+          trigger: "FOLLOW_UP",
+          text: "Just checking in about that appointment.",
+          structuredOutput: { reply: "Just checking in about that appointment." },
+          confidence: 0.8,
+          modelSuggestsSend: true,
+          needsReview: false,
+          status: options.scheduled ? "SCHEDULED" : "PENDING",
+          modelProvider: "anthropic",
+          modelName: "claude-opus-5",
+          promptVersion: "reply.v1",
+          schemaVersion: "ai-draft.v1",
+        },
+        select: { id: true },
+      });
+      if (!options.scheduled) {
+        return { draftId: draft.id, operationId: undefined };
+      }
+      const operationId = `op-${followUpId}-${String(attempt)}`;
+      await db().deliveryJobRecord.create({
+        data: {
+          ...scope,
+          draftId: draft.id,
+          operationId,
+          correlationId: `corr-${operationId}`,
+          status: "SCHEDULED",
+          scheduledFor: new Date(DUE.getTime() + 30_000),
+          selectedDelayMs: 30_000,
+        },
+      });
+      return { draftId: draft.id, operationId };
+    };
+
+    it("records the operation the dead worker scheduled, instead of scheduling a second one", async () => {
+      const { followUpId, profile } = await scenario({ maxAttempts: 3 });
+      const first = await claimFollowUp(db(), followUpId, DUE);
+      expect(first.status).toBe("READY");
+      // What the worker did before it died: a draft for this attempt and a delivery for that draft.
+      const { operationId } = await draftFor(profile, followUpId, 1, { scheduled: true });
+
+      const afterLease = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 6 * 60_000));
+
+      expect(afterLease).toEqual({ status: "ALREADY_SENT", followUpId, attempt: 1, operationId });
+      const [row] = await readFollowUps(db(), profile.context, profile.conversationId);
+      expect(row?.status).toBe("SENT");
+      // The attempt it spent, and no more: a second attempt here would be a second message.
+      expect(row?.attemptCount).toBe(1);
+      // The view does not carry the provider-facing operation, so the row itself is the check.
+      const stored = await db().followUp.findUnique({ where: { id: followUpId }, select: { deliveryOperationId: true } });
+      expect(stored?.deliveryOperationId).toBe(operationId);
+    }, 180_000);
+
+    it("settles an attempt whose draft the policy held, rather than retrying it for ever", async () => {
+      const { followUpId, profile } = await scenario({ maxAttempts: 3 });
+      await claimFollowUp(db(), followUpId, DUE);
+      // A draft with no delivery: held for somebody to decide, so no send is coming for this attempt.
+      await draftFor(profile, followUpId, 1, { scheduled: false });
+
+      const afterLease = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 6 * 60_000));
+
+      // Retrying would re-ask a question that already has an answer, and an attempt whose draft keeps
+      // being held is how a follow-up loops without end.
+      expect(afterLease).toEqual({ status: "STOPPED", followUpId, reason: "REVIEW_PENDING" });
+      const [row] = await readFollowUps(db(), profile.context, profile.conversationId);
+      expect(row?.status).toBe("CANCELLED");
+      expect(row?.attemptCount).toBe(1);
+    }, 180_000);
+
+    it("still lets an attempt that produced nothing at all be retried", async () => {
+      // The pre-existing recovery, unchanged: a worker that died *before* generating leaves no draft, so
+      // there is nothing to reconcile and the next claim is a genuine second attempt.
+      const { followUpId, profile } = await scenario({ maxAttempts: 2 });
+
+      await claimFollowUp(db(), followUpId, DUE);
+      const afterLease = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 6 * 60_000));
+
+      expect(afterLease.status).toBe("READY");
+      expect((await readFollowUps(db(), profile.context, profile.conversationId))[0]?.attemptCount).toBe(2);
+    }, 180_000);
+
+    it("reconciles even when the customer replied in the meantime", async () => {
+      // The gate would answer `SUPERSEDED` here, and it would be answering about a message the customer
+      // has already received. Recovery is asked first for exactly this case: what is left to do is to
+      // write down what happened, not to decide it again.
+      const { followUpId, profile } = await scenario({ maxAttempts: 3 });
+      await claimFollowUp(db(), followUpId, DUE);
+      const { operationId } = await draftFor(profile, followUpId, 1, { scheduled: true });
+      await inbound(profile, new Date(DUE.getTime() + 60_000));
+
+      const afterLease = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 6 * 60_000));
+
+      expect(afterLease).toMatchObject({ status: "ALREADY_SENT", operationId });
+      expect((await readFollowUps(db(), profile.context, profile.conversationId))[0]?.status).toBe("SENT");
+    }, 180_000);
+
+    it("recovers the attempt that actually crashed, not the first one", async () => {
+      // A mutation found this gap: every case above crashes on attempt 1, so a recovery that always
+      // looked for attempt 1's draft would pass all of them. Here attempt 1 produced nothing and attempt
+      // 2 is the one that got as far as scheduling — so a recovery keyed on the wrong attempt finds no
+      // draft, spends attempt 3, and sends a second message about one silence.
+      const { followUpId, profile } = await scenario({ maxAttempts: 3 });
+
+      await claimFollowUp(db(), followUpId, DUE);
+      const second = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 6 * 60_000));
+      expect(second.status).toBe("READY");
+      const { operationId } = await draftFor(profile, followUpId, 2, { scheduled: true });
+
+      const third = await claimFollowUp(db(), followUpId, new Date(DUE.getTime() + 20 * 60_000));
+
+      expect(third).toEqual({ status: "ALREADY_SENT", followUpId, attempt: 2, operationId });
+      const [row] = await readFollowUps(db(), profile.context, profile.conversationId);
+      expect(row?.status).toBe("SENT");
+      // Two attempts spent, not three.
+      expect(row?.attemptCount).toBe(2);
+    }, 180_000);
+
+    it("keeps one attempt's identity distinct from the next, so a real second attempt is a second send", async () => {
+      const { followUpId, profile } = await scenario({ maxAttempts: 3 });
+      const keys = [1, 2].map((attempt) =>
+        followUpGenerationKey({ conversationId: profile.conversationId, anchorMessageId: profile.messageId, followUpId, attempt }),
+      );
+
+      // Two attempts are two generations, bounded by `max_attempts` — which is where the decision to
+      // chase somebody twice belongs. An identity keyed on the follow-up alone would collapse them and
+      // silently turn three allowed attempts into one.
+      expect(new Set(keys).size).toBe(2);
+      expect(keys[0]).toContain(`${followUpId}:1`);
     }, 180_000);
   });
 
@@ -733,6 +937,105 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
       expect(cancelled).toBe(1);
       const row = (await readFollowUps(db(), profile.context, profile.conversationId))[0];
       expect(row).toMatchObject({ id: followUpId, status: "SUPERSEDED", stopReason: "NEW_INBOUND" });
+    }, 180_000);
+  });
+
+  /**
+   * The two events that actually call off a chase, driven through the code that handles them.
+   *
+   * `cancelPendingFollowUps` being correct is tested above, and on its own that proves nothing about the
+   * product: a cancellation helper with no caller is the defect class this repository keeps producing.
+   * These cases call `appendInboundMessage` and the operations store's `takeOver` — the real paths an
+   * inbound webhook and a person pressing *Take over* run — and assert the follow-up is already settled
+   * afterwards, so no sweep ever offers it and no claim has to reason about it.
+   */
+  describe("called off by the events that actually happen", () => {
+    it("is superseded by the customer's own reply, in the transaction that stores the message", async () => {
+      const { followUpId, profile } = await scenario();
+      const at = new Date(NOW.getTime() + 60_000);
+
+      const message = await appendInboundMessage(db(), profile.context, {
+        conversationId: profile.conversationId,
+        kind: "TEXT",
+        text: "sorry, got busy — still interested",
+        occurredAt: at,
+      });
+
+      const row = (await readFollowUps(db(), profile.context, profile.conversationId)).find((candidate) => candidate.id === followUpId);
+      expect(row).toMatchObject({ status: "SUPERSEDED", stopReason: "NEW_INBOUND", settledAt: at });
+      // The message is stored and the chase is off as one fact: the append that wrote this row is the
+      // same transaction that settled the follow-up, so no crash can leave one without the other.
+      expect(message.id).toBeTruthy();
+      // And the scan that rebuilds the work never offers it, which is what "not when the scan notices"
+      // means: the row is settled before any worker reads the table.
+      expect((await dueFollowUps(db(), DUE)).map((candidate) => candidate.id)).not.toContain(followUpId);
+    }, 180_000);
+
+    it("is cancelled when a person takes the conversation over", async () => {
+      const { followUpId, profile } = await scenario();
+      const at = new Date(NOW.getTime() + 60_000);
+
+      const taken = await createConversationOperationStore(db(), profile.context).takeOver({ conversationId: profile.conversationId, at });
+
+      expect(taken.status).toBe("TAKEN_OVER");
+      const row = (await readFollowUps(db(), profile.context, profile.conversationId)).find((candidate) => candidate.id === followUpId);
+      expect(row).toMatchObject({ status: "CANCELLED", stopReason: "HUMAN_TAKEOVER", settledAt: at });
+      expect((await dueFollowUps(db(), DUE)).map((candidate) => candidate.id)).not.toContain(followUpId);
+    }, 180_000);
+
+    it("stays cancelled when the person hands the conversation back, but does not block the next plan", async () => {
+      const { followUpId, goalId, profile } = await scenario();
+      const store = createConversationOperationStore(db(), profile.context);
+
+      await store.takeOver({ conversationId: profile.conversationId, at: new Date(NOW.getTime() + 60_000) });
+      await store.handBack({ conversationId: profile.conversationId, at: new Date(NOW.getTime() + 120_000) });
+
+      // Handing the conversation back does not resurrect the chase the takeover called off: a person
+      // spent that time on this customer, and what to do next is a fresh decision, not a resumed timer.
+      const row = (await readFollowUps(db(), profile.context, profile.conversationId)).find((candidate) => candidate.id === followUpId);
+      expect(row).toMatchObject({ status: "CANCELLED", stopReason: "HUMAN_TAKEOVER" });
+      // It must not block that decision either: "one pending follow-up per conversation" is about
+      // pending ones, so a settled row cannot leave the conversation permanently unchaseable.
+      const planned = await planFollowUp(db(), profile.context, {
+        conversationId: profile.conversationId,
+        goalId,
+        dueAt: DUE,
+        daypart: DAYPART,
+        at: new Date(NOW.getTime() + 180_000),
+      });
+      expect(planned.status).toBe("PLANNED");
+    }, 180_000);
+
+    it("does not reach into another conversation, or another Business Profile", async () => {
+      seq += 1;
+      const workspace = await seedWorkspace(db(), `followup-cancel-${String(seq)}`, ["one", "two"]);
+      const [first, second] = workspace.profiles as [SeededProfile, SeededProfile];
+      const plan = async (profile: SeededProfile) => {
+        const goal = await setPrimaryGoal(db(), profile.context, { conversationId: profile.conversationId, kind: "BOOK_APPOINTMENT", at: NOW });
+        const planned = await planFollowUp(db(), profile.context, {
+          conversationId: profile.conversationId,
+          goalId: goal.status === "SET" ? goal.id : "",
+          dueAt: DUE,
+          daypart: DAYPART,
+          at: NOW,
+        });
+        return planned.status === "PLANNED" ? planned.id : "";
+      };
+      const mine = await plan(first);
+      const neighbour = await plan(second);
+
+      await appendInboundMessage(db(), first.context, {
+        conversationId: first.conversationId,
+        kind: "TEXT",
+        text: "still here",
+        occurredAt: new Date(NOW.getTime() + 60_000),
+      });
+
+      expect((await readFollowUps(db(), first.context, first.conversationId)).find((row) => row.id === mine)?.status).toBe("SUPERSEDED");
+      // The neighbour's chase is untouched, which the scope on the cancellation predicate is what
+      // guarantees: one customer replying must not call off another profile's follow-ups.
+      expect((await readFollowUps(db(), second.context, second.conversationId)).find((row) => row.id === neighbour)?.status).toBe("PENDING");
+      expect((await dueFollowUps(db(), DUE)).map((row) => row.id)).toContain(neighbour);
     }, 180_000);
   });
 

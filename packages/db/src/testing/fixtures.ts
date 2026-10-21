@@ -5,6 +5,7 @@ import { NO_CAPABILITIES, PLAN_FEATURES, type WorkspaceRole } from "@omnichannel
 
 import type { DbClient } from "../client";
 import { publishPlanVersion, setWorkspaceSubscription } from "../entitlement-store";
+import type { Prisma } from "../generated/prisma/client";
 import { createChannelAccount, type ChannelAccountRecord } from "../repositories/channel-accounts";
 import { createContactWithChannelIdentity } from "../repositories/contacts";
 import { createConversation } from "../repositories/conversations";
@@ -158,6 +159,32 @@ async function subscribeToTestPlan(db: DbClient, context: WorkspaceContext): Pro
 }
 
 const TEST_PLAN_CODE = "test-everything";
+
+/**
+ * Changes the Business Profile's automation default to what a case needs.
+ *
+ * It already exists: `createBusinessProfile` writes the conservative default in the same statement as the
+ * profile, because a profile that cannot be configured is not a usable profile. So a case that wants
+ * AUTOPILOT, or an empty mandatory-review floor, is *editing* settings rather than inventing them — which
+ * is also what the product does, and a fixture that still created one would be writing a second profile
+ * default past a partial unique index.
+ *
+ * It insists on having changed exactly one row. A fixture that silently matched none is how a suite ends
+ * up asserting against the default it meant to replace.
+ */
+export async function setProfileDefaultPolicy(
+  db: DbClient,
+  scope: { readonly workspaceId: string; readonly businessProfileId: string },
+  data: Prisma.AutomationPolicyUpdateManyMutationInput,
+): Promise<void> {
+  const { count } = await db.automationPolicy.updateMany({
+    where: { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId, channelAccountId: null },
+    data,
+  });
+  if (count !== 1) {
+    throw new Error(`expected one Business Profile default policy to update, matched ${count}`);
+  }
+}
 
 /** Adds an existing user directly (test setup only; production uses addWorkspaceMember). */
 export async function addTestMember(
