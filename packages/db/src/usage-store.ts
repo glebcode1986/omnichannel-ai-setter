@@ -462,6 +462,45 @@ export interface UsageSnapshot {
  * Opened rather than merely read, so the first question about a cycle does not answer "there is no cycle"
  * — a workspace that has consumed nothing has used nothing, which is a number rather than an absence.
  */
+/**
+ * The same counters, without writing anything (#59).
+ *
+ * `readUsage` is not a read: it opens the cycle, and opening a cycle *creates the row* when nobody has
+ * counted in that period yet. For the customer's own screens that is right — the page is a side effect of
+ * a tenant using the product. For the internal console it is not: an operator opening a workspace's usage
+ * panel would write a `usage_cycles` row into that tenant, with no actor and no audit trail, and it would
+ * fail "every sensitive operator action is attributable" on the first page load, in the one direction
+ * nobody looks because the panel is documented as read-only.
+ *
+ * So this computes the boundaries with `usageCycleFor` and reports zeros when no row exists. The cycle it
+ * returns has no id, which is deliberate: there is nothing to reserve against, and a caller that wanted to
+ * write would have to go and open one properly.
+ */
+export async function readUsageSnapshot(
+  db: DbExecutor,
+  workspaceId: string,
+  at = new Date(),
+): Promise<{ readonly bounds: UsageCycleBounds; readonly counters: UsageSnapshot["counters"]; readonly cycleOpened: boolean }> {
+  const anchor = await readUsageAnchorDay(db, workspaceId);
+  const bounds = usageCycleFor(anchor, at);
+  const cycle = await db.usageCycle.findUnique({
+    where: { workspaceId_startsAt: { workspaceId, startsAt: bounds.startsAt } },
+    select: { id: true },
+  });
+  if (cycle === null) {
+    return { bounds, counters: {}, cycleOpened: false };
+  }
+  const rows = await db.usageCounter.findMany({
+    where: { workspaceId, cycleId: cycle.id },
+    select: { metric: true, committed: true, reserved: true },
+  });
+  const counters: Partial<Record<LedgerMetric, { committed: number; reserved: number }>> = {};
+  for (const row of rows) {
+    counters[row.metric] = { committed: row.committed, reserved: row.reserved };
+  }
+  return { bounds, counters, cycleOpened: true };
+}
+
 export async function readUsage(db: DbClient, workspaceId: string, at = new Date()): Promise<UsageSnapshot> {
   return db.$transaction(async (tx) => {
     const cycle = await openUsageCycleWithin(tx, workspaceId, at);

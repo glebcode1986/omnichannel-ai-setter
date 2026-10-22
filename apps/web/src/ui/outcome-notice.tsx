@@ -55,6 +55,17 @@ const OUTCOMES = [
   "TERMS_CHANGED",
   "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // The internal console's own outcomes (#59). An operator reads these as closely as a customer reads
+  // theirs, and more carefully: the refusals say whether a role is missing or a request was impossible.
+  "PAUSED",
+  "RESUMED_OUTBOUND",
+  "ALREADY_LIFTED",
+  "SESSION_OPENED",
+  "SESSION_REVOKED",
+  "ALREADY_REVOKED",
+  "REEXAMINED",
+  "NOT_PERMITTED",
+  "ADMIN_REFUSED",
   "MOVED",
   "STALE_STAGE",
   "UNCHANGED_STAGE",
@@ -96,6 +107,13 @@ const REFUSALS = new Set<string>([
   "TERMS_CHANGED",
   "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // An operator who pressed a control and did not get it. `ALREADY_LIFTED` and `ALREADY_REVOKED` are not
+  // refusals: nothing was denied, the work was simply already done.
+  "NOT_PERMITTED",
+  "ADMIN_REFUSED",
+  // The settings, timing and takeover refusals the accepted predecessors brought. Both sides appended to
+  // this set and the names are disjoint, so the resolution is the union: a `Set` carries no order, and
+  // dropping either side's half would leave a refusal rendered as an ordinary outcome.
   "FORBIDDEN",
   "TOO_LONG",
   "TIMING_INCOMPLETE",

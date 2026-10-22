@@ -22,6 +22,41 @@ export class BusinessProfileAccessDeniedError extends Error {
   }
 }
 
+/**
+ * The caller is not a member of staff, or presented a context that was not issued by
+ * `authorizePlatformAccess` (#59).
+ *
+ * A user with no platform role and a user whose role was withdrawn fail identically, and the message
+ * names neither — a distinguishable refusal would tell somebody which user ids are staff.
+ */
+export class PlatformAccessDeniedError extends Error {
+  constructor() {
+    super("Platform access denied");
+    this.name = "PlatformAccessDeniedError";
+  }
+}
+
+/**
+ * The caller is staff but their internal role does not hold the permission (#59).
+ *
+ * Carries the role and the permission as well as the action, because the operator reading it needs to
+ * know whether to ask for a different role or a different person — "you cannot do this" and "this is the
+ * billing team's" are different sentences.
+ */
+export class PlatformPermissionError extends Error {
+  readonly role: string;
+  readonly permission: string;
+  readonly operation: string;
+
+  constructor(role: string, permission: string, operation: string) {
+    super(`Platform role ${role} does not hold ${permission}, which is required to ${operation}`);
+    this.name = "PlatformPermissionError";
+    this.role = role;
+    this.permission = permission;
+    this.operation = operation;
+  }
+}
+
 /** The caller is a member but their role does not permit the operation. */
 export class WorkspacePermissionError extends Error {
   readonly operation: string;

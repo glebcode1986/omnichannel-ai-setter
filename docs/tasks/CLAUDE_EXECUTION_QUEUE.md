@@ -60,7 +60,65 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — the seller snapshot race on P6-09 / PR #101
+### Current work — remediating Astra's three findings on P7-01 / PR #102
+
+`CHANGES_REQUESTED` at `3317e74`, three blocking findings, all real and all fixed on this branch. #103+
+still held, nothing to `main`, no reviewer assigned or started by me.
+
+**[P1] The console released customer content and recorded nothing.** `readConversationContent` returned a
+customer's messages while its comment delegated `CUSTOMER_CONTENT_READ` to the caller — and the repository
+had **no production writer** of that kind, or of `WORKSPACE_INSPECTED`, at all. Both were declared in the
+domain, labelled in the catalogue and in the Prisma enum, and never emitted; the CHECK requiring a session
+id on a content row cannot force a row that is never inserted. Fixed structurally: the function owns its
+transaction and writes the CRITICAL row — actor, workspace, Business Profile, conversation, authorizing
+session, granted scope, break-glass, messages released, reason taken from the session's own purpose — in the
+same transaction as the select, so a failed audit rolls the read back. `readSupportSnapshot` records
+`WORKSPACE_INSPECTED` the same way, INFO and only when a workspace was found. The screen's catch-all was
+also narrowed: it admitted every exception and would have reported a storage failure as a permissions
+refusal.
+
+**[P2] Naming a workspace deleted the expiry predicate.** Two `OR` keys in one object literal, so the scope
+filter replaced the time bounds and the workspace console listed expired suspensions as active. Both
+disjunctions now sit under `AND`.
+
+**[P2] Two operators, two claims of one transition.** `liftKillSwitch` and `revokeSupportAccessSession`
+discarded the conditional `updateMany` count and filed a success audit either way, so the loser recorded a
+transition that never happened. The count decides now. This is the #100 lesson one step on: a conditional
+update is only as good as the branch that reads its count.
+
+Seven regressions on fresh workspaces, 41→48 in `platform-operations.integration`. Five mutations, one per
+part of the fix, each caught. The concurrency cases force the interleaving with a barrier that holds both
+transactions at their first read — two real PostgreSQL transactions, no sleeps — and the audit-failure case
+makes only the audit insert fail, then shows the messages are still readable, proving the content was
+withheld rather than destroyed.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (213 files, 2068 passed / 1408 skipped);
+PostgreSQL 50 files 1140/1140; Redis 55/55; E2E 106 files 1220/1220.
+
+### Earlier — propagating the accepted P6-09 into P7-01 / PR #102
+
+#101 passed at `79aaee1a` (Astra review 5614206303, `APPROVED`), so this branch is the next link. One
+ordinary non-rebase merge, one branch only — no rebase, no force-push, nothing to `main`, #103+ untouched,
+no reviewer assigned or started by me. #102 was **85 commits behind** while carrying 20 of its own.
+
+**One real conflict**, in `apps/web/src/ui/outcome-notice.tsx`: both sides append to the `REFUSALS` set
+after `CHECKOUT_UNAVAILABLE`. Resolved as the union keeping #102's comment — disjoint names, a `Set` has no
+order, and dropping either half renders a refusal as an ordinary outcome. 53 outcomes, 23 refusals, no
+duplicate, all 53 keyed in both locales.
+
+**A dry run of this merge was measured before the directive arrived**, and the two gates it named as
+"merges clean and still breaks" were both re-checked after the merge: the `translate.test.ts`
+identical-strings literal is still exactly its ten keys (18/18), and no new actorless operator pause exists
+for #102's `automation_suspensions` CHECK. Schema, barrel and worker registry all clean by name.
+
+Carried forward from the acceptance, unsmoothed: Astra **did not execute** the PostgreSQL concurrency
+regression — no database, Redis or container runtime in its environment — so that case's live-database
+evidence is mine plus CI, with no independent certification. The approval is not payment or legal approval.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (213 files, 2068 passed / 1401 skipped);
+PostgreSQL 50 files 1133/1133; Redis 55/55; E2E 106 files 1220/1220.
+
+### Earlier — the seller snapshot race on P6-09 / PR #101
 
 `CHANGES_REQUESTED` at `68a94d6`, one blocker, fixed on this same branch. #102+ still held, nothing to
 `main`, no reviewer assigned or invoked by me.

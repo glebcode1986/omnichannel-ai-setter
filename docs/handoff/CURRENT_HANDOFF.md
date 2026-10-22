@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #100 plus the P6-09 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#100 are completed by Claude and awaiting review; **P6-09 / Issue
-#47 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #101 plus the P7-01 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#101 are completed by Claude and awaiting review; **P7-01 / Issue
+#59 is the current task**, and it stays open after this slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -56,10 +56,11 @@ on 2026-10-13 and had been assumed otherwise until then:
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
 ` -> #85 -> #86 -> #87 -> #88 -> #89 -> #90 -> #91 -> #92 -> #93 -> #94 -> #95 -> #96 -> #97 -> #98 -> #99`
-` -> #100`
+` -> #100 -> #101`
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
-#43), #99 (P6-05, #42), #100 (P6-08, #46) and the P6-09 branch above (#47). **#41 / P6-04 is blocked** on the owner's choice
+#43), #99 (P6-05, #42), #100 (P6-08, #46) and #101 (P6-09, #47). Phase 7 continues the same chain with
+the P7-01 branch above (#59). **#41 / P6-04 is blocked** on the owner's choice
 of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
 implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
 the only Phase 6 work left needs the owner's provider decision.
@@ -745,6 +746,71 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    exists without one.
 
 1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
+
+1. **P7-01 / Issue #59 — the internal control plane, first slice.** Branch
+   `feat/p7-01-admin-operations`, based on #101. `docs/specs/ADMIN_OPERATIONS.md` and
+   `MVP_RELEASE_SCOPE.md` are brought into the chain from `origin/docs/phase6-commercial-billing` — Phase
+   7 could not cite its own specs before.
+
+   **The whole design turns on one refusal.** The obvious way to build an internal console is to mint a
+   `BusinessProfileContext` for a support engineer so every existing customer read works unchanged. That
+   would hand the operator customer `OWNER` authority across every `requireRole` site in `packages/db`,
+   because the context carries `role: WorkspaceRole` and nothing downstream can tell a minted one from a
+   real member's — the deletion path, `addWorkspaceMember`, `setEntitlementOverride` and the data export
+   would all accept it, and each writes `actorUserId` into the **customer's** audit log, readable by that
+   customer's own owner. Widening the membership lookup is worse: a staff row in `workspace_members`
+   appears in that user's workspace list and consumes a seat the customer pays for.
+
+   So `PlatformContext` has its own brand and its own `WeakSet`, and `scopeOf`, `profileScopeOf` and
+   `requireRole` **reject it**. That rejection is the feature, and `platform-boundary.test.ts` parses the
+   platform modules' ASTs to assert no exported signature takes a customer context and none imports a
+   credential reader.
+
+   **The slice has two typed actions, and it needed them.** A first slice of authorization and evidence
+   alone would have satisfied none of #59's acceptance criterion — "routine commercial troubleshooting
+   without direct DB mutation" — and the repo documents the two paths that are direct SQL today, in
+   `suspension-store.ts`'s and `suspension-lock.ts`'s own comments. So the console pulls and lifts the
+   kill switch at the four existing scopes, and asks for an ambiguous operation to be re-examined by
+   enqueueing the job the sweeper raises. It never decides: `reconcileOperation` does, in the worker,
+   where the provider-evidence port exists.
+
+   **Three defects found before a line was written**, by a three-agent survey-and-critique pass:
+
+   - `readBillingOverview` → `readUsage` → `openUsageCycleWithin` **creates** a `usage_cycles` row, so an
+     operator opening a "read-only" usage panel would have written into the customer's tenant with no
+     actor and no audit row — failing "every operator action is attributable" on the first page load, in
+     the one direction nobody looks. `readUsageSnapshot` is genuinely read-only and a test asserts the
+     cycle count is unchanged afterwards.
+   - A `SupportScope` with no content-bearing read would have been `requireWorkspaceWideWrite` again:
+     exported, documented, never called. So the slice includes exactly one screen that shows a customer's
+     words, gated on the scope, and the same page renders the reason when it does not.
+   - An `/admin` tree is a sibling of the whole product shell and this app has **no middleware**, so a
+     forgotten resolver call in one page file would be an unauthenticated internal page.
+     `route-authorization.test.ts` walks every `page.tsx` and `route.ts`, follows ancestor layouts and
+     imports two levels, and fails the build — with an allowlist of seven deliberate exceptions, each
+     carrying its reason. It is worth more than the console.
+
+   **`automation_suspensions_operator_check` is load-bearing.** `activeSystemSuspension` identifies the
+   system's own switch precisely by `by_user_id IS NULL`, so an operator pause with no actor is one the
+   backlog guard is free to close. Adding the CHECK broke four existing fixtures that created actorless
+   operator pauses, which is the finding rather than a cost.
+
+   **Audit kept separate, for a reason worth quoting rather than re-deriving.**
+   `audit_events.workspace_id` is `NOT NULL`, so a platform-level act has no row shape, and
+   `audit_events_scope_check`'s second disjunct forces `business_profile_id IS NOT NULL` for any kind
+   outside its allowlist. Severity is derived from the kind in the domain *and* paired with it by a CHECK.
+
+   **Decisions that are the owner's, stated in the PR rather than invented quietly:** the role-to-permission
+   matrix (`PLATFORM_PERMISSION_MATRIX` is one editable literal with the reasoning beside each row);
+   whether break-glass may be renewed and under what cap — nothing stops a chain of fifteen-minute grants,
+   so the audit counts the chain instead; "customer approval when required by policy", deferred; and how
+   staff authenticate, which is unanswerable today because `apps/web/src/auth.ts` has `providers: []` and
+   nobody can sign in at all.
+
+   **Deferred, and named:** the two suspension scopes that do not exist (channel/provider class,
+   high-risk feature), the queue/operation inspector and correlation tracing — the survey found three
+   breaks in correlation propagation, which is its own change — feature flags, and the remaining typed
+   actions. **#59 stays open.**
 
 1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
    `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:
@@ -4135,3 +4201,154 @@ cases were skipped on its side and are not passes; the exact-head CI run is what
 
 `billing-routing.integration` is **102/102** — 92 at the first reviewed head, +5 for the digest, +3 for the
 locale aliases, +1 for the required digest, +1 for this race. Totals 3391→3392, PostgreSQL 1086→1087.
+
+## P6-09 accepted, and propagated into P7-01 / PR #102 — 2026-10-22
+
+#101 passed at `79aaee1a3f5ccc1517c08d93492ac1260e2ecdd4` (Astra review 5614206303, `APPROVED`), closing
+three remediation rounds in one day: the offer-digest binding, the locale aliases, the required digest and
+the seller snapshot. The reviewer stated one limitation plainly and it is carried forward rather than
+smoothed over: **it did not execute the PostgreSQL concurrency regression** — its environment has no
+database, Redis or container runtime — so the live-database evidence for that case is mine plus the
+exact-head CI run, and no independent certification of it exists. The approval is also explicitly not
+production payment or legal approval; the final legal copy stays an owner decision.
+
+### The merge
+
+One ordinary non-rebase merge of the accepted head into `feat/p7-01-admin-operations`. The directive's
+figures were re-measured before the branch was touched and matched exactly: merge base `cd25fa2f`, #102
+twenty commits ahead and **eighty-five behind**, live head `1590582f`.
+
+**One real conflict**, in `apps/web/src/ui/outcome-notice.tsx`. `OUTCOMES` auto-merged with both sides
+present; only the `REFUSALS` set conflicted, where both sides append after `CHECKOUT_UNAVAILABLE`. Resolved
+as the union with #102's comment kept — the two sides' names are disjoint, a `Set` carries no order, and
+dropping either half would render a refusal as an ordinary outcome. Counted by bracket depth rather than by
+a line grep: **53 outcomes, 23 refusals, no duplicate**, every refusal also an outcome, and all 53 with an
+`outcome.<NAME>` key in **both** locales. That last one matters because the component reaches the catalogue
+through `as MessageKey`, so a missing key is a failed build rather than a type error.
+
+### The fallout that merges clean, checked by name
+
+A measured dry run of this exact merge existed before the directive arrived, and it had named two gates
+that would merge without a conflict and still break. Both were re-measured on the post-merge tree:
+
+| shape | result |
+|---|---|
+| schema drift | **No difference detected** |
+| models against tables | 72 `^model` against 72 `CREATE TABLE`; the one `DROP TABLE` match is **inside a comment**, not a statement |
+| colliding migration timestamps | none |
+| `packages/db/src/index.ts` barrel | no duplicate exported name |
+| worker loop registry | nine names in `loops` (one conditional spread), nine `.close()` inside `allSettled`, prose "nine" |
+| `translate.test.ts` identical-strings literal | **18/18** — the ten keys whose `en` and `ru` are byte-identical are still exactly the ten in the literal |
+| #102's `automation_suspensions` actorless-operator CHECK | no new `reason: "OPERATOR"` write, so nothing for it to refuse |
+
+Two of those numbers were ambiguous on first measurement and were resolved rather than accepted: the
+`DROP TABLE` was a comment, and a whole-file `.close()` count of twelve is not the registry — the nine that
+matter are the ones inside `allSettled`.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 213 files, **2068 passed / 1401 skipped (3469)** |
+| PostgreSQL suites | 50 files, **1133/1133** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1220/1220** |
+
+#102 brings the operations and audit segment on top: 208→213 files and 3392→3469 tests, PostgreSQL
+48→50 files and 1087→1133 cases, E2E 103→106 files and 1189→1220.
+
+Ancestry: the accepted #101 head `79aaee1a`, the previous #102 head `1590582f` and the accepted #100 parent
+`27baa3d9` are all ancestors of the new head.
+
+## PR #102 round one — three findings in the operations slice — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `3317e74` with three blocking findings. All three are real, all three
+are fixed, and all three are the same family: a correct piece with nothing connecting it to the thing it
+was supposed to protect.
+
+### [P1] The console released a customer's correspondence and recorded nothing
+
+`readConversationContent` checked the scope, selected the messages and returned the text. The comment above
+it said the **caller** records `CUSTOMER_CONTENT_READ`. No caller did — and the repository had no
+production writer of that kind, or of `WORKSPACE_INSPECTED`, anywhere. Both were declared in the domain,
+labelled in the catalogue and present in the Prisma enum, and never emitted. So an operator could read a
+customer's private messages and nothing could afterwards say which conversation, when, or whether the
+session they held had ever been used. Session opening and revocation were audited; neither answers that.
+The SQL CHECK that requires a session id on a content row could not help either: it constrains a row that
+is inserted, and none was.
+
+This is the unreached-code shape again, inverted — not an exported function with no caller but a declared
+audit kind with no writer. Worth noting that the comment delegating the write is what made it look done.
+
+**The fix is structural rather than an added call site.** `readConversationContent` now takes a `DbClient`,
+opens its own transaction, selects the messages and writes the `CUSTOMER_CONTENT_READ` row in that same
+transaction. A failure to record therefore rolls the read back and the caller gets no content — inseparable
+rather than adjacent. The row carries the actor, workspace, Business Profile, the conversation as subject,
+the authorizing session id, the granted scope, the break-glass flag and how many messages were released;
+severity is CRITICAL, derived from the kind rather than passed. The reason is the **session's own** stated
+purpose, read inside the transaction, so a CRITICAL record answers "why" without a join back to the
+session-open event. A granted scope carrying no session id is refused outright: it could not be filed, so
+it does not release anything.
+
+`readSupportSnapshot` records `WORKSPACE_INSPECTED` the same way — INFO, no session, and only once a
+workspace was actually found, because a lookup that returned nothing inspected nothing.
+
+**And one thing the finding did not ask for but the fix needed.** `assembleAdminConversation` caught
+*every* exception and rendered "no content, NOT_GRANTED". With the audit now inside the read, a storage
+failure would have been reported to an operator as a permissions refusal, sending them to open a session
+they already hold. The catch now admits only `PlatformPermissionError` and `DbInputError` and rethrows
+anything else.
+
+### [P2] Naming a workspace deleted the expiry predicate
+
+`listKillSwitches` built `OR: [{until: null}, {until: {gt: at}}]` and then **spread a second `OR`** for the
+scope. One object literal, one key: the scope filter replaced the expiry filter. So the workspace console
+listed suspensions that had already run out as if they were in force, while the unfiltered home list — which
+never set the second key — excluded them correctly. Expired rows could also consume the hundred-row cap and
+hide switches that really were active. Both disjunctions now sit under `AND`.
+
+### [P2] Two operators, two claims of one transition
+
+`liftKillSwitch` and `revokeSupportAccessSession` both read the row, ran a conditional `updateMany` whose
+predicate correctly let only one caller change it — and then **discarded the count**, appending a success
+audit event and returning `true` either way. The winner's attribution was never at risk; the record was,
+because the loser filed a row claiming a state transition that never happened. Both now let the affected-row
+count decide: zero means somebody else won, which is the same answer as finding it already done, and
+deliberately emits no transition event.
+
+This is the #100 lesson one step further on. There the fix was to put the comparison in the predicate; here
+the predicate was already right and its *result* was ignored. A conditional update is only as good as the
+branch that reads its count.
+
+### The regressions, and what proves they are not restatements
+
+Seven cases, +41→48 in `platform-operations.integration`, on fresh workspaces rather than the shared
+fixture. Five mutations, one per part of the fix, each caught by the case written for it:
+
+| reverted | caught by |
+|---|---|
+| the expiry predicate lost to the scope spread | "excludes an expired switch from the workspace list exactly as it does from the unfiltered one" |
+| `liftKillSwitch` ignoring the count | "lets exactly one lift win, files exactly one lift, and keeps the winner's attribution" |
+| `revokeSupportAccessSession` ignoring the count | "lets exactly one revocation win, and files exactly one revocation" |
+| the `CUSTOMER_CONTENT_READ` write | "files a CRITICAL content read…" **and** "withholds the correspondence when the audit row cannot be written" |
+| the `WORKSPACE_INSPECTED` write | "files an inspection when a workspace snapshot is read…" |
+
+The concurrency cases force the interleaving instead of waiting for it: the real client is proxied so both
+transactions are held at their first read until both have read, then released, so one conditional update
+wins and the other changes nothing — two real PostgreSQL transactions, no sleeps. The audit-failure case
+proves the direction of the dependency by making only the audit insert fail and then showing the messages
+are still readable afterwards: the content was withheld, not destroyed.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 213 files, **2068 passed / 1408 skipped (3476)** |
+| PostgreSQL suites | 50 files, **1140/1140** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1220/1220** |
+
+PostgreSQL 1133→1140 and `verify` 3469→3476: all seven new cases are database-gated, which is why the
+no-infrastructure run's skipped count rises by exactly seven.
