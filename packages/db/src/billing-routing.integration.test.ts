@@ -238,8 +238,29 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
   }
 
+  /**
+   * The digest of the offer this request would be shown, which `openCheckoutContract` now requires.
+   *
+   * Read the same way the page reads it, because that is the point of the field: a test that invented a
+   * value would be testing the refusal rather than the path it is interested in. The empty string when no
+   * offer exists at all — there is nothing to echo then, and the store returns that refusal before it ever
+   * compares a digest.
+   */
+  async function digestOf(context: WorkspaceContext, input: Request): Promise<string> {
+    const offer = await readCheckoutOffer(db(), context, {
+      planVersionId: input.planVersionId,
+      interval: input.interval,
+      arrangement: input.arrangement,
+      currency: input.currency,
+      locale: input.locale,
+      supersedeCurrent: true,
+      ...(input.market === undefined ? {} : { market: input.market }),
+    });
+    return offer.available ? offer.offerDigest : "";
+  }
+
   async function openFor(context: WorkspaceContext, input: Request): Promise<OpenedCheckout> {
-    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input) });
+    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input), offeredDigest: await digestOf(context, input) });
     if (!opened.available) {
       throw new Error(`checkout refused: ${opened.reason} ${opened.detail.join(", ")}`);
     }
@@ -261,7 +282,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return minted;
   }
 
-  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+  // Both of the fields a *submission* carries are left out: the document ids it ticked and the digest of
+  // the offer it was shown. Neither can come from a request builder, because both are answers the store
+  // itself produced for that request — so every call site has to fetch them, which is exactly what the
+  // page does.
+  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds" | "offeredDigest">;
 
   const request = (overrides: Partial<Request> = {}): Request => ({
     planVersionId,
@@ -379,7 +404,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         sellerProfileId: "seller-mor",
         provider: "attacker",
         providerAccountRef: "acct_attacker",
-      } as Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+      } as Request;
 
       const opened = await openFor(context, forged);
 
@@ -1131,7 +1156,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       // A second checkout that has not said it is migrating is refused. This is "never create a second
       // active charge path silently", and the default is the refusal.
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "ARRANGEMENT_EXISTS" });
 
@@ -1945,6 +1970,30 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(opened).toMatchObject({ available: true });
     });
 
+    it("refuses a submission that names no offer at all, instead of skipping the comparison", async () => {
+      // The guard cannot be switchable off by the client it exists to distrust, and leaving the field out
+      // is the cheapest possible way to try. While the digest was optional this restored the original
+      // defect in full: the acceptance was recorded against whatever the store resolved at POST time with
+      // nothing binding it to what anybody had been shown, and the stored contract could not afterwards be
+      // told apart from one that *had* been bound.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        // What `offeredDigestFrom` returns for a form with no `offer` field — a value no digest can equal,
+        // so the ordinary comparison refuses it and there is no `undefined` path to get wrong.
+        offeredDigest: "",
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+    });
+
     it("refuses when the selling entity and the tax treatment changed after the terms were displayed", async () => {
       const { context, workspaceId } = await freshWorkspace();
       const offer = await displayedOffer(context);
@@ -2220,7 +2269,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // And the stale id is refused once the replacement is effective — the half that matters, because a
       // reader with an open tab is holding exactly that id.
       const stale = withStale(offer, "PUBLIC_OFFER", superseded.legalDocumentId);
-      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale });
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
       expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
 
@@ -2228,7 +2277,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       // the replacement opens the checkout. Without this a guard that refused everything would pass.
       const second = await freshWorkspace();
       const current = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
-      const opened = await openCheckoutContract(db(), second.context, { ...request(ask), acceptedDocumentIds: current, offeredDocumentIds: current });
+      const opened = await openCheckoutContract(db(), second.context, { ...request(ask), acceptedDocumentIds: current, offeredDocumentIds: current, offeredDigest: offer.offerDigest });
       expect(opened).toMatchObject({ available: true });
       if (!opened.available) {
         return;
@@ -2293,7 +2342,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(offered.map((document) => document.version)).toEqual([2]);
 
       const stale = withStale(offer, "PUBLIC_OFFER", "raw-alias-b");
-      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale });
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
     });
 
@@ -2359,7 +2408,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const { context, workspaceId } = await freshWorkspace();
       const documents = await acceptedIds(context, request());
 
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
       if (!refused.available) {
@@ -2379,6 +2428,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const refused = await openCheckoutContract(db(), context, {
         ...request(),
         acceptedDocumentIds: [...mine.filter((id) => id !== theirs.id), theirs.id],
+        offeredDigest: await digestOf(context, request()),
       });
 
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_NOT_APPLICABLE" });
@@ -2737,7 +2787,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         effectiveFrom: new Date("2026-03-01T00:00:00.000Z"),
       });
 
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: staleIds });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: staleIds, offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
       if (!refused.available) {
@@ -2888,8 +2938,8 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         effectiveFrom: new Date("2026-01-15T00:00:00.000Z"),
       });
 
-      const blamed = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds });
-      const explained = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDocumentIds: offeredIds });
+      const blamed = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
+      const explained = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
 
       // Without the token the store cannot tell the two apart, and says the honest conservative thing.
       expect(blamed).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
@@ -2913,6 +2963,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         ...request(),
         acceptedDocumentIds: offeredIds.slice(0, 1),
         offeredDocumentIds: offeredIds,
+        offeredDigest: await digestOf(context, request()),
       });
 
       expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
@@ -3000,6 +3051,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         const refused = await openCheckoutContract(db(), context, {
           ...request(),
           acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
         });
 
         expect(refused).toMatchObject({ available: false, reason: "PROVIDER_UNAVAILABLE" });
@@ -3043,6 +3095,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openCheckoutContract(db(), context, {
         ...request({ locale: "RU-ru" }),
         acceptedDocumentIds: await acceptedIds(context, request({ locale: "RU-ru" })),
+        offeredDigest: await digestOf(context, request({ locale: "RU-ru" })),
       });
 
       expect(opened.available).toBe(true);
@@ -3055,7 +3108,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("refuses a locale that is not a language tag at all", async () => {
       const { context } = await freshWorkspace();
 
-      await expect(openCheckoutContract(db(), context, { ...request({ locale: "not a tag" }), acceptedDocumentIds: [] })).rejects.toThrow(DbInputError);
+      await expect(openCheckoutContract(db(), context, { ...request({ locale: "not a tag" }), acceptedDocumentIds: [], offeredDigest: "" })).rejects.toThrow(DbInputError);
     });
 
     it("never throws for a locale nobody published, in any of the product's own locales", async () => {
@@ -3069,6 +3122,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         const attempt = await openCheckoutContract(db(), context, {
           ...request({ locale }),
           acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
         });
         if (!attempt.available) {
           expect(CHECKOUT_REFUSALS.includes(attempt.reason), locale).toBe(true);
@@ -3112,6 +3166,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const staleRefusal = await openCheckoutContract(db(), second, {
         ...request(),
         acceptedDocumentIds: before.map((row) => row.legalDocumentId),
+        offeredDigest: await digestOf(second, request()),
       });
       expect(staleRefusal).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
     });

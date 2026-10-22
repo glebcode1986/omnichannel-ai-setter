@@ -80,7 +80,7 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
       locale,
       acceptedDocumentIds: acceptedDocumentIdsFrom(formData),
       offeredDocumentIds: offeredDocumentIdsFrom(formData),
-      ...(offeredDigestFrom(formData) === undefined ? {} : { offeredDigest: offeredDigestFrom(formData) }),
+      offeredDigest: offeredDigestFrom(formData),
     });
     finish(target, opened.available ? "ACCEPTED" : outcomeOf(opened.reason));
   } catch (error) {

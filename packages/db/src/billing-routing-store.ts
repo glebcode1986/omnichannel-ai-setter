@@ -897,11 +897,18 @@ export interface OpenCheckoutInput extends CheckoutRequest {
   /**
    * The `offerDigest` of the offer the page displayed (#47).
    *
-   * Optional for the same reason `offeredDocumentIds` is: a caller with no page behind it has no displayed
-   * offer to declare. Omitting it loses the protection for that caller and weakens nothing for anybody
-   * else — the comparison is always against what the store resolves inside the transaction.
+   * **Required**, unlike `offeredDocumentIds`, and the difference is the point. That one can only soften a
+   * refusal, so omitting it costs the caller a better sentence and nothing else. This one *is* the
+   * enforcement: a submission that cannot name the offer it was shown is a submission whose consent is
+   * bound to nothing, and if absence were allowed to skip the comparison then the client this check exists
+   * to distrust could switch it off by leaving the field out.
+   *
+   * A form that posts no such field therefore arrives here as the empty string, which no digest can equal,
+   * and is refused by the ordinary comparison rather than by a special case. A caller with no page behind
+   * it — a script, a future API — has to read the offer first and echo its digest, which it must do anyway
+   * to know which documents to accept.
    */
-  readonly offeredDigest?: string;
+  readonly offeredDigest: string;
   /**
    * A time-bounded charge in another currency or asset, from an adapter that quoted one.
    *
@@ -996,7 +1003,7 @@ async function write(
     // the new terms of the thing you were buying", while this says "the thing you were buying is not what
     // you were shown". Compared against the resolution above, which came from operator configuration a
     // client cannot write.
-    if (input.offeredDigest !== undefined && input.offeredDigest !== resolved.offer.offerDigest) {
+    if (input.offeredDigest !== resolved.offer.offerDigest) {
       return {
         available: false,
         reason: "OFFER_CHANGED",

@@ -89,8 +89,16 @@ left all 100 tests green, because the coverage trigger matches by kind and the s
 before the acceptance trigger is ever reached; the suite now writes an acceptance by raw statement and
 requires the database to raise on its own. Five mutations, one per part of the fix, are each caught.
 
-Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (208 files, 2041 passed / 1349 skipped);
-PostgreSQL 48 files 1085/1085; Redis 55/55; E2E 103 files 1187/1187.
+**Then a hole in my own P1 fix, found before anybody claimed the head.** `offeredDigest` was optional, so a
+submission that left the field out skipped the comparison and restored the defect in full — a guard the
+untrusted client can switch off is not a guard. It is now required on `OpenCheckoutInput`, an absent form
+field arrives as `""` which no digest can equal, and the refusal happens in the ordinary comparison with no
+`undefined` branch. Cost: 16 test call sites had to start supplying a correct digest, because the digest
+check runs before the document checks and they would otherwise have been handed `OFFER_CHANGED` instead of
+the refusal they assert. `tsc` enumerated every one once `Request` dropped the field.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (208 files, 2041 passed / 1350 skipped);
+PostgreSQL 48 files 1086/1086; Redis 55/55; E2E 103 files 1189/1189.
 
 ### Earlier — propagating the accepted #100 into P6-09 / PR #101
 

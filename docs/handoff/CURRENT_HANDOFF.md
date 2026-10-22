@@ -3992,16 +3992,16 @@ it is no longer able to present two spellings of one language as two current doc
 | gate | result |
 |---|---|
 | migration drift | **No difference detected.** |
-| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1349 skipped (3390)** |
-| PostgreSQL suites | 48 files, **1085/1085** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1350 skipped (3391)** |
+| PostgreSQL suites | 48 files, **1086/1086** |
 | Redis suites | **55/55** |
-| worker + web E2E | 103 files, **1187/1187** |
+| worker + web E2E | 103 files, **1189/1189** |
 
 Run by name:
 
 | suite | result |
 |---|---|
-| `billing-routing.integration` — 92 at the reviewed head, +5 for P1, +3 for P2 | **100/100** |
+| `billing-routing.integration` — 92 at the reviewed head, +5 for P1, +3 for P2, +1 for the required digest | **101/101** |
 | `billing-events` | **7/7** |
 | `domain/billing-routing` | **45/45** |
 | `checkout-screen.integration` | **8/8** |
@@ -4012,9 +4012,42 @@ Run by name:
 | `no-provider-payloads` | **6/6** |
 | the three `apps/web/src/i18n` gates | **34/34** |
 
-Totals: 3380→3390 tests, PostgreSQL 1077→1085. Eight of the ten new cases are in database-gated files,
-which is why the no-infrastructure run's skipped count rises by exactly eight and its passing count by the
+Totals: 3380→3391 tests, PostgreSQL 1077→1086. Nine of the eleven new cases are in database-gated files,
+which is why the no-infrastructure run's skipped count rises by exactly nine and its passing count by the
 remaining two — the digest form reader, which needs no infrastructure.
+
+### A hole I found in my own P1 fix, before anybody claimed the head
+
+Published as ready at `8b885c3`, then kept reading my own diff for the recurring finding class — an
+optional guard — and found one. `offeredDigest` was optional and the comparison was
+
+```ts
+if (input.offeredDigest !== undefined && input.offeredDigest !== resolved.offer.offerDigest) {
+```
+
+so **a submission that simply left the field out skipped the check entirely**, restoring Astra's P1 in
+full: the acceptance was recorded against whatever the store resolved at POST time with nothing binding it
+to what anybody had been shown. Worse for the evidentiary purpose #47 exists for, a stored contract could
+not afterwards be told apart from one that *had* been bound, because nothing recorded that the comparison
+happened. A guard the untrusted client can switch off is not a guard — and the justification I had written
+for making it optional, "an old page must not be refused for a digest it never carried", described a page
+that does not exist in a product with no deployment, while the cost was a real bypass.
+
+The field is now **required on `OpenCheckoutInput`**, and `offeredDigestFrom` returns `""` rather than
+`undefined` for an absent form field. An empty string cannot equal a sha256 digest, so an unbound
+submission is refused by the ordinary comparison: there is no `undefined` branch left to get wrong, and the
+conditional spread in the server action is gone. The only production caller is
+`apps/web/src/server/checkout-actions.ts` and the page always renders the field, so nothing reachable loses
+a path.
+
+Two consequences, both worth it. The digest check runs *before* the document checks, so every existing test
+expecting a document refusal had to start supplying a correct digest or it would have been handed
+`OFFER_CHANGED` instead — 16 call sites, enumerated by `tsc` once `Request` dropped the field, each now
+fetching the digest the way the page does (a new `digestOf` helper, or the `offer` already in scope). And
+the three `apps/web` cases now carry it **through the FormData**, which is more faithful than passing it
+beside the form: what the server enforces should be read from what a submission actually contained.
+
+Mutation-checked: restoring the skip-when-absent semantics fails exactly one test, the one written for it.
 
 ### Unchanged from the accepted predecessor
 

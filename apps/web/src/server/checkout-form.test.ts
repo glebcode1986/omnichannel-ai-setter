@@ -43,20 +43,20 @@ describe("reading the accepted documents", () => {
 });
 
 describe("reading the displayed offer", () => {
-  it("is absent when the field is, so an old page is not refused for a digest it never carried", () => {
-    // `undefined` and not `""`. The store compares the digest only when one arrived, so a submission
-    // from a page rendered before this field existed has to be indistinguishable from one that did not
-    // post it — an empty string would be compared against a real digest and refuse every such checkout.
-    expect(offeredDigestFrom(form([]))).toBeUndefined();
-    expect(offeredDigestFrom(form([["offer", "   "]]))).toBeUndefined();
+  it("is the empty string when the field is absent, which is a value that cannot match", () => {
+    // Not `undefined`. The store *requires* this value, so an absent field has to arrive as something no
+    // digest can equal rather than as something that skips the comparison — otherwise the client the
+    // check exists to distrust could disable it by leaving the field out.
+    expect(offeredDigestFrom(form([]))).toBe("");
+    expect(offeredDigestFrom(form([["offer", "   "]]))).toBe("");
     expect(offeredDigestFrom(form([["offer", " abc123 "]]))).toBe("abc123");
   });
 
-  it("is absent for anything that is not a string, rather than a value the store would compare", () => {
+  it("is the empty string for anything that is not a string", () => {
     const data = form([]);
     data.append("offer", new Blob(["x"]));
 
-    expect(offeredDigestFrom(data)).toBeUndefined();
+    expect(offeredDigestFrom(data)).toBe("");
   });
 });
 

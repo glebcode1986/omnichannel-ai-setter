@@ -51,10 +51,14 @@ export function offeredDocumentIdsFrom(formData: FormData): readonly string[] {
  * only ever *compared* against what the store resolves inside the opening transaction. A forged value
  * cannot name a seller, a provider or a route — the most it can do is match the terms that are current
  * anyway, which is the case the comparison exists to allow.
+ *
+ * Returns the empty string when the field is absent or blank, and deliberately not `undefined`: the store
+ * requires this value, and an absent one has to be a value that cannot match rather than a value that
+ * skips the comparison. A submission that names no offer is refused, which is the safe direction — the
+ * alternative is letting the client the check distrusts disable it by leaving the field out.
  */
-export function offeredDigestFrom(formData: FormData): string | undefined {
-  const value = field(formData, "offer").trim();
-  return value === "" ? undefined : value;
+export function offeredDigestFrom(formData: FormData): string {
+  return field(formData, "offer").trim();
 }
 
 function idsNamed(formData: FormData, name: string): readonly string[] {
