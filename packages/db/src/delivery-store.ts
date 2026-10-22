@@ -59,7 +59,7 @@ import { readEntitlement } from "./entitlement-store";
 import { resolveEffectiveMode } from "./automation-mode";
 import { releaseCatalogueLockKey } from "./release-lock";
 import { coveringSuspensionAt } from "./suspension-covering";
-import { readReleaseInForce, readRolloutAccess, rolloutAccessFrom } from "./release-store";
+import { readReleaseInForceNow, readRolloutAccess, rolloutAccessFrom } from "./release-store";
 import { suspensionLockKeysFor } from "./suspension-lock";
 import type {
   ActorKind,
@@ -591,7 +591,11 @@ async function claimInside(
     await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${releaseCatalogueLockKey()}, 0))`;
     // The stage from the catalogue under that key; the profile's own enablement off the row this
     // transaction already holds `FOR UPDATE`, rather than read again unlocked.
-    const rolloutNow = rolloutAccessFrom(await readReleaseInForce(tx, claimedAt), profileRows[0]?.rollout_autopilot ?? false);
+    // Not `claimedAt`. That instant was captured by the coordinator before this transaction started, and
+    // bounding the catalogue by it hid exactly the writer the shared key above was taken for: a
+    // restrictive release or verdict committed while this claim waited. Read what is committed now that
+    // the key is held, and let the comparison below disagree with the guard.
+    const rolloutNow = rolloutAccessFrom(await readReleaseInForceNow(tx), profileRows[0]?.rollout_autopilot ?? false);
     if (rolloutNow.autopilot !== guard.rollout.autopilot) {
       return { kind: "STATE_CHANGED" };
     }

@@ -4469,3 +4469,96 @@ pass while proving nothing about the simulation inputs it exists to compare.
 
 Ancestry: the accepted #102 head `8f35d350`, the previous #103 head `b3f2a6ec` and the accepted #101 head
 `79aaee1a` are all ancestors of the new head.
+
+## PR #103 round one — four findings in release evidence and rollout enforcement — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `9b96066` with four blocking findings. All four are real and all four
+are fixed.
+
+### [P1] A lock was taken, and the query then hid the writer it was taken for
+
+The send claim takes `pg_advisory_xact_lock_shared` on the release-catalogue key precisely because the
+candidate that would change its answer **may not exist yet** when the claim starts — no row lock can cover
+a row nobody has written. It then re-resolved the catalogue with `readReleaseInForce(tx, claimedAt)`, and
+`claimedAt` is captured by the coordinator *before* the claim transaction begins. So a restrictive release,
+or a `CHANGES_REQUESTED` verdict, committed while the claim waited for that key was excluded by
+`createdAt <= claimedAt`.
+
+Taking a lock does not repair a query that excludes the winning writer. The guarded read now uses a new
+`readReleaseInForceNow`, which has no as-of bound and therefore sees what is committed once the key is
+held; the comparison with the guard then disagrees and the claim returns `STATE_CHANGED`.
+`readReleaseInForce` keeps its bound and its two deliberate callers — the console showing what was in force
+at an instant, and `readRolloutAccess` resolving the facts a decision is judged from.
+
+### [P1] A note about outstanding work became an accepted limitation
+
+`planGateResults` turned any nonempty `manual` note in the evidence table into `KNOWN_LIMITATION`. Those
+notes say what is **not** settled — "no staging environment exists", "`pnpm evals` is not run by CI", "all
+seven alerts §16 requires are unevidenced" — so the repository's own description of unfinished work
+admitted that work, and a Commercial Beta came out `releasable: true` with AUTOPILOT enabled and nobody
+having judged anything. `LAUNCH_READINESS` asks for limitations that are explicit, bounded **and safe**;
+only a person can supply the last one.
+
+A gate with a manual note is now **omitted**, which `releaseDecision` reports as `GATE_NOT_EVALUATED` and
+which blocks — including when every suite passed, because suites passing says nothing about what the table
+says they do not cover. The route forward is a **written verdict**: a person records `KNOWN_LIMITATION`
+with its bound, or `HIGH`, which switches off the capability that gate guards. Measured end to end: three
+successful commands and no written verdict now gives `releasable: false`; with honest written verdicts the
+decision disables **AUTOPILOT and OPERATOR_VISIBILITY** rather than permitting them.
+
+### [P1] Evidence that named a candidate it had never tested
+
+`--sha` was taken verbatim: not checked for shape, not checked to exist, not checked against the checkout
+whose commands were about to run — and the migration list was always read from `HEAD`. Imported
+`--command-results` were a bare `[{command, exitCode}]`, indistinguishable from the same array copied out
+of a run against any other commit. The reviewer's own probe recorded a forty-character string that exists
+nowhere and printed it as releasable.
+
+Now: the SHA must be forty hex characters and must be a commit in this repository; running the commands
+locally requires the candidate to **be** `HEAD`; imported results must arrive in an envelope naming the
+tested SHA and a `reference` saying where they ran, and that SHA must equal the candidate; and the
+migration list is read from the candidate rather than from `HEAD`.
+
+### [P2] The allowlist transition, for the third time
+
+`setRolloutAutopilot` read the flag, compared, then updated unconditionally and audited unconditionally.
+Two operators adding the same profile both saw `false`, both returned `changed: true` and both filed
+`ROLLOUT_ALLOWLIST_CHANGED`, although one `false -> true` had happened. The same correction as
+`liftKillSwitch` and `revokeSupportAccessSession` on #102: the transition is the predicate, and its count
+decides.
+
+### A flake this work surfaced, and its mechanism
+
+`pnpm test:db` failed once in four runs on a test that was not mine: `release-lock.integration`'s control,
+"finds no lock on that key when nothing has written". Its helper counted `pg_locks` filtered only by lock
+type and key. **`pg_locks` is cluster-wide while advisory locks are per-database**, every suite runs in a
+migrated database of its own and vitest runs those files in parallel — so the control saw the catalogue key
+held by a claim in *somebody else's database*. Latent before this round; adding claims made the coincidence
+likely.
+
+Demonstrated rather than inferred: holding the key in `omnichannel` and counting from
+`omnichannel_shadow` gives **1** without a database filter and **0** with one. The helper now scopes to
+`current_database()`, and `pnpm test:db` ran clean four times after.
+
+### Mutation evidence
+
+| reverted | caught by |
+|---|---|
+| the catalogue read back to `claimedAt` | *refuses a claim when the release catalogue moved after the instant the coordinator captured* |
+| a manual note becoming its own verdict | four planner/CLI cases, including *cannot make a release approvable on its own, however green every command was* |
+| the CLI's envelope and SHA checks | *refuses a bare array…* and *refuses results recorded against another commit* |
+| the allowlist's conditional transition | *lets exactly one of two concurrent selections report the transition, in both directions* |
+
+The concurrency cases force the interleaving with a barrier holding both transactions at their first read;
+the claim case runs in a database of its own because **release evidence is append-only** — a trigger
+refuses the delete — so a candidate recorded in the shared suite could never be taken back.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 219 files, **2142 passed / 1453 skipped (3595)** |
+| PostgreSQL suites | 52 files, **1185/1185** (four consecutive clean runs) |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |

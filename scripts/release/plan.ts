@@ -97,13 +97,17 @@ export function planGateResults(input: {
 
     const suites = entry.suites ?? [];
     if (suites.length === 0) {
-      // Nothing automated settles it. If the table says so in as many words, that admission is the
-      // verdict; if it does not, the gate is omitted and the release is blocked until somebody says.
-      if ((entry.manual ?? "").trim() !== "") {
-        results.push({ gateId: gate.id, severity: "KNOWN_LIMITATION", evidence: line, note: (entry.manual ?? "").trim() });
-      } else {
-        omitted.push(gate.id);
-      }
+      // Nothing automated settles it, so nothing here can. The table's `manual` text **describes what is
+      // outstanding** — "no staging environment exists", "`pnpm evals` is not run by CI", "all seven
+      // alerts are unevidenced" — and it used to be read as the verdict on itself, which turned a
+      // repository note about unfinished work into an accepted limitation that permitted a Commercial
+      // Beta release with nobody having judged the gap. Astra's P1 on #103.
+      //
+      // Omitted now, which `releaseDecision` reports as `GATE_NOT_EVALUATED` and which blocks. The route
+      // to a release is a **written verdict** for this gate: a person records `KNOWN_LIMITATION` with its
+      // bound, or `HIGH` to switch off the capability the gate guards. That is the explicit, authorized,
+      // bounded acceptance, and the only thing that should stand in for evidence.
+      omitted.push(gate.id);
       continue;
     }
 
@@ -133,8 +137,10 @@ export function planGateResults(input: {
     // Every command covering this gate's suites was run and succeeded. The one place a pass comes from.
     const passEvidence = `${line} | ran: ${[...commands].toSorted().join(", ")}`;
     if ((entry.manual ?? "").trim() !== "") {
-      // Suites passed *and* there is something they do not settle. The spec's own category.
-      results.push({ gateId: gate.id, severity: "KNOWN_LIMITATION", evidence: passEvidence, note: (entry.manual ?? "").trim() });
+      // Suites passed *and* the table names something they do not settle. A pass would be wrong, and so
+      // would quietly filing it as an accepted limitation: the note says what remains unjudged, not that
+      // somebody judged it safe. Omitted until a written verdict says which it is.
+      omitted.push(gate.id);
       continue;
     }
     results.push({ gateId: gate.id, severity: "PASS", evidence: passEvidence });

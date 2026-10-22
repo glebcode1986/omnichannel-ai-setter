@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PlatformAccessDeniedError } from "./errors";
 import { DbInputError } from "./errors";
+import type { DbClient, DbExecutor } from "./client";
 import { authorizePlatformAccess, type PlatformContext } from "./platform-tenancy";
 import {
   listReleases,
@@ -354,6 +355,110 @@ describe.skipIf(!databaseTestsEnabled())("release records (PostgreSQL)", () => {
       expect(second.changed).toBe(false);
       const rows = await db().platformAuditEvent.findMany({ where: { kind: "ROLLOUT_ALLOWLIST_CHANGED" }, select: { severity: true } });
       expect(rows).toEqual([{ severity: "WARNING" }]);
+    }, 180_000);
+
+    /**
+     * Holds every transaction at its first read of the Business Profile until all of them have read.
+     *
+     * The interleaving is forced rather than waited for: a `sleep` would be a guess, and a sequential
+     * double click — which the case above is — never produces it at all. Two real transactions against
+     * real PostgreSQL; the proxy forwards every call untouched and only chooses *when* they are released.
+     */
+    function heldAtFirstProfileRead(parties: number): DbClient {
+      let arrived = 0;
+      let open = () => {};
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      const wait = async () => {
+        arrived += 1;
+        if (arrived >= parties) {
+          open();
+        }
+        await gate;
+      };
+      return new Proxy(db(), {
+        get(client, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(client, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            client.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(inner, model, innerReceiver) {
+                      const delegate = Reflect.get(inner, model, innerReceiver) as unknown;
+                      if (model !== "businessProfile") {
+                        return delegate;
+                      }
+                      return new Proxy(delegate as object, {
+                        get(owner, call, ownerReceiver) {
+                          const original = Reflect.get(owner, call, ownerReceiver) as unknown;
+                          if (call !== "findUnique" || typeof original !== "function") {
+                            return original;
+                          }
+                          return async (...args: unknown[]) => {
+                            const row = await (original as (...a: unknown[]) => Promise<unknown>).apply(owner, args);
+                            await wait();
+                            return row;
+                          };
+                        },
+                      });
+                    },
+                  }),
+                ),
+              ...(rest as []),
+            );
+        },
+      });
+    }
+
+    it("lets exactly one of two concurrent selections report the transition, in both directions", async () => {
+      // Astra's P2 on PR #103, and the third time this class has appeared: the read decided, an
+      // unconditional `update` followed, and the audit row was written whatever the update did. Two
+      // operators adding the same profile both saw `false`, both returned `changed: true`, and both filed
+      // `ROLLOUT_ALLOWLIST_CHANGED` — while only one `false -> true` had happened. The flag ends up right
+      // either way; the record did not.
+      //
+      // Its own workspace, so the unscoped audit count in the case above keeps meaning what it says.
+      const own = await seedWorkspace(db(), "allowlist-race");
+      // A second operator, because one actor pressing twice is the sequential case above.
+      const rival = await member("allowlist-rival", "OPERATIONS");
+      const target = { workspaceId: own.workspaceId, businessProfileId: own.profiles[0]?.businessProfileId ?? "" };
+      const audited = async () =>
+        db().platformAuditEvent.count({ where: { kind: "ROLLOUT_ALLOWLIST_CHANGED", businessProfileId: target.businessProfileId } });
+
+      const adding = heldAtFirstProfileRead(2);
+      const added = await Promise.all([
+        setRolloutAutopilot(adding, operations, { ...target, enabled: true, reason: "first operator" }),
+        setRolloutAutopilot(adding, rival, { ...target, enabled: true, reason: "second operator" }),
+      ]);
+
+      expect(added.filter((result) => result.changed).length).toBe(1);
+      expect(await audited()).toBe(1);
+      // The flag itself, not `readRolloutAccess`: with no release in force the catalogue permits
+      // unattended sending whatever the allowlist says, so that reader cannot tell these two apart.
+      const selected = await db().businessProfile.findUniqueOrThrow({
+        where: { workspaceId_id: { workspaceId: target.workspaceId, id: target.businessProfileId } },
+        select: { rolloutAutopilot: true },
+      });
+      expect(selected.rolloutAutopilot).toBe(true);
+
+      // The other direction, because a guard that only held one way would pass the half above.
+      const removing = heldAtFirstProfileRead(2);
+      const removed = await Promise.all([
+        setRolloutAutopilot(removing, operations, { ...target, enabled: false, reason: "first operator" }),
+        setRolloutAutopilot(removing, rival, { ...target, enabled: false, reason: "second operator" }),
+      ]);
+
+      expect(removed.filter((result) => result.changed).length).toBe(1);
+      expect(await audited()).toBe(2);
+      const deselected = await db().businessProfile.findUniqueOrThrow({
+        where: { workspaceId_id: { workspaceId: target.workspaceId, id: target.businessProfileId } },
+        select: { rolloutAutopilot: true },
+      });
+      expect(deselected.rolloutAutopilot).toBe(false);
     }, 180_000);
 
     it("cannot be changed by a role without the permission, or for a profile in another workspace", async () => {

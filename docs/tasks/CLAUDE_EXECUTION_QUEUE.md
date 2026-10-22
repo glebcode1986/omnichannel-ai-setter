@@ -85,7 +85,40 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted P7-01 into P7-02 / PR #103
+### Current work — remediating Astra's four findings on P7-02 / PR #103
+
+`CHANGES_REQUESTED` at `9b96066`, four blocking findings, all real and all fixed on this branch. #104+
+held, nothing to `main`, no reviewer assigned or started by me.
+
+**[P1] A lock taken, and the query hiding the writer it was taken for.** The send claim takes the
+release-catalogue key because the candidate that would change its answer may not exist yet — then
+re-resolved the catalogue with `claimedAt`, captured before the transaction began, so a release committed
+during the wait was excluded by `createdAt <= claimedAt`. New `readReleaseInForceNow` has no as-of bound;
+`readReleaseInForce` keeps its two deliberate callers.
+
+**[P1] A note about outstanding work became an accepted limitation.** Any nonempty `manual` note became
+`KNOWN_LIMITATION`, so "no staging environment exists" and "evals are not run by CI" admitted themselves
+and a Commercial Beta came out releasable with AUTOPILOT on. Such a gate is now omitted and blocks; a
+**written verdict** is the only way past, and the honest one (`HIGH`) disables the capability the gate
+guards.
+
+**[P1] Evidence that named a candidate it had never tested.** `--sha` unchecked, migrations always from
+`HEAD`, imported results a bare array with no provenance. Now: shape and existence checked, local runs
+must be `HEAD`, imported results need an envelope naming the tested SHA and where it ran, migrations read
+from the candidate.
+
+**[P2] The allowlist transition, the third of this class.** `setRolloutAutopilot` now lets the conditional
+update's count decide, as `liftKillSwitch` and `revokeSupportAccessSession` already do.
+
+**A flake this surfaced:** `release-lock.integration`'s control counted `pg_locks` without a database
+filter. `pg_locks` is cluster-wide, advisory locks are per-database, suites run in parallel in their own
+databases — so it saw another database's lock. Proven by holding the key in one database and counting from
+another: 1 unfiltered, 0 scoped. Fixed and four clean `pnpm test:db` runs.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (219 files, 2142 passed / 1453 skipped);
+PostgreSQL 52 files 1185/1185; Redis 55/55; E2E 106 files 1234/1234.
+
+### Earlier — propagating the accepted P7-01 into P7-02 / PR #103
 
 #102 passed at `8f35d350` (Astra review 5618092993), so this branch is the next link. One ordinary
 non-rebase merge, one branch only — #104+ untouched, nothing to `main`, no reviewer assigned or started by

@@ -79,7 +79,23 @@ if ((rollbackPlan ?? "").trim() === "" || (summary ?? "").trim() === "") {
   process.exit(2);
 }
 
-const sha = flag("sha") ?? git("rev-parse", "HEAD");
+const head = git("rev-parse", "HEAD");
+const sha = flag("sha") ?? head;
+
+// Astra's P1 on #103: `--sha` used to name the candidate with nothing tying it to the checkout that was
+// actually verified, so the CLI would happily attest a forty-character string that exists nowhere, run
+// its commands against this tree, and file the migration list of `HEAD` under that other name.
+if (!/^[0-9a-f]{40}$/u.test(sha)) {
+  console.error(`--sha must be a full 40-character commit id; got ${sha}`);
+  process.exit(2);
+}
+try {
+  git("cat-file", "-e", `${sha}^{commit}`);
+} catch {
+  console.error(`--sha ${sha.slice(0, 7)} is not a commit in this repository, so nothing here can have verified it`);
+  process.exit(2);
+}
+
 const dirty = git("status", "--porcelain");
 if (dirty !== "" && !present("allow-dirty")) {
   console.error(`the working tree has uncommitted changes, so ${sha.slice(0, 7)} is not what would be deployed:\n${dirty}`);
@@ -102,8 +118,57 @@ function readJsonFile<T>(file: string): T {
 const verdictsFile = flag("verdicts");
 const written: Readonly<Record<string, WrittenVerdict>> = verdictsFile === undefined ? {} : readJsonFile<Readonly<Record<string, WrittenVerdict>>>(verdictsFile);
 
+/**
+ * Imported results have to say which checkout produced them.
+ *
+ * A bare `[{command, exitCode}]` — which is what this used to accept — is indistinguishable from the same
+ * array copied out of a run against any other commit, which made "the gates passed" an assertion about
+ * nothing in particular. The envelope names the tested SHA and where it ran, and both are checked against
+ * the candidate before a single verdict is derived from them.
+ */
+interface CommandResultsFile {
+  readonly sha?: unknown;
+  readonly reference?: unknown;
+  readonly commands?: unknown;
+}
+
+function importedCommands(file: string): CommandRun[] {
+  const parsed = readJsonFile<CommandResultsFile | unknown[]>(file);
+  if (Array.isArray(parsed)) {
+    console.error(`${file} is a bare array of results, which cannot say which commit produced it`);
+    console.error('wrap it: { "sha": "<the 40-character SHA those commands ran against>", "reference": "<run id or URL>", "commands": [ ... ] }');
+    process.exit(2);
+  }
+  const envelope = parsed;
+  if (typeof envelope.sha !== "string" || !/^[0-9a-f]{40}$/u.test(envelope.sha)) {
+    console.error(`${file} must name the full 40-character SHA its commands ran against`);
+    process.exit(2);
+  }
+  if (envelope.sha !== sha) {
+    console.error(`${file} records a run against ${envelope.sha.slice(0, 7)}, but this candidate is ${sha.slice(0, 7)}`);
+    console.error("results from another commit are not evidence about this one");
+    process.exit(2);
+  }
+  if (typeof envelope.reference !== "string" || envelope.reference.trim() === "") {
+    console.error(`${file} must carry a "reference" saying where those commands ran, so the claim can be checked`);
+    process.exit(2);
+  }
+  if (!Array.isArray(envelope.commands)) {
+    console.error(`${file} must carry a "commands" array`);
+    process.exit(2);
+  }
+  return envelope.commands as CommandRun[];
+}
+
 const resultsFile = flag("command-results");
-const commands: CommandRun[] = resultsFile === undefined ? runCommands() : readJsonFile<CommandRun[]>(resultsFile);
+if (resultsFile === undefined && sha !== head) {
+  // Running the commands here verifies *this* checkout. Naming a different candidate would attest one
+  // commit with another commit's run.
+  console.error(`--sha ${sha.slice(0, 7)} is not HEAD (${head.slice(0, 7)}), and the verification would run against this checkout`);
+  console.error("check that commit out, or pass --command-results from a run that names it");
+  process.exit(2);
+}
+const commands: CommandRun[] = resultsFile === undefined ? runCommands() : importedCommands(resultsFile);
 
 const plan = planGateResults({ commands, written });
 const decision = releaseDecision(plan.results);
@@ -157,7 +222,9 @@ try {
     stage,
     rollbackPlan: (rollbackPlan ?? "").trim(),
     summary: (summary ?? "").trim(),
-    migrations: git("ls-tree", "--name-only", "HEAD", "packages/db/prisma/migrations/").split("\n").filter(Boolean),
+    // From the candidate, not from `HEAD`: the record says which migrations that commit carries, and
+    // reading them from whatever happens to be checked out made the two able to disagree.
+    migrations: git("ls-tree", "--name-only", sha, "packages/db/prisma/migrations/").split("\n").filter(Boolean),
     enabledFlags: (flag("enabled-flags") ?? "").split(",").map((entry) => entry.trim()).filter(Boolean),
     results: plan.results,
   });
