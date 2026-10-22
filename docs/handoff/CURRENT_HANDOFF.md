@@ -4393,3 +4393,79 @@ are still readable afterwards: the content was withheld, not destroyed.
 
 PostgreSQL 1133→1140 and `verify` 3469→3476: all seven new cases are database-gated, which is why the
 no-infrastructure run's skipped count rises by exactly seven.
+
+## P7-01 accepted, and propagated into P7-02 / PR #103 — 2026-10-22
+
+#102 passed at `8f35d35054924beeb0540c35f367734554c8c8ab` (Astra review 5618092993, `APPROVED`), closing
+three blockers in one round: the missing content-access audit, the overwritten expiry predicate and the
+discarded conditional-update counts. Two limitations are carried forward rather than smoothed over: the
+reviewer **did not execute** the integration suites against PostgreSQL (56 cases skipped, "not passed") and
+its two-caller probes were "controlled database-double executions, not live-PostgreSQL concurrency
+certification"; and the approval covers the implemented P7-01 slice only — Issue #59 is not declared
+delivered, and no deployment, payment or legal authorization is implied.
+
+### The merge
+
+One ordinary non-rebase merge into `feat/p7-02-launch-readiness`. The directive's figures were re-measured
+before the branch was touched and matched exactly: merge base `1590582f`, #103 twenty-six ahead and
+**eighty-eight behind**, live head `b3f2a6ec`.
+
+**Three real conflicts, all resolved as unions rather than choices.**
+
+`packages/db/src/platform-actions-store.ts` — **the code did not conflict at all.** Both sides had already
+made the identical `AND` repair to `listKillSwitches`: this branch while writing P7-02, and the parent
+under review after Astra flagged it. Only the two explanatory comments collided. Merged into one that
+keeps both consequences, the `inbox-store.ts` precedent this branch cited, and the fact that the same
+repair was found twice independently. Worth recording as a chain property: **a fix made on a later link
+does not travel back up**, so the earlier link kept shipping the defect and collected the review finding
+for it.
+
+`packages/db/src/platform-read-store.ts` — an import line only; this branch adds
+`loadCoveringSuspensions`, the parent widens the type import to `DbClient`. Both kept. The rest auto-merged
+and the parent's invariants were then checked **by name** rather than assumed: both functions still take
+`DbClient`, both still open their own transaction, `CUSTOMER_CONTENT_READ` is still written inside the
+content transaction between the select and the return, `WORKSPACE_INSPECTED` is still written by
+`readSnapshotWithin`, and the refusal for a scope carrying no session id is intact.
+
+`docs/tasks/CLAUDE_EXECUTION_QUEUE.md` — this branch's compact chain line against the parent's
+two-segments paragraph. The paragraph is substantive and was kept.
+
+### What merged clean and still broke
+
+`PolicyInput` gained a **required** `rollout` field on this branch (P7-02's staged-rollout gate), and
+`apps/web/src/server/simulation-inputs.test.ts` arrives from the other side of the merge, so it built a
+policy input that no longer typechecked. Git had nothing to conflict about: neither side touched the same
+lines, and the breakage is that one side's *type* no longer admits the other side's *fixture*.
+
+Caught by `pnpm typecheck`, which is the gate for this shape — not by a test, and not by the merge. Fixed
+by giving the fixture `NO_STAGED_ROLLOUT`, the posture of a deployment with no staged release in force,
+which is what a test database is and which matches the deliberately permissive `commercial` value the file
+already documents: a restrictive posture would make the rollout gate refuse every case and the suite would
+pass while proving nothing about the simulation inputs it exists to compare.
+
+### The fallout that merges clean, checked by name
+
+| shape | result |
+|---|---|
+| migration drift | **No difference detected** |
+| models against tables | 75 `^model` against 75 `CREATE TABLE` |
+| colliding migration timestamps | none |
+| `packages/db/src/index.ts` barrel | no duplicate exported name |
+| worker loop registry | nine names in `loops`, nine `.close()` inside `allSettled`, prose "nine" |
+| #102's actorless-operator CHECK | every database-writing operator pause carries an actor; the only `byUserId: null` cases are the two tests asserting the CHECK refuses exactly that |
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 218 files, **2134 passed / 1450 skipped (3584)** |
+| PostgreSQL suites | 52 files, **1182/1182** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |
+
+#103 brings the release-evidence and rollout-hold segment: 213→218 files and 3476→3584 tests, PostgreSQL
+50→52 files and 1140→1182 cases, E2E 1220→1234.
+
+Ancestry: the accepted #102 head `8f35d350`, the previous #103 head `b3f2a6ec` and the accepted #101 head
+`79aaee1a` are all ancestors of the new head.

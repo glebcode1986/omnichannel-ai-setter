@@ -24,7 +24,7 @@ numbering.
 PRs #26 through #102 are accepted; this branch is #103. `docs/handoff/CURRENT_HANDOFF.md` carries the
 current list. Nothing is merged to `main`.
 
-### Current work — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
+### Task definition — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
 
 **Branch `feat/p7-02-launch-readiness`**, based on `feat/p7-01-admin-operations`. See
 `docs/specs/RELEASE_PROCESS.md` for the operational companion to `LAUNCH_READINESS.md`.
@@ -85,7 +85,28 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — remediating Astra's three findings on P7-01 / PR #102
+### Current work — propagating the accepted P7-01 into P7-02 / PR #103
+
+#102 passed at `8f35d350` (Astra review 5618092993), so this branch is the next link. One ordinary
+non-rebase merge, one branch only — #104+ untouched, nothing to `main`, no reviewer assigned or started by
+me. #103 was **88 commits behind** while carrying 26 of its own.
+
+**Three conflicts, all resolved as unions.** In `platform-actions-store.ts` the *code* did not conflict:
+both sides had already made the identical `AND` repair to `listKillSwitches`, so only the comments
+collided — a reminder that a fix made on a later link does not travel back up, which is why the earlier
+link kept the defect and collected the finding. In `platform-read-store.ts` only an import line; the
+parent's audit invariants were then verified by name in the merged file. In the execution queue, this
+branch's compact chain line against the parent's two-segments paragraph, both kept.
+
+**One thing merged clean and still broke.** `PolicyInput` gained a required `rollout` field on this
+branch, and `apps/web/src/server/simulation-inputs.test.ts` comes from the other side, so its fixture
+stopped typechecking — neither side touched the same lines. Caught by `pnpm typecheck`, fixed with
+`NO_STAGED_ROLLOUT`, the posture of a deployment with no staged release in force.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (218 files, 2134 passed / 1450 skipped);
+PostgreSQL 52 files 1182/1182; Redis 55/55; E2E 106 files 1234/1234.
+
+### Earlier — remediating Astra's three findings on P7-01 / PR #102
 
 `CHANGES_REQUESTED` at `3317e74`, three blocking findings, all real and all fixed on this branch. #103+
 still held, nothing to `main`, no reviewer assigned or started by me.
