@@ -9,6 +9,7 @@ import {
   CHANNEL_CAPABILITY_KEYS,
   createAutomationPolicy,
   DEFAULT_DEBOUNCE_WINDOW_MS,
+  defaultAutomationSettings,
   DEFAULT_DELIVERY_DELAY_MS,
   DELIVERY_JOB_STATUSES,
   DomainValidationError,
@@ -347,6 +348,16 @@ describe("createAutomationPolicy", () => {
     expect(policy.mandatoryReviewReasons).toEqual(expect.arrayContaining([...MANDATORY_REVIEW_REASON_CODES]));
     expect(policy).toMatchObject({ workspaceId: "ws_1", businessProfileId: "bp_1" });
     expect(policy).not.toHaveProperty("channelAccountId");
+  });
+
+  it("says the same thing as the settings a new Business Profile is created with", () => {
+    // Two spellings of "conservative", and only one of them is read when somebody changes their mind:
+    // `createAutomationPolicy` is asked by every caller that has a policy's identity, and
+    // `defaultAutomationSettings` by the statement that creates a Business Profile, where no identity
+    // exists yet. Field by field, because a default that drifts drifts in the direction nobody notices.
+    const { id: _id, workspaceId: _workspaceId, businessProfileId: _businessProfileId, ...settings } = createAutomationPolicy(base);
+
+    expect(defaultAutomationSettings()).toEqual(settings);
   });
 
   it("never lets configuration remove mandatory-review categories", () => {

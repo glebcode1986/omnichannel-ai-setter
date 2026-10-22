@@ -61,6 +61,12 @@ export default async function CheckoutPage({
           <form action={acceptTermsAndOpenCheckoutAction.bind(null, target)} className="stack" data-checkout="form">
             <input type="hidden" name="plan" value={data.selection.planVersionId} />
             <input type="hidden" name="interval" value={data.selection.interval} />
+            {/* Which commercial offer this page actually displayed — the selling entity, its
+                jurisdiction, who remits the tax, the commitment and the price — as one opaque value.
+                The server recomputes it from its own fresh resolution inside the opening transaction and
+                refuses `OFFER_CHANGED` if the two differ, so an acceptance can never be recorded against
+                terms somebody was not shown. It names nothing the client is allowed to choose. */}
+            <input type="hidden" name="offer" value={data.offer.offerDigest} />
             {/* Which ticks this page actually rendered. It is how the server tells "you left one
                 unticked" from "a requirement appeared while you were reading" — the second of which is
                 not the reader's fault and must not be reported as one. It can only ever shrink the set

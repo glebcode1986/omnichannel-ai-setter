@@ -248,7 +248,10 @@ function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefi
  *
  * `undefined` means this channel and this policy have no template route, and the caller falls through to
  * the window gate it had before — so a business that chose `SERVICE_WINDOW_ONLY` is in exactly the
- * position it was in before this existed: automation stops until the customer writes again.
+ * position it was in before this existed: automation stops until the customer writes again. `undefined`
+ * rather than an empty refusal list, because "templates do not apply here" and "a template would have
+ * been allowed" are different answers and the caller above distinguishes them: only the first may fall
+ * through to the human-support path, which is Instagram's alone.
  *
  * Four things decide the answer, and each is a different sentence to the operator.
  *
@@ -263,9 +266,13 @@ function evaluateWindowGate(input: PolicyInput, approved: HumanApproval | undefi
  * dispatched after it closed cannot be sent whoever approved it: approving words is not approving a
  * template, and no click reopens a messaging window.
  *
- * **Unattended sending needs the allowlist.** `TEMPLATE_AUTOPILOT` with nothing allowlisted sends nothing
- * on its own — ADR-016 is explicit — and a human approval of this very template send is the other way
- * through. In `TEMPLATE_REVIEW` only the second exists, which is the whole of that mode.
+ * **Unattended sending needs the template allowlisted.** `TEMPLATE_AUTOPILOT` with nothing allowlisted
+ * sends nothing on its own — ADR-016 is explicit — and a human approval of this very template send is the
+ * other way through. In `TEMPLATE_REVIEW` only the second exists, which is the whole of that mode.
+ *
+ * The catalogue and the allowlist are not read here. `templateRoute` arrives as two settled booleans,
+ * `approvedTemplateAvailable` and `automatable`, decided by `selectTemplate` where the catalogue is — a
+ * policy engine holding a catalogue would be the place a model's ranking quietly became a send.
  */
 function evaluateTemplateGate(input: PolicyInput, approved: HumanApproval | undefined): readonly ReasonCode[] | undefined {
   const afterWindow = input.limits.afterWindow;

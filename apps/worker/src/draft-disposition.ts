@@ -143,7 +143,9 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
 
     const draft = await dependencies.db.aiDraft.findUnique({
       where: { workspaceId_businessProfileId_id: { ...scope, id: input.draftId } },
-      select: { text: true, confidence: true, reasonCodes: true, factualSourceIds: true, needsReview: true, status: true, retrieval: true },
+      // `trigger` because a follow-up attempt answers no message of the customer's, and the provider's
+      // automated-response budget below is counted from the message being answered (#55).
+      select: { text: true, confidence: true, reasonCodes: true, factualSourceIds: true, needsReview: true, status: true, retrieval: true, trigger: true },
     });
     const conversation = await dependencies.db.conversation.findUnique({
       where: { workspaceId_businessProfileId_id: { ...scope, id: input.conversationId } },
@@ -170,12 +172,33 @@ export function createDraftDisposition(dependencies: DraftDispositionDependencie
       return { status: "SKIPPED", reasons: ["no automation policy"] };
     }
 
-    // Instagram's budget for an automated experience, and only Instagram's: WhatsApp publishes no such
-    // deadline, so applying one would shorten or abandon the human-like delay for a rule that platform
-    // does not impose.
+    // The provider timing rules the budget below is measured against. Named for Instagram because they
+    // are Instagram's; `remainingMs` states when they apply and when they do not.
     const timing = instagramTimingPolicy();
+    /**
+     * How long the provider's automated-response budget still allows, or `undefined` when it does not
+     * apply. Two independent reasons it may not, and both have already cost this product a working
+     * feature, so both are kept.
+     *
+     * **It is Instagram's budget, and only Instagram's.** WhatsApp publishes no such deadline, so
+     * measuring one against a WhatsApp send would shorten or abandon the human-like delay for a rule that
+     * platform does not impose.
+     *
+     * **It does not apply to a planned follow-up, on any channel.** The budget is Meta's rule about
+     * answering a person promptly and it starts at *their* message; a follow-up exists precisely because
+     * they stopped writing, so its anchor is hours or days old by design and a budget measured from it is
+     * always already spent. Applying it anyway sent every follow-up to `DEADLINE_MISSED`, which asked a
+     * person to review a message nobody is waiting for and left the attempt to be cancelled as
+     * `REVIEW_PENDING` — so the feature could be wired up correctly end to end and still never send
+     * anything.
+     *
+     * Nothing else is relaxed: the 24-hour messaging window is still computed from the customer's last
+     * message and still refuses a follow-up outside it, and every other gate is untouched.
+     */
     const remainingMs =
-      conversation.lastInboundAt === null || conversation.channelIdentity.channelAccount.channel !== "INSTAGRAM"
+      conversation.lastInboundAt === null ||
+      conversation.channelIdentity.channelAccount.channel !== "INSTAGRAM" ||
+      draft.trigger === "FOLLOW_UP"
         ? undefined
         : remainingAutomatedDispatchMs(conversation.lastInboundAt, now, timing);
     // The commercial state at the moment this draft is judged (#40). Read here rather than carried from
