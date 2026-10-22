@@ -1069,10 +1069,19 @@ async function write(
     }
 
     const charge = input.quote?.charge ?? resolved.offer.base;
-    const seller = await tx.sellerProfile.findUniqueOrThrow({
-      where: { id: resolved.sellerProfileId },
-      select: { legalName: true, displayName: true, jurisdiction: true, supportEmail: true },
-    });
+    // The snapshot the digest was computed from, and deliberately **not** a second read of the row.
+    //
+    // Astra's P1 on the #101 remediation. This used to re-read `sellerProfile` here and copy that second
+    // result into the contract, the audit entry and the returned offer. `upsertSellerProfile` takes
+    // neither of this transaction's two locks and the transaction is `READ COMMITTED`, so an operator
+    // update committing between `resolveCheckout`'s read and this one changed the persisted legal name
+    // and jurisdiction *without* invalidating the digest that had just been compared — the acceptance
+    // then named an entity nobody had been shown, which is the exact defect the digest exists to prevent,
+    // reintroduced one layer below the guard.
+    //
+    // One read per transaction is the whole fix: what was checked is what is written. A later convenience
+    // read of this row anywhere below the comparison would be the same defect again.
+    const seller = resolved.offer.seller;
 
     // Ending the superseded path before the new one is created, because the single-live index would
     // otherwise refuse the insert. `ENDED` first and `SUPERSEDED` after the successor exists: the CHECK

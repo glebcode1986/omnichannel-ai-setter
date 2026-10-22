@@ -60,7 +60,36 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — remediating Astra's two findings on P6-09 / PR #101
+### Current work — the seller snapshot race on P6-09 / PR #101
+
+`CHANGES_REQUESTED` at `68a94d6`, one blocker, fixed on this same branch. #102+ still held, nothing to
+`main`, no reviewer assigned or invoked by me.
+
+**The same mistake I had already recorded after #100.** `resolveCheckout` read the selling entity and the
+digest was computed from that row; the write path then **re-read** `sellerProfile` and copied the second
+result into the immutable contract. `upsertSellerProfile` takes neither of the transaction's locks and the
+transaction is `READ COMMITTED`, so an operator rename committing between the two reads changed the
+persisted legal name and jurisdiction without invalidating the digest that had just passed. A
+validate-then-use boundary across an `await` needs the snapshot, not a second read — which I knew, wrote
+down, and then did again one layer below the guard I had just built.
+
+Fixed by binding `seller` to `resolved.offer.seller`. That closed **five** use sites, not the two the review
+located: the contract's legal name and jurisdiction, the audit summary, the audit detail's jurisdiction, and
+the seller on the returned checkout.
+
+**Two things the regression taught.** The entity is never fetched by `sellerProfile.findUnique` on the
+resolve path — it arrives as a nested `select` under the route read, so the only such call the transaction
+ever made *was* the second read; the structural assertion is therefore `sellerRereads === 0`. And a barrier
+on the *first* route read makes the checkout refuse `OFFER_CHANGED` legitimately, because the candidate
+routes are selected by an earlier `findMany`: the window this blocker concerns opens only after the read
+that carries the seller, so the barrier is pinned to `billingRoute.findUniqueOrThrow` with the reason
+written down. Deterministic, on real PostgreSQL, competing commit on another pooled connection.
+Mutation-checked.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (208 files, 2041 passed / 1351 skipped);
+PostgreSQL 48 files 1087/1087; Redis 55/55; E2E 103 files 1189/1189.
+
+### Earlier — remediating Astra's two findings on P6-09 / PR #101
 
 `CHANGES_REQUESTED` at `46e734b`, two blocking correctness findings, both real and both fixed on this same
 branch. No propagation this round: #102+ stays untouched, nothing goes to `main`, and no reviewer is

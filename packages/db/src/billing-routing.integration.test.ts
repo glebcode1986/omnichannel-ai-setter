@@ -51,6 +51,7 @@ import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } f
 import { createTestUser } from "./testing/fixtures";
 import { createWorkspaceWithOwner } from "./repositories/workspaces";
 import { authorizeWorkspaceAccess, type WorkspaceContext } from "./tenancy";
+import type { DbExecutor } from "./client";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 
@@ -2387,6 +2388,181 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
           stored.version,
         ),
       ).rejects.toThrow(/legal_documents_kind_language_version_key/u);
+    });
+  });
+
+  describe("the seller snapshot a digest was checked against", () => {
+    /**
+     * Astra's P1 on the #101 remediation, and the same mistake I had already written down after #100: a
+     * validate-then-use boundary that crosses an `await` needs the *snapshot*, not a second read.
+     *
+     * `resolveCheckout` read the selling entity and the digest was computed from that row. The write path
+     * then re-read `sellerProfile` and copied the **second** result into the immutable contract, the audit
+     * entry and the returned offer. `upsertSellerProfile` takes neither of this transaction's two locks
+     * and the transaction is `READ COMMITTED`, so an operator update committing between the two reads
+     * changed the persisted legal name and jurisdiction without invalidating the digest that had just been
+     * compared. The acceptance then named an entity nobody had been shown — the exact defect the digest
+     * exists to prevent, reintroduced one layer below the guard.
+     *
+     * The interleaving is forced rather than waited for. A timer would be a guess, so the real Prisma
+     * client is wrapped in a proxy that commits the operator's update at the precise moment the first
+     * seller read has resolved, on a *different* pooled connection and therefore its own transaction —
+     * every query here still runs against real PostgreSQL. Nothing about the store is reimplemented: the
+     * proxy forwards every call untouched and only chooses *when* the competing commit lands.
+     */
+    async function raceSeller(context: WorkspaceContext, input: Request, accepted: readonly string[], digest: string) {
+      let sellerRereads = 0;
+      let committedDuringTransaction = false;
+
+      // The selling entity is *not* fetched by `sellerProfile.findUnique` on the resolve path: it arrives
+      // as a nested `select` under the route read, which is why the only such call this transaction ever
+      // made was the second read this fix removes. So the barrier hangs off the route read — guaranteed to
+      // happen in every version, and before anything the write path does — and a `sellerProfile` read is
+      // counted rather than triggered on, because after the fix there must be none at all.
+      const interceptTx = (tx: DbExecutor): DbExecutor =>
+        new Proxy(tx, {
+          get(target, property, receiver) {
+            if (property !== "billingRoute" && property !== "sellerProfile") {
+              return Reflect.get(target, property, receiver) as unknown;
+            }
+            const model = property;
+            const delegate = Reflect.get(target, property, receiver) as object;
+            return new Proxy(delegate, {
+              get(owner, call, ownerReceiver) {
+                const original = Reflect.get(owner, call, ownerReceiver) as unknown;
+                if (typeof call !== "string" || !call.startsWith("find") || typeof original !== "function") {
+                  return original;
+                }
+                // `findUniqueOrThrow` and not any route read: the candidate routes are selected by an
+                // earlier `findMany`, and committing the rename before *that* would change the seller the
+                // POST resolves, so the digest would legitimately stop matching and the submission would
+                // be refused `OFFER_CHANGED`. That is correct behaviour but a different case. The window
+                // this test is for opens once the route read carrying the seller has resolved — the digest
+                // has then been computed from the old row and is about to be compared and accepted.
+                const isBarrier = model === "billingRoute" && call === "findUniqueOrThrow";
+                return async (...args: unknown[]) => {
+                  const row = await (original as (...a: unknown[]) => Promise<unknown>).apply(owner, args);
+                  if (model === "sellerProfile") {
+                    sellerRereads += 1;
+                    return row;
+                  }
+                  if (isBarrier && !committedDuringTransaction) {
+                    // The operator renames the selling entity and moves its jurisdiction, committed from
+                    // another pooled connection — its own transaction — while this one is still open and
+                    // has already resolved the offer. Before the fix the second read below returned this
+                    // row and the contract was written from it.
+                    await db().sellerProfile.update({
+                      where: { code: "seller-race" },
+                      data: { legalName: "Seller Race NEW LEGAL ENTITY", jurisdiction: "UA" },
+                    });
+                    committedDuringTransaction = true;
+                  }
+                  return row;
+                };
+              },
+            });
+          },
+        });
+
+      const client = new Proxy(db(), {
+        get(target, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(target, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            target.$transaction((tx) => callback(interceptTx(tx)), ...(rest as []));
+        },
+      });
+
+      const opened = await openCheckoutContract(client, context, {
+        ...input,
+        acceptedDocumentIds: accepted,
+        offeredDocumentIds: accepted,
+        offeredDigest: digest,
+      });
+      return { opened, sellerRereads, committedDuringTransaction };
+    }
+
+    it("persists the entity the digest was checked against, not one committed mid-transaction", async () => {
+      await upsertSellerProfile(db(), {
+        code: "seller-race",
+        legalName: "Seller Race SRL",
+        displayName: "Race",
+        jurisdiction: "RO",
+        supportEmail: "billing@race.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "race-direct",
+        provider: "test-psp",
+        providerAccountRef: "acct_race",
+        sellerProfileCode: "seller-race",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: ["SEK"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 95,
+      });
+      await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en",
+        contentRef: "https://legal.example.test/offer/race/en/1",
+        sellerProfileCode: "seller-race",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const planVersionId = (
+        await publishPlanVersion(db(), {
+          code: "race-plan",
+          name: "Race",
+          grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} },
+          availability: "PUBLIC",
+          prices: [{ currency: "SEK", interval: "MONTH", amountCents: 9_900 }],
+        })
+      ).planVersionId;
+
+      const ask = request({ planVersionId, currency: "SEK", locale: "en", supersedeCurrent: true });
+      const { context } = await freshWorkspace();
+      // What the page displayed, and the digest it would post back.
+      const displayed = await readCheckoutOffer(db(), context, ask, NOW);
+      if (!displayed.available) {
+        throw new Error(`offer unavailable: ${displayed.reason} ${displayed.detail.join(", ")}`);
+      }
+      expect(displayed.seller.legalName).toBe("Seller Race SRL");
+      expect(displayed.seller.jurisdiction).toBe("RO");
+
+      const accepted = displayed.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      const raced = await raceSeller(context, ask, accepted, displayed.offerDigest);
+
+      // The competing write really did commit, and it really did commit while the checkout was open.
+      // Without this the assertions below would hold against a database nobody had changed.
+      expect(raced.committedDuringTransaction).toBe(true);
+      expect(await db().sellerProfile.findUniqueOrThrow({ where: { code: "seller-race" }, select: { legalName: true } })).toEqual({
+        legalName: "Seller Race NEW LEGAL ENTITY",
+      });
+
+      const opened = raced.opened;
+      expect(opened).toMatchObject({ available: true });
+      if (!opened.available) {
+        return;
+      }
+      // The returned offer, the contract row and the audit entry all have to name what was accepted.
+      expect(opened.seller).toMatchObject({ legalName: "Seller Race SRL", jurisdiction: "RO" });
+      const contract = await db().checkoutContract.findUniqueOrThrow({
+        where: { id: opened.checkoutContractId },
+        select: { sellerLegalName: true, sellerJurisdiction: true },
+      });
+      expect(contract).toEqual({ sellerLegalName: "Seller Race SRL", sellerJurisdiction: "RO" });
+
+      const page = await searchAuditEvents(db(), context, { kinds: ["CHECKOUT_OPENED"] });
+      const row = page.rows.find((event) => event.subjectId === opened.checkoutContractId);
+      expect(row?.summary).toContain("Seller Race SRL");
+      expect(JSON.stringify(row?.detail ?? {})).toContain('"sellerJurisdiction":"RO"');
+
+      // And the structural half of the fix: the transaction never reads `sellerProfile` on its own at all.
+      // The entity arrives once, nested under the route read the digest was computed from, so there is no
+      // second read left for a later commit to change. A convenience re-read added anywhere below the
+      // digest comparison would make this one, and the assertions above would go with it.
+      expect(raced.sellerRereads).toBe(0);
     });
   });
 

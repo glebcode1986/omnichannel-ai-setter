@@ -4056,3 +4056,82 @@ reversals with insufficient period attribution remain an auditable `NONE`; the c
 real-PostgreSQL concurrency is still covered only by my racing test and CI; the `createBusinessProfile`
 lock-observer gap remains open and non-blocking; and the snapshot, the monotonic guards and the
 conditional update are intact.
+
+## PR #101 round two — the seller snapshot the digest was checked against — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `68a94d6` with one blocker, and it is the same mistake I had already
+written down after #100: **a validate-then-use boundary that crosses an `await` needs the snapshot, not a
+second read.** I fixed that class in the billing event path four rounds ago, recorded the lesson, and then
+wrote it again one layer below the guard I had just built.
+
+### The defect
+
+`resolveCheckout` reads the selling entity and `offerDigest` is computed from that row. The write path then
+re-read `sellerProfile` and copied the **second** result into the immutable contract. `upsertSellerProfile`
+takes neither of this transaction's two locks and the transaction is `READ COMMITTED`, so an operator update
+committing between the two reads changed the persisted legal name and jurisdiction **without invalidating
+the digest that had just been compared**. The acceptance then named an entity nobody had been shown — the
+exact defect the digest exists to prevent, reintroduced below it.
+
+Verified in the source before fixing: the second read fed **five** places, not the two the review located —
+`sellerLegalName` and `sellerJurisdiction` on the contract, the audit summary, `sellerJurisdiction` in the
+audit detail, and the `seller` on the returned `OpenedCheckout`. Replacing the binding closed all five.
+
+### The fix
+
+`const seller = resolved.offer.seller;` — the snapshot the digest was computed from, selected with exactly
+the four fields the second read asked for, inside the same transaction. One read per transaction, so what
+was checked is what is written. A later convenience read of that row anywhere below the comparison would be
+the same defect again, which the comment now says in those words.
+
+### The regression, and what designing it taught me
+
+Deterministic rather than timed: the real Prisma client is wrapped in a proxy that commits the operator's
+rename at a precise call, on a different pooled connection and therefore its own transaction. Every query
+still runs against real PostgreSQL; the proxy forwards everything untouched and only chooses *when* the
+competing commit lands.
+
+**Two discoveries while building it, both of which changed the test.**
+
+First, the selling entity is not fetched by `sellerProfile.findUnique` on the resolve path at all — it
+arrives as a nested `select` under the route read. So the only `sellerProfile.findUnique*` call this
+transaction ever made *was* the second read this fix removes. That turns the structural assertion from
+"reads it once" into the stronger `sellerRereads === 0`: the transaction must never read that row on its
+own, and a convenience re-read added anywhere would make it one.
+
+Second, my first barrier hung off the *first* route read and the checkout came back refused. That was not a
+bug in the test or the store: the candidate routes are selected by an earlier `findMany`, so committing the
+rename before the read that carries the seller changes what the POST resolves, the digest legitimately
+stops matching, and `OFFER_CHANGED` is the correct answer. Correct, but a different case. The window this
+blocker is about opens only *after* the route read carrying the seller has resolved — the digest has then
+been computed from the old row and is about to be compared and accepted. The barrier is therefore pinned to
+`billingRoute.findUniqueOrThrow`, and the reason is written in the test so nobody moves it back.
+
+The case asserts that the competing write really committed and really committed mid-transaction (without
+that, every assertion below it would hold against a database nobody had changed), that the row in the
+database really is the renamed one, and that the returned offer, the contract row and the audit entry all
+still name `Seller Race SRL` / `RO`. Its own seller, route, currency and plan, so the rename touches nothing
+shared.
+
+Mutation-checked: restoring the second read fails exactly this case, on the returned seller first.
+
+### Astra's own stated limits on this round, carried honestly
+
+The review says plainly that it did **not** execute the race on PostgreSQL — the interleaving was inferred
+from the two source reads, the default isolation and the absence of coordination in `upsertSellerProfile`,
+and demonstrated with a database double over the real store source. My regression is the real-PostgreSQL
+half, and that is now the only live-database evidence for this case. Its 109 infrastructure-gated checkout
+cases were skipped on its side and are not passes; the exact-head CI run is what covers them.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1351 skipped (3392)** |
+| PostgreSQL suites | 48 files, **1087/1087** |
+| Redis suites | **55/55** |
+| worker + web E2E | 103 files, **1189/1189** |
+
+`billing-routing.integration` is **102/102** — 92 at the first reviewed head, +5 for the digest, +3 for the
+locale aliases, +1 for the required digest, +1 for this race. Totals 3391→3392, PostgreSQL 1086→1087.
