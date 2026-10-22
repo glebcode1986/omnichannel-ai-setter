@@ -85,6 +85,8 @@ function harness(
     generate?: DraftGenerationDependencies["model"]["generate"];
     retrieval?: DraftRetrievalDependencies;
     styleProfiles?: { load: () => Promise<readonly { readonly persona?: string; readonly language?: string }[]> };
+    dispose?: (input: { readonly draftId: string }) => Promise<unknown>;
+    recordFollowUpSent?: (input: { readonly followUpId: string; readonly operationId: string }) => Promise<unknown>;
   } = {},
 ) {
   const saved: unknown[] = [];
@@ -134,6 +136,8 @@ function harness(
     styleProfiles: overrides.styleProfiles ?? { load: () => Promise.resolve([{ persona: "Friendly studio assistant." }]) },
     platformStyleFallback: resolveStyleProfile([{ persona: "Platform default assistant." }]),
     logger: createLogger({ level: "debug", sink: (line) => logs.push(line) }),
+    ...(overrides.dispose === undefined ? {} : { dispose: overrides.dispose }),
+    ...(overrides.recordFollowUpSent === undefined ? {} : { recordFollowUpSent: overrides.recordFollowUpSent }),
   });
   return { handler, saved, logs, requests };
 }
@@ -313,5 +317,78 @@ describe("ai draft handler", () => {
       trigger: { kind: "AUTOMATIC", reason: "DEBOUNCE_ELAPSED" },
       correlationId: "corr_9",
     });
+  });
+});
+
+/**
+ * What a follow-up attempt leaves behind (#55, Astra's first P1 on PR #82).
+ *
+ * The handler is the only place that knows both that this generation was a follow-up attempt and what the
+ * shared disposition did with the draft, so it is where the attempt stops being claimable. The asymmetry
+ * is deliberate and is what these cases hold in place: it records a send, and records nothing at all
+ * otherwise, because what an *unsent* attempt means is the claim's decision and only the claim's.
+ */
+describe("recording what a follow-up attempt produced", () => {
+  const followUpJob: AiDraftJob = { ...job, trigger: { kind: "FOLLOW_UP", followUpId: "fu_1", attempt: 2 } };
+
+  const recording = (disposition: unknown) => {
+    const recorded: { followUpId: string; operationId: string }[] = [];
+    const { handler, saved } = harness({
+      dispose: () => Promise.resolve(disposition),
+      recordFollowUpSent: (input) => {
+        recorded.push({ ...input });
+        return Promise.resolve(undefined);
+      },
+    });
+    return { handler, recorded, saved };
+  };
+
+  it("records the operation the one send path issued, under the disposition's own identity", async () => {
+    const { handler, recorded } = recording({ status: "SCHEDULED", operationId: "op_77", draftId: "draft_1" });
+
+    await handler(followUpJob);
+
+    // The operation id is the disposition's. The handler inventing one would be a second send identity
+    // for one send, and nothing downstream could reconcile the two.
+    expect(recorded).toEqual([{ followUpId: "fu_1", operationId: "op_77" }]);
+  });
+
+  it("records nothing when the draft was held for a person, so the next claim decides", async () => {
+    const { handler, recorded, saved } = recording({ status: "REVIEW_REQUIRED", draftId: "draft_1" });
+
+    await handler(followUpJob);
+
+    // The draft exists and is waiting for somebody. Marking the follow-up SENT here would claim an
+    // outbound that has not happened; leaving it PENDING lets the claim settle it as REVIEW_PENDING.
+    expect(saved).toHaveLength(1);
+    expect(recorded).toEqual([]);
+  });
+
+  it("records nothing when the policy skipped the send, or named no operation", async () => {
+    for (const disposition of [
+      { status: "SKIPPED", reason: "MODE_OFF" },
+      { status: "DEADLINE_MISSED" },
+      // A "scheduled" disposition with no operation is not a send: it is a bug upstream, and reading it
+      // as one would mark the follow-up sent against an identity nothing can look up.
+      { status: "SCHEDULED" },
+      { status: "SCHEDULED", operationId: "" },
+      { status: "SCHEDULED", operationId: 77 },
+      undefined,
+      null,
+    ]) {
+      const { handler, recorded } = recording(disposition);
+      await handler(followUpJob);
+      expect(recorded).toEqual([]);
+    }
+  });
+
+  it("records nothing for a draft nobody planned as a follow-up", async () => {
+    const { handler, recorded } = recording({ status: "SCHEDULED", operationId: "op_77" });
+
+    await handler(job);
+    await handler({ ...job, trigger: { kind: "HUMAN_REQUEST", requestedByUserId: "user_7", requestedAt: new Date(), requestId: "req_1" } });
+
+    // Two sends happened and no follow-up row may move, because neither of them was chasing a silence.
+    expect(recorded).toEqual([]);
   });
 });

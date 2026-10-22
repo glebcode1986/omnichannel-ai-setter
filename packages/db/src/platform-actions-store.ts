@@ -158,10 +158,19 @@ export async function liftKillSwitch(
     if (suspension.liftedAt !== null) {
       return { lifted: false };
     }
-    await tx.automationSuspension.updateMany({
+    // The count decides, not the read above. Two operators can both pass the `liftedAt !== null` check
+    // before either writes: the predicate makes sure only one of them changes the row, but ignoring the
+    // count made the loser report a lift it did not perform and file an audit row claiming a second state
+    // transition that never happened. The winner's attribution was never at risk; the record was.
+    const { count } = await tx.automationSuspension.updateMany({
       where: { id: input.suspensionId, liftedAt: null },
       data: { liftedAt: at, liftedByUserId: actor.userId },
     });
+    if (count === 0) {
+      // Somebody else lifted it between the read and the update. Same answer as finding it already
+      // lifted, and deliberately no transition event: there was no transition.
+      return { lifted: false };
+    }
     await recordPlatformAuditEvent(tx, context, {
       kind: "KILL_SWITCH_LIFTED",
       subjectType: "AutomationSuspension",
@@ -204,9 +213,13 @@ export async function listKillSwitches(
       // `AND` of two disjunctions, not two `OR` keys. Two bare `OR`s in one object literal is the second
       // silently replacing the first — so with a workspace supplied, which is what the workspace screen
       // always does, the expiry half was dropped and a switch whose `until` had already passed was listed
-      // as active. An incident console reading "outbound is stopped" while it is not is the wrong
-      // direction to be wrong in. `inbox-store.ts` documents this exact trap and defends against it the
-      // same way, which is where the shape here comes from.
+      // as active, while the unfiltered home list excluded it correctly. An incident console reading
+      // "outbound is stopped" while it is not is the wrong direction to be wrong in, and expired rows
+      // could also consume the 100-row cap and hide switches that really were active.
+      //
+      // Both sides of this merge had already made this exact repair independently, with identical code:
+      // it was found here while writing P7-02 and found again on P7-01 under review. `inbox-store.ts`
+      // documents the same trap and defends against it the same way, which is where the shape comes from.
       AND: [
         { OR: [{ until: null }, { until: { gt: at } }] },
         ...(query.workspaceId === undefined ? [] : [{ OR: [{ scope: "GLOBAL" as const }, { workspaceId: query.workspaceId }] }]),

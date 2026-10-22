@@ -158,6 +158,32 @@ function belongsToThisAsset(value: WhatsAppChangeValue, config: ResolvedWhatsApp
   return asset === undefined || asset === config.binding.phoneNumberId;
 }
 
+/**
+ * Whether two spellings name the same telephone number.
+ *
+ * `from` arrives as a `wa_id`: digits only. `display_phone_number` is Meta's *display* field, and the Graph
+ * `/phone_numbers` edge spells the same number `+1 555-000-0001` — a spelling this system already stores
+ * during onboarding. So the two values can name one number and not match as strings.
+ *
+ * Used by the one place that compares them: the refusal of a `messages` entry claiming to come from the
+ * business itself. A missed refusal is not a cosmetic loss — the entry falls through to `INBOUND_MESSAGE`
+ * with the business's own number as the sender, and the draft path answers it. Keyed on raw equality the
+ * refusal would miss in exactly the cases the spellings differ, which is the same mismatch that made the
+ * classification it replaced unreliable.
+ *
+ * Authorship itself is not decided here. Meta publishes a coexistence business's app-sent and
+ * companion-device messages under a webhook field of their own, `smb_message_echoes`, where arrival under
+ * that field is the signal; `normalizeEcho` consumes it.
+ */
+function sameNumber(left: string, right: string | undefined): boolean {
+  if (right === undefined) {
+    return false;
+  }
+  const digits = left.replace(/\D/gu, "");
+  // Two unparseable spellings are not a match; without this, empty or non-numeric metadata reads as an echo.
+  return digits !== "" && digits === right.replace(/\D/gu, "");
+}
+
 function normalizeMessage(
   message: WhatsAppMessage,
   value: WhatsAppChangeValue,
@@ -205,7 +231,12 @@ function normalizeMessage(
   // are formatted differently, `from` being a wa_id and `display_phone_number` a formatted string — the
   // business's own message became an inbound message from a "customer" who is the business, which starts a
   // reply cycle answering ourselves. Refusing costs nothing: the real echo has its own field.
-  if (message.from !== undefined && message.from === value.metadata?.display_phone_number) {
+  //
+  // The comparison is canonical rather than literal, which is what makes the refusal reliable: the
+  // spelling mismatch above is precisely why the old classification missed, so a refusal keyed on raw
+  // equality would miss in the same cases and leave the phantom-inbound behaviour this comment describes
+  // still reachable. `sameNumber` compares digits, and refuses to call two spellings with no digits equal.
+  if (message.from !== undefined && sameNumber(message.from, value.metadata?.display_phone_number)) {
     config.logger?.warn("whatsapp.message_from_self", { channelAccountId: config.binding.channelAccountId });
     return undefined;
   }

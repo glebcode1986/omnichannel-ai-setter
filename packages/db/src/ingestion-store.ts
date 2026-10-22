@@ -18,8 +18,9 @@ import { isMessageDeliveryStatus } from "@omnichannel/domain";
 
 import { channelCapabilitiesOf } from "./channel-capabilities";
 import type { DbClient } from "./client";
-import { createPendingTranscripts } from "./transcript-store";
+import { cancelPendingFollowUps } from "./followup-store";
 import type { Prisma } from "./generated/prisma/client";
+import { createPendingTranscripts } from "./transcript-store";
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -283,6 +284,16 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
                   "updated_at" = now()
               WHERE "workspace_id" = ${workspaceId} AND "business_profile_id" = ${businessProfileId} AND "id" = ${conversationId}`;
       expectOneConversation(count);
+      if (direction === "IN") {
+        // The customer wrote back, so a follow-up waiting to chase their silence is about a question that
+        // has moved on (#55). Cancelled here, in the ingestion transaction that recorded the message,
+        // because this — not `appendInboundMessage` — is the path a webhook actually takes: that function
+        // has no production caller, and a cancellation hooked only to it would have run in tests and
+        // nowhere else. `claimFollowUp` re-reads the same fact at execution and would refuse anyway; this
+        // is the prompt path, and a follow-up already superseded in the table is one no worker has to
+        // reason about.
+        await cancelPendingFollowUps(tx, { workspaceId, businessProfileId }, conversationId, "NEW_INBOUND", occurredAt);
+      }
     },
 
     async isAppOriginatedMessage({ workspaceId, businessProfileId, channelAccountId, platformMessageId }) {
@@ -335,6 +346,11 @@ function createTransaction(tx: TransactionClient): IngestionTransaction {
             "updated_at" = now()
         WHERE "workspace_id" = ${workspaceId} AND "business_profile_id" = ${businessProfileId} AND "id" = ${conversationId}`;
       expectOneConversation(count);
+      // A person is handling this conversation now — they answered from the native app rather than from
+      // ours — and automation does not interrupt them, however they took it over (#55). The takeover
+      // started through our own UI is cancelled in `conversation-operations-store`; this is the other
+      // door into the same state, and a guard on one of two doors is a guard on neither.
+      await cancelPendingFollowUps(tx, { workspaceId, businessProfileId }, conversationId, "HUMAN_TAKEOVER", since);
     },
 
     async findMessageByPlatformId({ workspaceId, businessProfileId, channelAccountId, platformMessageId }) {

@@ -35,7 +35,7 @@ import { createChannelStateResolver } from "./delivery-policy";
 import { aiProviderProbe, channelAccountProbes, databaseProbe } from "./health-probes";
 import { createOperationEvidencePort } from "./operation-evidence";
 import { createReconcileHandler } from "./reconcile-handler";
-import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
+import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z");
 const GRACE_MS = 10 * 60_000;
@@ -65,7 +65,7 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
       capabilities: { ...NO_CAPABILITIES, text: true },
     });
     channelAccountId = account.id;
-    await infra.db.automationPolicy.create({ data: { ...scope, mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [] } });
+    await setProfileDefaultPolicy(infra.db, scope, { mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [] });
   }, 180_000);
 
   afterEach(async () => {

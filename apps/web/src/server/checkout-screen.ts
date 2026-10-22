@@ -69,6 +69,7 @@ export const CHECKOUT_REFUSAL_MESSAGES: Readonly<Record<CheckoutRefusalReason, M
   NO_PRICE: "checkout.refusedNoPrice",
   TERMS_NOT_ACCEPTED: "outcome.TERMS_NOT_ACCEPTED",
   DOCUMENT_SUPERSEDED: "outcome.TERMS_CHANGED",
+  OFFER_CHANGED: "outcome.OFFER_CHANGED",
   DOCUMENT_NOT_APPLICABLE: "checkout.refusedDocumentNotApplicable",
   NO_ROUTE: "checkout.refusedUnavailable",
   PROVIDER_UNAVAILABLE: "checkout.refusedUnavailable",
