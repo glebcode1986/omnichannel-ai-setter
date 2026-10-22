@@ -31,7 +31,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDeliveryHandler } from "./delivery-handler";
 import { createPaidWorkspace } from "./testing/paid-workspace";
 import { createChannelStateResolver } from "./delivery-policy";
-import { createEndToEndInfrastructure, endToEndTestsEnabled, type EndToEndInfrastructure } from "./testing/infrastructure";
+import { createEndToEndInfrastructure, endToEndTestsEnabled, setProfileDefaultPolicy, type EndToEndInfrastructure } from "./testing/infrastructure";
 
 const NOW = new Date("2026-09-19T12:00:00.000Z");
 
@@ -62,8 +62,11 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
       capabilities: { ...NO_CAPABILITIES, text: true },
     });
     channelAccountId = account.id;
-    await infra.db.automationPolicy.create({
-      data: { ...scope, mode: "AUTOPILOT", mandatoryReviewReasons: [], deliveryDelayMinMs: 0, deliveryDelayMaxMs: 0 },
+    await setProfileDefaultPolicy(infra.db, scope, {
+      mode: "AUTOPILOT",
+      mandatoryReviewReasons: [],
+      deliveryDelayMinMs: 0,
+      deliveryDelayMaxMs: 0,
     });
   }, 180_000);
 
@@ -420,8 +423,11 @@ describe.skipIf(!endToEndTestsEnabled())("the claim and the switch take the same
       capabilities: { ...NO_CAPABILITIES, text: true },
     });
     channelAccountId = account.id;
-    await infra.db.automationPolicy.create({
-      data: { ...scope, mode: "AUTOPILOT", mandatoryReviewReasons: [], deliveryDelayMinMs: 0, deliveryDelayMaxMs: 0 },
+    await setProfileDefaultPolicy(infra.db, scope, {
+      mode: "AUTOPILOT",
+      mandatoryReviewReasons: [],
+      deliveryDelayMinMs: 0,
+      deliveryDelayMaxMs: 0,
     });
   }, 180_000);
 

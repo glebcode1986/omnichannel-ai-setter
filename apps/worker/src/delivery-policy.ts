@@ -72,8 +72,11 @@ export function createChannelStateResolver(now: () => Date, humanAgentApproval: 
           eligibility.state === "ELIGIBLE"
             ? { state: "ELIGIBLE", expiresAt: eligibility.expiresAt }
             : { state: "UNAVAILABLE", reason: eligibility.state === "NOT_APPROVED" ? "NOT_APPROVED" : eligibility.state === "EXPIRED" ? "EXPIRED" : "UNKNOWN" },
-        // Measured from the customer's own message, which is where the provider's clock starts.
-        ...(context.lastInboundAt === undefined
+        // Measured from the customer's own message, which is where the provider's clock starts — and so
+        // only for a send that answers one. A planned follow-up answers nothing, and a budget counted
+        // from a message hours old is already spent, which would turn every follow-up into a review item
+        // the moment quiet hours applied (#55).
+        ...(context.lastInboundAt === undefined || context.proactive === true
           ? {}
           : { dispatchDeadline: new Date(context.lastInboundAt.getTime() + timing.automatedDispatchTargetMs) }),
       };

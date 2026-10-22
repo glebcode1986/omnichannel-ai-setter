@@ -158,6 +158,14 @@ export async function saveStyleProfile(
   expected?: { readonly updatedAt?: Date },
 ): Promise<StyleWriteOutcome> {
   const scope = profileScopeOf(context);
+  if (scopeLevel === "WORKSPACE") {
+    // The base voice every Business Profile inherits, so writing it from one profile's screen is a
+    // cross-profile write — the same act `createStyleExample` guards twenty lines below and the privacy
+    // spec assigns to an admin or owner. It was the one workspace-scoped write in this file with no role
+    // check at all, which let a member granted a single profile rewrite the voice all of them reply in.
+    // Role only here, like its sibling: a profile context carries no Business Profile scope (#57).
+    requireRole(context, WORKSPACE_ADMIN_ROLES, "writing the Workspace-wide voice");
+  }
   const businessProfileId = scopeLevel === "WORKSPACE" ? null : scope.businessProfileId;
   const data = {
     persona: blankToNull(draft.persona),
@@ -644,14 +652,13 @@ export async function archiveStyleExample(db: DbClient, context: BusinessProfile
 /**
  * Back into style retrieval, naming whoever brought it back.
  *
- * The approver is re-stamped rather than left as it was: the person restoring an example is the one
- * standing behind it now, and the CHECK would accept the old name — which would make the audit trail say
- * a colleague approved something they never saw again.
+ * The approver is **not** re-stamped. `decide` writes `approvedByUserId` only when the row has none, so
+ * the first person to vouch for an example keeps that place and a restore cannot quietly reassign it;
+ * re-stamping on every restore is what used to lose the original approver for good.
  *
- * Re-stamping used to be the end of it, and that lost the previous approver for good. It does not now:
- * every decision writes an audit row naming the actor and the transition, so "who approved this first,
- * who archived it, who brought it back" is a question the history answers even though the row itself
- * only ever holds the current answer.
+ * Who brought it back is still recorded — `decidedByUserId`, `decidedAt` and a `style_example_decisions`
+ * row naming the actor and the transition — so "who approved this first, who archived it, who restored
+ * it" is a question the history answers even though the row itself holds only the current status.
  */
 export async function restoreStyleExample(db: DbClient, context: BusinessProfileContext, exampleId: string, at = new Date()): Promise<StyleWriteOutcome> {
   return decide(db, context, exampleId, { from: ["ARCHIVED", "REJECTED"], to: "ACTIVE", outcome: { status: "RESTORED" }, decision: "RESTORED", approve: true }, at);
@@ -691,9 +698,17 @@ async function decide(
       status: { in: [...transition.from] },
       ...exampleScopeFilter(undefined, scope.businessProfileId),
     };
-    const before = await tx.styleExample.findFirst({ where, select: { status: true, approvedByUserId: true } });
+    const before = await tx.styleExample.findFirst({ where, select: { status: true, approvedByUserId: true, businessProfileId: true } });
     if (before === null) {
       return { status: "GONE" } as const;
+    }
+    if (before.businessProfileId === null) {
+      // One guard for all four transitions, because they share this helper. A Workspace-scoped example is
+      // drawn on by every Business Profile's voice, and approving one *stamps the approver* — so without
+      // this a member granted a single profile could supply the "verified human" provenance the CHECK
+      // exists to require, for content all of them speak in, or archive an active one out of every
+      // profile's retrieval. `createStyleExample` already guards making one (#57).
+      requireRole(context, WORKSPACE_ADMIN_ROLES, "deciding a Workspace-wide style example");
     }
     const changed = await tx.styleExample.updateMany({
       where,

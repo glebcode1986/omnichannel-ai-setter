@@ -56,7 +56,7 @@ import {
 
 import { recordSystemAuditEvent, recordWorkspaceAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
-import { assertVerifiedBillingEvent, billingProviderRegistered, type VerifiedBillingEvent } from "./billing-events";
+import { billingProviderRegistered, snapshotVerifiedBillingEvent, type VerifiedBillingEvent } from "./billing-events";
 import { DbInputError } from "./errors";
 import { requireRole, scopeOf, type WorkspaceContext } from "./tenancy";
 
@@ -1095,16 +1095,24 @@ export interface BillingEventResult {
 /**
  * Applies one verified provider event to the workspace's normalized billing state.
  *
- * The first line is the whole security model: `assertVerifiedBillingEvent` refuses anything that
- * `billing-events.ts` did not mint, so a success-page handler cannot reach this path even by
- * constructing an object of the right shape and casting it.
+ * The first line is the whole security model, and it does two things rather than one.
+ * `snapshotVerifiedBillingEvent` refuses anything `billing-events.ts` did not mint — so a success-page
+ * handler cannot reach this path even by constructing an object of the right shape and casting it — and it
+ * returns a private copy of the authenticated facts.
+ *
+ * The copy is the part that is easy to leave out, and leaving it out was a real defect: asserting answers
+ * a question about one instant, and this function then awaits a route lookup, a transaction and several
+ * queries. A caller that still holds the object it passed in can move a `Date` inside it while any of
+ * those are pending, and every read after the await would see the new value. Re-asserting after each
+ * await does not close it, because there is always another await. So nothing below reads the caller's
+ * object again: `event` here *is* the snapshot.
  *
  * Idempotent by index. A redelivered webhook is read before it is written, under an advisory lock on the
  * route and event identifier, and returns `DUPLICATE` with the effect the first delivery had — so a
  * provider retrying for an hour neither double-charges nor double-extends.
  */
-export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
-  assertVerifiedBillingEvent(event);
+export async function recordVerifiedBillingEvent(db: DbClient, delivered: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
+  const event = snapshotVerifiedBillingEvent(delivered);
 
   const route = await db.billingRoute.findUnique({
     where: { code: event.routeCode },
@@ -1213,6 +1221,13 @@ export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBi
       now,
     });
 
+    // Read back the term the grant actually put in force — `apply` has already written it in this
+    // transaction — so the event row records the relationship rather than leaving it to be inferred.
+    const grantedTerm =
+      (applied === "ACTIVATE" || applied === "EXTEND") && arrangement !== null
+        ? (await tx.billingArrangement.findUnique({ where: { id: arrangement.id }, select: { currentPeriodEnd: true } }))?.currentPeriodEnd ?? null
+        : null;
+
     const row = await writeEvent(tx, {
       event,
       routeId: route.id,
@@ -1222,6 +1237,7 @@ export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBi
       effect: applied,
       now,
       ...(decision.quote === undefined ? {} : { quote: decision.quote }),
+      ...(grantedTerm === null ? {} : { appliedTermEndsAt: grantedTerm }),
     });
     await recordSystemAuditEvent(
       tx,
@@ -1267,6 +1283,17 @@ type ArrangementRow = {
   readonly currentPeriodEnd: Date | null;
   readonly startedAt: Date | null;
 } | null;
+
+/** The later of two optional instants, or whichever one exists. Null only when neither does. */
+function laterOf(left: Date | null, right: Date | null): Date | null {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return left.getTime() >= right.getTime() ? left : right;
+}
 
 /**
  * Writes what the effect means, and reports what it actually did.
@@ -1350,15 +1377,49 @@ async function apply(
     // like a live renewal under a subscription that is ending — provider state and application state are
     // never summed. The event is still written with `effect: NONE` and audited, which is what makes the
     // divergence visible; resolving it is `reconcileProviderState`'s job.
-    const settled = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true } });
+    const settled = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true, periodEndsAt: true } });
     if (settled !== null && (settled.state === "CANCELED_PENDING_END" || settled.state === "INACTIVE")) {
       return "NONE";
     }
+    // A renewal may only move the paid term forward.
+    //
+    // Providers redeliver, and they redeliver out of order: a renewal raised for February can arrive after
+    // the one raised for March, with its own event id, so idempotency on the id does not help. Writing the
+    // stated end unconditionally therefore *removes* access the workspace has already bought — the
+    // subscription's `periodEndsAt` goes backwards and `paidWorkAllowed` starts refusing work inside a term
+    // somebody paid for. The maximum below used to guard only the computed fallback, which is the case a
+    // provider that states its own period never reaches.
+    //
+    // So the term is compared against what is already paid for, taking both rows into account because
+    // either can be ahead: the arrangement carries the provider's view and the subscription carries the
+    // entitlement's. A renewal that does not extend past that is a reordering or a redelivery; it is
+    // recorded and audited with `effect: NONE` and changes nothing, which is the same answer this branch
+    // already gives a renewal for a cancelled subscription.
     const interval = chargeIntervalOf(arrangement.interval);
-    const from = arrangement.currentPeriodEnd !== null && arrangement.currentPeriodEnd.getTime() > now.getTime() ? arrangement.currentPeriodEnd : now;
+    const paidThrough = laterOf(arrangement.currentPeriodEnd, settled?.periodEndsAt ?? null);
+    const from = paidThrough !== null && paidThrough.getTime() > now.getTime() ? paidThrough : now;
     const periodEndsAt = event.periodEndsAt ?? periodEndFor(interval, from);
-    await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { currentPeriodEnd: periodEndsAt } });
-    await setSubscription(tx, workspaceId, { planVersionId: arrangement.planVersionId, state: "ACTIVE", periodEndsAt });
+    if (paidThrough !== null && periodEndsAt.getTime() <= paidThrough.getTime()) {
+      return "NONE";
+    }
+    // The comparison above is not enough on its own, and finding that out is what the racing case in
+    // `billing-routing.integration.test.ts` is for. Two renewals with different event ids are two
+    // transactions: both read the same `paidThrough`, both decide they extend it, and the one that commits
+    // *second* wins — so a renewal buying less time can still overwrite one buying more. Idempotency keys
+    // on the provider's event id, which is precisely what differs here.
+    //
+    // So the write carries the comparison instead of trusting the read. Under READ COMMITTED the second
+    // transaction blocks on the row and then re-evaluates the predicate against the committed value, which
+    // is the same reason `billing_arrangements_one_live_key` is an index rather than a check in this file:
+    // a decision an application makes before a write is a decision another writer can invalidate.
+    const advanced = await extendSubscription(tx, workspaceId, { planVersionId: arrangement.planVersionId, periodEndsAt });
+    if (!advanced) {
+      return "NONE";
+    }
+    await tx.billingArrangement.updateMany({
+      where: { id: arrangement.id, OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { lt: periodEndsAt } }] },
+      data: { currentPeriodEnd: periodEndsAt },
+    });
     return "EXTEND";
   }
 
@@ -1397,19 +1458,90 @@ async function apply(
   if (arrangement.state === "ENDED" || arrangement.state === "SUPERSEDED") {
     return "NONE";
   }
-  await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { state: "ENDED", endedAt: now } });
   const existing = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { periodEndsAt: true } });
+  const paidThrough = laterOf(arrangement.currentPeriodEnd, existing?.periodEndsAt ?? null);
+
+  // A reversal revokes the term it paid for — not whichever term happens to be current.
+  //
+  // Providers send reversals late, and a refund or chargeback for an old invoice can arrive months after a
+  // newer term on the *same* arrangement was bought and paid for. The previous shape of this branch asked
+  // only whether the arrangement was still live and then wrote `INACTIVE`, so a February chargeback took
+  // away access somebody had paid for through April. Nothing correlated the money being taken back with
+  // the term that was granting service.
+  //
+  // The event's own `periodEndsAt` is the provider's statement of which term it concerns, and it is
+  // retained on every event row that states one (see `writeEvent`), so the audit trail can answer this
+  // afterwards too. When the reversal names a term that ends before what is already paid for, it is
+  // historical. When it names no term at all it is ambiguous, and an ambiguous reversal is not grounds to
+  // delete access that a separate payment bought.
+  //
+  // Both cases leave every row alone and record `effect: NONE`, which is this file's existing answer for a
+  // divergence it will not resolve by guessing: `reconcileProviderState` reads the provider and settles
+  // it. The alternative — revoking on a maybe — bills the customer for a month they then cannot use.
+  if ((input.kind === "REFUNDED" || input.kind === "CHARGEBACK") && paidThrough !== null && paidThrough.getTime() > now.getTime()) {
+    // Two questions, because a reversal can be identified two ways and the common case has neither field
+    // missing nor a mystery to solve: the only payment ever made, refunded at once, *is* the current term
+    // and must still revoke it.
+    //
+    // First, what the provider says. A stated period that ends before what is already paid for names an
+    // earlier term outright.
+    if (event.periodEndsAt !== undefined && event.periodEndsAt.getTime() < paidThrough.getTime()) {
+      return "NONE";
+    }
+    // Second, what the ledger says — and this is where comparing timestamps was wrong.
+    //
+    // A reversal's `occurredAt` is when the *reversal* was raised, not when the charge it reverses was
+    // made: `NormalizedBillingEvent` says so, and a refund issued today for last month's invoice is
+    // legitimately newer than today's renewal. Comparing the two therefore let exactly the case this
+    // guard exists for through — a new reversal of an old charge — which Astra demonstrated on PR #100
+    // after the first version of this fix. Time cannot answer the question; identity has to.
+    //
+    // So the ledger is asked how many payments have granted a term on this arrangement at all — and only
+    // that, because nothing else in an authenticated payload can carry the answer.
+    //
+    // **One** grant means there is nothing to confuse: the money being returned is the money that bought
+    // the access, whatever the provider chose to state, and it goes. That is the ordinary refund, and an
+    // earlier attempt at this guard broke it.
+    //
+    // **More than one** means a separately paid term may be in force, and the reversal has to *show* it
+    // concerns that term. Two things that look like proof are not:
+    //
+    // - `providerReference` cannot serve. Its own contract is "the provider's own subscription **or**
+    //   charge object", so on a recurring arrangement two separately paid terms legitimately share one
+    //   subscription id, and a refund of the first charge carries it just as the second does. Matching on
+    //   it revoked a term the reversal said nothing about — Astra demonstrated that with
+    //   `providerReference='sub-shared'` after the previous version of this guard.
+    // - "the most recent grant" cannot serve either. Selecting by `occurredAt` descending picks by event
+    //   time, while the monotonic renewal rule above deliberately lets a *delayed* event buy a term that
+    //   reaches **farther** than one already applied. So the latest event is not necessarily the payment
+    //   that bought the term in force, and a refund of the shorter one would end the longer one.
+    //
+    // What remains is the one proof the payload does carry: a stated period that reaches the term in
+    // force, handled by the check above. Without it, a reversal on a multi-grant arrangement changes
+    // nothing, is recorded with `effect: NONE` and audited, and `reconcileProviderState` reads the
+    // provider to settle it. Refusing to guess costs a disputed term staying live until that read; the
+    // alternative deletes a term somebody paid for, which is worse and irreversible from here.
+    const grants =
+      event.periodEndsAt !== undefined
+        ? 0
+        : await tx.billingEvent.count({ where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } } });
+    if (grants > 1) {
+      return "NONE";
+    }
+  }
+
+  await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { state: "ENDED", endedAt: now } });
   if (existing === null) {
     return "END";
   }
-  const paidThrough = existing.periodEndsAt;
-  if (input.kind === "SUBSCRIPTION_CANCELED" && paidThrough !== null && paidThrough.getTime() > now.getTime()) {
+  if (input.kind === "SUBSCRIPTION_CANCELED" && existing.periodEndsAt !== null && existing.periodEndsAt.getTime() > now.getTime()) {
     // Cancel at period end: the workspace keeps what it paid for. The accepted default, and the only
     // branch where the end date is in the future.
-    await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "CANCELED_PENDING_END", canceledAt: now, periodEndsAt: paidThrough } });
+    await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "CANCELED_PENDING_END", canceledAt: now, periodEndsAt: existing.periodEndsAt } });
     return "END";
   }
-  // A refund or a chargeback takes the money back, so the term it paid for is over now. Data is kept.
+  // A refund or a chargeback for the current term takes the money back, so that term is over now. Data is
+  // kept.
   await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "INACTIVE", canceledAt: now } });
   return "END";
 }
@@ -1420,7 +1552,7 @@ async function apply(
  * Takes a workspace id rather than a context, for the reason `readEntitlement` does: the caller is a
  * verified webhook or a reconciliation sweep and there is no session to have. Inventing one so this would
  * type-check is how a background path acquires authority nobody granted — and the authority that matters
- * here was established by `assertVerifiedBillingEvent`, not by a role.
+ * here was established by `snapshotVerifiedBillingEvent` at the entry point, not by a role.
  */
 async function setSubscription(
   tx: DbExecutor,
@@ -1429,6 +1561,39 @@ async function setSubscription(
 ): Promise<void> {
   const data = { planVersionId: input.planVersionId, state: input.state, periodEndsAt: input.periodEndsAt, graceStartedAt: null, canceledAt: null };
   await tx.workspaceSubscription.upsert({ where: { workspaceId }, create: { workspaceId, ...data }, update: data });
+}
+
+/**
+ * Moves the subscription's paid term forward, and says whether it actually moved.
+ *
+ * `updateMany` with the term in the predicate rather than `upsert`, because this is a compare-and-set: the
+ * database decides whether this renewal is the later one, at the moment of writing, holding the row. An
+ * `upsert` would write whatever it was given and the last writer would win regardless of which term it
+ * bought.
+ *
+ * `false` means the row is already at or beyond this term — a redelivery, or a reordered renewal that lost
+ * a race — and the caller records `effect: NONE`. The missing-row case still has to create one, and that
+ * create is safe because `workspaceId` is unique: a concurrent create fails rather than duplicating.
+ */
+async function extendSubscription(
+  tx: DbExecutor,
+  workspaceId: string,
+  input: { readonly planVersionId: string; readonly periodEndsAt: Date },
+): Promise<boolean> {
+  const data = { planVersionId: input.planVersionId, state: "ACTIVE" as const, periodEndsAt: input.periodEndsAt, graceStartedAt: null, canceledAt: null };
+  const { count } = await tx.workspaceSubscription.updateMany({
+    where: { workspaceId, OR: [{ periodEndsAt: null }, { periodEndsAt: { lt: input.periodEndsAt } }] },
+    data,
+  });
+  if (count > 0) {
+    return true;
+  }
+  const existing = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { workspaceId: true } });
+  if (existing !== null) {
+    return false;
+  }
+  await tx.workspaceSubscription.create({ data: { workspaceId, ...data } });
+  return true;
 }
 
 async function writeEvent(
@@ -1441,6 +1606,8 @@ async function writeEvent(
     readonly arrangementId: string | null;
     readonly effect: EntitlementEffect;
     readonly quote?: QuoteVerdict;
+    /** The term this event actually put in force, where it granted one. Computed terms included. */
+    readonly appliedTermEndsAt?: Date;
     readonly now: Date;
   },
 ): Promise<{ readonly id: string }> {
@@ -1459,7 +1626,21 @@ async function writeEvent(
       effect: input.effect,
       // Normalized detail only. No raw payload, no signature, no header: a stored signature is a secret
       // in a table nobody treats as one.
-      detail: { ...(input.quote === undefined ? {} : { quote: input.quote }) },
+      //
+      // The term is retained whenever the provider states one, because a reversal arriving later has to be
+      // attributable to the term it paid for rather than to whichever term is current — see the `END`
+      // branch in `apply`. Where a provider states no period the arrangement's own `currentPeriodEnd`
+      // after this event is the answer, ordered by `occurredAt`; this field does not invent one.
+      detail: {
+        ...(input.quote === undefined ? {} : { quote: input.quote }),
+        ...(input.event.periodEndsAt === undefined ? {} : { periodEndsAt: input.event.periodEndsAt.toISOString() }),
+        ...(input.event.providerReference === undefined ? {} : { providerReference: input.event.providerReference }),
+        // The term this payment actually put in force, which is not always the one it stated: an event
+        // with no period of its own gets the interval computed for it, and that computed term is just as
+        // much a fact about what was bought. Recorded so the ledger can answer "which term did this
+        // payment buy" for every grant rather than only for the talkative ones.
+        ...(input.appliedTermEndsAt === undefined ? {} : { appliedTermEndsAt: input.appliedTermEndsAt.toISOString() }),
+      },
     },
     select: { id: true },
   });

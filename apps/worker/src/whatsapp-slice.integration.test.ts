@@ -109,8 +109,13 @@ describe.skipIf(!endToEndTestsEnabled())("WhatsApp vertical slice (end to end)",
       expiresAt: CREDENTIAL_EXPIRES,
     });
     await infra.db.channelAccount.update({ where: { id: channelAccountId }, data: { credentialId, status: "CONNECTED" } });
-    await infra.db.automationPolicy.create({
-      data: { ...scope, mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [], deliveryDelayMinMs: 1_000, deliveryDelayMaxMs: 2_000 },
+    // The profile default already exists: the accepted P3-02 head makes `createBusinessProfile` write it
+    // alongside the profile itself, from the domain's own `profileDefaultPolicyWrite()`. So this edits that
+    // row rather than inventing a second one — a hand-written create violates
+    // `automation_policies_profile_default_key` and fails the whole suite.
+    await infra.db.automationPolicy.updateMany({
+      where: { ...scope, channelAccountId: null },
+      data: { mode: "AUTOPILOT", confidenceThreshold: 0.8, mandatoryReviewReasons: [], deliveryDelayMinMs: 1_000, deliveryDelayMaxMs: 2_000 },
     });
   }, 180_000);
 
