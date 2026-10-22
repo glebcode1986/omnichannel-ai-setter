@@ -44,6 +44,19 @@ export function offeredDocumentIdsFrom(formData: FormData): readonly string[] {
   return idsNamed(formData, "offered");
 }
 
+/**
+ * The opaque identity of the offer the page displayed (#47).
+ *
+ * Attacker-controlled like every other field, and safe for the same reason the document ids are: it is
+ * only ever *compared* against what the store resolves inside the opening transaction. A forged value
+ * cannot name a seller, a provider or a route — the most it can do is match the terms that are current
+ * anyway, which is the case the comparison exists to allow.
+ */
+export function offeredDigestFrom(formData: FormData): string | undefined {
+  const value = field(formData, "offer").trim();
+  return value === "" ? undefined : value;
+}
+
 function idsNamed(formData: FormData, name: string): readonly string[] {
   const seen = new Set<string>();
   for (const value of formData.getAll(name)) {

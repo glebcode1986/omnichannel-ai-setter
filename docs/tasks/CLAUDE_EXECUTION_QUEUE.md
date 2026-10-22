@@ -60,7 +60,39 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — propagating the accepted #100 into P6-09 / PR #101
+### Current work — remediating Astra's two findings on P6-09 / PR #101
+
+`CHANGES_REQUESTED` at `46e734b`, two blocking correctness findings, both real and both fixed on this same
+branch. No propagation this round: #102+ stays untouched, nothing goes to `main`, and no reviewer is
+assigned or invoked by me.
+
+**[P1] An acceptance was not bound to the offer displayed.** The form carried no identity for the
+commercial terms, and a globally-required document applies to every seller, so document ids could not bind
+the selling entity. The store now computes an opaque digest of exactly what the summary renders — seller,
+jurisdiction, settlement model, tax remitter, arrangement, interval, base price — the page posts it as one
+hidden field, and the opening transaction compares it against its own fresh resolution. Mismatch is a new
+`OFFER_CHANGED` refusal, placed before the document checks so the sentence is "the terms moved" rather
+than "you did not tick a box".
+
+**[P2] One language spelled two ways was two languages.** `en-US` and `en-us` each became version 1 of one
+document, both current, neither superseding the other. Fixed at every place the identity is used:
+publication canonicalizes and refuses an unparseable tag; version allocation matches by canonical
+equality; the TypeScript grouping keys on the canonical language and *computes* the winner from
+specificity, `effectiveFrom` and `version`; and in SQL `current_legal_documents()` groups case- and
+separator-folded, a CHECK refuses the separator form no canonical tag has, and a folded unique index makes
+two rows of one kind and one language sharing a version unreachable.
+
+**Two things worth carrying forward.** The pre-fix winner was decided by the database's *collation*, since
+locale negotiation returns the first matching candidate and candidates arrive in `locale ASC` order — so
+both publication orders are needed and neither is sufficient alone. And reverting the entire SQL change
+left all 100 tests green, because the coverage trigger matches by kind and the store refuses in TypeScript
+before the acceptance trigger is ever reached; the suite now writes an acceptance by raw statement and
+requires the database to raise on its own. Five mutations, one per part of the fix, are each caught.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (208 files, 2041 passed / 1349 skipped);
+PostgreSQL 48 files 1085/1085; Redis 55/55; E2E 103 files 1187/1187.
+
+### Earlier — propagating the accepted #100 into P6-09 / PR #101
 
 #100 was accepted at `27baa3d918001443080c534380a7b44acdf498d5`, so this branch is the next link. Ordinary
 non-rebase merge, one branch only — no rebase, no force-push, nothing to `main`, #102+ untouched. #101 was

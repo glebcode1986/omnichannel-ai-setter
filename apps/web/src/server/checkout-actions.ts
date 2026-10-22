@@ -22,7 +22,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { requestLocale } from "@/i18n/request-locale";
-import { acceptedDocumentIdsFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
+import { acceptedDocumentIdsFrom, offeredDigestFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
 import { checkoutSelectionFrom } from "./checkout-screen";
 import { getDb } from "./db";
 import { requireWorkspaceContext } from "./request-context";
@@ -80,6 +80,7 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
       locale,
       acceptedDocumentIds: acceptedDocumentIdsFrom(formData),
       offeredDocumentIds: offeredDocumentIdsFrom(formData),
+      ...(offeredDigestFrom(formData) === undefined ? {} : { offeredDigest: offeredDigestFrom(formData) }),
     });
     finish(target, opened.available ? "ACCEPTED" : outcomeOf(opened.reason));
   } catch (error) {

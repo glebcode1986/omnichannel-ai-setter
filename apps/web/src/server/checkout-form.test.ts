@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { acceptedDocumentIdsFrom, field, offeredDocumentIdsFrom } from "./checkout-form";
+import { acceptedDocumentIdsFrom, field, offeredDigestFrom, offeredDocumentIdsFrom } from "./checkout-form";
 
 const form = (entries: readonly [string, string][]): FormData => {
   const data = new FormData();
@@ -39,6 +39,24 @@ describe("reading the accepted documents", () => {
 
     // A clean set, so a refusal the store reports names something real rather than an empty string.
     expect(acceptedDocumentIdsFrom(data)).toEqual(["doc-1", "doc-2"]);
+  });
+});
+
+describe("reading the displayed offer", () => {
+  it("is absent when the field is, so an old page is not refused for a digest it never carried", () => {
+    // `undefined` and not `""`. The store compares the digest only when one arrived, so a submission
+    // from a page rendered before this field existed has to be indistinguishable from one that did not
+    // post it — an empty string would be compared against a real digest and refuse every such checkout.
+    expect(offeredDigestFrom(form([]))).toBeUndefined();
+    expect(offeredDigestFrom(form([["offer", "   "]]))).toBeUndefined();
+    expect(offeredDigestFrom(form([["offer", " abc123 "]]))).toBe("abc123");
+  });
+
+  it("is absent for anything that is not a string, rather than a value the store would compare", () => {
+    const data = form([]);
+    data.append("offer", new Blob(["x"]));
+
+    expect(offeredDigestFrom(data)).toBeUndefined();
   });
 });
 

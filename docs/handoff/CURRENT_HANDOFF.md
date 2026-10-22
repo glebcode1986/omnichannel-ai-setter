@@ -3894,3 +3894,132 @@ conditional `updateMany`'s real-PostgreSQL concurrency is still covered only by 
 by independent certification; the `createBusinessProfile` lock-observer gap **remains open and
 non-blocking**, and other lock tests are still not proof of that case; and the snapshot, the monotonic
 guards and the conditional update are all intact, verified by name above.
+
+## PR #101 round one — Astra's two blocking findings on P6-09 — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `46e734b` with two correctness findings. Both are real, both are
+fixed here, and both were the same shape as the recurring one: a correct piece with no path between it and
+the thing it was supposed to protect.
+
+### P1 — an acceptance was not bound to the offer that was displayed
+
+The form carried the plan, the interval and the document ids. It carried nothing identifying the
+*commercial* offer, and a globally-required document legitimately applies to every seller — so document
+ids cannot bind the selling entity. Trusted operator configuration changing between the GET that drew the
+ticks and the POST that accepted them produced a contract naming a different legal entity, a different
+jurisdiction and a different tax treatment than the person had read.
+
+The fix is an opaque digest of exactly the terms the summary renders — seller legal name, jurisdiction,
+settlement model, who remits the tax, arrangement, interval and base price — computed by the store,
+rendered as one hidden field, and compared inside the opening transaction against the store's own fresh
+resolution. A mismatch is a new `OFFER_CHANGED` refusal placed *before* the document checks, because the
+honest sentence is "the terms moved", not "you did not tick a box". The client cannot choose anything with
+it: the value is only ever compared, never read as a seller, a route or a price.
+
+**One disclosure about the reproduction.** Astra's own repro said the stale submission comes back
+`available: true`. Against the real schema I could not reproduce that *in the configuration Astra
+described*, because this harness's `PUBLIC_OFFER` is seller-specific: switching sellers makes the
+previously-offered document inapplicable and the store refuses `DOCUMENT_NOT_APPLICABLE` — a refusal, for
+the wrong reason. The defect does reproduce as `available: true` in two configurations I verified on real
+PostgreSQL: a seller switch where the required documents are global, and a same-seller legal-identity
+rename. The finding stands; its stated symptom depends on the catalogue.
+
+### P2 — one language spelled two ways was two languages
+
+`legal_documents.locale` is what "which version is current in this reader's language?" groups by.
+Publication kept `input.locale` verbatim and allocated versions by that raw string, while
+`negotiateDocumentLocale` canonicalizes before matching. So `en-US` and `en-us` each became version 1 of
+one document, both stayed current, neither superseded the other, and a replacement published under the
+other spelling left the superseded text on the checkout page.
+
+Fixed in four places, because the identity has to mean the same thing everywhere it is used:
+
+1. **Publication** canonicalizes the tag, refuses one it cannot parse, and stores the canonical form.
+2. **Version allocation** matches existing rows by canonical equality, so a catalogue that already holds a
+   non-canonical spelling still gets one sequence instead of two.
+3. **The TypeScript current-document grouping** keys on the canonical language, and the winner inside a
+   group is now *computed* — specificity, then `effectiveFrom`, then `version` — by a new `supersedes`.
+4. **SQL**: `current_legal_documents()` groups by the locale case-folded and separator-folded, with the
+   same expression in `ORDER BY` so `DISTINCT ON` keeps the newest of the collapsed group; a CHECK refuses
+   the separator form no canonical tag has; and a folded unique index makes the state the defect rested on
+   — two rows of one kind and one language sharing a version — unreachable.
+
+### Why the winner had to be computed, which I did not expect
+
+`negotiateDocumentLocale` returns the **first** candidate whose canonical tag matches, and candidates
+arrive in `locale ASC` order. So before this change, which of two spellings a reader was offered came down
+to the database's collation. Measured against this harness `en-us` sorts before `en-US`, which means the
+alias-is-newer order happens to land on the right row and the alias-is-older order lands on the superseded
+one; under a collation that sorts the other way it is the reverse. That is why both publication orders are
+in the suite and why neither is sufficient alone — and it is also why reverting the grouping key alone
+still passed one of my two cases until I measured it.
+
+### The gap between two correct triggers
+
+The coverage trigger matches an acceptance to a requirement by **kind**, so one acceptance of a kind
+satisfies it however many rows `current_legal_documents()` returned — it could never have caught the
+duplicate. The acceptance trigger matches by **id**, so it is the one that would have let consent to the
+superseded alias through. But `openCheckoutContract` resolves the current versions in TypeScript and
+refuses before any row is written, so my first store-level regression proved the store and said nothing
+about the SQL at all: reverting the whole SQL change left all 100 tests green. The suite now writes an
+acceptance row by raw statement against the superseded id and requires the database to raise on its own.
+
+### What proves these are regressions and not restatements of the diff
+
+Five mutations, each reverting one part of the fix, each caught:
+
+| reverted | caught by |
+|---|---|
+| the canonical grouping key | "continues one version sequence across spellings" |
+| `supersedes` back to first-row-wins | "continues one version sequence across spellings" |
+| publication storing the raw spelling and allocating by string equality | that case **and** "refuses to store a spelling the database cannot group" |
+| `DISTINCT ON`/`ORDER BY` back to the raw locale | "offers one current version when the replacement was written in the other spelling" |
+| the folded unique index | "refuses to store a spelling the database cannot group" |
+
+Both alias regressions write their non-canonical row by raw statement, because the fixed writer refuses to
+create one — which is what makes them read a row the fix did not produce.
+
+### An honest limit on the SQL half
+
+No SQL expression knows that `iw` and `he` are one language. The database collapses case and separator
+aliases, which is the class it can decide, and it provably cannot over-collapse: two canonical tags never
+differ only in case, so no two distinct languages can land in one group. Deprecated-subtag aliases are
+collapsed only by the TypeScript writer. I am not claiming the database is canonical-aware; I am claiming
+it is no longer able to present two spellings of one language as two current documents.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1349 skipped (3390)** |
+| PostgreSQL suites | 48 files, **1085/1085** |
+| Redis suites | **55/55** |
+| worker + web E2E | 103 files, **1187/1187** |
+
+Run by name:
+
+| suite | result |
+|---|---|
+| `billing-routing.integration` — 92 at the reviewed head, +5 for P1, +3 for P2 | **100/100** |
+| `billing-events` | **7/7** |
+| `domain/billing-routing` | **45/45** |
+| `checkout-screen.integration` | **8/8** |
+| `checkout-form` — +2 for the digest reader | **6/6** |
+| `ui/checkout/checkout-panes` | **14/14** |
+| `billing-screen.integration` | **15/15** |
+| `ui/billing/billing-panes` | **26/26** |
+| `no-provider-payloads` | **6/6** |
+| the three `apps/web/src/i18n` gates | **34/34** |
+
+Totals: 3380→3390 tests, PostgreSQL 1077→1085. Eight of the ten new cases are in database-gated files,
+which is why the no-infrastructure run's skipped count rises by exactly eight and its passing count by the
+remaining two — the digest form reader, which needs no infrastructure.
+
+### Unchanged from the accepted predecessor
+
+The four conditions #100's approval attached still hold and are unaffected by this round: multi-grant
+reversals with insufficient period attribution remain an auditable `NONE`; the conditional `updateMany`'s
+real-PostgreSQL concurrency is still covered only by my racing test and CI; the `createBusinessProfile`
+lock-observer gap remains open and non-blocking; and the snapshot, the monotonic guards and the
+conditional update are intact.

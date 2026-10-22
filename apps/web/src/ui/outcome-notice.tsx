@@ -53,6 +53,7 @@ const OUTCOMES = [
   "ACCEPTED",
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
+  "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
   "MOVED",
   "STALE_STAGE",
@@ -93,6 +94,7 @@ const REFUSALS = new Set<string>([
   // because the tone is what stops them trying again and again.
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
+  "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
   "FORBIDDEN",
   "TOO_LONG",

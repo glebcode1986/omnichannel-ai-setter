@@ -26,6 +26,8 @@
  * a transaction-scoped advisory lock and reads before writing. The unique index stays as the backstop for
  * anything that does not come through here.
  */
+import { createHash } from "node:crypto";
+
 import {
   acceptedInOwnLanguage,
   canonicalLanguageTag,
@@ -334,6 +336,18 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
   if (!isReadableDocumentUrl(input.contentRef)) {
     throw new DbInputError("contentRef", "a legal document is published at an absolute https URL somebody can open");
   }
+  // Canonicalized once, here, and stored that way — because every other part of this file identifies a
+  // document by its locale and they have to mean the same thing by it.
+  //
+  // Astra's P2 on #101: publishing kept `input.locale` verbatim and allocated versions by that raw
+  // string, while `negotiateDocumentLocale` canonicalizes before matching. So `en-US` and `en-us` each
+  // became v1 of the same kind, both current, neither superseding the other, and which spelling a reader
+  // was offered came down to row order rather than to `effectiveFrom` or `version`. Two aliases of one
+  // language tag are one identity, and the only place that can be settled is where the row is written.
+  const locale = canonicalLanguageTag(input.locale);
+  if (locale === undefined || locale === null) {
+    throw new DbInputError("locale", "a legal document is published in a well-formed BCP-47 language tag");
+  }
   return db.$transaction(async (tx) => {
     const seller =
       input.sellerProfileCode === undefined
@@ -349,16 +363,20 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
     // anything could turn it into a sentence. Both are rare owner-or-operator acts, so serializing them
     // against each other costs nothing.
     await serialize(tx, LEGAL_CATALOGUE_LOCK);
-    const latest = await tx.legalDocument.findFirst({
-      where: { kind: input.kind, locale: input.locale },
-      orderBy: { version: "desc" },
-      select: { version: true },
-    });
-    const version = (latest?.version ?? 0) + 1;
+    // Versions are allocated per *canonical* locale, and existing rows are matched the same way rather
+    // than by string equality — so a catalogue that already holds a non-canonical spelling still gets one
+    // sequence instead of two. The comparison is in TypeScript because the canonical form of a language
+    // tag is not something SQL can compute: no SQL expression knows that `iw` and `he` are one language.
+    // What the database does enforce is the part it can decide — `current_legal_documents()` groups by the
+    // locale case-folded and separator-folded, so two spellings of one language cannot both be current
+    // even for a row that never came through this function.
+    const published = await tx.legalDocument.findMany({ where: { kind: input.kind }, select: { locale: true, version: true } });
+    const sameLanguage = published.filter((row) => canonicalLanguageTag(row.locale) === locale);
+    const version = Math.max(0, ...sameLanguage.map((row) => row.version)) + 1;
     const row = await tx.legalDocument.create({
       data: {
         kind: input.kind,
-        locale: input.locale,
+        locale,
         version,
         contentRef: input.contentRef,
         effectiveFrom: input.effectiveFrom,
@@ -487,6 +505,24 @@ export interface CheckoutOffer {
    * different sentence from "there is no plan for you".
    */
   readonly checkoutReady: boolean;
+  /**
+   * An opaque identity of the commercial terms this offer displayed (#47).
+   *
+   * The form posts it back and `openCheckoutContract` recomputes it from its own fresh resolution inside
+   * the opening transaction. It exists because consent is to *terms*, and the terms are not only the plan
+   * and the price: they are the selling legal entity, its jurisdiction, and whether the tax is remitted by
+   * that entity or by the provider at its own hosted checkout. None of that was bound to the acceptance
+   * before — the form carried the plan, the interval and the document ids, and global documents
+   * legitimately apply to every seller, so a route reconfigured between the GET and the POST produced a
+   * contract naming a different seller under terms nobody had been shown. Astra demonstrated it on #101.
+   *
+   * Opaque on purpose, and *compared* rather than trusted: the client cannot name a seller, a provider or
+   * a route with it. All it can do is prove which offer it was shown, and a value that does not match what
+   * the server resolves now is refused with `OFFER_CHANGED` so the person reads the new terms and accepts
+   * them deliberately. A digest rather than a stored row because it needs no lifecycle: the authority is
+   * always the fresh resolution, and this only answers "is that still what you saw".
+   */
+  readonly offerDigest: string;
 }
 
 export const CHECKOUT_REFUSALS = [
@@ -512,6 +548,15 @@ export const CHECKOUT_REFUSALS = [
    * would send somebody looking for a fault that is not theirs.
    */
   "DOCUMENT_SUPERSEDED",
+  /**
+   * The commercial terms changed between the page that was accepted and the submission (#47).
+   *
+   * Its own reason rather than a silent re-resolution, because the thing that changed is what somebody
+   * consented to: which legal entity is selling, under which jurisdiction, who remits the tax, at what
+   * price. The answer is "here are the new terms, accept them if you still want to" — which is a
+   * different sentence from every document refusal, and the only one that keeps the acceptance honest.
+   */
+  "OFFER_CHANGED",
   /**
    * No provider adapter can settle a checkout on the selected route (#47, #41).
    *
@@ -643,8 +688,51 @@ async function resolveCheckout(
       // Whether this deployment could settle what it is about to offer. The registry is process-local, so
       // this answers for *this* process — which is the one that will hand the customer to the provider.
       checkoutReady: billingProviderRegistered(row.provider),
+      offerDigest: offerDigestOf({
+        seller: row.sellerProfile,
+        settlementModel: route.settlementModel,
+        taxRemittedBy: taxRemittedBy(route),
+        arrangement: request.arrangement,
+        interval: request.interval,
+        base: money(price.amountCents, price.currency),
+      }),
     },
   };
+}
+
+/**
+ * The commercial terms of an offer, as one string.
+ *
+ * Every field here is something a person is shown and consents to, and nothing here is something they
+ * choose: the seller and its jurisdiction, who remits the tax, the shape and length of the commitment and
+ * the price. Deliberately **not** the document ids — those are bound separately and have their own
+ * refusals, and `DOCUMENT_SUPERSEDED` says "read the new terms" far better than a digest mismatch could.
+ * Deliberately not the route id or the provider either: the client must never hold an authoritative
+ * pointer to one, and a seller changing provider without changing any disclosed term is not a change to
+ * what was agreed.
+ */
+function offerDigestOf(terms: {
+  readonly seller: { readonly legalName: string; readonly jurisdiction: string };
+  readonly settlementModel: SettlementModel;
+  readonly taxRemittedBy: "PROVIDER" | "SELLER";
+  readonly arrangement: ArrangementKind;
+  readonly interval: ChargeInterval;
+  readonly base: Money;
+}): string {
+  return createHash("sha256")
+    .update(
+      [
+        terms.seller.legalName,
+        terms.seller.jurisdiction,
+        terms.settlementModel,
+        terms.taxRemittedBy,
+        terms.arrangement,
+        terms.interval,
+        String(terms.base.amountMinor),
+        terms.base.currency,
+      ].join("\u0000"),
+    )
+    .digest("hex");
 }
 
 /**
@@ -696,14 +784,41 @@ async function readLegalDocumentOffers(db: DbExecutor, sellerProfileId: string, 
   });
 
   type Row = (typeof rows)[number];
-  // The current document per (kind, locale), with the seller-specific precedence applied.
+
+  /**
+   * Which of two documents of one kind and one language is the current one.
+   *
+   * Computed rather than taken from the query's order on purpose. `orderBy` sorts by the stored locale
+   * before the date, so once two spellings of one language are collapsed into a single group the first
+   * row of that group is whichever spelling sorts first — not the newest. A rename published as `en-GB`
+   * after an `en-gb` would have lost to it, and the reader would have been offered, and the trigger would
+   * have enforced, a version that had already been replaced.
+   *
+   * Specificity first, because a selling entity's own text displaces the platform's whatever its date;
+   * then the later `effectiveFrom`; then the higher version, which is the tie-break for two documents
+   * made effective at the same instant.
+   */
+  function supersedes(candidate: Row, chosen: Row): boolean {
+    if ((candidate.sellerProfileId !== null) !== (chosen.sellerProfileId !== null)) {
+      return candidate.sellerProfileId !== null;
+    }
+    if (candidate.effectiveFrom.getTime() !== chosen.effectiveFrom.getTime()) {
+      return candidate.effectiveFrom.getTime() > chosen.effectiveFrom.getTime();
+    }
+    return candidate.version > chosen.version;
+  }
+
+  // The current document per (kind, canonical language), with the seller-specific precedence applied.
   const current = new Map<string, Row>();
   for (const row of rows) {
-    const key = `${row.kind}\u0000${row.locale}`;
+    // Grouped by the *canonical* language, not by the stored spelling. `publishLegalDocument`
+    // canonicalizes on the way in and `current_legal_documents()` groups the same way in SQL, but a row
+    // written before that — or by hand — can still spell one language two ways, and a group per spelling
+    // would offer a reader two current versions of one document and let an acceptance of either satisfy
+    // the checkout. One language, one group, whatever it is spelled like.
+    const key = `${row.kind}\u0000${canonicalLanguageTag(row.locale) ?? row.locale}`;
     const chosen = current.get(key);
-    // Rows arrive newest first within a (kind, locale), so the first wins — unless a seller-specific one
-    // turns up later, which displaces a global one whatever its date.
-    if (chosen === undefined || (row.sellerProfileId !== null && chosen.sellerProfileId === null)) {
+    if (chosen === undefined || supersedes(row, chosen)) {
       current.set(key, row);
     }
   }
@@ -779,6 +894,14 @@ export interface OpenCheckoutInput extends CheckoutRequest {
    * from what the store itself would offer now.
    */
   readonly offeredDocumentIds?: readonly string[];
+  /**
+   * The `offerDigest` of the offer the page displayed (#47).
+   *
+   * Optional for the same reason `offeredDocumentIds` is: a caller with no page behind it has no displayed
+   * offer to declare. Omitting it loses the protection for that caller and weakens nothing for anybody
+   * else — the comparison is always against what the store resolves inside the transaction.
+   */
+  readonly offeredDigest?: string;
   /**
    * A time-bounded charge in another currency or asset, from an adapter that quoted one.
    *
@@ -868,6 +991,17 @@ async function write(
     const resolved = await resolveCheckout(tx, input, at);
     if (!resolved.available) {
       return resolved.refusal;
+    }
+    // Before any document question, because this one is more fundamental: a document refusal says "read
+    // the new terms of the thing you were buying", while this says "the thing you were buying is not what
+    // you were shown". Compared against the resolution above, which came from operator configuration a
+    // client cannot write.
+    if (input.offeredDigest !== undefined && input.offeredDigest !== resolved.offer.offerDigest) {
+      return {
+        available: false,
+        reason: "OFFER_CHANGED",
+        detail: ["the seller, the tax treatment or the price changed after the terms were displayed"],
+      } satisfies CheckoutRefusal;
     }
     const accepted = resolved.documents.filter((document) => input.acceptedDocumentIds.includes(document.legalDocumentId));
     const unknown = input.acceptedDocumentIds.filter((id) => !resolved.documents.some((document) => document.legalDocumentId === id));
