@@ -62,8 +62,19 @@ describe("the candidate a release record names", () => {
   it("refuses to verify this checkout while naming a different candidate", () => {
     // No `--command-results`, so the commands would run here. Attesting another commit with this tree's
     // run is the shape the whole finding is about.
-    const parent = spawnSync("git", ["rev-parse", "HEAD~1"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
-    const run = record("--stage", "INTERNAL", "--sha", parent);
+    //
+    // The other commit is built rather than looked up: `HEAD~1` does not resolve in CI, where the
+    // checkout is shallow, and `git rev-parse` prints an unresolvable argument back verbatim instead of
+    // failing loudly — so the test used to hand the CLI the string "HEAD~1" and watch it refuse for the
+    // wrong reason. `commit-tree` writes a real, parentless commit object from the tree already here: it
+    // exists, it is a valid candidate, and it is not HEAD, at any clone depth.
+    const other = spawnSync("git", ["commit-tree", `${head}^{tree}`, "-m", "a commit that is not HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).stdout.trim();
+    expect(other, "the probe commit must have been written").toMatch(/^[0-9a-f]{40}$/u);
+
+    const run = record("--stage", "INTERNAL", "--sha", other);
 
     expect(run.status).toBe(2);
     expect(run.output).toContain("is not HEAD");
