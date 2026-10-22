@@ -27,7 +27,10 @@ const DAY = 86_400_000;
 
 afterEach(cleanup);
 
+const CHECKOUT_PATH = "/workspaces/w/profiles/p/settings/billing/checkout";
+
 const data = (overrides: Partial<BillingScreenData> = {}): BillingScreenData => ({
+  checkoutPath: CHECKOUT_PATH,
   overview: {
     subscription: {
       state: "ACTIVE",
@@ -246,7 +249,7 @@ describe("the other plans", () => {
   });
 
   it("says a move costs nothing when it costs nothing", () => {
-    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable={false} />);
+    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable={false} checkoutPath={CHECKOUT_PATH} />);
 
     expect(document.querySelector('[data-offer-state="clean"]')?.textContent).toBe(text("billing.offerClean"));
   });
@@ -257,6 +260,7 @@ describe("the other plans", () => {
         t={t}
         offers={[offer({ consequences: { overCapacity: [{ limit: "BUSINESS_PROFILES", inUse: 4, ceiling: 1 }], losingFeatures: [], clean: false } })]}
         checkoutAvailable={false}
+        checkoutPath={CHECKOUT_PATH}
       />,
     );
 
@@ -269,20 +273,20 @@ describe("the other plans", () => {
 
   it("names a feature that would be lost", () => {
     render(
-      <PlanOffers t={t} offers={[offer({ consequences: { overCapacity: [], losingFeatures: ["AUTOPILOT"], clean: false } })]} checkoutAvailable={false} />,
+      <PlanOffers t={t} offers={[offer({ consequences: { overCapacity: [], losingFeatures: ["AUTOPILOT"], clean: false } })]} checkoutAvailable={false} checkoutPath={CHECKOUT_PATH} />,
     );
 
     expect(document.querySelector('[data-consequence="AUTOPILOT"]')?.textContent).toContain(text("feature.AUTOPILOT"));
   });
 
   it("marks the current plan and offers it no consequences", () => {
-    render(<PlanOffers t={t} offers={[offer({ current: true })]} checkoutAvailable={false} />);
+    render(<PlanOffers t={t} offers={[offer({ current: true })]} checkoutAvailable={false} checkoutPath={CHECKOUT_PATH} />);
 
     expect(document.querySelector('[data-offer-state="current"]')?.textContent).toBe(text("billing.currentOffer"));
   });
 
   it("says plainly that changing plan is not available here", () => {
-    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable={false} />);
+    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable={false} checkoutPath={CHECKOUT_PATH} />);
 
     // Honest rather than hopeful: an upgrade needs authoritative confirmation that money moved, and a
     // button that could not produce one would be a button that lies.
@@ -290,9 +294,29 @@ describe("the other plans", () => {
   });
 
   it("stops saying so once a provider exists", () => {
-    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable />);
+    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable checkoutPath={CHECKOUT_PATH} />);
 
     expect(document.querySelector('[data-checkout="unavailable"]')).toBeNull();
+  });
+
+  it("links each other plan to the acceptance step once a checkout could be completed (#47)", () => {
+    // Without this the acceptance surface would be a route nothing links to, which is the same thing as
+    // a route nobody can reach. It becomes reachable by configuring a route whose adapter exists, never
+    // by editing a constant.
+    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable checkoutPath={CHECKOUT_PATH} />);
+
+    const link = document.querySelector('[data-action="choose-plan"]');
+    expect(link?.getAttribute("href")).toBe(`${CHECKOUT_PATH}?plan=pv_1&interval=MONTH`);
+    expect(link?.textContent).toBe(text("billing.choosePlan"));
+  });
+
+  it("offers no such link while nothing could settle, and none for the current plan", () => {
+    render(<PlanOffers t={t} offers={[offer()]} checkoutAvailable={false} checkoutPath={CHECKOUT_PATH} />);
+    expect(document.querySelector('[data-action="choose-plan"]')).toBeNull();
+
+    cleanup();
+    render(<PlanOffers t={t} offers={[offer({ current: true })]} checkoutAvailable checkoutPath={CHECKOUT_PATH} />);
+    expect(document.querySelector('[data-action="choose-plan"]')).toBeNull();
   });
 });
 

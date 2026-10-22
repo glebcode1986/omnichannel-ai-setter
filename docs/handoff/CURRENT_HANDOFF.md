@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #99 plus the P6-08 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#99 are completed by Claude and awaiting review; **P6-08 / Issue
-#46 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #100 plus the P6-09 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#100 are completed by Claude and awaiting review; **P6-09 / Issue
+#47 is the current task**. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -56,12 +56,13 @@ on 2026-10-13 and had been assumed otherwise until then:
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
 ` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> #83 -> #84`
 ` -> #85 -> #86 -> #87 -> #88 -> #89 -> #90 -> #91 -> #92 -> #93 -> #94 -> #95 -> #96 -> #97 -> #98 -> #99`
+` -> #100`
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
-#43), #99 (P6-05, #42) and the P6-08 branch above (#46). **#41 / P6-04 is blocked** on the owner's choice
+#43), #99 (P6-05, #42), #100 (P6-08, #46) and the P6-09 branch above (#47). **#41 / P6-04 is blocked** on the owner's choice
 of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
-implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, and #47
-(P6-09, terms/offer UX) is the next unblocked one.
+implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
+the only Phase 6 work left needs the owner's provider decision.
 
 `#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
 
@@ -744,6 +745,60 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    exists without one.
 
 1. **P5-06 / Issue #32 — the retired-list reachability blocker on PR #78, repaired and PASSED.**
+
+1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
+   `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:
+   `settings/billing/checkout`, with the seller's legal identity, the price, who remits the tax, and one
+   unticked checkbox per required document version.
+
+   **#46 left the store and the database disagreeing about what "accepted" means, and a probe proved it.**
+   `readLegalDocumentOffers` filtered documents by an *exact* locale, so a Russian-reading workspace was
+   offered **no documents at all** — `missingAcceptances([], [])` refused nothing, a contract with zero
+   acceptances was written, and the deferred coverage trigger killed it at COMMIT with a raw Postgres
+   exception. Not a refusal: a 500. The trigger was the only thing standing between that and a silent
+   bypass, which is the strongest argument for it the chain has produced.
+
+   The fix has two halves and they have to agree: locale negotiation in the store (exact tag → same
+   language, another region → the fallback the product publishes everything in), and
+   `legal_acceptances.locale` recording the language of the *page* somebody accepted on — which is not the
+   document's locale, and is the fact a dispute actually asks about.
+
+   **Specificity now dominates language, in both implementations.** Choosing the locale first handed a
+   Russian reader the platform's generic offer whenever the selling entity had published its own in
+   English alone — for a checkout whose contract names that entity. A kind the seller has published at all
+   is read only from the seller's own versions, in `readLegalDocumentOffers` and in
+   `current_legal_documents()`, and a test holds the two derivations against each other.
+
+   **`contentRef` had to become a URL.** Every value written under #46 was a path fragment, and as an
+   `href` on the checkout route a fragment resolves to a page that does not exist — a checkbox asking for
+   consent to something unreadable. Now `https` only, enforced in `publishLegalDocument` and by a CHECK.
+
+   **Two refusals that used to be one.** `TERMS_NOT_ACCEPTED` means a box was left unticked;
+   `DOCUMENT_SUPERSEDED` means the terms changed while the page was open — including a requirement that
+   *appeared* after it was drawn, which the form distinguishes by declaring the ticks it rendered in a
+   hidden `offered` field. Without it the store blames somebody for a control they never saw.
+   `PROVIDER_UNAVAILABLE` moved to **last**, after the acceptance checks: checked first, it refused every
+   checkout in every real process and made the terms enforcement unreachable — and would have made its
+   own test green for the wrong reason.
+
+   **`CHECKOUT_AVAILABLE = false` is gone.** It was a constant, so the entire acceptance surface was
+   unreachable however a deployment was configured, and somebody would have had to remember to edit a
+   file on the day an adapter landed. It is now derived — at least one enabled route whose provider has a
+   registered adapter — and `PlanOffers` links to the checkout exactly when that is true, asserted in both
+   directions.
+
+   Two traps worth remembering: a parameter named after a column is **silently** shadowed by it in a SQL
+   function (`d."seller_profile_id" = seller_profile_id` compared the column to itself and made every
+   seller's documents applicable to every seller — caught by #46's own suite), and `semantics.test.ts`
+   accepts `htmlFor` only as a double-quoted *literal*, so a dynamic checkbox group has to wrap each input
+   in its own `<label>`.
+
+   **A refused attempt deliberately writes nothing.** The contract id *is* the attempt reference, and an
+   attempt that was refused offered nothing to consent to; recording "they did not tick a box at 14:02"
+   would be surveillance rather than evidence. Stated in `BILLING_ROUTING.md` so it reads as a decision.
+
+   **Not in this issue:** no payment redirect — the step records the contract and stops, because where the
+   customer goes next is the adapter's, which is #41.
 
 1. **P6-08 / Issue #46 — seller profiles, payment routing and legal acceptance.** Branch
    `feat/p6-08-billing-routing-seller-profiles`, based on #99. `docs/adr/ADR-019` is brought into the
@@ -3731,3 +3786,352 @@ Real PostgreSQL 17 + pgvector and Redis 7; dedicated shadow database.
 | worker + web E2E | 100 files, **1158/1158** |
 | evals | **20/20**, 0 quality regressions |
 | no-infrastructure `pnpm verify` under `env -i` | exit 0 — **2012 passed / 1311 skipped** |
+
+## P6-09 terms acceptance, and the accepted #100 propagated into it — PR #101 — 2026-10-22
+
+#100 was accepted at `27baa3d918001443080c534380a7b44acdf498d5` — after four Astra rounds, three of them
+`CHANGES_REQUESTED` — and the directive propagated it into `feat/p6-09-terms-acceptance-ux`, which was at
+`cd25fa2fd3b00ff71522aae025b14334ea8f46e6`, **81 commits behind** while carrying 19 of its own.
+
+### What P6-09 is
+
+**The screen exists because of one sentence in the spec:** acceptance of the Public Offer and the Terms is
+evidenced by an explicit control **before** the redirect, not by the later act of payment. A product that
+inferred consent from a completed charge would hold no record of what anybody agreed to, and no way to
+answer the only question a dispute asks — *which version, in which language, by whom, and when.*
+
+The checkout step therefore shows four things a person must be able to read before committing: **who is
+selling to them** (the legal entity, not the product's brand), **what it costs**, **who remits the tax** —
+on a Merchant-of-Record route the invoice is the provider's and its own terms additionally apply at its
+hosted checkout — and **the exact document versions** being accepted, each as its own tick, **none
+pre-ticked**.
+
+**Nothing on the screen decides anything.** The server refuses a submission with a box unticked whatever
+was rendered, refuses a superseded version, and refuses a route whose provider cannot settle. Like
+`billing-screen.ts`, it is assembled away from the authenticated request path so a test can drive it.
+
+**The migration closes two places where #46 left the store and the database disagreeing about what
+"accepted" means.** The applicability trigger now requires each acceptance to name the **current** version
+of its kind and locale, and the coverage trigger reads the requirement from the current version rather
+than from any effective row — which also closes the opposite hole, where an old version marked required
+went on demanding an acceptance after a newer version had stopped requiring one. Before this, a caller
+reaching the tables directly could satisfy the trigger with a superseded version.
+
+**The locale disagreement was worse than a mismatch.** `readLegalDocumentOffers` filtered by an exact
+locale while the trigger filtered by none, so a workspace whose interface language the offer had not been
+translated into was offered **no documents at all** and then had its checkout killed by the trigger with a
+raw exception. The product half of the fix is locale negotiation in the store; the evidence half is
+`legal_acceptances.locale`, recording the language of the page somebody actually accepted on.
+`REFUND_POLICY` joins the document kinds so the policy is linkable rather than implied.
+
+### The merge: two conflicts, and the one that mattered
+
+`packages/db/src/billing-routing-store.ts` — **the file four review rounds had just rewritten.** #101
+added 354 lines to it while the accepted parent carried every round of the P6-08 remediation, so git
+conflicted on a single import line and **auto-merged the rest.** Resolved as the union the calls actually
+require:
+
+| symbol | whose | called at |
+|---|---|---|
+| `billingProviderRegistered` | #101's | `checkoutReady` |
+| `snapshotVerifiedBillingEvent` | the parent's trust boundary | the entry point |
+| `assertVerifiedBillingEvent` | — | **no caller left**, dropped rather than carried for symmetry |
+
+`apps/web/src/ui/outcome-notice.tsx` — each side appended its own refusal codes, #101's three checkout
+refusals and the parent's seven. Both sets kept.
+
+**Then every invariant the four rounds established was checked by name in the merged file**, because the
+remainder of a 354-line divergence merged silently and that is exactly where this chain has been bitten
+before:
+
+| invariant | present |
+|---|---|
+| the private snapshot at the entry point | yes |
+| `laterOf` | yes |
+| `extendSubscription` (the conditional `updateMany`) | yes |
+| `billingEvent.count` attribution | yes |
+| `appliedTermEndsAt` retention | yes (3 sites) |
+| the comment recording why `providerReference` cannot serve as charge identity | yes |
+
+Plus the standing checks: worker registry 9 loops / 9 `close()` / prose "nine", **69 models = 69
+`CREATE TABLE`**, no duplicate export name, no drift, **0 TypeScript errors**.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` | exit 0 — 208 files, **3380/3380** |
+| PostgreSQL suites | 48 files, **1077/1077**, **zero skipped or todo** |
+| Redis suites | **55/55** |
+| worker + web E2E | 103 files, **1187/1187** |
+| evals | **20/20**, 0 quality regressions |
+| no-infrastructure `pnpm verify` under `env -i` | exit 0 — **2039 passed / 1341 skipped** |
+
+Run by name — P6-09's own surface and the regressions the four rounds added:
+
+| suite | result |
+|---|---|
+| `checkout-screen.integration` | **8/8** |
+| `checkout-form` | **4/4** |
+| `ui/checkout/checkout-panes` | **14/14** |
+| `billing-screen.integration` (extended by #101) | **15/15** |
+| `no-provider-payloads` (extended by #101) | **6/6** |
+| `ui/billing/billing-panes` | **26/26** |
+| `billing-routing.integration` — the four rounds plus #101's 21 | **92/92** |
+| `billing-events` — the snapshot and the fingerprint | **7/7** |
+| `domain/billing-routing` | **45/45** |
+| the three `apps/web/src/i18n` gates | **34/34** |
+
+Totals: 205→208 files and 3323→3380 tests, PG 48 files and 1056→1077 cases, E2E 100→103 files and
+1158→1187.
+
+### The conditions #100's approval attached, carried into this link unchanged
+
+Astra's PASS named four things to preserve, and all four hold here: multi-grant reversals with
+insufficient period attribution remain an auditable `NONE` pending authoritative reconciliation; the
+conditional `updateMany`'s real-PostgreSQL concurrency is still covered only by my racing test and CI, not
+by independent certification; the `createBusinessProfile` lock-observer gap **remains open and
+non-blocking**, and other lock tests are still not proof of that case; and the snapshot, the monotonic
+guards and the conditional update are all intact, verified by name above.
+
+## PR #101 round one — Astra's two blocking findings on P6-09 — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `46e734b` with two correctness findings. Both are real, both are
+fixed here, and both were the same shape as the recurring one: a correct piece with no path between it and
+the thing it was supposed to protect.
+
+### P1 — an acceptance was not bound to the offer that was displayed
+
+The form carried the plan, the interval and the document ids. It carried nothing identifying the
+*commercial* offer, and a globally-required document legitimately applies to every seller — so document
+ids cannot bind the selling entity. Trusted operator configuration changing between the GET that drew the
+ticks and the POST that accepted them produced a contract naming a different legal entity, a different
+jurisdiction and a different tax treatment than the person had read.
+
+The fix is an opaque digest of exactly the terms the summary renders — seller legal name, jurisdiction,
+settlement model, who remits the tax, arrangement, interval and base price — computed by the store,
+rendered as one hidden field, and compared inside the opening transaction against the store's own fresh
+resolution. A mismatch is a new `OFFER_CHANGED` refusal placed *before* the document checks, because the
+honest sentence is "the terms moved", not "you did not tick a box". The client cannot choose anything with
+it: the value is only ever compared, never read as a seller, a route or a price.
+
+**One disclosure about the reproduction.** Astra's own repro said the stale submission comes back
+`available: true`. Against the real schema I could not reproduce that *in the configuration Astra
+described*, because this harness's `PUBLIC_OFFER` is seller-specific: switching sellers makes the
+previously-offered document inapplicable and the store refuses `DOCUMENT_NOT_APPLICABLE` — a refusal, for
+the wrong reason. The defect does reproduce as `available: true` in two configurations I verified on real
+PostgreSQL: a seller switch where the required documents are global, and a same-seller legal-identity
+rename. The finding stands; its stated symptom depends on the catalogue.
+
+### P2 — one language spelled two ways was two languages
+
+`legal_documents.locale` is what "which version is current in this reader's language?" groups by.
+Publication kept `input.locale` verbatim and allocated versions by that raw string, while
+`negotiateDocumentLocale` canonicalizes before matching. So `en-US` and `en-us` each became version 1 of
+one document, both stayed current, neither superseded the other, and a replacement published under the
+other spelling left the superseded text on the checkout page.
+
+Fixed in four places, because the identity has to mean the same thing everywhere it is used:
+
+1. **Publication** canonicalizes the tag, refuses one it cannot parse, and stores the canonical form.
+2. **Version allocation** matches existing rows by canonical equality, so a catalogue that already holds a
+   non-canonical spelling still gets one sequence instead of two.
+3. **The TypeScript current-document grouping** keys on the canonical language, and the winner inside a
+   group is now *computed* — specificity, then `effectiveFrom`, then `version` — by a new `supersedes`.
+4. **SQL**: `current_legal_documents()` groups by the locale case-folded and separator-folded, with the
+   same expression in `ORDER BY` so `DISTINCT ON` keeps the newest of the collapsed group; a CHECK refuses
+   the separator form no canonical tag has; and a folded unique index makes the state the defect rested on
+   — two rows of one kind and one language sharing a version — unreachable.
+
+### Why the winner had to be computed, which I did not expect
+
+`negotiateDocumentLocale` returns the **first** candidate whose canonical tag matches, and candidates
+arrive in `locale ASC` order. So before this change, which of two spellings a reader was offered came down
+to the database's collation. Measured against this harness `en-us` sorts before `en-US`, which means the
+alias-is-newer order happens to land on the right row and the alias-is-older order lands on the superseded
+one; under a collation that sorts the other way it is the reverse. That is why both publication orders are
+in the suite and why neither is sufficient alone — and it is also why reverting the grouping key alone
+still passed one of my two cases until I measured it.
+
+### The gap between two correct triggers
+
+The coverage trigger matches an acceptance to a requirement by **kind**, so one acceptance of a kind
+satisfies it however many rows `current_legal_documents()` returned — it could never have caught the
+duplicate. The acceptance trigger matches by **id**, so it is the one that would have let consent to the
+superseded alias through. But `openCheckoutContract` resolves the current versions in TypeScript and
+refuses before any row is written, so my first store-level regression proved the store and said nothing
+about the SQL at all: reverting the whole SQL change left all 100 tests green. The suite now writes an
+acceptance row by raw statement against the superseded id and requires the database to raise on its own.
+
+### What proves these are regressions and not restatements of the diff
+
+Five mutations, each reverting one part of the fix, each caught:
+
+| reverted | caught by |
+|---|---|
+| the canonical grouping key | "continues one version sequence across spellings" |
+| `supersedes` back to first-row-wins | "continues one version sequence across spellings" |
+| publication storing the raw spelling and allocating by string equality | that case **and** "refuses to store a spelling the database cannot group" |
+| `DISTINCT ON`/`ORDER BY` back to the raw locale | "offers one current version when the replacement was written in the other spelling" |
+| the folded unique index | "refuses to store a spelling the database cannot group" |
+
+Both alias regressions write their non-canonical row by raw statement, because the fixed writer refuses to
+create one — which is what makes them read a row the fix did not produce.
+
+### An honest limit on the SQL half
+
+No SQL expression knows that `iw` and `he` are one language. The database collapses case and separator
+aliases, which is the class it can decide, and it provably cannot over-collapse: two canonical tags never
+differ only in case, so no two distinct languages can land in one group. Deprecated-subtag aliases are
+collapsed only by the TypeScript writer. I am not claiming the database is canonical-aware; I am claiming
+it is no longer able to present two spellings of one language as two current documents.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1350 skipped (3391)** |
+| PostgreSQL suites | 48 files, **1086/1086** |
+| Redis suites | **55/55** |
+| worker + web E2E | 103 files, **1189/1189** |
+
+Run by name:
+
+| suite | result |
+|---|---|
+| `billing-routing.integration` — 92 at the reviewed head, +5 for P1, +3 for P2, +1 for the required digest | **101/101** |
+| `billing-events` | **7/7** |
+| `domain/billing-routing` | **45/45** |
+| `checkout-screen.integration` | **8/8** |
+| `checkout-form` — +2 for the digest reader | **6/6** |
+| `ui/checkout/checkout-panes` | **14/14** |
+| `billing-screen.integration` | **15/15** |
+| `ui/billing/billing-panes` | **26/26** |
+| `no-provider-payloads` | **6/6** |
+| the three `apps/web/src/i18n` gates | **34/34** |
+
+Totals: 3380→3391 tests, PostgreSQL 1077→1086. Nine of the eleven new cases are in database-gated files,
+which is why the no-infrastructure run's skipped count rises by exactly nine and its passing count by the
+remaining two — the digest form reader, which needs no infrastructure.
+
+### A hole I found in my own P1 fix, before anybody claimed the head
+
+Published as ready at `8b885c3`, then kept reading my own diff for the recurring finding class — an
+optional guard — and found one. `offeredDigest` was optional and the comparison was
+
+```ts
+if (input.offeredDigest !== undefined && input.offeredDigest !== resolved.offer.offerDigest) {
+```
+
+so **a submission that simply left the field out skipped the check entirely**, restoring Astra's P1 in
+full: the acceptance was recorded against whatever the store resolved at POST time with nothing binding it
+to what anybody had been shown. Worse for the evidentiary purpose #47 exists for, a stored contract could
+not afterwards be told apart from one that *had* been bound, because nothing recorded that the comparison
+happened. A guard the untrusted client can switch off is not a guard — and the justification I had written
+for making it optional, "an old page must not be refused for a digest it never carried", described a page
+that does not exist in a product with no deployment, while the cost was a real bypass.
+
+The field is now **required on `OpenCheckoutInput`**, and `offeredDigestFrom` returns `""` rather than
+`undefined` for an absent form field. An empty string cannot equal a sha256 digest, so an unbound
+submission is refused by the ordinary comparison: there is no `undefined` branch left to get wrong, and the
+conditional spread in the server action is gone. The only production caller is
+`apps/web/src/server/checkout-actions.ts` and the page always renders the field, so nothing reachable loses
+a path.
+
+Two consequences, both worth it. The digest check runs *before* the document checks, so every existing test
+expecting a document refusal had to start supplying a correct digest or it would have been handed
+`OFFER_CHANGED` instead — 16 call sites, enumerated by `tsc` once `Request` dropped the field, each now
+fetching the digest the way the page does (a new `digestOf` helper, or the `offer` already in scope). And
+the three `apps/web` cases now carry it **through the FormData**, which is more faithful than passing it
+beside the form: what the server enforces should be read from what a submission actually contained.
+
+Mutation-checked: restoring the skip-when-absent semantics fails exactly one test, the one written for it.
+
+### Unchanged from the accepted predecessor
+
+The four conditions #100's approval attached still hold and are unaffected by this round: multi-grant
+reversals with insufficient period attribution remain an auditable `NONE`; the conditional `updateMany`'s
+real-PostgreSQL concurrency is still covered only by my racing test and CI; the `createBusinessProfile`
+lock-observer gap remains open and non-blocking; and the snapshot, the monotonic guards and the
+conditional update are intact.
+
+## PR #101 round two — the seller snapshot the digest was checked against — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `68a94d6` with one blocker, and it is the same mistake I had already
+written down after #100: **a validate-then-use boundary that crosses an `await` needs the snapshot, not a
+second read.** I fixed that class in the billing event path four rounds ago, recorded the lesson, and then
+wrote it again one layer below the guard I had just built.
+
+### The defect
+
+`resolveCheckout` reads the selling entity and `offerDigest` is computed from that row. The write path then
+re-read `sellerProfile` and copied the **second** result into the immutable contract. `upsertSellerProfile`
+takes neither of this transaction's two locks and the transaction is `READ COMMITTED`, so an operator update
+committing between the two reads changed the persisted legal name and jurisdiction **without invalidating
+the digest that had just been compared**. The acceptance then named an entity nobody had been shown — the
+exact defect the digest exists to prevent, reintroduced below it.
+
+Verified in the source before fixing: the second read fed **five** places, not the two the review located —
+`sellerLegalName` and `sellerJurisdiction` on the contract, the audit summary, `sellerJurisdiction` in the
+audit detail, and the `seller` on the returned `OpenedCheckout`. Replacing the binding closed all five.
+
+### The fix
+
+`const seller = resolved.offer.seller;` — the snapshot the digest was computed from, selected with exactly
+the four fields the second read asked for, inside the same transaction. One read per transaction, so what
+was checked is what is written. A later convenience read of that row anywhere below the comparison would be
+the same defect again, which the comment now says in those words.
+
+### The regression, and what designing it taught me
+
+Deterministic rather than timed: the real Prisma client is wrapped in a proxy that commits the operator's
+rename at a precise call, on a different pooled connection and therefore its own transaction. Every query
+still runs against real PostgreSQL; the proxy forwards everything untouched and only chooses *when* the
+competing commit lands.
+
+**Two discoveries while building it, both of which changed the test.**
+
+First, the selling entity is not fetched by `sellerProfile.findUnique` on the resolve path at all — it
+arrives as a nested `select` under the route read. So the only `sellerProfile.findUnique*` call this
+transaction ever made *was* the second read this fix removes. That turns the structural assertion from
+"reads it once" into the stronger `sellerRereads === 0`: the transaction must never read that row on its
+own, and a convenience re-read added anywhere would make it one.
+
+Second, my first barrier hung off the *first* route read and the checkout came back refused. That was not a
+bug in the test or the store: the candidate routes are selected by an earlier `findMany`, so committing the
+rename before the read that carries the seller changes what the POST resolves, the digest legitimately
+stops matching, and `OFFER_CHANGED` is the correct answer. Correct, but a different case. The window this
+blocker is about opens only *after* the route read carrying the seller has resolved — the digest has then
+been computed from the old row and is about to be compared and accepted. The barrier is therefore pinned to
+`billingRoute.findUniqueOrThrow`, and the reason is written in the test so nobody moves it back.
+
+The case asserts that the competing write really committed and really committed mid-transaction (without
+that, every assertion below it would hold against a database nobody had changed), that the row in the
+database really is the renamed one, and that the returned offer, the contract row and the audit entry all
+still name `Seller Race SRL` / `RO`. Its own seller, route, currency and plan, so the rename touches nothing
+shared.
+
+Mutation-checked: restoring the second read fails exactly this case, on the returned seller first.
+
+### Astra's own stated limits on this round, carried honestly
+
+The review says plainly that it did **not** execute the race on PostgreSQL — the interleaving was inferred
+from the two source reads, the default isolation and the absence of coordination in `upsertSellerProfile`,
+and demonstrated with a database double over the real store source. My regression is the real-PostgreSQL
+half, and that is now the only live-database evidence for this case. Its 109 infrastructure-gated checkout
+cases were skipped on its side and are not passes; the exact-head CI run is what covers them.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 208 files, **2041 passed / 1351 skipped (3392)** |
+| PostgreSQL suites | 48 files, **1087/1087** |
+| Redis suites | **55/55** |
+| worker + web E2E | 103 files, **1189/1189** |
+
+`billing-routing.integration` is **102/102** — 92 at the first reviewed head, +5 for the digest, +3 for the
+locale aliases, +1 for the required digest, +1 for this race. Totals 3391→3392, PostgreSQL 1086→1087.

@@ -518,6 +518,10 @@ enum LegalDocumentKind {
   TERMS_OF_SERVICE
   PUBLIC_OFFER
   PRIVACY_POLICY
+  /// Linked rather than ticked where product configuration requires it (#47). A document that is linked
+  /// instead of accepted is simply one whose `requiredForCheckout` is false, so both behaviours fall out
+  /// of the same two columns.
+  REFUND_POLICY
 }
 
 /// A payment, as the product understands it after an adapter has normalized it (#46).
@@ -768,6 +772,13 @@ model LegalAcceptance {
   legalDocumentId    String   @map("legal_document_id")
   /// The checkout this acceptance was given for. Absent for an acceptance taken outside a checkout.
   checkoutContractId String?  @map("checkout_contract_id")
+  /// The locale of the *page* the person accepted on — their own interface language (#47).
+  ///
+  /// Not the document's locale, which is on the document and may differ: a product that has not
+  /// translated its offer shows an English one to a Russian reader, and the question a dispute asks is
+  /// "was this person shown terms in a language they read?". That fact is not derivable from the document
+  /// row, which only knows what language it is in, so it is recorded here.
+  locale             String
   acceptedAt         DateTime @map("accepted_at")
   createdAt          DateTime @default(now()) @map("created_at")
 

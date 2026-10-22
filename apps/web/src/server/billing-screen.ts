@@ -16,20 +16,33 @@
  * the person is shown which of their resources exceed the new plan, so every offer carries its own
  * consequences rather than a yes or no.
  */
-import { readBillingOverview, type BillingOverview, type DbClient, type WorkspaceContext } from "@omnichannel/db";
+import { billingProviderRegistered, readBillingOverview, readBillingRoutes, type BillingOverview, type DbClient, type WorkspaceContext } from "@omnichannel/db";
 import { planChangeConsequences, type PlanChangeConsequences } from "@omnichannel/domain";
 
 import type { RawSearchParams } from "@/server/inbox-view";
 import { one } from "@/server/style-view";
 
 /**
- * Whether this deployment can start a checkout or open a customer portal.
+ * Whether this deployment can start a checkout (#47; was a constant `false` in #42).
  *
- * `false` until a billing provider is chosen and its adapter exists (#41). Stated as one named constant
- * rather than scattered conditionals, so the screen says "not available here" in one voice and the single
- * place to change when the adapter lands is obvious.
+ * Derived rather than hard-coded, and the change matters more than it looks. A constant meant the whole
+ * acceptance surface was unreachable no matter how a deployment was configured, and the day an adapter
+ * landed somebody would have had to remember to edit this file — which is the shape of every capability
+ * this codebase has shipped and never called.
+ *
+ * True when at least one enabled route's provider has an adapter registered in *this* process, which is
+ * the process that would hand the customer to it. Until #41 chooses a provider nothing is registered and
+ * this is false on its own, with no constant to maintain.
  */
-export const CHECKOUT_AVAILABLE = false;
+export async function checkoutAvailable(db: DbClient): Promise<boolean> {
+  const routes = await readBillingRoutes(db, { enabledOnly: true });
+  const configured = await db.billingRoute.findMany({ where: { enabled: true }, select: { code: true, provider: true } });
+  const providers = new Map(configured.map((route) => [route.code, route.provider]));
+  return routes.some((route) => {
+    const provider = providers.get(route.code);
+    return provider !== undefined && billingProviderRegistered(provider);
+  });
+}
 
 /** What the browser claims happened at a provider. Never trusted; only used to choose a sentence. */
 export type CheckoutReturn = "success" | "cancelled";
@@ -67,6 +80,8 @@ export interface BillingScreenData {
    */
   readonly checkoutReturn?: CheckoutReturn;
   readonly basePath: string;
+  /** Where the acceptance step lives, so the offers can link to it rather than rebuild the path (#47). */
+  readonly checkoutPath: string;
 }
 
 export async function assembleBillingScreen(
@@ -76,7 +91,7 @@ export async function assembleBillingScreen(
   basePath: string,
   at = new Date(),
 ): Promise<BillingScreenData> {
-  const overview = await readBillingOverview(db, context.workspaceId, at);
+  const [overview, available] = await Promise.all([readBillingOverview(db, context.workspaceId, at), checkoutAvailable(db)]);
   const returned = one(searchParams["checkout"]);
 
   return {
@@ -97,7 +112,8 @@ export async function assembleBillingScreen(
     // The role decides what is *offered*, never what is permitted: the store refuses an admin whatever
     // this says, so a wrong answer here is a confusing screen rather than a security hole.
     canManage: context.role === "OWNER",
-    checkoutAvailable: CHECKOUT_AVAILABLE,
+    checkoutAvailable: available,
+    checkoutPath: `${basePath}/checkout`,
     ...(returned !== undefined && CHECKOUT_RETURNS.includes(returned) ? { checkoutReturn: returned as CheckoutReturn } : {}),
     basePath,
   };

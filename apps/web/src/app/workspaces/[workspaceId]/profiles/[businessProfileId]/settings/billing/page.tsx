@@ -82,7 +82,7 @@ export default async function BillingPage({
 
       <CapacityList t={t} capacity={data.overview.capacity} addOns={data.overview.addOns} />
 
-      <PlanOffers t={t} offers={data.offers} checkoutAvailable={data.checkoutAvailable} />
+      <PlanOffers t={t} offers={data.offers} checkoutAvailable={data.checkoutAvailable} checkoutPath={data.checkoutPath} />
 
       <p className="muted" data-read-at={data.overview.readAt.toISOString()}>
         <time dateTime={data.overview.readAt.toISOString()}>

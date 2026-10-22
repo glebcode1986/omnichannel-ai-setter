@@ -29,6 +29,7 @@ import {
 } from "./billing-events";
 import {
   attachProviderCheckoutReference,
+  CHECKOUT_REFUSALS,
   expireStaleCheckouts,
   openCheckoutContract,
   publishLegalDocument,
@@ -39,6 +40,7 @@ import {
   recordVerifiedBillingEvent,
   upsertBillingRoute,
   upsertSellerProfile,
+  type LegalDocumentOffer,
   type OpenCheckoutInput,
   type OpenedCheckout,
 } from "./billing-routing-store";
@@ -49,6 +51,7 @@ import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } f
 import { createTestUser } from "./testing/fixtures";
 import { createWorkspaceWithOwner } from "./repositories/workspaces";
 import { authorizeWorkspaceAccess, type WorkspaceContext } from "./tenancy";
+import type { DbExecutor } from "./client";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 
@@ -129,20 +132,20 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     await publishLegalDocument(database.db, {
       kind: "TERMS_OF_SERVICE",
       locale: "en",
-      contentRef: "terms/en/1",
+      contentRef: "https://legal.example.test/terms/en/1",
       effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
     });
     await publishLegalDocument(database.db, {
       kind: "PUBLIC_OFFER",
       locale: "en",
-      contentRef: "offer/ro/en/1",
+      contentRef: "https://legal.example.test/offer/ro/en/1",
       sellerProfileCode: "seller-ro",
       effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
     });
     await publishLegalDocument(database.db, {
       kind: "PUBLIC_OFFER",
       locale: "en",
-      contentRef: "offer/mor/en/1",
+      contentRef: "https://legal.example.test/offer/mor/en/1",
       sellerProfileCode: "seller-mor",
       effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
     });
@@ -150,7 +153,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     await publishLegalDocument(database.db, {
       kind: "PRIVACY_POLICY",
       locale: "en",
-      contentRef: "privacy/en/next",
+      contentRef: "https://legal.example.test/privacy/en/next",
       requiredForCheckout: false,
       effectiveFrom: new Date("2027-01-01T00:00:00.000Z"),
     });
@@ -236,8 +239,29 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
   }
 
+  /**
+   * The digest of the offer this request would be shown, which `openCheckoutContract` now requires.
+   *
+   * Read the same way the page reads it, because that is the point of the field: a test that invented a
+   * value would be testing the refusal rather than the path it is interested in. The empty string when no
+   * offer exists at all — there is nothing to echo then, and the store returns that refusal before it ever
+   * compares a digest.
+   */
+  async function digestOf(context: WorkspaceContext, input: Request): Promise<string> {
+    const offer = await readCheckoutOffer(db(), context, {
+      planVersionId: input.planVersionId,
+      interval: input.interval,
+      arrangement: input.arrangement,
+      currency: input.currency,
+      locale: input.locale,
+      supersedeCurrent: true,
+      ...(input.market === undefined ? {} : { market: input.market }),
+    });
+    return offer.available ? offer.offerDigest : "";
+  }
+
   async function openFor(context: WorkspaceContext, input: Request): Promise<OpenedCheckout> {
-    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input) });
+    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input), offeredDigest: await digestOf(context, input) });
     if (!opened.available) {
       throw new Error(`checkout refused: ${opened.reason} ${opened.detail.join(", ")}`);
     }
@@ -259,7 +283,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return minted;
   }
 
-  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+  // Both of the fields a *submission* carries are left out: the document ids it ticked and the digest of
+  // the offer it was shown. Neither can come from a request builder, because both are answers the store
+  // itself produced for that request — so every call site has to fetch them, which is exactly what the
+  // page does.
+  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds" | "offeredDigest">;
 
   const request = (overrides: Partial<Request> = {}): Request => ({
     planVersionId,
@@ -377,7 +405,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         sellerProfileId: "seller-mor",
         provider: "attacker",
         providerAccountRef: "acct_attacker",
-      } as Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+      } as Request;
 
       const opened = await openFor(context, forged);
 
@@ -1129,7 +1157,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       // A second checkout that has not said it is migrating is refused. This is "never create a second
       // active charge path silently", and the default is the refusal.
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "ARRANGEMENT_EXISTS" });
 
@@ -1905,6 +1933,639 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     });
   });
 
+  describe("the offer an acceptance is bound to", () => {
+    /**
+     * Astra's P1 on PR #101. The form carried the plan, the interval and the document ids, and nothing
+     * identifying the *commercial* offer — so a route reconfigured between the GET that drew the ticks and
+     * the POST that accepted them produced a contract naming a different selling entity, a different
+     * jurisdiction and a different tax treatment than the person had been shown. A global required
+     * document legitimately applies to both sellers, so the document ids cannot bind any of that.
+     */
+    async function displayedOffer(context: WorkspaceContext) {
+      const offer = await readCheckoutOffer(db(), context, request({ supersedeCurrent: true }));
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+      return offer;
+    }
+
+    /** Submits exactly what a page displaying `offer` would post, and nothing else. */
+    async function submit(context: WorkspaceContext, offer: Awaited<ReturnType<typeof displayedOffer>>) {
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      return openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        offeredDigest: offer.offerDigest,
+      });
+    }
+
+    it("opens when the offer is still the one that was displayed", async () => {
+      // The control, and the reason the refusals below mean something: posting a digest the server itself
+      // produced must not stop an ordinary checkout.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      const opened = await submit(context, offer);
+
+      expect(opened).toMatchObject({ available: true });
+    });
+
+    it("refuses a submission that names no offer at all, instead of skipping the comparison", async () => {
+      // The guard cannot be switchable off by the client it exists to distrust, and leaving the field out
+      // is the cheapest possible way to try. While the digest was optional this restored the original
+      // defect in full: the acceptance was recorded against whatever the store resolved at POST time with
+      // nothing binding it to what anybody had been shown, and the stored contract could not afterwards be
+      // told apart from one that *had* been bound.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        // What `offeredDigestFrom` returns for a form with no `offer` field — a value no digest can equal,
+        // so the ordinary comparison refuses it and there is no `undefined` path to get wrong.
+        offeredDigest: "",
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+    });
+
+    it("refuses when the selling entity and the tax treatment changed after the terms were displayed", async () => {
+      const { context, workspaceId } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+      expect(offer.seller.legalName, "the harness must start on the direct route").toBe("Example SRL");
+      expect(offer.settlementModel).toBe("DIRECT_PSP");
+
+      // Trusted operator configuration changes, exactly as it may at any moment: the direct route is
+      // withdrawn and the Merchant-of-Record route becomes the one that admits this request.
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: false } });
+      try {
+        const refused = await submit(context, offer);
+
+        expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+        // And nothing was written: no contract naming a seller nobody agreed to, and no acceptance.
+        expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+        expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(0);
+      } finally {
+        await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: true } });
+      }
+    });
+
+    it("refuses when the same seller's own legal identity changed after the terms were displayed", async () => {
+      // The case Astra asked for by name. Nothing about the route changes here — the entity a person was
+      // told they were buying from is simply not the entity now recorded, and a disclosure is the thing
+      // being consented to rather than a label on it.
+      const { context, workspaceId } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      await upsertSellerProfile(db(), {
+        code: "seller-ro",
+        legalName: "Example SRL (renamed)",
+        displayName: "Example",
+        jurisdiction: "RO",
+        supportEmail: "billing@example.test",
+        legalConfigRef: "config/ro",
+      });
+      try {
+        const refused = await submit(context, offer);
+
+        expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+        expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+      } finally {
+        await upsertSellerProfile(db(), {
+          code: "seller-ro",
+          legalName: "Example SRL",
+          displayName: "Example",
+          jurisdiction: "RO",
+          supportEmail: "billing@example.test",
+          legalConfigRef: "config/ro",
+        });
+      }
+    });
+
+    it("refuses a seller switch when every required document is global, which is where nothing else catches it", async () => {
+      // The configuration Astra's reproduction used, and it needs saying why it is a case of its own.
+      // With the harness's seller-specific `PUBLIC_OFFER` required, switching sellers happens to be caught
+      // by `DOCUMENT_NOT_APPLICABLE`, because the accepted offer document belongs to the other entity — so
+      // that path does not demonstrate this defect at all. Make the required set global, which is a
+      // legitimate configuration, and the incidental guard disappears.
+      //
+      // Entirely self-contained: its own sellers, its own routes in a currency nothing else uses, and its
+      // own plan. An earlier version of this case dropped the requirement on the *shared* catalogue
+      // instead and broke three later cases — and publications are append-only, so "restoring" it only
+      // added another version and broke two more. Shared append-only state cannot be borrowed.
+      const { context, workspaceId } = await freshWorkspace();
+      for (const [code, legalName, jurisdiction] of [
+        ["seller-digest-direct", "Digest Direct SRL", "RO"],
+        ["seller-digest-mor", "Digest Reseller Inc", "US"],
+      ] as const) {
+        await upsertSellerProfile(db(), { code, legalName, displayName: code, jurisdiction, supportEmail: `billing@${code}.test` });
+      }
+      await upsertBillingRoute(db(), {
+        code: "digest-direct",
+        provider: "test-psp",
+        providerAccountRef: "acct_digest_direct",
+        sellerProfileCode: "seller-digest-direct",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: ["USD"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 10,
+      });
+      await upsertBillingRoute(db(), {
+        code: "digest-mor",
+        provider: "test-mor",
+        providerAccountRef: "acct_digest_mor",
+        sellerProfileCode: "seller-digest-mor",
+        settlementModel: "MERCHANT_OF_RECORD",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "TAX_REMITTANCE", "INVOICES", "VERIFIED_WEBHOOKS"],
+        currencies: ["USD"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 20,
+      });
+      const usdPlan = (
+        await publishPlanVersion(db(), {
+          code: "digest-binding-plan",
+          name: "Digest binding plan",
+          grants: { features: [], limits: {}, quotas: {} },
+          prices: [{ currency: "USD", interval: "MONTH", amountCents: 4_900 }],
+        })
+      ).planVersionId;
+
+      const usd = { planVersionId: usdPlan, interval: "MONTH", arrangement: "RECURRING", currency: "USD", locale: "en", at: NOW, supersedeCurrent: true } as const;
+      const offer = await readCheckoutOffer(db(), context, usd);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason} ${offer.detail.join(", ")}`);
+      }
+      // Neither new seller has published a `PUBLIC_OFFER`, so the only required document is the global
+      // terms — which is the whole point.
+      expect(
+        offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.kind),
+        "no required document may name the seller in this case",
+      ).toEqual(["TERMS_OF_SERVICE"]);
+      expect(offer.seller.legalName).toBe("Digest Direct SRL");
+      expect(offer.settlementModel).toBe("DIRECT_PSP");
+
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      await db().billingRoute.update({ where: { code: "digest-direct" }, data: { enabled: false } });
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...usd,
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        offeredDigest: offer.offerDigest,
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+      // Nothing written: no contract naming a seller nobody agreed to, and no acceptance of its terms.
+      expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(0);
+    });
+
+    it("still enforces the ticks when the offer itself has not moved", async () => {
+      // The digest must not become a way around the acceptance: a submission carrying the right offer and
+      // none of the ticks is still refused for what it did not accept.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: [],
+        offeredDocumentIds: offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId),
+        offeredDigest: offer.offerDigest,
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
+    });
+  });
+
+  describe("a language spelled two ways", () => {
+    /**
+     * Astra's P2 on PR #101. `legal_documents.locale` is what "which version is current in this reader's
+     * language?" groups by, in TypeScript and in `current_legal_documents()`. Both grouped by the stored
+     * spelling while the locale *negotiation* canonicalized before matching — so `en-US` and `en-us` were
+     * two languages: each got a version 1, each stayed current, neither superseded the other, and which
+     * one a reader was offered came down to row order. Publishing a replacement under the other spelling
+     * therefore left the superseded text on the checkout page and let the coverage trigger accept consent
+     * to it.
+     *
+     * Both halves of the fix need a non-canonical row to exist, and `publishLegalDocument` now refuses to
+     * create one — so these write it the way the only thing that still can would: a statement run by hand,
+     * or a publication from before this change. That is also what makes them regressions rather than
+     * tautologies: the row they read is not one the fixed writer produced.
+     *
+     * Both publication orders are here because the defect's outcome was decided by neither of them.
+     * `negotiateDocumentLocale` returns the *first* candidate whose canonical tag matches, and the
+     * candidates arrive in `locale ASC` order — so which of two spellings a reader was offered came down
+     * to the database's collation. Measured against this harness, `en-us` sorts before `en-US`, so the
+     * alias-is-newer order happens to land on the right row and the alias-is-older order lands on the
+     * superseded one; under a collation that sorts the other way it is the reverse. Neither case is
+     * therefore sufficient alone, and both pass once the winner is computed from `effective_from` and
+     * `version` instead of from row order.
+     */
+
+    /** A seller, a route, a currency and a plan nothing else in this file touches. */
+    async function isolatedSeller(code: string, currency: string): Promise<string> {
+      await upsertSellerProfile(db(), {
+        code,
+        legalName: `Alias ${code} SA`,
+        displayName: "Alias",
+        jurisdiction: "CH",
+        supportEmail: `billing@${code}.test`,
+      });
+      await upsertBillingRoute(db(), {
+        code: `${code}-direct`,
+        provider: "test-psp",
+        providerAccountRef: "acct_alias",
+        sellerProfileCode: code,
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: [currency],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 90,
+      });
+      // Its own currency, so this seller's route is the only one that can admit the request and no other
+      // case in this file can be reached by it.
+      return (
+        await publishPlanVersion(db(), {
+          code: `${code}-plan`,
+          name: "Alias",
+          grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} },
+          availability: "PUBLIC",
+          prices: [{ currency, interval: "MONTH", amountCents: 9_900 }],
+        })
+      ).planVersionId;
+    }
+
+    /** A document row written verbatim, bypassing the canonicalization the store now applies. */
+    async function writeRawDocument(row: {
+      readonly id: string;
+      readonly kind: string;
+      readonly locale: string;
+      readonly version: number;
+      readonly sellerProfileCode: string;
+      readonly effectiveFrom: string;
+    }): Promise<void> {
+      const written = await db().$executeRawUnsafe(
+        `INSERT INTO "legal_documents"
+           ("id","kind","version","locale","seller_profile_id","content_ref","required_for_checkout","effective_from","created_at")
+         SELECT $1, $2::"LegalDocumentKind", $3, $4, s."id", $5, true, $6::timestamp, $6::timestamp
+           FROM "seller_profiles" s WHERE s."code" = $7`,
+        row.id,
+        row.kind,
+        row.version,
+        row.locale,
+        `https://legal.example.test/offer/${row.id}`,
+        row.effectiveFrom,
+        row.sellerProfileCode,
+      );
+      // A seller code that matched nothing would insert no row and every assertion below would pass
+      // vacuously against a catalogue holding only the canonical version.
+      expect(written, `the raw ${row.locale} row was not written`).toBe(1);
+    }
+
+    /** Everything a page would tick, with the current version of one kind swapped for a stale id. */
+    const withStale = (offer: { readonly documents: readonly LegalDocumentOffer[] }, kind: string, staleId: string): readonly string[] =>
+      offer.documents.filter((document) => document.requiredForCheckout).map((document) => (document.kind === kind ? staleId : document.legalDocumentId));
+
+    it("offers one current version when the replacement was written in the other spelling", async () => {
+      const planVersionId = await isolatedSeller("seller-alias-a", "CHF");
+      const ask = { planVersionId, currency: "CHF", locale: "en-US" } as const;
+      const superseded = await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en-US",
+        contentRef: "https://legal.example.test/offer/alias-a/en-US/1",
+        sellerProfileCode: "seller-alias-a",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      // The replacement, in force, spelled the way the product never spells it.
+      await writeRawDocument({
+        id: "raw-alias-a",
+        kind: "PUBLIC_OFFER",
+        locale: "en-us",
+        version: 2,
+        sellerProfileCode: "seller-alias-a",
+        effectiveFrom: "2026-06-01T00:00:00.000Z",
+      });
+
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(ask), NOW);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+
+      // One tick for this kind, not two, and it is the replacement rather than whichever spelling sorted
+      // first. Before the fix this was two required documents, both version 1 of one offer.
+      const offered = offer.documents.filter((document) => document.kind === "PUBLIC_OFFER");
+      expect(offered.map((document) => document.legalDocumentId)).toEqual(["raw-alias-a"]);
+
+      // And the stale id is refused once the replacement is effective — the half that matters, because a
+      // reader with an open tab is holding exactly that id.
+      const stale = withStale(offer, "PUBLIC_OFFER", superseded.legalDocumentId);
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
+      expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+
+      // The control, in a workspace of its own so no refused attempt can be what stopped it: accepting
+      // the replacement opens the checkout. Without this a guard that refused everything would pass.
+      const second = await freshWorkspace();
+      const current = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      const opened = await openCheckoutContract(db(), second.context, { ...request(ask), acceptedDocumentIds: current, offeredDocumentIds: current, offeredDigest: offer.offerDigest });
+      expect(opened).toMatchObject({ available: true });
+      if (!opened.available) {
+        return;
+      }
+
+      // And the database refuses the same thing on its own, which is the half the store cannot speak for.
+      // `openCheckoutContract` resolves the current versions in TypeScript and returns
+      // `DOCUMENT_SUPERSEDED` before any row is written, so the refusal above proves the store and says
+      // nothing about `current_legal_documents()` — and that function is what the acceptance trigger
+      // matches an accepted id against. With it grouping by the stored spelling, both aliases were
+      // "current" and an acceptance of the superseded one was allowed straight through.
+      //
+      // The coverage trigger cannot catch this: it matches an acceptance to a requirement by *kind*, so
+      // one acceptance of the kind satisfies it however many rows the function returned.
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_acceptances"
+             ("id","workspace_id","actor_user_id","legal_document_id","checkout_contract_id","locale","accepted_at","created_at")
+           VALUES ($1,$2,$3,$4,$5,'en-US',NOW(),NOW())`,
+          `raw-acceptance-${opened.checkoutContractId}`,
+          second.workspaceId,
+          second.ownerUserId,
+          superseded.legalDocumentId,
+          opened.checkoutContractId,
+        ),
+      ).rejects.toThrow(/is superseded/u);
+    });
+
+    it("continues one version sequence across spellings, whichever spelling was published first", async () => {
+      const planVersionId = await isolatedSeller("seller-alias-b", "NOK");
+      const ask = { planVersionId, currency: "NOK", locale: "en-GB" } as const;
+      // The other publication order: the alias is already in the catalogue when the canonical version is
+      // published. `locale` sorts before `effective_from` in the query that reads these, so this is the
+      // order in which "the first row of the group wins" silently returns the older document.
+      await writeRawDocument({
+        id: "raw-alias-b",
+        kind: "PUBLIC_OFFER",
+        locale: "en-gb",
+        version: 1,
+        sellerProfileCode: "seller-alias-b",
+        effectiveFrom: "2026-01-01T00:00:00.000Z",
+      });
+      const replacement = await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en-GB",
+        contentRef: "https://legal.example.test/offer/alias-b/en-GB/2",
+        sellerProfileCode: "seller-alias-b",
+        effectiveFrom: new Date("2026-06-01T00:00:00.000Z"),
+      });
+
+      // Version allocation saw the alias as the same language. A second version 1 is the state the whole
+      // defect rests on: two first versions of one document, neither able to supersede the other.
+      expect(replacement.version).toBe(2);
+
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(ask), NOW);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+      const offered = offer.documents.filter((document) => document.kind === "PUBLIC_OFFER");
+      expect(offered.map((document) => document.legalDocumentId)).toEqual([replacement.legalDocumentId]);
+      expect(offered.map((document) => document.version)).toEqual([2]);
+
+      const stale = withStale(offer, "PUBLIC_OFFER", "raw-alias-b");
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
+      expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+    });
+
+    it("refuses to store a spelling the database cannot group, and refuses to publish one at all", async () => {
+      // The two halves of the backstop. `publishLegalDocument` canonicalizes everything it can name a
+      // language for and refuses what it cannot; the CHECK refuses the separator form that no canonical
+      // tag has, so a hand-run statement cannot leave `ru_RU` in a column that is also displayed to a
+      // reader as the language a contract is published in.
+      await expect(
+        publishLegalDocument(db(), {
+          kind: "REFUND_POLICY",
+          locale: "nonsense tag",
+          contentRef: "https://legal.example.test/refunds/x/1",
+          effectiveFrom: NOW,
+        }),
+      ).rejects.toThrow(DbInputError);
+
+      const stored = await publishLegalDocument(db(), {
+        kind: "REFUND_POLICY",
+        locale: "RU-ru",
+        contentRef: "https://legal.example.test/refunds/ru/1",
+        requiredForCheckout: false,
+        effectiveFrom: NOW,
+      });
+      const row = await db().legalDocument.findUniqueOrThrow({ where: { id: stored.legalDocumentId }, select: { locale: true } });
+      expect(row.locale).toBe("ru-RU");
+
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_documents" ("id","kind","version","locale","content_ref","required_for_checkout","effective_from","created_at")
+           VALUES ('raw-underscore','REFUND_POLICY'::"LegalDocumentKind",99,'ru_RU','https://legal.example.test/refunds/raw',false,NOW(),NOW())`,
+        ),
+      ).rejects.toThrow(/legal_documents_locale_well_formed/u);
+
+      // And the state the whole defect rested on is now unreachable: two rows of one kind and one
+      // language sharing a version number. The declared unique is on the stored spelling, so `RU-ru` v1
+      // and `ru-RU` v1 satisfied it and neither could supersede the other.
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_documents" ("id","kind","version","locale","content_ref","required_for_checkout","effective_from","created_at")
+           VALUES ('raw-alias-version','REFUND_POLICY'::"LegalDocumentKind",$1,'RU-ru','https://legal.example.test/refunds/alias',false,NOW(),NOW())`,
+          stored.version,
+        ),
+      ).rejects.toThrow(/legal_documents_kind_language_version_key/u);
+    });
+  });
+
+  describe("the seller snapshot a digest was checked against", () => {
+    /**
+     * Astra's P1 on the #101 remediation, and the same mistake I had already written down after #100: a
+     * validate-then-use boundary that crosses an `await` needs the *snapshot*, not a second read.
+     *
+     * `resolveCheckout` read the selling entity and the digest was computed from that row. The write path
+     * then re-read `sellerProfile` and copied the **second** result into the immutable contract, the audit
+     * entry and the returned offer. `upsertSellerProfile` takes neither of this transaction's two locks
+     * and the transaction is `READ COMMITTED`, so an operator update committing between the two reads
+     * changed the persisted legal name and jurisdiction without invalidating the digest that had just been
+     * compared. The acceptance then named an entity nobody had been shown — the exact defect the digest
+     * exists to prevent, reintroduced one layer below the guard.
+     *
+     * The interleaving is forced rather than waited for. A timer would be a guess, so the real Prisma
+     * client is wrapped in a proxy that commits the operator's update at the precise moment the first
+     * seller read has resolved, on a *different* pooled connection and therefore its own transaction —
+     * every query here still runs against real PostgreSQL. Nothing about the store is reimplemented: the
+     * proxy forwards every call untouched and only chooses *when* the competing commit lands.
+     */
+    async function raceSeller(context: WorkspaceContext, input: Request, accepted: readonly string[], digest: string) {
+      let sellerRereads = 0;
+      let committedDuringTransaction = false;
+
+      // The selling entity is *not* fetched by `sellerProfile.findUnique` on the resolve path: it arrives
+      // as a nested `select` under the route read, which is why the only such call this transaction ever
+      // made was the second read this fix removes. So the barrier hangs off the route read — guaranteed to
+      // happen in every version, and before anything the write path does — and a `sellerProfile` read is
+      // counted rather than triggered on, because after the fix there must be none at all.
+      const interceptTx = (tx: DbExecutor): DbExecutor =>
+        new Proxy(tx, {
+          get(target, property, receiver) {
+            if (property !== "billingRoute" && property !== "sellerProfile") {
+              return Reflect.get(target, property, receiver) as unknown;
+            }
+            const model = property;
+            const delegate = Reflect.get(target, property, receiver) as object;
+            return new Proxy(delegate, {
+              get(owner, call, ownerReceiver) {
+                const original = Reflect.get(owner, call, ownerReceiver) as unknown;
+                if (typeof call !== "string" || !call.startsWith("find") || typeof original !== "function") {
+                  return original;
+                }
+                // `findUniqueOrThrow` and not any route read: the candidate routes are selected by an
+                // earlier `findMany`, and committing the rename before *that* would change the seller the
+                // POST resolves, so the digest would legitimately stop matching and the submission would
+                // be refused `OFFER_CHANGED`. That is correct behaviour but a different case. The window
+                // this test is for opens once the route read carrying the seller has resolved — the digest
+                // has then been computed from the old row and is about to be compared and accepted.
+                const isBarrier = model === "billingRoute" && call === "findUniqueOrThrow";
+                return async (...args: unknown[]) => {
+                  const row = await (original as (...a: unknown[]) => Promise<unknown>).apply(owner, args);
+                  if (model === "sellerProfile") {
+                    sellerRereads += 1;
+                    return row;
+                  }
+                  if (isBarrier && !committedDuringTransaction) {
+                    // The operator renames the selling entity and moves its jurisdiction, committed from
+                    // another pooled connection — its own transaction — while this one is still open and
+                    // has already resolved the offer. Before the fix the second read below returned this
+                    // row and the contract was written from it.
+                    await db().sellerProfile.update({
+                      where: { code: "seller-race" },
+                      data: { legalName: "Seller Race NEW LEGAL ENTITY", jurisdiction: "UA" },
+                    });
+                    committedDuringTransaction = true;
+                  }
+                  return row;
+                };
+              },
+            });
+          },
+        });
+
+      const client = new Proxy(db(), {
+        get(target, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(target, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            target.$transaction((tx) => callback(interceptTx(tx)), ...(rest as []));
+        },
+      });
+
+      const opened = await openCheckoutContract(client, context, {
+        ...input,
+        acceptedDocumentIds: accepted,
+        offeredDocumentIds: accepted,
+        offeredDigest: digest,
+      });
+      return { opened, sellerRereads, committedDuringTransaction };
+    }
+
+    it("persists the entity the digest was checked against, not one committed mid-transaction", async () => {
+      await upsertSellerProfile(db(), {
+        code: "seller-race",
+        legalName: "Seller Race SRL",
+        displayName: "Race",
+        jurisdiction: "RO",
+        supportEmail: "billing@race.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "race-direct",
+        provider: "test-psp",
+        providerAccountRef: "acct_race",
+        sellerProfileCode: "seller-race",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: ["SEK"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 95,
+      });
+      await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en",
+        contentRef: "https://legal.example.test/offer/race/en/1",
+        sellerProfileCode: "seller-race",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const planVersionId = (
+        await publishPlanVersion(db(), {
+          code: "race-plan",
+          name: "Race",
+          grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} },
+          availability: "PUBLIC",
+          prices: [{ currency: "SEK", interval: "MONTH", amountCents: 9_900 }],
+        })
+      ).planVersionId;
+
+      const ask = request({ planVersionId, currency: "SEK", locale: "en", supersedeCurrent: true });
+      const { context } = await freshWorkspace();
+      // What the page displayed, and the digest it would post back.
+      const displayed = await readCheckoutOffer(db(), context, ask, NOW);
+      if (!displayed.available) {
+        throw new Error(`offer unavailable: ${displayed.reason} ${displayed.detail.join(", ")}`);
+      }
+      expect(displayed.seller.legalName).toBe("Seller Race SRL");
+      expect(displayed.seller.jurisdiction).toBe("RO");
+
+      const accepted = displayed.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      const raced = await raceSeller(context, ask, accepted, displayed.offerDigest);
+
+      // The competing write really did commit, and it really did commit while the checkout was open.
+      // Without this the assertions below would hold against a database nobody had changed.
+      expect(raced.committedDuringTransaction).toBe(true);
+      expect(await db().sellerProfile.findUniqueOrThrow({ where: { code: "seller-race" }, select: { legalName: true } })).toEqual({
+        legalName: "Seller Race NEW LEGAL ENTITY",
+      });
+
+      const opened = raced.opened;
+      expect(opened).toMatchObject({ available: true });
+      if (!opened.available) {
+        return;
+      }
+      // The returned offer, the contract row and the audit entry all have to name what was accepted.
+      expect(opened.seller).toMatchObject({ legalName: "Seller Race SRL", jurisdiction: "RO" });
+      const contract = await db().checkoutContract.findUniqueOrThrow({
+        where: { id: opened.checkoutContractId },
+        select: { sellerLegalName: true, sellerJurisdiction: true },
+      });
+      expect(contract).toEqual({ sellerLegalName: "Seller Race SRL", sellerJurisdiction: "RO" });
+
+      const page = await searchAuditEvents(db(), context, { kinds: ["CHECKOUT_OPENED"] });
+      const row = page.rows.find((event) => event.subjectId === opened.checkoutContractId);
+      expect(row?.summary).toContain("Seller Race SRL");
+      expect(JSON.stringify(row?.detail ?? {})).toContain('"sellerJurisdiction":"RO"');
+
+      // And the structural half of the fix: the transaction never reads `sellerProfile` on its own at all.
+      // The entity arrives once, nested under the route read the digest was computed from, so there is no
+      // second read left for a later commit to change. A convenience re-read added anywhere below the
+      // digest comparison would make this one, and the assertions above would go with it.
+      expect(raced.sellerRereads).toBe(0);
+    });
+  });
+
   describe("the acceptance snapshot", () => {
     it("offers the seller's own public offer and nothing that is not yet in force", async () => {
       const { context } = await freshWorkspace();
@@ -1913,7 +2574,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(offer.available).toBe(true);
       if (offer.available) {
         expect(offer.documents.map((document) => document.kind).sort()).toEqual(["PUBLIC_OFFER", "TERMS_OF_SERVICE"]);
-        expect(offer.documents.find((document) => document.kind === "PUBLIC_OFFER")?.contentRef).toBe("offer/ro/en/1");
+        expect(offer.documents.find((document) => document.kind === "PUBLIC_OFFER")?.contentRef).toBe("https://legal.example.test/offer/ro/en/1");
         // Effective next year. Published, not offered.
         expect(offer.documents.some((document) => document.kind === "PRIVACY_POLICY")).toBe(false);
       }
@@ -1923,7 +2584,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const { context, workspaceId } = await freshWorkspace();
       const documents = await acceptedIds(context, request());
 
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
       if (!refused.available) {
@@ -1935,7 +2596,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("refuses an acceptance of another seller's document", async () => {
       const { context } = await freshWorkspace();
       const theirs = await db().legalDocument.findFirstOrThrow({
-        where: { contentRef: "offer/mor/en/1" },
+        where: { contentRef: "https://legal.example.test/offer/mor/en/1" },
         select: { id: true },
       });
       const mine = await acceptedIds(context, request());
@@ -1943,6 +2604,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const refused = await openCheckoutContract(db(), context, {
         ...request(),
         acceptedDocumentIds: [...mine.filter((id) => id !== theirs.id), theirs.id],
+        offeredDigest: await digestOf(context, request()),
       });
 
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_NOT_APPLICABLE" });
@@ -2010,7 +2672,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     });
 
     it("refuses a legal document version that is immutable once published", async () => {
-      const published = await db().legalDocument.findFirstOrThrow({ where: { contentRef: "terms/en/1" }, select: { id: true } });
+      const published = await db().legalDocument.findFirstOrThrow({ where: { contentRef: "https://legal.example.test/terms/en/1" }, select: { id: true } });
 
       await expect(db().$executeRawUnsafe(`UPDATE "legal_documents" SET "content_ref" = 'terms/en/1-edited' WHERE "id" = '${published.id}'`)).rejects.toThrow(
         /legal_documents are immutable/u,
@@ -2021,13 +2683,13 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const second = await publishLegalDocument(db(), {
         kind: "TERMS_OF_SERVICE",
         locale: "en",
-        contentRef: "terms/en/2",
+        contentRef: "https://legal.example.test/terms/en/2",
         effectiveFrom: new Date("2026-02-01T00:00:00.000Z"),
       });
       const other = await publishLegalDocument(db(), {
         kind: "TERMS_OF_SERVICE",
         locale: "ru",
-        contentRef: "terms/ru/1",
+        contentRef: "https://legal.example.test/terms/ru/1",
         effectiveFrom: new Date("2026-02-01T00:00:00.000Z"),
       });
 
@@ -2037,7 +2699,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const { context } = await freshWorkspace();
       const offer = await readCheckoutOffer(db(), context, request());
       if (offer.available) {
-        expect(offer.documents.find((document) => document.kind === "TERMS_OF_SERVICE")).toMatchObject({ version: 2, contentRef: "terms/en/2" });
+        expect(offer.documents.find((document) => document.kind === "TERMS_OF_SERVICE")).toMatchObject({ version: 2, contentRef: "https://legal.example.test/terms/en/2" });
       }
     });
   });
@@ -2139,6 +2801,553 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     });
   });
 
+  describe("the locale somebody reads the terms in", () => {
+    /**
+     * Its own seller, its own route, its own currency and its own document kind.
+     *
+     * The suite publishes English and Russian terms elsewhere, so a locale test that leaned on the shared
+     * fixtures would pass or fail according to which other test had run — which is a test that passes for
+     * the wrong reason. `REFUND_POLICY` is used here and nowhere else precisely so its translations are
+     * this block's to control.
+     */
+    let localeSellerId: string;
+
+    beforeAll(async () => {
+      await upsertSellerProfile(db(), {
+        code: "seller-locale",
+        legalName: "Locale SRL",
+        displayName: "Locale",
+        jurisdiction: "RO",
+        supportEmail: "billing@locale.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "locale-route",
+        provider: "test-psp",
+        sellerProfileCode: "seller-locale",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "VERIFIED_WEBHOOKS"],
+        currencies: ["PLN"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 1,
+      });
+      await db().planPrice.create({ data: { planVersionId, currency: "PLN", interval: "MONTH", amountCents: 21_000 } });
+      await publishLegalDocument(db(), {
+        kind: "REFUND_POLICY",
+        locale: "en",
+        contentRef: "https://legal.example.test/refund/en/1",
+        sellerProfileCode: "seller-locale",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      localeSellerId = (await db().sellerProfile.findUniqueOrThrow({ where: { code: "seller-locale" }, select: { id: true } })).id;
+    }, 60_000);
+
+    const inPln = (overrides: Partial<Request> = {}) => request({ currency: "PLN", ...overrides });
+
+    it("offers the fallback language rather than nothing, and says it is not the reader's", async () => {
+      // The defect this closes. Filtering documents by an exact locale offered a Russian-reading
+      // workspace *no document of that kind at all* — which is not a stricter checkout, it is one whose
+      // acceptance control silently disappeared — and the database's coverage trigger then killed the
+      // checkout with a raw exception instead of a sentence.
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, inPln({ locale: "ru" }), NOW);
+
+      expect(offer.available).toBe(true);
+      if (offer.available) {
+        expect(offer.viewerLocale).toBe("ru");
+        const refund = offer.documents.find((document) => document.kind === "REFUND_POLICY");
+        expect(refund).toMatchObject({ locale: "en", contentRef: "https://legal.example.test/refund/en/1", inViewerLanguage: false, requiredForCheckout: true });
+      }
+    });
+
+    it("records the reader's own language on every acceptance, whatever the document was published in", async () => {
+      const { context } = await freshWorkspace();
+      const opened = await openFor(context, inPln({ locale: "ru" }));
+
+      const acceptances = await db().legalAcceptance.findMany({
+        where: { checkoutContractId: opened.checkoutContractId },
+        select: { locale: true, legalDocument: { select: { locale: true, kind: true } } },
+      });
+
+      expect(acceptances.length).toBeGreaterThan(1);
+      const refund = acceptances.find((acceptance) => acceptance.legalDocument.kind === "REFUND_POLICY");
+      // Asserted as an inequality, not as two equalities that another test's publication could make
+      // identical: this is the only shape in which "the reader's language, not the document's" can fail.
+      expect(refund?.locale).toBe("ru");
+      expect(refund?.legalDocument.locale).toBe("en");
+      expect(refund?.locale).not.toBe(refund?.legalDocument.locale);
+      for (const acceptance of acceptances) {
+        expect(acceptance.locale, acceptance.legalDocument.kind).toBe("ru");
+      }
+    });
+
+    it("prefers a translation once one exists", async () => {
+      await publishLegalDocument(db(), {
+        kind: "REFUND_POLICY",
+        locale: "ru",
+        contentRef: "https://legal.example.test/refund/ru/1",
+        sellerProfileCode: "seller-locale",
+        effectiveFrom: new Date("2026-02-01T00:00:00.000Z"),
+      });
+      const { context } = await freshWorkspace();
+
+      const offer = await readCheckoutOffer(db(), context, inPln({ locale: "ru" }), NOW);
+
+      expect(offer.available).toBe(true);
+      if (offer.available) {
+        expect(offer.documents.find((document) => document.kind === "REFUND_POLICY")).toMatchObject({
+          locale: "ru",
+          contentRef: "https://legal.example.test/refund/ru/1",
+          inViewerLanguage: true,
+        });
+      }
+      void localeSellerId;
+    });
+
+    it("refuses when a required document is published in no language the reader could be offered", async () => {
+      // Operator misconfiguration rather than a customer's circumstance: the fallback locale is the one
+      // the product publishes everything in, so a required kind missing from it is a gap somebody fills.
+      await upsertSellerProfile(db(), {
+        code: "seller-de-only",
+        legalName: "Nur Deutsch GmbH",
+        displayName: "Nur Deutsch",
+        jurisdiction: "DE",
+        supportEmail: "billing@nur.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "de-only",
+        provider: "test-psp",
+        sellerProfileCode: "seller-de-only",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "VERIFIED_WEBHOOKS"],
+        currencies: ["CHF"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 1,
+      });
+      await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "de",
+        contentRef: "https://legal.example.test/offer/de/1",
+        sellerProfileCode: "seller-de-only",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      await db().planPrice.create({ data: { planVersionId, currency: "CHF", interval: "MONTH", amountCents: 5_000 } });
+      const { context } = await freshWorkspace();
+
+      try {
+        const offer = await readCheckoutOffer(db(), context, request({ currency: "CHF" }), NOW);
+
+        expect(offer).toMatchObject({ available: false, reason: "DOCUMENT_UNAVAILABLE" });
+        if (!offer.available) {
+          expect(offer.detail.join(" ")).toContain("PUBLIC_OFFER");
+        }
+      } finally {
+        await db().billingRoute.update({ where: { code: "de-only" }, data: { enabled: false } });
+      }
+    });
+  });
+
+  describe("the current version, and only the current version", () => {
+    it("refuses a superseded version with its own reason, so the screen can say the terms changed", async () => {
+      const { context } = await freshWorkspace();
+      const before = await readCheckoutOffer(db(), context, request(), NOW);
+      const staleIds = before.available ? before.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [];
+
+      // A new version becomes effective between the page that drew the checkboxes and the submission.
+      const published = await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en",
+        contentRef: "https://legal.example.test/offer/ro/en/next",
+        sellerProfileCode: "seller-ro",
+        effectiveFrom: new Date("2026-03-01T00:00:00.000Z"),
+      });
+
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: staleIds, offeredDigest: await digestOf(context, request()) });
+
+      expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+      if (!refused.available) {
+        expect(refused.detail.join(" ")).toContain("PUBLIC_OFFER v1");
+      }
+      // And accepting what the page would show now succeeds.
+      const opened = await openFor(context, request());
+      const accepted = await db().legalAcceptance.findMany({
+        where: { checkoutContractId: opened.checkoutContractId },
+        select: { legalDocument: { select: { kind: true, version: true } } },
+      });
+      expect(accepted.find((row) => row.legalDocument.kind === "PUBLIC_OFFER")?.legalDocument.version).toBe(published.version);
+    });
+
+    it("refuses a superseded version written straight to the table, whoever writes it", async () => {
+      // The store refuses it above; this is the same rule where a support script would meet it.
+      const { context, workspaceId, ownerUserId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      const superseded = await db().legalDocument.findFirstOrThrow({ where: { contentRef: "https://legal.example.test/offer/ro/en/1" }, select: { id: true } });
+
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_acceptances" ("id","workspace_id","actor_user_id","legal_document_id","checkout_contract_id","locale","accepted_at")
+           VALUES ('stale-acceptance','${workspaceId}','${ownerUserId}','${superseded.id}','${opened.checkoutContractId}','en',NOW())`,
+        ),
+      ).rejects.toThrow(/is superseded/u);
+    });
+
+    it("stops demanding a kind whose current version withdrew the requirement", async () => {
+      // The opposite hole: an old version marked required went on demanding an acceptance after a newer
+      // one had stopped requiring it, so nobody could complete a checkout the product no longer gated.
+      await publishLegalDocument(db(), {
+        kind: "PRIVACY_POLICY",
+        locale: "en",
+        contentRef: "https://legal.example.test/privacy/en/required",
+        requiredForCheckout: true,
+        effectiveFrom: new Date("2026-04-01T00:00:00.000Z"),
+      });
+      const { context } = await freshWorkspace();
+      const withPrivacy = await readCheckoutOffer(db(), context, request(), NOW);
+      expect(withPrivacy.available).toBe(true);
+      if (withPrivacy.available) {
+        expect(withPrivacy.documents.find((document) => document.kind === "PRIVACY_POLICY")?.requiredForCheckout).toBe(true);
+      }
+
+      await publishLegalDocument(db(), {
+        kind: "PRIVACY_POLICY",
+        locale: "en",
+        contentRef: "https://legal.example.test/privacy/en/optional",
+        requiredForCheckout: false,
+        effectiveFrom: new Date("2026-05-01T00:00:00.000Z"),
+      });
+
+      const after = await readCheckoutOffer(db(), context, request(), NOW);
+      expect(after.available).toBe(true);
+      if (after.available) {
+        // Still offered, as a link rather than a checkbox.
+        expect(after.documents.find((document) => document.kind === "PRIVACY_POLICY")).toMatchObject({ requiredForCheckout: false, contentRef: "https://legal.example.test/privacy/en/optional" });
+      }
+      // And a checkout that ticks only what is still required commits, which is what the coverage
+      // trigger has to agree with.
+      const opened = await openFor(context, request());
+      expect(opened.checkoutContractId).toBeTruthy();
+    });
+
+    it("agrees with the database about which kinds are required", async () => {
+      // The requirement rule is written twice — in `readLegalDocumentOffers` and in SQL's
+      // `current_legal_documents` — so this holds the two derivations against each other. A
+      // disagreement is either a checkout that cannot commit or a consent nobody was asked for.
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(), NOW);
+      expect(offer.available).toBe(true);
+      if (!offer.available) {
+        return;
+      }
+      const sellerProfileId = (await db().billingRoute.findUniqueOrThrow({ where: { code: "direct-eu" }, select: { sellerProfileId: true } })).sellerProfileId;
+      const rows = await db().$queryRawUnsafe<{ kind: string; required: boolean }[]>(
+        // Explicit casts: the function takes TEXT and TIMESTAMP(3), and `NOW()` is a timestamptz.
+        `SELECT "kind"::TEXT AS kind, bool_or("required_for_checkout") AS required
+           FROM "current_legal_documents"('${sellerProfileId}'::TEXT, NOW()::TIMESTAMP(3))
+          GROUP BY "kind"`,
+      );
+      const fromSql = new Map(rows.map((row) => [row.kind, row.required]));
+
+      for (const document of offer.documents) {
+        expect(fromSql.get(document.kind), document.kind).toBe(document.requiredForCheckout);
+      }
+      // And nothing the database thinks is required is missing from the screen.
+      for (const [kind, required] of fromSql) {
+        if (required) {
+          expect(offer.documents.some((document) => document.kind === kind), kind).toBe(true);
+        }
+      }
+    });
+  });
+
+  describe("what a reader can actually open", () => {
+    it("refuses a published location that is not an https URL anybody could follow", async () => {
+      // Every `contentRef` written under #46 was a path fragment, and as an `href` on the checkout route
+      // a fragment resolves to a page that does not exist — a checkbox asking for consent to something
+      // unreadable, which is the one thing this issue exists to prevent.
+      for (const contentRef of ["terms/en/1", "", "http://legal.example.test/terms", "not a url", "//legal.example.test/terms"]) {
+        await expect(
+          publishLegalDocument(db(), { kind: "TERMS_OF_SERVICE", locale: "xx", contentRef, effectiveFrom: NOW }),
+          contentRef,
+        ).rejects.toThrow(DbInputError);
+      }
+    });
+
+    it("refuses one written straight to the table too", async () => {
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_documents" ("id","kind","version","locale","content_ref","effective_from")
+           VALUES ('raw-fragment','TERMS_OF_SERVICE',99,'xx','terms/en/1',NOW())`,
+        ),
+      ).rejects.toThrow(/legal_documents_content_ref_check/u);
+    });
+
+    it("offers every required document with a link somebody could follow", async () => {
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(), NOW);
+
+      expect(offer.available).toBe(true);
+      if (offer.available) {
+        expect(offer.documents.length).toBeGreaterThan(0);
+        for (const document of offer.documents) {
+          expect(new URL(document.contentRef).protocol, document.kind).toBe("https:");
+          // And the date, because the version number counts publications across the catalogue and a
+          // seller's first offer can be "version 2".
+          expect(document.effectiveFrom, document.kind).toBeInstanceOf(Date);
+        }
+      }
+    });
+  });
+
+  describe("a requirement that appeared after the page was drawn", () => {
+    it("says the terms changed rather than blaming the reader for a box that was never there", async () => {
+      const { context } = await freshWorkspace();
+      const drawn = await readCheckoutOffer(db(), context, request(), NOW);
+      const offeredIds = drawn.available ? drawn.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [];
+
+      // A kind nobody had published becomes effective, and required, between the GET and the POST.
+      await publishLegalDocument(db(), {
+        kind: "REFUND_POLICY",
+        locale: "en",
+        contentRef: "https://legal.example.test/refund/global/1",
+        requiredForCheckout: true,
+        effectiveFrom: new Date("2026-01-15T00:00:00.000Z"),
+      });
+
+      const blamed = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
+      const explained = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
+
+      // Without the token the store cannot tell the two apart, and says the honest conservative thing.
+      expect(blamed).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
+      // With it, the refusal names what actually happened.
+      expect(explained).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+      if (!explained.available) {
+        expect(explained.detail.join(" ")).toContain("REFUND_POLICY");
+      }
+    });
+
+    it("still refuses a box the reader simply left unticked", async () => {
+      // The other half, and the one the token must not weaken: the page rendered the tick, the person
+      // did not use it, and `offeredDocumentIds` is the channel through which a client could claim
+      // otherwise.
+      const { context, workspaceId } = await freshWorkspace();
+      const drawn = await readCheckoutOffer(db(), context, request(), NOW);
+      const offeredIds = drawn.available ? drawn.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [];
+      expect(offeredIds.length).toBeGreaterThan(1);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request(),
+        acceptedDocumentIds: offeredIds.slice(0, 1),
+        offeredDocumentIds: offeredIds,
+        offeredDigest: await digestOf(context, request()),
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(0);
+    });
+  });
+
+  describe("the seller's own text, in the reader's language where there is one", () => {
+    it("prefers the seller's own document over a better-translated global one", async () => {
+      // Locale must not dominate specificity. A global `ru` offer alongside the seller's `en`-only one
+      // would otherwise hand a Russian reader the platform's generic terms for a checkout whose contract
+      // names that seller's legal entity and jurisdiction.
+      await upsertSellerProfile(db(), {
+        code: "seller-specific",
+        legalName: "Specific SRL",
+        displayName: "Specific",
+        jurisdiction: "RO",
+        supportEmail: "billing@specific.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "specific-route",
+        provider: "test-psp",
+        sellerProfileCode: "seller-specific",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "VERIFIED_WEBHOOKS"],
+        currencies: ["SEK"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 1,
+      });
+      await db().planPrice.create({ data: { planVersionId, currency: "SEK", interval: "MONTH", amountCents: 55_000 } });
+      await publishLegalDocument(db(), {
+        kind: "PRIVACY_POLICY",
+        locale: "ru",
+        contentRef: "https://legal.example.test/privacy/global/ru",
+        requiredForCheckout: true,
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      await publishLegalDocument(db(), {
+        kind: "PRIVACY_POLICY",
+        locale: "en",
+        contentRef: "https://legal.example.test/privacy/specific/en",
+        sellerProfileCode: "seller-specific",
+        requiredForCheckout: true,
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const { context } = await freshWorkspace();
+
+      try {
+        const offer = await readCheckoutOffer(db(), context, request({ currency: "SEK", locale: "ru" }), NOW);
+
+        expect(offer.available).toBe(true);
+        if (offer.available) {
+          const privacy = offer.documents.find((document) => document.kind === "PRIVACY_POLICY");
+          // The seller's own English text, not the platform's Russian one.
+          expect(privacy).toMatchObject({ contentRef: "https://legal.example.test/privacy/specific/en", locale: "en", inViewerLanguage: false });
+        }
+      } finally {
+        await db().billingRoute.update({ where: { code: "specific-route" }, data: { enabled: false } });
+      }
+    });
+  });
+
+  describe("a checkout nobody could settle", () => {
+    it("is refused before anything is written, so it cannot block the next one", async () => {
+      // The registry is process-local and empty for a provider nobody wired. A contract written anyway
+      // would take the workspace's one live charge path and leave a PENDING arrangement behind it.
+      await upsertBillingRoute(db(), {
+        code: "unwired",
+        provider: "provider-with-no-adapter",
+        sellerProfileCode: "seller-ro",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "VERIFIED_WEBHOOKS"],
+        currencies: ["EUR"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 1,
+      });
+      const { context, workspaceId } = await freshWorkspace();
+      try {
+        const offer = await readCheckoutOffer(db(), context, request(), NOW);
+        expect(offer).toMatchObject({ available: true, checkoutReady: false });
+
+        const refused = await openCheckoutContract(db(), context, {
+          ...request(),
+          acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
+        });
+
+        expect(refused).toMatchObject({ available: false, reason: "PROVIDER_UNAVAILABLE" });
+        expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+        expect(await readArrangement(db(), workspaceId)).toBeNull();
+      } finally {
+        await db().billingRoute.update({ where: { code: "unwired" }, data: { enabled: false } });
+      }
+    });
+
+    it("reports a route whose provider is wired as ready", async () => {
+      const { context } = await freshWorkspace();
+
+      expect(await readCheckoutOffer(db(), context, request(), NOW)).toMatchObject({ available: true, checkoutReady: true });
+    });
+  });
+
+  describe("the acceptance record itself", () => {
+    it("has exactly the columns it is meant to have, so an added one has to be argued for", async () => {
+      // The issue says no payment or card data is stored in acceptance records. A denylist of card-shaped
+      // words would pass for any column #47 could add, so this asserts the whole set: a new column fails
+      // here and has to be explained rather than noticed.
+      const columns = await db().$queryRawUnsafe<{ column_name: string }[]>(
+        `SELECT "column_name" FROM information_schema.columns WHERE "table_name" = 'legal_acceptances'`,
+      );
+
+      expect(columns.map((column) => column.column_name).sort()).toEqual([
+        "accepted_at",
+        "actor_user_id",
+        "checkout_contract_id",
+        "created_at",
+        "id",
+        "legal_document_id",
+        "locale",
+        "workspace_id",
+      ]);
+    });
+
+    it("canonicalizes the language it stores, so one language is not several spellings", async () => {
+      const { context } = await freshWorkspace();
+      const opened = await openCheckoutContract(db(), context, {
+        ...request({ locale: "RU-ru" }),
+        acceptedDocumentIds: await acceptedIds(context, request({ locale: "RU-ru" })),
+        offeredDigest: await digestOf(context, request({ locale: "RU-ru" })),
+      });
+
+      expect(opened.available).toBe(true);
+      if (opened.available) {
+        const stored = await db().legalAcceptance.findMany({ where: { checkoutContractId: opened.checkoutContractId }, select: { locale: true } });
+        expect(stored.map((row) => row.locale)).toEqual(stored.map(() => "ru-RU"));
+      }
+    });
+
+    it("refuses a locale that is not a language tag at all", async () => {
+      const { context } = await freshWorkspace();
+
+      await expect(openCheckoutContract(db(), context, { ...request({ locale: "not a tag" }), acceptedDocumentIds: [], offeredDigest: "" })).rejects.toThrow(DbInputError);
+    });
+
+    it("never throws for a locale nobody published, in any of the product's own locales", async () => {
+      // The invariant the #46 defect broke, and the one worth holding permanently: a checkout either
+      // succeeds or comes back with a reason. It never reaches a page as a Postgres sentence.
+      const { context } = await freshWorkspace();
+      for (const locale of ["en", "ru", "de", "zh-Hant"]) {
+        const offer = await readCheckoutOffer(db(), context, request({ locale }), NOW);
+        expect(offer.available || CHECKOUT_REFUSALS.includes(offer.reason), locale).toBe(true);
+
+        const attempt = await openCheckoutContract(db(), context, {
+          ...request({ locale }),
+          acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
+        });
+        if (!attempt.available) {
+          expect(CHECKOUT_REFUSALS.includes(attempt.reason), locale).toBe(true);
+        }
+        if (attempt.available) {
+          // One live charge path per workspace, so the next locale needs its own workspace. Released
+          // rather than left behind, which is what the sweeper would otherwise have to do.
+          await db().billingArrangement.update({ where: { id: attempt.arrangementId }, data: { state: "ENDED", endedAt: NOW } });
+        }
+      }
+    });
+
+    it("is not rewritten when a new document version is published", async () => {
+      const { context } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      const before = await db().legalAcceptance.findMany({
+        where: { checkoutContractId: opened.checkoutContractId },
+        orderBy: { legalDocumentId: "asc" },
+        select: { legalDocumentId: true, locale: true, acceptedAt: true },
+      });
+
+      await publishLegalDocument(db(), {
+        kind: "TERMS_OF_SERVICE",
+        locale: "en",
+        contentRef: "https://legal.example.test/terms/en/after-acceptance",
+        effectiveFrom: new Date("2026-06-01T00:00:00.000Z"),
+      });
+
+      const after = await db().legalAcceptance.findMany({
+        where: { checkoutContractId: opened.checkoutContractId },
+        orderBy: { legalDocumentId: "asc" },
+        select: { legalDocumentId: true, locale: true, acceptedAt: true },
+      });
+
+      // Historical acceptance names the version that was accepted, for ever. A newer one existing is not
+      // a reason to say somebody agreed to it.
+      expect(after).toEqual(before);
+      // And the other half, which is what makes this test able to fail: the version that was accepted is
+      // no longer one a *new* checkout may accept.
+      const { context: second } = await freshWorkspace();
+      const staleRefusal = await openCheckoutContract(db(), second, {
+        ...request(),
+        acceptedDocumentIds: before.map((row) => row.legalDocumentId),
+        offeredDigest: await digestOf(second, request()),
+      });
+      expect(staleRefusal).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+    });
+  });
+
   describe("the accepted tiers", () => {
     it("each reach ACTIVE through a verified event, carrying the capacity the accepted table publishes", async () => {
       // #44 asks for Starter/Growth/Scale activation against immutable accepted plan versions, and every
@@ -2222,7 +3431,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const first = await freshWorkspace();
       const second = await freshWorkspace();
       const opened = await openFor(first.context, request());
-      const document = await db().legalDocument.findFirstOrThrow({ where: { contentRef: "terms/en/1" }, select: { id: true } });
+      const document = await db().legalDocument.findFirstOrThrow({ where: { contentRef: "https://legal.example.test/terms/en/1" }, select: { id: true } });
 
       await expect(
         db().$executeRawUnsafe(

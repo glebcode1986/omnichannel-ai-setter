@@ -48,6 +48,13 @@ const OUTCOMES = [
   // keeps the ordinary tone and says when it bites.
   "CANCELING",
   "RESUMED",
+  // Accepting the terms (#47). `ACCEPTED` is not a purchase and does not claim to be one: the acceptance
+  // is recorded and the payment step is what comes next.
+  "ACCEPTED",
+  "TERMS_NOT_ACCEPTED",
+  "TERMS_CHANGED",
+  "OFFER_CHANGED",
+  "CHECKOUT_UNAVAILABLE",
   "MOVED",
   "STALE_STAGE",
   "UNCHANGED_STAGE",
@@ -82,6 +89,13 @@ const REFUSALS = new Set<string>([
   // A conflict is a refusal, and the one most worth marking: it is the word that stops somebody believing
   // their edit or their publish landed.
   "CONFLICT",
+  // Three ways a checkout did not start (#47). Marked as refusals because in every one of them the
+  // person pressed a button and did not get what it offered — and `CHECKOUT_UNAVAILABLE` especially,
+  // because the tone is what stops them trying again and again.
+  "TERMS_NOT_ACCEPTED",
+  "TERMS_CHANGED",
+  "OFFER_CHANGED",
+  "CHECKOUT_UNAVAILABLE",
   "FORBIDDEN",
   "TOO_LONG",
   "TIMING_INCOMPLETE",

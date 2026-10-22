@@ -19,10 +19,13 @@ export function PlanOffers({
   t,
   offers,
   checkoutAvailable,
+  checkoutPath,
 }: {
   readonly t: Translator;
   readonly offers: readonly PlanOffer[];
   readonly checkoutAvailable: boolean;
+  /** Where the acceptance step lives (#47). Linked only when a checkout could actually be completed. */
+  readonly checkoutPath: string;
 }) {
   return (
     <section className="card" data-billing="offers">
@@ -45,6 +48,21 @@ export function PlanOffers({
                 </li>
               ))}
             </ul>
+
+            {/* The link to the acceptance step, and only when one could be completed (#47). Absent rather
+                than disabled, which is this pane's existing rule — and the reason the route is
+                unreachable in a deployment with no provider adapter is that there is nothing on the far
+                side of it. `checkoutAvailable` becomes true by configuring a route whose adapter exists,
+                never by editing a constant. */}
+            {offer.current || !checkoutAvailable ? undefined : (
+              <a
+                className="button"
+                href={`${checkoutPath}?plan=${encodeURIComponent(offer.planVersionId)}&interval=${encodeURIComponent(offer.prices[0]?.interval ?? "MONTH")}`}
+                data-action="choose-plan"
+              >
+                {t.t("billing.choosePlan")}
+              </a>
+            )}
 
             {offer.current ? (
               <p className="muted" data-offer-state="current">
