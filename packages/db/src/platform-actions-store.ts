@@ -210,11 +210,16 @@ export async function listKillSwitches(
     where: {
       liftedAt: null,
       since: { lte: at },
-      // Both disjunctions under `AND`, and that is the whole fix. They used to be two `OR` keys in one
-      // object literal, so the scope filter **replaced** the expiry filter whenever a workspace was
-      // named: the workspace console listed suspensions that had already expired as if they were still in
-      // force, while the unfiltered home list — which never set the second key — excluded them correctly.
-      // Expired rows could also consume the 100-row cap and hide switches that really were active.
+      // `AND` of two disjunctions, not two `OR` keys. Two bare `OR`s in one object literal is the second
+      // silently replacing the first — so with a workspace supplied, which is what the workspace screen
+      // always does, the expiry half was dropped and a switch whose `until` had already passed was listed
+      // as active, while the unfiltered home list excluded it correctly. An incident console reading
+      // "outbound is stopped" while it is not is the wrong direction to be wrong in, and expired rows
+      // could also consume the 100-row cap and hide switches that really were active.
+      //
+      // Both sides of this merge had already made this exact repair independently, with identical code:
+      // it was found here while writing P7-02 and found again on P7-01 under review. `inbox-store.ts`
+      // documents the same trap and defends against it the same way, which is where the shape comes from.
       AND: [
         { OR: [{ until: null }, { until: { gt: at } }] },
         ...(query.workspaceId === undefined ? [] : [{ OR: [{ scope: "GLOBAL" as const }, { workspaceId: query.workspaceId }] }]),

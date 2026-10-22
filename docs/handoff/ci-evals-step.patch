@@ -1,0 +1,19 @@
+Staged because this repository's push credential cannot write .github/workflows (see the handoff).
+
+Apply with: git apply docs/handoff/ci-evals-step.patch
+
+Why: §5 of LAUNCH_READINESS.md is the AI regression gate, and `pnpm evals` is invoked by neither CI job,
+so the golden-case suite is only ever run by hand. `scripts/release/evidence.ts` records that as the
+gate's admitted limitation; this step removes it. The step belongs in the `infrastructure` job because the
+evals need the database.
+
+--- a/.github/workflows/verify.yml
++++ b/.github/workflows/verify.yml
+@@
+       - name: Webhook to queue E2E
+         run: pnpm test:e2e
++
++      # The AI regression gate (#60, LAUNCH_READINESS.md §5). Without this step the golden cases are only
++      # ever run by hand, which is what `scripts/release/evidence.ts` admits for that gate.
++      - name: AI golden cases
++        run: pnpm evals

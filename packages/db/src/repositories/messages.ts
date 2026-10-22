@@ -1,13 +1,10 @@
 import { isValidIdentifier, type MediaReference, type MessageKind } from "@omnichannel/domain";
 
-import type { DbClient, DbExecutor } from "../client";
+import type { DbClient } from "../client";
 import { TenantRecordNotFoundError } from "../errors";
 import type { Message } from "../generated/prisma/client";
 import { cancelPendingFollowUps } from "../followup-store";
 import { profileScopeOf, type BusinessProfileContext } from "../tenancy";
-
-const DEFAULT_MESSAGE_LIMIT = 200;
-const MAX_MESSAGE_LIMIT = 500;
 
 export interface NewInboundMessage {
   readonly conversationId: string;
@@ -94,30 +91,6 @@ export async function appendInboundMessage(
     // follow-up that is already superseded in the table is one no worker has to reason about.
     await cancelPendingFollowUps(tx, scope, input.conversationId, "NEW_INBOUND", input.occurredAt);
     return message;
-  });
-}
-
-export async function listConversationMessages(
-  db: DbExecutor,
-  context: BusinessProfileContext,
-  conversationId: string,
-  options: { readonly limit?: number } = {},
-): Promise<Message[]> {
-  const scope = profileScopeOf(context);
-  const conversation = isValidIdentifier(conversationId)
-    ? await db.conversation.findUnique({
-        where: { workspaceId_businessProfileId_id: { ...scope, id: conversationId } },
-        select: { id: true },
-      })
-    : null;
-  if (conversation === null) {
-    throw new TenantRecordNotFoundError("Conversation");
-  }
-  const limit = Math.min(Math.max(Math.trunc(options.limit ?? DEFAULT_MESSAGE_LIMIT), 1), MAX_MESSAGE_LIMIT);
-  return db.message.findMany({
-    where: { ...scope, conversationId },
-    orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-    take: limit,
   });
 }
 

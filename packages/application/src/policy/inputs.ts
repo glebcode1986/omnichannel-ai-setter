@@ -23,6 +23,7 @@ import type {
   HumanTakeoverState,
   InstagramAfterWindowPolicy,
   QuietHours,
+  RolloutAccess,
   ReasonCode,
   ReviewMode,
   SendAuthority,
@@ -147,6 +148,16 @@ export interface PolicyInput {
    * so with `NO_COMMERCIAL_ACCESS` rather than by omission.
    */
   readonly commercial: CommercialAccess;
+  /**
+   * What the staged rollout permits for this Business Profile (#60, LAUNCH_READINESS.md §18).
+   *
+   * Required for the same reason `commercial` above is, and the argument is worth repeating rather than
+   * referring to: an optional rollout fact would default to "released" at every site that forgot it, and
+   * a staged rollout whose gate is absent by omission is not a staged rollout. Required, the compiler
+   * names every caller that has to decide — and a caller that cannot establish it says so with
+   * `UNRELEASED_ROLLOUT_ACCESS` rather than by leaving it out.
+   */
+  readonly rollout: RolloutAccess;
   readonly capabilities: ChannelCapabilities;
   readonly window: WindowDecision;
   readonly humanAgent: HumanAgentAvailability;

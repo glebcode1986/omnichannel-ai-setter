@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #101 plus the P7-01 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#101 are completed by Claude and awaiting review; **P7-01 / Issue
-#59 is the current task**, and it stays open after this slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #102 plus the P7-02 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#102 are completed by Claude and awaiting review; **P7-02 / Issue
+#60 is the current task**. Issue #59 stays open after its slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -1645,6 +1645,47 @@ is satisfied; the owner asked for Stage E to begin while the Stage D chain is in
 11. No rebases, no force-pushes, and no merges to `main`.
 12. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
+
+## P7-02 / Issue #60 — launch readiness, staged rollout and release evidence
+
+`docs/specs/RELEASE_PROCESS.md` is the operational companion; `LAUNCH_READINESS.md` stays the contract.
+
+What a later session has to know about this slice:
+
+1. **A release can now actually be recorded.** `pnpm release:record` and `pnpm release:review`, both
+   requiring the new `OPERATE_RELEASE` platform permission, both audited. Before them the release tables,
+   the gate catalogue, the severity model and the §18 send gate were reachable only from tests — so the
+   stage in force was always "none", and "none" is the one state in which the rollout gate permits
+   everybody. A schema nobody can write to is not an implementation of §20.
+2. **The §18 gate fails closed when it cannot tell.** `readReleaseInForce` reports `NONE`, `IN_FORCE` or
+   `INDETERMINATE`, and only the first permits. The earlier version searched a window of ten candidates
+   and reported "no release" when it found nothing approved — so recording ten unreviewed proposals, the
+   most common state a candidate is in, would have switched unattended sending on platform-wide.
+3. **`HIGH` disables something.** `releaseDecision(...).disabledCapabilities` is carried into the rollout
+   posture, so a release whose autopilot gate returned `HIGH` keeps autopilot off whatever stage it names.
+   It was computed and read by nothing, which made the severity decoration.
+4. **The release catalogue has its own advisory key.** `release-lock.ts` plus a trigger on all three
+   tables, taken shared by the delivery claim — the `entitlement-lock.ts` pattern, for the same reason: a
+   candidate that would change the answer may not exist yet when the claim starts, so no row lock covers
+   it. The claim's existing "every read is locked" invariant test caught the unlocked version.
+5. **Evidence lives in `scripts/release/evidence.ts`, not in a test.** `suites` are test files and
+   `implementation` is source offered as evidence of itself — separate fields, because three production
+   files listed as suites is how §16's gate came to look covered.
+6. **CI does not run `pnpm evals`**, so §5's gate is settled by a person. The one-line fix is staged at
+   `docs/handoff/ci-evals-step.patch`; it is not applied because this repository's push credential cannot
+   write `.github/workflows`. **Someone with that scope should apply it.**
+7. Four limitations are stated in `RELEASE_PROCESS.md` rather than hidden: the CI gap above, no
+   per-feature rollout (§18's "repeat a staged rollout" has one global stage plus one allowlist), reviewer
+   independence being a process property rather than a constraint, and only `AUTOPILOT` being a capability
+   the send path can actually switch off.
+8. **Fixture clocks must be in the past.** A trigger refuses a review `submitted_at` in the future,
+   because `reviewerStatusOf` takes the newest matching verdict and these tables are append-only — a
+   `PASS` stamped 2099 could never be withdrawn. A suite stamping fixtures with tomorrow's date fails on
+   its own fixtures.
+9. **One commit may be proposed at several stages, once each** (`@@unique([sha, stage])`), and reviews are
+   keyed by `reviewed_sha` with no foreign key to a candidate. Advancing a stage is a new release decision
+   that inherits the verdict already given about that code. Pulling a rollout back during an incident is
+   the kill switch's job, not this table's.
 
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
@@ -4352,3 +4393,172 @@ are still readable afterwards: the content was withheld, not destroyed.
 
 PostgreSQL 1133→1140 and `verify` 3469→3476: all seven new cases are database-gated, which is why the
 no-infrastructure run's skipped count rises by exactly seven.
+
+## P7-01 accepted, and propagated into P7-02 / PR #103 — 2026-10-22
+
+#102 passed at `8f35d35054924beeb0540c35f367734554c8c8ab` (Astra review 5618092993, `APPROVED`), closing
+three blockers in one round: the missing content-access audit, the overwritten expiry predicate and the
+discarded conditional-update counts. Two limitations are carried forward rather than smoothed over: the
+reviewer **did not execute** the integration suites against PostgreSQL (56 cases skipped, "not passed") and
+its two-caller probes were "controlled database-double executions, not live-PostgreSQL concurrency
+certification"; and the approval covers the implemented P7-01 slice only — Issue #59 is not declared
+delivered, and no deployment, payment or legal authorization is implied.
+
+### The merge
+
+One ordinary non-rebase merge into `feat/p7-02-launch-readiness`. The directive's figures were re-measured
+before the branch was touched and matched exactly: merge base `1590582f`, #103 twenty-six ahead and
+**eighty-eight behind**, live head `b3f2a6ec`.
+
+**Three real conflicts, all resolved as unions rather than choices.**
+
+`packages/db/src/platform-actions-store.ts` — **the code did not conflict at all.** Both sides had already
+made the identical `AND` repair to `listKillSwitches`: this branch while writing P7-02, and the parent
+under review after Astra flagged it. Only the two explanatory comments collided. Merged into one that
+keeps both consequences, the `inbox-store.ts` precedent this branch cited, and the fact that the same
+repair was found twice independently. Worth recording as a chain property: **a fix made on a later link
+does not travel back up**, so the earlier link kept shipping the defect and collected the review finding
+for it.
+
+`packages/db/src/platform-read-store.ts` — an import line only; this branch adds
+`loadCoveringSuspensions`, the parent widens the type import to `DbClient`. Both kept. The rest auto-merged
+and the parent's invariants were then checked **by name** rather than assumed: both functions still take
+`DbClient`, both still open their own transaction, `CUSTOMER_CONTENT_READ` is still written inside the
+content transaction between the select and the return, `WORKSPACE_INSPECTED` is still written by
+`readSnapshotWithin`, and the refusal for a scope carrying no session id is intact.
+
+`docs/tasks/CLAUDE_EXECUTION_QUEUE.md` — this branch's compact chain line against the parent's
+two-segments paragraph. The paragraph is substantive and was kept.
+
+### What merged clean and still broke
+
+`PolicyInput` gained a **required** `rollout` field on this branch (P7-02's staged-rollout gate), and
+`apps/web/src/server/simulation-inputs.test.ts` arrives from the other side of the merge, so it built a
+policy input that no longer typechecked. Git had nothing to conflict about: neither side touched the same
+lines, and the breakage is that one side's *type* no longer admits the other side's *fixture*.
+
+Caught by `pnpm typecheck`, which is the gate for this shape — not by a test, and not by the merge. Fixed
+by giving the fixture `NO_STAGED_ROLLOUT`, the posture of a deployment with no staged release in force,
+which is what a test database is and which matches the deliberately permissive `commercial` value the file
+already documents: a restrictive posture would make the rollout gate refuse every case and the suite would
+pass while proving nothing about the simulation inputs it exists to compare.
+
+### The fallout that merges clean, checked by name
+
+| shape | result |
+|---|---|
+| migration drift | **No difference detected** |
+| models against tables | 75 `^model` against 75 `CREATE TABLE` |
+| colliding migration timestamps | none |
+| `packages/db/src/index.ts` barrel | no duplicate exported name |
+| worker loop registry | nine names in `loops`, nine `.close()` inside `allSettled`, prose "nine" |
+| #102's actorless-operator CHECK | every database-writing operator pause carries an actor; the only `byUserId: null` cases are the two tests asserting the CHECK refuses exactly that |
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 218 files, **2134 passed / 1450 skipped (3584)** |
+| PostgreSQL suites | 52 files, **1182/1182** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |
+
+#103 brings the release-evidence and rollout-hold segment: 213→218 files and 3476→3584 tests, PostgreSQL
+50→52 files and 1140→1182 cases, E2E 1220→1234.
+
+Ancestry: the accepted #102 head `8f35d350`, the previous #103 head `b3f2a6ec` and the accepted #101 head
+`79aaee1a` are all ancestors of the new head.
+
+## PR #103 round one — four findings in release evidence and rollout enforcement — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `9b96066` with four blocking findings. All four are real and all four
+are fixed.
+
+### [P1] A lock was taken, and the query then hid the writer it was taken for
+
+The send claim takes `pg_advisory_xact_lock_shared` on the release-catalogue key precisely because the
+candidate that would change its answer **may not exist yet** when the claim starts — no row lock can cover
+a row nobody has written. It then re-resolved the catalogue with `readReleaseInForce(tx, claimedAt)`, and
+`claimedAt` is captured by the coordinator *before* the claim transaction begins. So a restrictive release,
+or a `CHANGES_REQUESTED` verdict, committed while the claim waited for that key was excluded by
+`createdAt <= claimedAt`.
+
+Taking a lock does not repair a query that excludes the winning writer. The guarded read now uses a new
+`readReleaseInForceNow`, which has no as-of bound and therefore sees what is committed once the key is
+held; the comparison with the guard then disagrees and the claim returns `STATE_CHANGED`.
+`readReleaseInForce` keeps its bound and its two deliberate callers — the console showing what was in force
+at an instant, and `readRolloutAccess` resolving the facts a decision is judged from.
+
+### [P1] A note about outstanding work became an accepted limitation
+
+`planGateResults` turned any nonempty `manual` note in the evidence table into `KNOWN_LIMITATION`. Those
+notes say what is **not** settled — "no staging environment exists", "`pnpm evals` is not run by CI", "all
+seven alerts §16 requires are unevidenced" — so the repository's own description of unfinished work
+admitted that work, and a Commercial Beta came out `releasable: true` with AUTOPILOT enabled and nobody
+having judged anything. `LAUNCH_READINESS` asks for limitations that are explicit, bounded **and safe**;
+only a person can supply the last one.
+
+A gate with a manual note is now **omitted**, which `releaseDecision` reports as `GATE_NOT_EVALUATED` and
+which blocks — including when every suite passed, because suites passing says nothing about what the table
+says they do not cover. The route forward is a **written verdict**: a person records `KNOWN_LIMITATION`
+with its bound, or `HIGH`, which switches off the capability that gate guards. Measured end to end: three
+successful commands and no written verdict now gives `releasable: false`; with honest written verdicts the
+decision disables **AUTOPILOT and OPERATOR_VISIBILITY** rather than permitting them.
+
+### [P1] Evidence that named a candidate it had never tested
+
+`--sha` was taken verbatim: not checked for shape, not checked to exist, not checked against the checkout
+whose commands were about to run — and the migration list was always read from `HEAD`. Imported
+`--command-results` were a bare `[{command, exitCode}]`, indistinguishable from the same array copied out
+of a run against any other commit. The reviewer's own probe recorded a forty-character string that exists
+nowhere and printed it as releasable.
+
+Now: the SHA must be forty hex characters and must be a commit in this repository; running the commands
+locally requires the candidate to **be** `HEAD`; imported results must arrive in an envelope naming the
+tested SHA and a `reference` saying where they ran, and that SHA must equal the candidate; and the
+migration list is read from the candidate rather than from `HEAD`.
+
+### [P2] The allowlist transition, for the third time
+
+`setRolloutAutopilot` read the flag, compared, then updated unconditionally and audited unconditionally.
+Two operators adding the same profile both saw `false`, both returned `changed: true` and both filed
+`ROLLOUT_ALLOWLIST_CHANGED`, although one `false -> true` had happened. The same correction as
+`liftKillSwitch` and `revokeSupportAccessSession` on #102: the transition is the predicate, and its count
+decides.
+
+### A flake this work surfaced, and its mechanism
+
+`pnpm test:db` failed once in four runs on a test that was not mine: `release-lock.integration`'s control,
+"finds no lock on that key when nothing has written". Its helper counted `pg_locks` filtered only by lock
+type and key. **`pg_locks` is cluster-wide while advisory locks are per-database**, every suite runs in a
+migrated database of its own and vitest runs those files in parallel — so the control saw the catalogue key
+held by a claim in *somebody else's database*. Latent before this round; adding claims made the coincidence
+likely.
+
+Demonstrated rather than inferred: holding the key in `omnichannel` and counting from
+`omnichannel_shadow` gives **1** without a database filter and **0** with one. The helper now scopes to
+`current_database()`, and `pnpm test:db` ran clean four times after.
+
+### Mutation evidence
+
+| reverted | caught by |
+|---|---|
+| the catalogue read back to `claimedAt` | *refuses a claim when the release catalogue moved after the instant the coordinator captured* |
+| a manual note becoming its own verdict | four planner/CLI cases, including *cannot make a release approvable on its own, however green every command was* |
+| the CLI's envelope and SHA checks | *refuses a bare array…* and *refuses results recorded against another commit* |
+| the allowlist's conditional transition | *lets exactly one of two concurrent selections report the transition, in both directions* |
+
+The concurrency cases force the interleaving with a barrier holding both transactions at their first read;
+the claim case runs in a database of its own because **release evidence is append-only** — a trigger
+refuses the delete — so a candidate recorded in the shared suite could never be taken back.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 219 files, **2142 passed / 1453 skipped (3595)** |
+| PostgreSQL suites | 52 files, **1185/1185** (four consecutive clean runs) |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |

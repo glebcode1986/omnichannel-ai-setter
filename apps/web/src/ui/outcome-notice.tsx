@@ -64,6 +64,12 @@ const OUTCOMES = [
   "SESSION_REVOKED",
   "ALREADY_REVOKED",
   "REEXAMINED",
+  // The limited-rollout allowlist (#60). Three rather than two, because clicking twice should say that
+  // nothing happened: no audit row was written, and a success message for an unmade change is how an
+  // operator comes to believe a profile is on the list when it was never added.
+  "ALLOWLIST_ADDED",
+  "ALLOWLIST_REMOVED",
+  "ALLOWLIST_UNCHANGED",
   "NOT_PERMITTED",
   "ADMIN_REFUSED",
   "MOVED",

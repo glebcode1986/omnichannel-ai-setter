@@ -12,17 +12,10 @@
  * persistence boundary is a promise the compiler cannot check, and these particular identifiers decide
  * which sends a switch covers.
  */
-import {
-  toBusinessProfileId,
-  toChannelAccountId,
-  toUserId,
-  toWorkspaceId,
-  type AutomationSuspension,
-  type SuspensionReason,
-  type SuspensionScope,
-} from "@omnichannel/domain";
+import type { AutomationSuspension, SuspensionReason, SuspensionScope } from "@omnichannel/domain";
 
 import type { DbClient } from "./client";
+import { loadCoveringSuspensions } from "./suspension-covering";
 
 export interface SuspensionTargetQuery {
   readonly workspaceId: string;
@@ -90,29 +83,9 @@ export function createSuspensionStore(db: DbClient): SuspensionStore {
 
   return {
     async loadCovering(target) {
-      const rows = await db.automationSuspension.findMany({
-        where: {
-          liftedAt: null,
-          OR: [
-            { scope: "GLOBAL" },
-            { scope: "WORKSPACE", workspaceId: target.workspaceId },
-            { scope: "BUSINESS_PROFILE", workspaceId: target.workspaceId, businessProfileId: target.businessProfileId },
-            { scope: "CHANNEL_ACCOUNT", workspaceId: target.workspaceId, channelAccountId: target.channelAccountId },
-          ],
-        },
-        select: { scope: true, workspaceId: true, businessProfileId: true, channelAccountId: true, reason: true, note: true, since: true, until: true, byUserId: true },
-      });
-      return rows.map((row) => ({
-        scope: row.scope,
-        ...(row.workspaceId === null ? {} : { workspaceId: toWorkspaceId(row.workspaceId) }),
-        ...(row.businessProfileId === null ? {} : { businessProfileId: toBusinessProfileId(row.businessProfileId) }),
-        ...(row.channelAccountId === null ? {} : { channelAccountId: toChannelAccountId(row.channelAccountId) }),
-        reason: row.reason,
-        ...(row.note === null ? {} : { note: row.note }),
-        since: row.since,
-        ...(row.until === null ? {} : { until: row.until }),
-        ...(row.byUserId === null ? {} : { byUserId: toUserId(row.byUserId) }),
-      }));
+      // One predicate for every path that asks what is paused; `suspension-covering.ts` records the four
+      // answers that replaced.
+      return loadCoveringSuspensions(db, target);
     },
 
     async suspend(input) {

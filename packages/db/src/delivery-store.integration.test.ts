@@ -98,6 +98,35 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
     return { operationId, draftId: aiDraftId };
   };
 
+  /**
+   * The whole precedence table, read through the claim's own load.
+   *
+   * `resolveEffectiveMode` declares itself the single implementation of this rule — "a second
+   * implementation of a rule that governs whether we send to a customer is the kind of duplication that
+   * eventually disagrees with itself" — and there were four, with the two that decide whether a reply
+   * goes out being the two that did not call it. They agreed; the point is that nothing made them.
+   *
+   * Driven through `loadForSend` rather than through the function, because what matters is that the send
+   * path's answer *is* the rule's answer.
+   */
+  const modeFromSendPath = async (override: "OFF" | "DRAFT" | "AUTOPILOT" | null, accountMode: "OFF" | "DRAFT" | "AUTOPILOT" | null) => {
+    await database.db.conversation.update({ where: { id: profile.conversationId }, data: { modeOverride: override } });
+    // Written rather than updated: `updateMany` silently matches nothing when the row is absent, and an
+    // earlier case in this file may have removed it — which is how the default-policy case came to read
+    // `OFF` and look like a precedence bug rather than a missing fixture.
+    await database.db.automationPolicy.deleteMany({ where: { ...scope(), channelAccountId: null } });
+    await database.db.automationPolicy.create({ data: { ...scope(), channelAccountId: null, mode: "DRAFT", mandatoryReviewReasons: [] } });
+    await database.db.automationPolicy.deleteMany({ where: { ...scope(), channelAccountId: profile.channelAccount.id } });
+    if (accountMode !== null) {
+      await database.db.automationPolicy.create({
+        data: { ...scope(), channelAccountId: profile.channelAccount.id, mode: accountMode, mandatoryReviewReasons: [] },
+      });
+    }
+    const { operationId } = await scheduleDelivery();
+    const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+    return context?.mode;
+  };
+
   const statusOf = async (operationId: string) =>
     (await database.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } })).status;
 
@@ -402,6 +431,100 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
 
       expect((await store.claim(context, NOW)).kind).toBe("STATE_CHANGED");
       expect((await database.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } })).status).toBe("SCHEDULED");
+    }, 120_000);
+
+    it("claims normally while the release catalogue has not moved, which is what the next case changes", async () => {
+      // The control. Without it a guard that refused every claim would satisfy the case below.
+      const operationId = await composeDelivery("Nothing moved underneath this one.");
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId, NOW);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+
+      expect((await store.claim(context, NOW)).kind).toBe("CLAIMED");
+    }, 120_000);
+
+    it("refuses a claim when the release catalogue moved after the instant the coordinator captured", async () => {
+      // Astra's P1 on PR #103. The claim takes the release-catalogue key precisely because the candidate
+      // that would change its answer may not exist yet when the claim starts — and it then re-resolved the
+      // catalogue with `claimedAt`, an instant the coordinator captured *before* the transaction began. A
+      // release committed while this claim waited for that key was therefore excluded by
+      // `createdAt <= claimedAt`: the lock was acquired, and the query hid the writer it had been taken
+      // for. Taking a lock does not repair a query that excludes the winning writer.
+      //
+      // `claimedAt` is `NOW`, a fixed instant in the past, and the record below is stamped by the
+      // database's own clock — committed strictly after the guard was judged, which is the shape of the
+      // race without having to orchestrate one. That the claim really waits for the key is the subject of
+      // `release-lock.integration.test.ts`; this is about what it sees once it has it.
+      //
+      // In a database of its own because **release evidence is append-only** — a trigger refuses the
+      // delete — so a candidate recorded here could never be taken back, and every later case in this
+      // file would fail closed against a premise it never set.
+      const fresh = await createMigratedTestDatabase();
+      try {
+        const seeded = await seedWorkspace(fresh.db, "release-gate");
+        const [only] = seeded.profiles as [SeededProfile];
+        const composedAt = new Date(NOW.getTime() + 1_000);
+        const compose = async (operationId: string, text: string) => {
+          await fresh.db.deliveryJobRecord.create({
+            data: {
+              workspaceId: only.context.workspaceId,
+              businessProfileId: only.businessProfileId,
+              humanText: text,
+              composedByUserId: only.context.userId,
+              conversationId: only.conversationId,
+              operationId,
+              correlationId: operationId,
+              status: "SCHEDULED",
+              scheduledFor: composedAt,
+              selectedDelayMs: 0,
+              authority: "HUMAN_APPROVED",
+              approvedByUserId: only.context.userId,
+              approvedAt: composedAt,
+              approvedReviewMode: "NORMAL",
+              decisionKey: `compose-${operationId}`,
+            },
+          });
+          return operationId;
+        };
+
+        const store = createDeliveryStore(fresh.db);
+        const control = await compose("op_release_control", "Claimed while the catalogue was empty.");
+        const operationId = await compose("op_release_gate", "Judged while the platform was unreleased.");
+
+        // The control, in this same database: with an empty catalogue the claim goes through, so the
+        // refusal below is the catalogue changing rather than anything about these fixtures.
+        const controlContext = await store.loadForSend(control, composedAt);
+        if (controlContext === undefined) {
+          throw new Error("no delivery context");
+        }
+        expect((await store.claim(controlContext, composedAt)).kind).toBe("CLAIMED");
+
+        const judged = await store.loadForSend(operationId, composedAt);
+        if (judged === undefined) {
+          throw new Error("no delivery context");
+        }
+
+        // One unreviewed candidate is enough: an establishable rollout is the only thing that permits,
+        // and a catalogue that cannot be established fails closed. No review, nothing approved.
+        await fresh.db.releaseRecord.create({
+          data: {
+            sha: "e".repeat(40),
+            actorUserId: only.context.userId,
+            stage: "INTERNAL",
+            rollbackPlan: "redeploy the previous tag",
+            summary: "recorded while a claim was in flight",
+          },
+        });
+
+        expect((await store.claim(judged, composedAt)).kind).toBe("STATE_CHANGED");
+        // And no send was attempted: the job is still where the scheduler left it.
+        const after = await fresh.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } });
+        expect(after.status).toBe("SCHEDULED");
+      } finally {
+        await fresh.dispose();
+      }
     }, 120_000);
 
     it("refuses a second claim after the send was already recorded", async () => {
@@ -1374,12 +1497,44 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       const immutableCatalog = reads.filter(
         (read) => read.includes('"plan_versions"') || read.includes('"plan_definitions"') || read.includes('"addon_versions"'),
       );
-      expect(advisory).toHaveLength(2);
+      // The release catalogue, re-read under its own advisory key (#60). Three statements, because the
+      // stage in force is the stage of the newest candidate whose gates permit a release and whose own SHA
+      // a reviewer passed — so the gate results and the verdicts are part of the question, not decoration
+      // on the answer. Covered by a key rather than a row lock for the reason the suspensions and the
+      // override are: the candidate that would change the answer may not exist yet when the claim starts,
+      // and no lock can be taken on a row nobody has inserted. Here that is the normal case rather than the
+      // edge one, since what moves the stage is an INSERT.
+      //
+      // The rollout's *other* half — whether this Business Profile is one of the explicitly selected ones —
+      // is deliberately absent from this list: it is a column on the `business_profiles` row this
+      // transaction already holds `FOR UPDATE`, and it is selected from that locked read rather than from a
+      // second unlocked one.
+      const releaseCatalogue = reads.filter(
+        (read) =>
+          read.includes('"release_records"') || read.includes('"release_gate_results"') || read.includes('"release_reviews"'),
+      );
+      expect(advisory).toHaveLength(3);
       expect(suspensions).toHaveLength(1);
       expect(entitlement).toHaveLength(3);
       expect(immutableCatalog).toHaveLength(3);
+      // Two rather than three, and the number is this fixture's rather than the design's: no release is
+      // recorded here, so `readReleaseInForce` returns early instead of asking for verdicts about
+      // candidates that do not exist. The assertion that actually holds the invariant is the one at the
+      // end — a release read that stopped being accounted for here would land in `rowReads` and fail
+      // there, whatever this count said.
+      expect(releaseCatalogue).toHaveLength(2);
+      // Asserted rather than assumed: if the flag were ever read in its own statement this would still be
+      // the locked read, and the unlocked one would land in `rowReads` below and fail there.
+      expect(reads.filter((read) => read.includes('"rollout_autopilot"'))).toEqual([
+        reads.find((read) => read.includes('"business_profiles"') && read.includes("FOR UPDATE")),
+      ]);
       const rowReads = reads.filter(
-        (read) => !advisory.includes(read) && !suspensions.includes(read) && !entitlement.includes(read) && !immutableCatalog.includes(read),
+        (read) =>
+          !advisory.includes(read) &&
+          !suspensions.includes(read) &&
+          !entitlement.includes(read) &&
+          !immutableCatalog.includes(read) &&
+          !releaseCatalogue.includes(read),
       );
       expect(rowReads.length).toBeGreaterThan(0);
       expect(rowReads.filter((read) => !/FOR (UPDATE|SHARE)$/.test(read))).toEqual([]);
@@ -1395,4 +1550,29 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       await logged.$disconnect();
     }, 120_000);
   });
+
+  describe("which mode the send path reads", () => {
+    it("follows the one precedence rule, for every case of it", async () => {
+      // Override first, then the account's own policy, then the profile default, and `OFF` when nothing
+      // has been written. The profile default is `DRAFT` throughout, so a reading that fell through to it
+      // by accident is distinguishable from one that honoured what was asked.
+      expect(await modeFromSendPath("AUTOPILOT", "OFF"), "a conversation's own override wins").toBe("AUTOPILOT");
+      expect(await modeFromSendPath("OFF", "AUTOPILOT"), "even when the override is the restrictive one").toBe("OFF");
+      expect(await modeFromSendPath(null, "AUTOPILOT"), "then the policy written for this account").toBe("AUTOPILOT");
+      expect(await modeFromSendPath(null, null), "then the profile's default").toBe("DRAFT");
+    }, 180_000);
+
+    it("reads OFF when the profile never opted into automation at all", async () => {
+      // The floor, and the direction it has to fail in: a profile with no policy row has not asked for
+      // anything to be sent on its behalf.
+      await database.db.conversation.update({ where: { id: profile.conversationId }, data: { modeOverride: null } });
+      await database.db.automationPolicy.deleteMany({ where: scope() });
+      const { operationId } = await scheduleDelivery();
+
+      const context = await createDeliveryStore(database.db).loadForSend(operationId, NOW);
+
+      expect(context?.mode).toBe("OFF");
+    }, 180_000);
+  });
+
 });

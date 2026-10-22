@@ -61,6 +61,7 @@ import {
   recordUsage,
   type BusinessProfileContext,
   type PolicyView,
+  readRolloutAccess,
 } from "@omnichannel/db";
 import { commercialAccessOf, NO_CAPABILITIES, resolveStyleProfile, type ChannelCapabilities, type StyleProfileLayer } from "@omnichannel/domain";
 import type { KnowledgeHit, PolicyInput, PolicyLimits, StyleHit } from "@omnichannel/application";
@@ -305,6 +306,10 @@ export async function runSimulation(
   // Resolved before the policy call rather than inside it, because that expression is a conditional and
   // this is an await.
   const commercial = commercialAccessOf(await readEntitlement(getDb(), scope.workspaceId, now));
+  // And the real staged rollout (#60), for the same reason: a Test Drive that assumed unattended sending
+  // was released would preview a send the product would hold for a person, which is the one thing a
+  // playground exists to show honestly. The run still cannot send whatever either value says.
+  const rollout = await readRolloutAccess(getDb(), scope, now);
   const draft = saved[0];
   const policy =
     draft === undefined || policyUsed === undefined
@@ -314,6 +319,7 @@ export async function runSimulation(
           // send the product would refuse — and an owner comparing the playground with production would
           // be comparing two different products. The run still cannot send whatever this says.
           commercial: commercial,
+          rollout,
           mode: policyUsed.mode as "OFF" | "DRAFT" | "AUTOPILOT",
           aiEnabled: true,
           takeover: { state: "NONE" },

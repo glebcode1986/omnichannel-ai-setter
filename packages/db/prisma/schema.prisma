@@ -1415,6 +1415,7 @@ model User {
   leadStageTransitions      LeadStageTransition[]     @relation("LeadStageActor")
   openedCheckouts           CheckoutContract[]        @relation("CheckoutActor")
   platformMembership        PlatformMember?           @relation("PlatformMemberUser")
+  proposedReleases          ReleaseRecord[]           @relation("ReleaseActor")
   legalAcceptances          LegalAcceptance[]         @relation("AcceptanceActor")
   leadQualificationAnswers  LeadQualificationAnswer[] @relation("LeadQualificationActor")
 
@@ -1544,6 +1545,14 @@ model BusinessProfile {
   workspaceId String                @map("workspace_id")
   name        String
   status      BusinessProfileStatus @default(SETUP)
+  /// Whether this profile is on the explicit list §18 of LAUNCH_READINESS.md calls for at the
+  /// `LIMITED_AUTOPILOT` stage (#60).
+  ///
+  /// Consulted at that one stage and nowhere else: before it nobody sends unattended whatever this says,
+  /// and from `COMMERCIAL_BETA` onwards the plan governs — a rollout that kept an allowlist for ever
+  /// would be a permanent gate wearing a temporary name. Defaults to false, because the spec's own
+  /// default is DRAFT and AUTOPILOT "requires explicit enablement".
+  rolloutAutopilot Boolean           @default(false) @map("rollout_autopilot")
   createdAt   DateTime              @default(now()) @map("created_at")
   updatedAt   DateTime              @updatedAt @map("updated_at")
 
@@ -2935,6 +2944,9 @@ enum PlatformAuditKind {
   KILL_SWITCH_PULLED
   KILL_SWITCH_LIFTED
   RECONCILIATION_REQUESTED
+  RELEASE_RECORDED
+  RELEASE_REVIEW_RECORDED
+  ROLLOUT_ALLOWLIST_CHANGED
 }
 
 /// A member of staff, with an internal role (#59).
@@ -3054,4 +3066,122 @@ model PlatformAuditEvent {
   @@index([severity, occurredAt])
   @@index([workspaceId, occurredAt])
   @@map("platform_audit_events")
+}
+
+/// The staged rollout of `LAUNCH_READINESS.md` §18, in order (#60).
+enum RolloutStage {
+  INTERNAL
+  DESIGN_PARTNERS_DRAFT
+  LIMITED_AUTOPILOT
+  COMMERCIAL_BETA
+  GENERAL_AVAILABILITY
+}
+
+/// `LAUNCH_READINESS.md`'s four release severities (#60).
+enum GateSeverity {
+  PASS
+  KNOWN_LIMITATION
+  HIGH
+  BLOCKER
+}
+
+/// What an independent reviewer said about one exact commit (#60).
+enum ReviewVerdict {
+  PASS
+  CHANGES_REQUESTED
+}
+
+/// A release candidate: one immutable commit, and the evidence gathered about it (#60).
+///
+/// Immutable by trigger, because it is evidence. What is deliberately **not** on it is any stored
+/// judgement: there is no `releasable` column and no `reviewerStatus` column, because both are functions
+/// of the rows below and a stored copy is a second answer that can disagree with its own inputs.
+/// `releaseDecision` and `reviewerStatusOf` recompute them every time they are asked.
+model ReleaseRecord {
+  id           String       @id @default(uuid(7))
+  /// The full 40-character commit SHA. Abbreviated forms are refused by a CHECK: an abbreviation is
+  /// exactly how a verdict given to one commit comes to be read as a verdict about another.
+  sha          String
+  /// Who proposed this release. A person, not a process.
+  actorUserId  String       @map("actor_user_id")
+  stage        RolloutStage
+  /// How to get back. A release with no stated way back is not a plan, so this is required.
+  rollbackPlan String       @map("rollback_plan")
+  /// The migrations this candidate carries, newest last. Recorded because a rollback has to know.
+  migrations   String[]     @default([])
+  /// The feature flags enabled for this release, by name.
+  enabledFlags String[]     @default([]) @map("enabled_flags")
+  /// Free-text context for a human reader: what this release is for.
+  summary      String
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  actor   User                @relation("ReleaseActor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  results ReleaseGateResult[]
+
+  /// One commit, one record per stage. §18 is a progression, so advancing a build from `LIMITED_AUTOPILOT`
+  /// to `COMMERCIAL_BETA` is a second release decision with its own evidence and its own reviewer status —
+  /// not an edit to the first, which nothing here can edit anyway. The key also means re-running the
+  /// release script for a stage already recorded is refused rather than silently duplicated.
+  @@unique([sha, stage])
+  @@index([sha])
+  @@index([createdAt])
+  @@index([stage, createdAt])
+  @@map("release_records")
+}
+
+/// One launch gate's verdict for one release candidate (#60, LAUNCH_READINESS.md).
+///
+/// `gateId` is the domain's own gate identifier rather than a foreign key, because the catalogue of gates
+/// lives in `packages/domain/src/release.ts` and in the spec — not in a table somebody could edit
+/// independently of either. `release-store.integration.test.ts` holds every stored id against the
+/// domain's catalogue, and `releaseDecision` reports one it does not define as `UNKNOWN_GATE` rather than
+/// ignoring the row — because ignoring it is how a gate removed from the catalogue would make an archived
+/// record carrying its `BLOCKER` read as releasable.
+///
+/// Evidence is required for every severity, including `PASS`: the spec refuses "Claude ran it locally"
+/// without recorded commands and results, and a pass with nothing behind it is that claim exactly.
+model ReleaseGateResult {
+  id        String       @id @default(uuid(7))
+  releaseId String       @map("release_id")
+  gateId    String       @map("gate_id")
+  severity  GateSeverity
+  /// What was actually run or read: a command, a CI run URL, a suite name, a signed checklist.
+  evidence  String
+  /// Why this is acceptable. Required for `KNOWN_LIMITATION` by a CHECK: an unbounded limitation is not one.
+  note      String?
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  release ReleaseRecord @relation(fields: [releaseId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  /// One verdict per gate per release. A second would be two answers to one question.
+  @@unique([releaseId, gateId])
+  @@map("release_gate_results")
+}
+
+/// An independent reviewer's verdict, and the commit it was given about (#60).
+///
+/// Append-only, and `reviewedSha` is deliberately **not** constrained to equal the release's own SHA. That
+/// is the inverse of the obvious design and it is the important part: a verdict given to an earlier commit
+/// has to be *recordable*, because its existence is the fact somebody needs to see — this repository has
+/// had a stale `CHANGES_REQUESTED` sitting on one SHA while the branch head was two commits further on,
+/// and the danger was precisely that it read as current.
+///
+/// So the database records any verdict about any commit, and `reviewerStatusOf` decides which one counts:
+/// the newest whose reviewed SHA *is* the release's own, and no other. Forbidding the row would have
+/// destroyed the evidence instead of interpreting it.
+model ReleaseReview {
+  id          String        @id @default(uuid(7))
+  /// Who reviewed. Free text: an independent reviewer is not a user of this product.
+  reviewer    String
+  verdict     ReviewVerdict
+  /// The full commit SHA this verdict was given about, and the only thing it is attached to.
+  reviewedSha String        @map("reviewed_sha")
+  /// Where the verdict can be read: a review URL, a comment link.
+  reference   String?
+  /// When the reviewer said it. Caller-supplied, and bounded to the past by a trigger — see the migration.
+  submittedAt DateTime      @map("submitted_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([reviewedSha, submittedAt])
+  @@map("release_reviews")
 }

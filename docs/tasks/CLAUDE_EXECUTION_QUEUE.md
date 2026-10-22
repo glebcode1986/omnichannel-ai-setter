@@ -11,7 +11,7 @@ Everything implemented so far is one stacked chain of unmerged PRs, each branch 
 each awaiting independent review in dependency order:
 
 `#26 -> #49 -> #50 -> #51 -> #52 -> #63 -> #64 -> #65 -> #66 -> #67 -> #68 -> #69 -> #70 -> #71 -> #72`
-` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82`
+` -> #73 -> #74 -> #75 -> #76 -> #77 -> #78 -> #79 -> #80 -> #81 -> #82 -> ... -> #105`
 
 **The chain is two segments, and the ancestry is not what the PR numbers suggest.** Segment two
 (`#83 -> #84 -> ... -> #105`) forked from an **older** #82 at `c098c18290bb88ea749a8b4d708912870044df89`,
@@ -21,7 +21,32 @@ joined to the accepted #82 by an **ordinary non-rebase merge**, recorded below. 
 needs both segments; measure the graph with `git merge-base --is-ancestor` rather than inferring it from
 numbering.
 
-Nothing is merged to `main`.
+PRs #26 through #102 are accepted; this branch is #103. `docs/handoff/CURRENT_HANDOFF.md` carries the
+current list. Nothing is merged to `main`.
+
+### Task definition — P7-02 / Issue #60, launch readiness, staged rollout and release evidence
+
+**Branch `feat/p7-02-launch-readiness`**, based on `feat/p7-01-admin-operations`. See
+`docs/specs/RELEASE_PROCESS.md` for the operational companion to `LAUNCH_READINESS.md`.
+
+Two things a supervisor should know without reading the diff.
+
+**A release can now be recorded, and could not before.** `pnpm release:record` and `pnpm release:review`
+are the producers §20 asks for; both need the new `OPERATE_RELEASE` platform permission and both write a
+platform audit row with the fact they record. The record is read back at `/admin/releases`, and the
+limited-rollout allowlist §18 stage three needs is on the workspace screen. Until this slice every one of
+those tables was reachable only from a test, so the stage in force was always "none" — and "none" is the
+one state in which the §18 gate permits every profile on the platform.
+
+**One action is outstanding and needs a credential this session does not have.** CI runs neither
+`pnpm evals` step, so §5's AI regression gate is settled by a person rather than by a run. The one-line
+fix is staged at `docs/handoff/ci-evals-step.patch` and is **not applied**, because the push credential
+here cannot write `.github/workflows`. Somebody with that scope should apply it; until then the gate
+carries that admission in its own recorded evidence.
+
+Three further limitations are stated in `RELEASE_PROCESS.md` rather than left to be discovered: there is
+no per-feature rollout, reviewer independence is a process property rather than a constraint the schema
+enforces, and `AUTOPILOT` is the only capability a `HIGH` can actually switch off on the send path.
 
 ### Correction — what is true on 2026-10-19, superseding the dated statements below
 
@@ -60,7 +85,61 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — remediating Astra's three findings on P7-01 / PR #102
+### Current work — remediating Astra's four findings on P7-02 / PR #103
+
+`CHANGES_REQUESTED` at `9b96066`, four blocking findings, all real and all fixed on this branch. #104+
+held, nothing to `main`, no reviewer assigned or started by me.
+
+**[P1] A lock taken, and the query hiding the writer it was taken for.** The send claim takes the
+release-catalogue key because the candidate that would change its answer may not exist yet — then
+re-resolved the catalogue with `claimedAt`, captured before the transaction began, so a release committed
+during the wait was excluded by `createdAt <= claimedAt`. New `readReleaseInForceNow` has no as-of bound;
+`readReleaseInForce` keeps its two deliberate callers.
+
+**[P1] A note about outstanding work became an accepted limitation.** Any nonempty `manual` note became
+`KNOWN_LIMITATION`, so "no staging environment exists" and "evals are not run by CI" admitted themselves
+and a Commercial Beta came out releasable with AUTOPILOT on. Such a gate is now omitted and blocks; a
+**written verdict** is the only way past, and the honest one (`HIGH`) disables the capability the gate
+guards.
+
+**[P1] Evidence that named a candidate it had never tested.** `--sha` unchecked, migrations always from
+`HEAD`, imported results a bare array with no provenance. Now: shape and existence checked, local runs
+must be `HEAD`, imported results need an envelope naming the tested SHA and where it ran, migrations read
+from the candidate.
+
+**[P2] The allowlist transition, the third of this class.** `setRolloutAutopilot` now lets the conditional
+update's count decide, as `liftKillSwitch` and `revokeSupportAccessSession` already do.
+
+**A flake this surfaced:** `release-lock.integration`'s control counted `pg_locks` without a database
+filter. `pg_locks` is cluster-wide, advisory locks are per-database, suites run in parallel in their own
+databases — so it saw another database's lock. Proven by holding the key in one database and counting from
+another: 1 unfiltered, 0 scoped. Fixed and four clean `pnpm test:db` runs.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (219 files, 2142 passed / 1453 skipped);
+PostgreSQL 52 files 1185/1185; Redis 55/55; E2E 106 files 1234/1234.
+
+### Earlier — propagating the accepted P7-01 into P7-02 / PR #103
+
+#102 passed at `8f35d350` (Astra review 5618092993), so this branch is the next link. One ordinary
+non-rebase merge, one branch only — #104+ untouched, nothing to `main`, no reviewer assigned or started by
+me. #103 was **88 commits behind** while carrying 26 of its own.
+
+**Three conflicts, all resolved as unions.** In `platform-actions-store.ts` the *code* did not conflict:
+both sides had already made the identical `AND` repair to `listKillSwitches`, so only the comments
+collided — a reminder that a fix made on a later link does not travel back up, which is why the earlier
+link kept the defect and collected the finding. In `platform-read-store.ts` only an import line; the
+parent's audit invariants were then verified by name in the merged file. In the execution queue, this
+branch's compact chain line against the parent's two-segments paragraph, both kept.
+
+**One thing merged clean and still broke.** `PolicyInput` gained a required `rollout` field on this
+branch, and `apps/web/src/server/simulation-inputs.test.ts` comes from the other side, so its fixture
+stopped typechecking — neither side touched the same lines. Caught by `pnpm typecheck`, fixed with
+`NO_STAGED_ROLLOUT`, the posture of a deployment with no staged release in force.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (218 files, 2134 passed / 1450 skipped);
+PostgreSQL 52 files 1182/1182; Redis 55/55; E2E 106 files 1234/1234.
+
+### Earlier — remediating Astra's three findings on P7-01 / PR #102
 
 `CHANGES_REQUESTED` at `3317e74`, three blocking findings, all real and all fixed on this branch. #103+
 still held, nothing to `main`, no reviewer assigned or started by me.

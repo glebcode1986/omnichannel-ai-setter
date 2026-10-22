@@ -58,6 +58,7 @@ const conversation = (overrides: Partial<ConversationDetail> = {}): Conversation
   lastOutboundAt: new Date("2026-09-30T10:06:00.000Z"),
   messages: [],
   pendingSends: [],
+  pendingSendsBeyondWindow: 0,
   latestDraft: draft(),
   ...overrides,
 });

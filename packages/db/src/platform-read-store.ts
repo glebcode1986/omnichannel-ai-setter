@@ -29,6 +29,7 @@
  */
 import {
   activeSuspension,
+  SUSPENSION_SCOPES,
   supportScopeGrants,
   type AutomationSuspension,
   type EntitlementSnapshot,
@@ -38,6 +39,7 @@ import {
 } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { loadCoveringSuspensions } from "./suspension-covering";
 import { readEntitlement } from "./entitlement-store";
 import { recordPlatformAuditEvent } from "./platform-audit-store";
 import { DbInputError, PlatformPermissionError } from "./errors";
@@ -102,6 +104,14 @@ export interface ProfileDiagnostic {
   readonly name: string;
   readonly status: string;
   readonly channelAccounts: number;
+  /**
+   * Whether this profile is on the limited-rollout autopilot allowlist (#60, §18 stage three).
+   *
+   * Here because an operator who can change the list has to be able to see it. Without it the flag was a
+   * column nothing displayed, so "which profiles send unattended during the limited rollout" was a
+   * question only a SQL prompt could answer — which is the thing this console exists to end.
+   */
+  readonly rolloutAutopilot: boolean;
 }
 
 /**
@@ -172,7 +182,7 @@ async function readSnapshotWithin(
     db.businessProfile.findMany({
       where: { workspaceId },
       orderBy: [{ createdAt: "asc" }],
-      select: { id: true, name: true, status: true, _count: { select: { channelAccounts: true } } },
+      select: { id: true, name: true, status: true, rolloutAutopilot: true, _count: { select: { channelAccounts: true } } },
     }),
     db.channelAccount.findMany({
       where: { workspaceId },
@@ -201,6 +211,7 @@ async function readSnapshotWithin(
       name: profile.name,
       status: profile.status,
       channelAccounts: profile._count.channelAccounts,
+      rolloutAutopilot: profile.rolloutAutopilot,
     })),
     channels: channels.map((account) => ({
       channelAccountId: account.id,
@@ -257,47 +268,56 @@ async function readEntitlementFor(db: DbExecutor, workspaceId: string, at: Date)
  * as the wide one.
  */
 async function readActivePause(db: DbExecutor, workspaceId: string, at: Date): Promise<SupportSnapshot["pause"]> {
-  const rows = await db.automationSuspension.findMany({
-    where: { liftedAt: null, OR: [{ scope: "GLOBAL" }, { workspaceId }] },
-    select: { scope: true, workspaceId: true, businessProfileId: true, channelAccountId: true, reason: true, note: true, since: true, until: true, byUserId: true },
-  });
-  const suspensions = rows.map(
-    (row) =>
-      ({
-        scope: row.scope,
-        ...(row.workspaceId === null ? {} : { workspaceId: row.workspaceId }),
-        ...(row.businessProfileId === null ? {} : { businessProfileId: row.businessProfileId }),
-        ...(row.channelAccountId === null ? {} : { channelAccountId: row.channelAccountId }),
-        reason: row.reason,
-        ...(row.note === null ? {} : { note: row.note }),
-        since: row.since,
-        ...(row.until === null ? {} : { until: row.until }),
-        ...(row.byUserId === null ? {} : { byUserId: row.byUserId }),
-      }) as AutomationSuspension,
-  );
-  // The target has to name a profile and a channel account for the domain's `covers` to judge the narrow
-  // scopes. Any one of the workspace's own will do for "is this workspace paused at all", and the widest
-  // match wins regardless, so a sentinel would only ever miss a narrow switch — hence the real ids.
-  for (const candidate of await db.channelAccount.findMany({ where: { workspaceId }, select: { id: true, businessProfileId: true }, take: 50 })) {
-    const active = activeSuspension(
-      { workspaceId, businessProfileId: candidate.businessProfileId, channelAccountId: candidate.id } as never,
-      suspensions,
-      at,
-    );
-    if (active !== undefined) {
-      return { scope: active.scope, reason: active.reason, since: active.since, until: active.until ?? null, byOperator: active.byUserId !== undefined };
-    }
-  }
-  // No channel account to judge against: only the wide scopes can apply.
-  const wide = suspensions.find(
-    (suspension) =>
-      (suspension.scope === "GLOBAL" || (suspension.scope === "WORKSPACE" && suspension.workspaceId === workspaceId)) &&
-      suspension.since.getTime() <= at.getTime() &&
-      (suspension.until === undefined || suspension.until.getTime() > at.getTime()),
-  );
-  return wide === undefined
+  // Through the one reader, like every other path that asks what is paused. This file had its own copy
+  // of the predicate and its own mapping to domain values; it agreed with the delivery claim, which is
+  // more than two of the other three managed.
+  const suspensions = await loadCoveringSuspensions(db, { workspaceId });
+  // Every suspension is its own witness, so nothing has to be enumerated.
+  //
+  // This used to probe up to fifty of the workspace's channel accounts and ask the domain whether each
+  // was paused — `take: 50`, and with no `orderBy`, so the fifty were whichever ones the heap returned.
+  // A `CHANNEL_ACCOUNT`- or `BUSINESS_PROFILE`-scoped switch on anything outside that arbitrary set was
+  // simply not found, and the screen then said nothing was paused. The send gate re-reads independently,
+  // so outbound really was stopped; the console was the thing that was wrong, which on an incident screen
+  // is its own kind of harm — an operator looking for "why is nothing going out?" was told to look
+  // elsewhere.
+  //
+  // The fix is to stop asking the question from the wrong end. `covers` is reflexive on the target a
+  // suspension names: a `GLOBAL` row covers every target, a `WORKSPACE` row covers one carrying its
+  // workspace, and the two narrow scopes cover one carrying their own id. So if any live row applies to
+  // anything in this workspace, it applies to the target built out of that row — which means iterating
+  // the rows finds every one of them, with no cap, no ordering question and no second query.
+  //
+  // The unused halves of each target are empty strings rather than a borrowed real id: `covers` does not
+  // consult them for the scope that row names, and an empty string cannot collide with a real identifier,
+  // so a wide row's target cannot accidentally match somebody's narrow switch.
+  const widest = suspensions
+    .map((suspension) =>
+      activeSuspension(
+        {
+          workspaceId,
+          businessProfileId: suspension.businessProfileId ?? "",
+          channelAccountId: suspension.channelAccountId ?? "",
+        } as never,
+        suspensions,
+        at,
+      ),
+    )
+    .filter((active): active is AutomationSuspension => active !== undefined)
+    // The domain already returns the widest match for one target; across targets the widest of those is
+    // the answer, ordered by the domain's own scope list rather than by a second copy of the precedence.
+    .toSorted((left, right) => SUSPENSION_SCOPES.indexOf(left.scope) - SUSPENSION_SCOPES.indexOf(right.scope))
+    .at(0);
+
+  return widest === undefined
     ? undefined
-    : { scope: wide.scope, reason: wide.reason, since: wide.since, until: wide.until ?? null, byOperator: wide.byUserId !== undefined };
+    : {
+        scope: widest.scope,
+        reason: widest.reason,
+        since: widest.since,
+        until: widest.until ?? null,
+        byOperator: widest.byUserId !== undefined,
+      };
 }
 
 export interface ConversationContentLine {

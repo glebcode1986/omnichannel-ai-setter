@@ -9,6 +9,7 @@ import type { ChannelType, SendResult, WindowDecision } from "@omnichannel/chann
 import type {
   AiMode,
   CommercialAccess,
+  RolloutAccess,
   DeliveryJobStatus,
   HumanTakeoverState,
   ReasonCode,
@@ -123,6 +124,14 @@ export interface DeliverySendContext {
    * row versions.
    */
   readonly commercial: CommercialAccess;
+  /**
+   * What the staged rollout permitted when the decision was made (#60, LAUNCH_READINESS.md §18).
+   *
+   * Carried on the context for the same reason the commercial state is: a value read outside the guarded
+   * read cannot be bound by the claim, and unbound is how the kill switch was once bypassable. A rollout
+   * pulled back while a reply waited out its delay must stop that reply, not be discovered afterwards.
+   */
+  readonly rollout: RolloutAccess;
   /** What every fact above was read from, for the claim to re-assert. Opaque here, and deliberately so. */
   readonly guard: DeliveryStateGuard;
 }
