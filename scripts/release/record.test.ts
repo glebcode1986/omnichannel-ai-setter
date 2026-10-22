@@ -71,10 +71,24 @@ describe("the candidate a release record names", () => {
     const other = spawnSync("git", ["commit-tree", `${head}^{tree}`, "-m", "a commit that is not HEAD"], {
       cwd: repoRoot,
       encoding: "utf8",
-    }).stdout.trim();
-    expect(other, "the probe commit must have been written").toMatch(/^[0-9a-f]{40}$/u);
+      // Writing a commit object needs a committer, and CI configures no git identity at all — without
+      // these `commit-tree` fails with "Committer identity unknown" and returns an empty string. Supplied
+      // through the environment rather than `git config`, so nothing about the checkout is modified.
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "release record probe",
+        GIT_AUTHOR_EMAIL: "probe@example.invalid",
+        GIT_COMMITTER_NAME: "release record probe",
+        GIT_COMMITTER_EMAIL: "probe@example.invalid",
+      },
+    });
+    const probe = other.stdout.trim();
+    // Says *why* when it cannot be written. The first attempt at this assertion compared an empty string
+    // to a SHA pattern and reported only that, which told me nothing about the environment that produced
+    // it — and the environment is the whole difficulty here.
+    expect(probe, `git commit-tree wrote nothing: ${other.stderr.trim()}`).toMatch(/^[0-9a-f]{40}$/u);
 
-    const run = record("--stage", "INTERNAL", "--sha", other);
+    const run = record("--stage", "INTERNAL", "--sha", probe);
 
     expect(run.status).toBe(2);
     expect(run.output).toContain("is not HEAD");
