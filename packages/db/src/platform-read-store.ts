@@ -37,8 +37,9 @@ import {
   type SuspensionScope,
 } from "@omnichannel/domain";
 
-import type { DbExecutor } from "./client";
+import type { DbClient, DbExecutor } from "./client";
 import { readEntitlement } from "./entitlement-store";
+import { recordPlatformAuditEvent } from "./platform-audit-store";
 import { DbInputError, PlatformPermissionError } from "./errors";
 import { platformActorOf, requirePlatformPermission, type PlatformContext } from "./platform-tenancy";
 import { readUsageSnapshot } from "./usage-store";
@@ -138,12 +139,25 @@ export interface SupportSnapshot {
 }
 
 export async function readSupportSnapshot(
-  db: DbExecutor,
+  db: DbClient,
   context: PlatformContext,
   workspaceId: string,
   at = new Date(),
 ): Promise<SupportSnapshot | null> {
   requirePlatformPermission(context, "READ_METADATA", "read a support snapshot");
+  // One transaction for the same reason the content read has one: `WORKSPACE_INSPECTED` was declared in
+  // the domain, labelled in the catalogue and present in the enum, and nothing in production ever wrote
+  // it — so an operator could read a tenant's whole operational picture and leave no trace of having
+  // looked. Recording it here rather than in the screen means a second console surface cannot forget it.
+  return db.$transaction(async (tx) => readSnapshotWithin(tx, context, workspaceId, at));
+}
+
+async function readSnapshotWithin(
+  db: DbExecutor,
+  context: PlatformContext,
+  workspaceId: string,
+  at: Date,
+): Promise<SupportSnapshot | null> {
   const workspace = await db.workspace.findUnique({
     where: { id: workspaceId },
     select: { id: true, name: true, createdAt: true, _count: { select: { members: true } } },
@@ -177,7 +191,7 @@ export async function readSupportSnapshot(
     readActivePause(db, workspaceId, at),
   ]);
 
-  return {
+  const snapshot = {
     workspaceId: workspace.id,
     name: workspace.name,
     createdAt: workspace.createdAt,
@@ -203,7 +217,22 @@ export async function readSupportSnapshot(
     lastOutboundAt: outbound._max?.occurredAt ?? null,
     pendingReconciliations: reconciliations,
     ...(pause === undefined ? {} : { pause }),
-  };
+  } satisfies SupportSnapshot;
+
+  // Only once a workspace was actually found and assembled: a lookup that returned nothing inspected
+  // nothing. No support session is named because this is metadata under `READ_METADATA`, and the kind's
+  // own severity is INFO rather than CRITICAL for the same reason.
+  await recordPlatformAuditEvent(db, context, {
+    kind: "WORKSPACE_INSPECTED",
+    subjectType: "Workspace",
+    subjectId: workspaceId,
+    reason: "internal console inspected this workspace's operational snapshot",
+    workspaceId,
+    detail: { profiles: snapshot.profiles.length, channels: snapshot.channels.length },
+    occurredAt: at,
+  });
+
+  return snapshot;
 }
 
 /**
@@ -287,14 +316,25 @@ export interface ConversationContentLine {
  * what is here" are different facts and a screen that could not tell them apart would send an operator
  * to open a session they already have.
  *
- * The caller records `CUSTOMER_CONTENT_READ` — a CRITICAL audit row whose CHECK requires the session id,
- * so a content read with no session named cannot be filed at all.
+ * **The `CUSTOMER_CONTENT_READ` row is written here, in the same transaction that selects the messages.**
+ * It used to be delegated to the caller by the comment that stood here, and no caller ever wrote it:
+ * repository-wide there was no production writer of that kind at all, so the console released a
+ * customer's private correspondence with nothing recording which conversation an operator had read, when,
+ * or whether the session they held was ever used. Session opening and revocation were audited, and
+ * neither can answer that question. The SQL CHECK requiring a session id on a content row cannot help
+ * either: it constrains a row that is inserted, and none was.
+ *
+ * Inseparable now rather than merely adjacent: the read and the audit share one transaction, so a failure
+ * to record the access rolls the read back and the caller gets no content. And because the CHECK needs
+ * the session id, a granted scope that somehow carries none cannot be filed — so it does not release
+ * anything either.
  */
 export async function readConversationContent(
-  db: DbExecutor,
+  db: DbClient,
   context: PlatformContext,
   scope: SupportScope,
   target: { readonly workspaceId: string; readonly businessProfileId: string; readonly conversationId: string; readonly limit?: number },
+  at = new Date(),
 ): Promise<readonly ConversationContentLine[]> {
   platformActorOf(context);
   if (!supportScopeGrants(scope, "CONVERSATION_CONTENT")) {
@@ -313,13 +353,46 @@ export async function readConversationContent(
     throw new DbInputError("businessProfileId", "the session in force is for another Business Profile");
   }
 
-  const rows = await db.message.findMany({
-    where: { workspaceId: target.workspaceId, businessProfileId: target.businessProfileId, conversationId: target.conversationId },
-    orderBy: [{ occurredAt: "desc" }],
-    take: Math.min(Math.max(Math.trunc(target.limit ?? 50), 1), 200),
-    select: { id: true, direction: true, kind: true, occurredAt: true, text: true },
+  const sessionId = scope.sessionId;
+  if (sessionId === undefined) {
+    // A grant with no session behind it cannot be audited, and an unauditable content read is one this
+    // console does not perform. Reached only through a malformed scope, never through `readSupportScope`.
+    throw new DbInputError("sessionId", "a content read names the support session that authorized it");
+  }
+
+  return db.$transaction(async (tx) => {
+    // The session's own stated purpose becomes the audit row's reason, so the CRITICAL record answers
+    // "why was this read" without a reader having to join back to the session-open event.
+    const session = await tx.supportAccessSession.findUnique({ where: { id: sessionId }, select: { reason: true } });
+    if (session === null) {
+      throw new DbInputError("sessionId", "the support session that authorized this read no longer exists");
+    }
+
+    const rows = await tx.message.findMany({
+      where: { workspaceId: target.workspaceId, businessProfileId: target.businessProfileId, conversationId: target.conversationId },
+      orderBy: [{ occurredAt: "desc" }],
+      take: Math.min(Math.max(Math.trunc(target.limit ?? 50), 1), 200),
+      select: { id: true, direction: true, kind: true, occurredAt: true, text: true },
+    });
+
+    // Written after the select so the row can say how much was released, and inside the same transaction
+    // so that recording it is not optional. `severity` is derived from the kind — CRITICAL — rather than
+    // passed, and the scope and break-glass flag are recorded because "what was this operator allowed to
+    // see" is a different question from "what did they open".
+    await recordPlatformAuditEvent(tx, context, {
+      kind: "CUSTOMER_CONTENT_READ",
+      subjectType: "Conversation",
+      subjectId: target.conversationId,
+      reason: session.reason,
+      workspaceId: target.workspaceId,
+      businessProfileId: target.businessProfileId,
+      supportSessionId: sessionId,
+      detail: { granted: [...scope.granted], breakGlass: scope.breakGlass, messagesRead: rows.length },
+      occurredAt: at,
+    });
+
+    return rows.map((row) => ({ messageId: row.id, direction: row.direction, kind: row.kind, occurredAt: row.occurredAt, text: row.text }));
   });
-  return rows.map((row) => ({ messageId: row.id, direction: row.direction, kind: row.kind, occurredAt: row.occurredAt, text: row.text }));
 }
 
 export interface ReconciliationRow {

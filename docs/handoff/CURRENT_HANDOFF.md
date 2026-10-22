@@ -4260,3 +4260,95 @@ matter are the ones inside `allSettled`.
 
 Ancestry: the accepted #101 head `79aaee1a`, the previous #102 head `1590582f` and the accepted #100 parent
 `27baa3d9` are all ancestors of the new head.
+
+## PR #102 round one — three findings in the operations slice — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `3317e74` with three blocking findings. All three are real, all three
+are fixed, and all three are the same family: a correct piece with nothing connecting it to the thing it
+was supposed to protect.
+
+### [P1] The console released a customer's correspondence and recorded nothing
+
+`readConversationContent` checked the scope, selected the messages and returned the text. The comment above
+it said the **caller** records `CUSTOMER_CONTENT_READ`. No caller did — and the repository had no
+production writer of that kind, or of `WORKSPACE_INSPECTED`, anywhere. Both were declared in the domain,
+labelled in the catalogue and present in the Prisma enum, and never emitted. So an operator could read a
+customer's private messages and nothing could afterwards say which conversation, when, or whether the
+session they held had ever been used. Session opening and revocation were audited; neither answers that.
+The SQL CHECK that requires a session id on a content row could not help either: it constrains a row that
+is inserted, and none was.
+
+This is the unreached-code shape again, inverted — not an exported function with no caller but a declared
+audit kind with no writer. Worth noting that the comment delegating the write is what made it look done.
+
+**The fix is structural rather than an added call site.** `readConversationContent` now takes a `DbClient`,
+opens its own transaction, selects the messages and writes the `CUSTOMER_CONTENT_READ` row in that same
+transaction. A failure to record therefore rolls the read back and the caller gets no content — inseparable
+rather than adjacent. The row carries the actor, workspace, Business Profile, the conversation as subject,
+the authorizing session id, the granted scope, the break-glass flag and how many messages were released;
+severity is CRITICAL, derived from the kind rather than passed. The reason is the **session's own** stated
+purpose, read inside the transaction, so a CRITICAL record answers "why" without a join back to the
+session-open event. A granted scope carrying no session id is refused outright: it could not be filed, so
+it does not release anything.
+
+`readSupportSnapshot` records `WORKSPACE_INSPECTED` the same way — INFO, no session, and only once a
+workspace was actually found, because a lookup that returned nothing inspected nothing.
+
+**And one thing the finding did not ask for but the fix needed.** `assembleAdminConversation` caught
+*every* exception and rendered "no content, NOT_GRANTED". With the audit now inside the read, a storage
+failure would have been reported to an operator as a permissions refusal, sending them to open a session
+they already hold. The catch now admits only `PlatformPermissionError` and `DbInputError` and rethrows
+anything else.
+
+### [P2] Naming a workspace deleted the expiry predicate
+
+`listKillSwitches` built `OR: [{until: null}, {until: {gt: at}}]` and then **spread a second `OR`** for the
+scope. One object literal, one key: the scope filter replaced the expiry filter. So the workspace console
+listed suspensions that had already run out as if they were in force, while the unfiltered home list — which
+never set the second key — excluded them correctly. Expired rows could also consume the hundred-row cap and
+hide switches that really were active. Both disjunctions now sit under `AND`.
+
+### [P2] Two operators, two claims of one transition
+
+`liftKillSwitch` and `revokeSupportAccessSession` both read the row, ran a conditional `updateMany` whose
+predicate correctly let only one caller change it — and then **discarded the count**, appending a success
+audit event and returning `true` either way. The winner's attribution was never at risk; the record was,
+because the loser filed a row claiming a state transition that never happened. Both now let the affected-row
+count decide: zero means somebody else won, which is the same answer as finding it already done, and
+deliberately emits no transition event.
+
+This is the #100 lesson one step further on. There the fix was to put the comparison in the predicate; here
+the predicate was already right and its *result* was ignored. A conditional update is only as good as the
+branch that reads its count.
+
+### The regressions, and what proves they are not restatements
+
+Seven cases, +41→48 in `platform-operations.integration`, on fresh workspaces rather than the shared
+fixture. Five mutations, one per part of the fix, each caught by the case written for it:
+
+| reverted | caught by |
+|---|---|
+| the expiry predicate lost to the scope spread | "excludes an expired switch from the workspace list exactly as it does from the unfiltered one" |
+| `liftKillSwitch` ignoring the count | "lets exactly one lift win, files exactly one lift, and keeps the winner's attribution" |
+| `revokeSupportAccessSession` ignoring the count | "lets exactly one revocation win, and files exactly one revocation" |
+| the `CUSTOMER_CONTENT_READ` write | "files a CRITICAL content read…" **and** "withholds the correspondence when the audit row cannot be written" |
+| the `WORKSPACE_INSPECTED` write | "files an inspection when a workspace snapshot is read…" |
+
+The concurrency cases force the interleaving instead of waiting for it: the real client is proxied so both
+transactions are held at their first read until both have read, then released, so one conditional update
+wins and the other changes nothing — two real PostgreSQL transactions, no sleeps. The audit-failure case
+proves the direction of the dependency by making only the audit insert fail and then showing the messages
+are still readable afterwards: the content was withheld, not destroyed.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 213 files, **2068 passed / 1408 skipped (3476)** |
+| PostgreSQL suites | 50 files, **1140/1140** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1220/1220** |
+
+PostgreSQL 1133→1140 and `verify` 3469→3476: all seven new cases are database-gated, which is why the
+no-infrastructure run's skipped count rises by exactly seven.

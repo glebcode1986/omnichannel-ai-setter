@@ -25,6 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { connectChannelAccount } from "./repositories/channel-accounts";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
+import type { DbClient, DbExecutor } from "./client";
 import { createTestUser, seedWorkspace } from "./testing/fixtures";
 import { DbInputError, PlatformAccessDeniedError, PlatformPermissionError, WorkspaceAccessDeniedError } from "./errors";
 import { liftKillSwitch, listKillSwitches, pullKillSwitch, requestReconciliation } from "./platform-actions-store";
@@ -649,6 +650,339 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
       const newcomer = await createTestUser(db(), "platform-unexplained");
 
       await expect(setPlatformMember(db(), admin, { userId: newcomer, role: "SUPPORT", note: "   " })).rejects.toThrow(DbInputError);
+    });
+  });
+
+  describe("the access that has to leave a trace", () => {
+    /**
+     * Astra's P1 on PR #102. `readConversationContent` checked the scope, selected the messages and
+     * returned a customer's private correspondence, and the comment above it said the *caller* records
+     * `CUSTOMER_CONTENT_READ`. No caller did: repository-wide there was no production writer of that kind
+     * or of `WORKSPACE_INSPECTED` at all, so the console released content leaving nothing that could say
+     * which conversation was read, when, or whether the session an operator held had ever been used.
+     * Opening and revoking sessions was audited, and neither answers that.
+     *
+     * The audit is now written inside the same transaction that selects the messages, which is what makes
+     * these assertions about more than a shape: a failed audit rolls the read back.
+     */
+    async function sessionFor(target: Awaited<ReturnType<typeof seedWorkspace>>, reason: string) {
+      await openSupportAccessSession(db(), support, {
+        workspaceId: target.workspaceId,
+        scopes: ["CONVERSATION_CONTENT"],
+        reason,
+        at: NOW,
+      });
+      return readSupportScope(db(), support, { workspaceId: target.workspaceId }, NOW);
+    }
+
+    function targetOf(seeded: Awaited<ReturnType<typeof seedWorkspace>>) {
+      const profile = seeded.profiles[0];
+      if (profile === undefined) {
+        throw new Error("the fixture has no profile");
+      }
+      return { workspaceId: seeded.workspaceId, businessProfileId: profile.businessProfileId, conversationId: profile.conversationId };
+    }
+
+    it("files a CRITICAL content read naming the session, the conversation and what it released", async () => {
+      const seeded = await seedWorkspace(db(), "audit-content");
+      const target = targetOf(seeded);
+      const reason = "ticket 9001: customer disputes a reply we sent";
+      const scope = await sessionFor(seeded, reason);
+
+      const lines = await readConversationContent(db(), support, scope, target, NOW);
+      expect(lines.length).toBeGreaterThan(0);
+
+      const rows = await db().platformAuditEvent.findMany({
+        where: { kind: "CUSTOMER_CONTENT_READ", workspaceId: seeded.workspaceId },
+        select: {
+          severity: true,
+          reason: true,
+          subjectType: true,
+          subjectId: true,
+          workspaceId: true,
+          businessProfileId: true,
+          supportSessionId: true,
+          platformMemberId: true,
+          detail: true,
+        },
+      });
+      // Exactly one, not zero — zero is what this path produced before — and not two.
+      expect(rows.length).toBe(1);
+      const row = rows[0];
+      expect(row).toMatchObject({
+        // Derived from the kind rather than passed, so a caller cannot file a content read as INFO.
+        severity: "CRITICAL",
+        subjectType: "Conversation",
+        subjectId: target.conversationId,
+        workspaceId: target.workspaceId,
+        businessProfileId: target.businessProfileId,
+        // The authority. Its CHECK requires it, and the session is what a dispute asks about.
+        supportSessionId: scope.sessionId,
+      });
+      expect(row?.platformMemberId).toBeTruthy();
+      // The session's own stated purpose, so the record answers "why" without joining back to the open.
+      expect(row?.reason).toContain("ticket 9001");
+      expect(row?.detail).toMatchObject({ granted: ["CONVERSATION_CONTENT"], breakGlass: false, messagesRead: lines.length });
+    });
+
+    it("files nothing when the read is refused, because nothing was released", async () => {
+      const seeded = await seedWorkspace(db(), "audit-refused");
+      const target = targetOf(seeded);
+
+      // No session at all.
+      const none = await readSupportScope(db(), support, { workspaceId: seeded.workspaceId }, NOW);
+      await expect(readConversationContent(db(), support, none, target, NOW)).rejects.toThrow(PlatformPermissionError);
+
+      // A live session for this workspace pointed at somebody else's: refused on the target, not the grant.
+      const scope = await sessionFor(seeded, "ticket 9002: checking a quiet inbox");
+      const elsewhere = { ...target, workspaceId: otherTenant.workspaceId };
+      await expect(readConversationContent(db(), support, scope, elsewhere, NOW)).rejects.toThrow(DbInputError);
+
+      expect(await db().platformAuditEvent.count({ where: { kind: "CUSTOMER_CONTENT_READ", workspaceId: seeded.workspaceId } })).toBe(0);
+      expect(await db().platformAuditEvent.count({ where: { kind: "CUSTOMER_CONTENT_READ", workspaceId: otherTenant.workspaceId } })).toBe(0);
+    });
+
+    it("withholds the correspondence when the audit row cannot be written", async () => {
+      // The half that makes the other assertions mean something. The audit and the select share one
+      // transaction, so this proves the direction of the dependency: if the record cannot be kept, the
+      // content does not leave the database. The real client is proxied so only that one insert fails —
+      // every other query still runs against PostgreSQL.
+      const seeded = await seedWorkspace(db(), "audit-fails");
+      const target = targetOf(seeded);
+      const scope = await sessionFor(seeded, "ticket 9003: storage is about to refuse");
+
+      const refusing = new Proxy(db(), {
+        get(client, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(client, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            client.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(inner, model, innerReceiver) {
+                      if (model !== "platformAuditEvent") {
+                        return Reflect.get(inner, model, innerReceiver) as unknown;
+                      }
+                      return {
+                        create: () => {
+                          throw new Error("platform_audit_events is unavailable");
+                        },
+                      };
+                    },
+                  }),
+                ),
+              ...(rest as []),
+            );
+        },
+      });
+
+      await expect(readConversationContent(refusing, support, scope, target, NOW)).rejects.toThrow(/unavailable/u);
+      // Nothing recorded, and — the point — nothing returned either.
+      expect(await db().platformAuditEvent.count({ where: { kind: "CUSTOMER_CONTENT_READ", workspaceId: seeded.workspaceId } })).toBe(0);
+      // The messages are still there; the refusal withheld them rather than destroying anything.
+      const after = await readConversationContent(db(), support, scope, target, NOW);
+      expect(after.length).toBeGreaterThan(0);
+    });
+
+    it("files an inspection when a workspace snapshot is read, and nothing when there is no workspace", async () => {
+      const seeded = await seedWorkspace(db(), "audit-inspect");
+
+      const snapshot = await readSupportSnapshot(db(), support, seeded.workspaceId, NOW);
+      expect(snapshot?.workspaceId).toBe(seeded.workspaceId);
+
+      const rows = await db().platformAuditEvent.findMany({
+        where: { kind: "WORKSPACE_INSPECTED", workspaceId: seeded.workspaceId },
+        select: { severity: true, subjectType: true, subjectId: true, supportSessionId: true, detail: true },
+      });
+      expect(rows.length).toBe(1);
+      expect(rows[0]).toMatchObject({
+        // Metadata, so INFO rather than CRITICAL — and no session, because none is needed to look.
+        severity: "INFO",
+        subjectType: "Workspace",
+        subjectId: seeded.workspaceId,
+        supportSessionId: null,
+      });
+
+      // A lookup that found nothing inspected nothing.
+      const before = await db().platformAuditEvent.count({ where: { kind: "WORKSPACE_INSPECTED" } });
+      expect(await readSupportSnapshot(db(), support, "no-such-workspace", NOW)).toBeNull();
+      expect(await db().platformAuditEvent.count({ where: { kind: "WORKSPACE_INSPECTED" } })).toBe(before);
+    });
+  });
+
+  describe("expiry and scope are both predicates", () => {
+    /**
+     * Astra's first P2 on PR #102. The `where` object held `OR: [{until: null}, {until: {gt: at}}]` and
+     * then spread a second `OR` for the scope, so naming a workspace **replaced** the expiry predicate:
+     * the workspace console listed suspensions that had already run out as if they were still in force,
+     * while the unfiltered home list — which never set the second key — excluded them correctly. Expired
+     * rows could also consume the hundred-row cap and hide switches that really were active.
+     */
+    it("excludes an expired switch from the workspace list exactly as it does from the unfiltered one", async () => {
+      const seeded = await seedWorkspace(db(), "expiry-scope");
+      const expired = await pullKillSwitch(db(), operations, {
+        scope: "WORKSPACE",
+        workspaceId: seeded.workspaceId,
+        reason: "incident 91: holding outbound for ten minutes",
+        until: new Date(NOW.getTime() - 1_000),
+        at: new Date(NOW.getTime() - 60_000),
+      });
+      const profile = seeded.profiles[0];
+      if (profile === undefined) {
+        throw new Error("the fixture has no profile");
+      }
+      const active = await pullKillSwitch(db(), operations, {
+        scope: "BUSINESS_PROFILE",
+        workspaceId: seeded.workspaceId,
+        businessProfileId: profile.businessProfileId,
+        reason: "incident 92: still holding this profile",
+        at: NOW,
+      });
+
+      const unfiltered = await listKillSwitches(db(), operations, { at: NOW });
+      const scoped = await listKillSwitches(db(), operations, { workspaceId: seeded.workspaceId, at: NOW });
+
+      // The two lists have to agree about what is in force. Before the fix the scoped one was the only
+      // place the expired row appeared, which is exactly the list an operator uses to decide.
+      for (const [label, rows] of [["unfiltered", unfiltered] as const, ["scoped", scoped] as const]) {
+        const ids = rows.map((row) => row.suspensionId);
+        expect(ids, `${label} must not offer an expired switch`).not.toContain(expired.suspensionId);
+        expect(ids, `${label} must still offer the active one`).toContain(active.suspensionId);
+      }
+
+      // And the scope filter still filters: another tenant's active switch is not in this list.
+      expect(scoped.map((row) => row.workspaceId).filter((id) => id !== null && id !== seeded.workspaceId)).toEqual([]);
+    });
+  });
+
+  describe("two operators, one transition", () => {
+    /**
+     * Astra's second P2 on PR #102. Both functions read the row, ran a conditional `updateMany` whose
+     * predicate correctly let only one caller change it — and then **ignored the count**, appending a
+     * success audit event and returning `true` either way. The winner's attribution was never at risk; the
+     * record was: the loser filed a row claiming a state transition that never happened.
+     *
+     * Deterministic rather than hopeful. The barrier releases both transactions' initial reads before
+     * either conditional update runs, so the interleaving is forced instead of waited for, on real
+     * PostgreSQL with two real transactions.
+     */
+    function barrierFor(parties: number) {
+      let arrived = 0;
+      let open = () => {};
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return async () => {
+        arrived += 1;
+        if (arrived >= parties) {
+          open();
+        }
+        await gate;
+      };
+    }
+
+    /** Holds every transaction at its first read of `model` until all of them have read. */
+    function heldAtFirstRead(model: "automationSuspension" | "supportAccessSession", parties: number): DbClient {
+      const wait = barrierFor(parties);
+      return new Proxy(db(), {
+        get(client, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(client, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            client.$transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(inner, name, innerReceiver) {
+                      const delegate = Reflect.get(inner, name, innerReceiver) as unknown;
+                      if (name !== model) {
+                        return delegate;
+                      }
+                      return new Proxy(delegate as object, {
+                        get(owner, call, ownerReceiver) {
+                          const original = Reflect.get(owner, call, ownerReceiver) as unknown;
+                          if (call !== "findUnique" || typeof original !== "function") {
+                            return original;
+                          }
+                          return async (...args: unknown[]) => {
+                            const row = await (original as (...a: unknown[]) => Promise<unknown>).apply(owner, args);
+                            await wait();
+                            return row;
+                          };
+                        },
+                      });
+                    },
+                  }),
+                ),
+              ...(rest as []),
+            );
+        },
+      });
+    }
+
+    it("lets exactly one lift win, files exactly one lift, and keeps the winner's attribution", async () => {
+      const seeded = await seedWorkspace(db(), "race-lift");
+      const pulled = await pullKillSwitch(db(), operations, {
+        scope: "WORKSPACE",
+        workspaceId: seeded.workspaceId,
+        reason: "incident 93: two operators will both reach for this",
+        at: NOW,
+      });
+      const held = heldAtFirstRead("automationSuspension", 2);
+
+      const results = await Promise.all([
+        liftKillSwitch(held, operations, { suspensionId: pulled.suspensionId, reason: "first operator", at: NOW }),
+        liftKillSwitch(held, admin, { suspensionId: pulled.suspensionId, reason: "second operator", at: NOW }),
+      ]);
+
+      // One transition, not two reports of one.
+      expect(results.filter((result) => result.lifted).length).toBe(1);
+      expect(results.filter((result) => !result.lifted).length).toBe(1);
+      expect(await db().platformAuditEvent.count({ where: { kind: "KILL_SWITCH_LIFTED", subjectId: pulled.suspensionId } })).toBe(1);
+
+      // And the row names whoever actually wrote it, which the predicate already guaranteed.
+      const row = await db().automationSuspension.findUniqueOrThrow({
+        where: { id: pulled.suspensionId },
+        select: { liftedAt: true, liftedByUserId: true },
+      });
+      expect(row.liftedAt).not.toBeNull();
+      expect(row.liftedByUserId).toBeTruthy();
+      const filed = await db().platformAuditEvent.findFirstOrThrow({
+        where: { kind: "KILL_SWITCH_LIFTED", subjectId: pulled.suspensionId },
+        select: { reason: true },
+      });
+      // The surviving audit row is the winner's own reason, not an arbitrary one of the two.
+      expect(["first operator", "second operator"]).toContain(filed.reason);
+    });
+
+    it("lets exactly one revocation win, and files exactly one revocation", async () => {
+      const seeded = await seedWorkspace(db(), "race-revoke");
+      const opened = await openSupportAccessSession(db(), support, {
+        workspaceId: seeded.workspaceId,
+        scopes: ["CONVERSATION_CONTENT"],
+        reason: "ticket 9004: two operators will both close this",
+        at: NOW,
+      });
+      const held = heldAtFirstRead("supportAccessSession", 2);
+
+      const results = await Promise.all([
+        revokeSupportAccessSession(held, support, { sessionId: opened.sessionId, reason: "first operator", at: NOW }),
+        revokeSupportAccessSession(held, admin, { sessionId: opened.sessionId, reason: "second operator", at: NOW }),
+      ]);
+
+      expect(results.filter((result) => result.revoked).length).toBe(1);
+      expect(results.filter((result) => !result.revoked).length).toBe(1);
+      expect(await db().platformAuditEvent.count({ where: { kind: "SUPPORT_SESSION_REVOKED", subjectId: opened.sessionId } })).toBe(1);
+
+      const row = await db().supportAccessSession.findUniqueOrThrow({
+        where: { id: opened.sessionId },
+        select: { revokedAt: true, revokedByMemberId: true },
+      });
+      expect(row.revokedAt).not.toBeNull();
+      expect(row.revokedByMemberId).toBeTruthy();
     });
   });
 

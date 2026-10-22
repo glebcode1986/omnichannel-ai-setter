@@ -186,10 +186,17 @@ export async function revokeSupportAccessSession(
     if (session.revokedAt !== null) {
       return { revoked: false };
     }
-    await tx.supportAccessSession.updateMany({
+    // The count decides, not the read above — the same correction as `liftKillSwitch`. Two operators can
+    // both see an unrevoked session and both call this; the predicate lets exactly one change the row, and
+    // ignoring the count made the loser claim a revocation it did not perform.
+    const { count } = await tx.supportAccessSession.updateMany({
       where: { id: input.sessionId, revokedAt: null },
       data: { revokedAt: at, revokedByMemberId: actor.platformMemberId },
     });
+    if (count === 0) {
+      // Already revoked by the time this write landed. No transition, so no transition event.
+      return { revoked: false };
+    }
     await recordPlatformAuditEvent(tx, context, {
       kind: "SUPPORT_SESSION_REVOKED",
       subjectType: "SupportAccessSession",

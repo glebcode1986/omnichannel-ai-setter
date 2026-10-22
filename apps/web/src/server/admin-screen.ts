@@ -19,11 +19,13 @@
  * disagree with the delivery path about what is paused.
  */
 import {
+  DbInputError,
   findWorkspaces,
   listKillSwitches,
   listReconciliations,
   listSupportSessions,
   platformCan,
+  PlatformPermissionError,
   readConversationContent,
   readSupportScope,
   readSupportSnapshot,
@@ -157,11 +159,18 @@ export async function assembleAdminConversation(
   const scope = await readSupportScope(db, context, { workspaceId: target.workspaceId, businessProfileId: target.businessProfileId }, at);
   const frame = { role: contextRole(context), can, ...target, scope, basePath } as const;
   try {
-    const lines = await readConversationContent(db, context, scope, target);
+    const lines = await readConversationContent(db, context, scope, target, at);
     return { ...frame, lines };
-  } catch {
-    // Any refusal — no session, expired, revoked, out of scope, or a scope pointed at another tenant —
-    // renders the same way: no content, and the reason the domain gave.
+  } catch (error) {
+    if (!(error instanceof PlatformPermissionError) && !(error instanceof DbInputError)) {
+      // Not a refusal. The content read now writes its `CUSTOMER_CONTENT_READ` row in the same
+      // transaction that selects the messages, so a failure to record the access withholds the content
+      // by rolling it back — and this catch must not then relabel a storage failure as "NOT_GRANTED",
+      // which would send an operator to open a session they already hold.
+      throw error;
+    }
+    // Any genuine refusal — no session, expired, revoked, out of scope, or a scope pointed at another
+    // tenant — renders the same way: no content, and the reason the domain gave.
     return { ...frame, refusal: scope.refusal ?? "NOT_GRANTED" };
   }
 }

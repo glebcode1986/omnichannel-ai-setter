@@ -158,10 +158,19 @@ export async function liftKillSwitch(
     if (suspension.liftedAt !== null) {
       return { lifted: false };
     }
-    await tx.automationSuspension.updateMany({
+    // The count decides, not the read above. Two operators can both pass the `liftedAt !== null` check
+    // before either writes: the predicate makes sure only one of them changes the row, but ignoring the
+    // count made the loser report a lift it did not perform and file an audit row claiming a second state
+    // transition that never happened. The winner's attribution was never at risk; the record was.
+    const { count } = await tx.automationSuspension.updateMany({
       where: { id: input.suspensionId, liftedAt: null },
       data: { liftedAt: at, liftedByUserId: actor.userId },
     });
+    if (count === 0) {
+      // Somebody else lifted it between the read and the update. Same answer as finding it already
+      // lifted, and deliberately no transition event: there was no transition.
+      return { lifted: false };
+    }
     await recordPlatformAuditEvent(tx, context, {
       kind: "KILL_SWITCH_LIFTED",
       subjectType: "AutomationSuspension",
@@ -201,8 +210,15 @@ export async function listKillSwitches(
     where: {
       liftedAt: null,
       since: { lte: at },
-      OR: [{ until: null }, { until: { gt: at } }],
-      ...(query.workspaceId === undefined ? {} : { OR: [{ scope: "GLOBAL" }, { workspaceId: query.workspaceId }] }),
+      // Both disjunctions under `AND`, and that is the whole fix. They used to be two `OR` keys in one
+      // object literal, so the scope filter **replaced** the expiry filter whenever a workspace was
+      // named: the workspace console listed suspensions that had already expired as if they were still in
+      // force, while the unfiltered home list — which never set the second key — excluded them correctly.
+      // Expired rows could also consume the 100-row cap and hide switches that really were active.
+      AND: [
+        { OR: [{ until: null }, { until: { gt: at } }] },
+        ...(query.workspaceId === undefined ? [] : [{ OR: [{ scope: "GLOBAL" as const }, { workspaceId: query.workspaceId }] }]),
+      ],
     },
     orderBy: [{ since: "desc" }],
     take: 100,
