@@ -60,7 +60,30 @@ what was believed when is worth keeping:
 that heading have been renamed to what they actually are, because four of them claiming to be current at
 once is how the stale statements above went unnoticed.
 
-### Current work — the seller snapshot race on P6-09 / PR #101
+### Current work — propagating the accepted P6-09 into P7-01 / PR #102
+
+#101 passed at `79aaee1a` (Astra review 5614206303, `APPROVED`), so this branch is the next link. One
+ordinary non-rebase merge, one branch only — no rebase, no force-push, nothing to `main`, #103+ untouched,
+no reviewer assigned or started by me. #102 was **85 commits behind** while carrying 20 of its own.
+
+**One real conflict**, in `apps/web/src/ui/outcome-notice.tsx`: both sides append to the `REFUSALS` set
+after `CHECKOUT_UNAVAILABLE`. Resolved as the union keeping #102's comment — disjoint names, a `Set` has no
+order, and dropping either half renders a refusal as an ordinary outcome. 53 outcomes, 23 refusals, no
+duplicate, all 53 keyed in both locales.
+
+**A dry run of this merge was measured before the directive arrived**, and the two gates it named as
+"merges clean and still breaks" were both re-checked after the merge: the `translate.test.ts`
+identical-strings literal is still exactly its ten keys (18/18), and no new actorless operator pause exists
+for #102's `automation_suspensions` CHECK. Schema, barrel and worker registry all clean by name.
+
+Carried forward from the acceptance, unsmoothed: Astra **did not execute** the PostgreSQL concurrency
+regression — no database, Redis or container runtime in its environment — so that case's live-database
+evidence is mine plus CI, with no independent certification. The approval is not payment or legal approval.
+
+Gates at this head: no drift; `pnpm verify` under `env -i` exit 0 (213 files, 2068 passed / 1401 skipped);
+PostgreSQL 50 files 1133/1133; Redis 55/55; E2E 106 files 1220/1220.
+
+### Earlier — the seller snapshot race on P6-09 / PR #101
 
 `CHANGES_REQUESTED` at `68a94d6`, one blocker, fixed on this same branch. #102+ still held, nothing to
 `main`, no reviewer assigned or invoked by me.

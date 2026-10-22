@@ -4201,3 +4201,62 @@ cases were skipped on its side and are not passes; the exact-head CI run is what
 
 `billing-routing.integration` is **102/102** — 92 at the first reviewed head, +5 for the digest, +3 for the
 locale aliases, +1 for the required digest, +1 for this race. Totals 3391→3392, PostgreSQL 1086→1087.
+
+## P6-09 accepted, and propagated into P7-01 / PR #102 — 2026-10-22
+
+#101 passed at `79aaee1a3f5ccc1517c08d93492ac1260e2ecdd4` (Astra review 5614206303, `APPROVED`), closing
+three remediation rounds in one day: the offer-digest binding, the locale aliases, the required digest and
+the seller snapshot. The reviewer stated one limitation plainly and it is carried forward rather than
+smoothed over: **it did not execute the PostgreSQL concurrency regression** — its environment has no
+database, Redis or container runtime — so the live-database evidence for that case is mine plus the
+exact-head CI run, and no independent certification of it exists. The approval is also explicitly not
+production payment or legal approval; the final legal copy stays an owner decision.
+
+### The merge
+
+One ordinary non-rebase merge of the accepted head into `feat/p7-01-admin-operations`. The directive's
+figures were re-measured before the branch was touched and matched exactly: merge base `cd25fa2f`, #102
+twenty commits ahead and **eighty-five behind**, live head `1590582f`.
+
+**One real conflict**, in `apps/web/src/ui/outcome-notice.tsx`. `OUTCOMES` auto-merged with both sides
+present; only the `REFUSALS` set conflicted, where both sides append after `CHECKOUT_UNAVAILABLE`. Resolved
+as the union with #102's comment kept — the two sides' names are disjoint, a `Set` carries no order, and
+dropping either half would render a refusal as an ordinary outcome. Counted by bracket depth rather than by
+a line grep: **53 outcomes, 23 refusals, no duplicate**, every refusal also an outcome, and all 53 with an
+`outcome.<NAME>` key in **both** locales. That last one matters because the component reaches the catalogue
+through `as MessageKey`, so a missing key is a failed build rather than a type error.
+
+### The fallout that merges clean, checked by name
+
+A measured dry run of this exact merge existed before the directive arrived, and it had named two gates
+that would merge without a conflict and still break. Both were re-measured on the post-merge tree:
+
+| shape | result |
+|---|---|
+| schema drift | **No difference detected** |
+| models against tables | 72 `^model` against 72 `CREATE TABLE`; the one `DROP TABLE` match is **inside a comment**, not a statement |
+| colliding migration timestamps | none |
+| `packages/db/src/index.ts` barrel | no duplicate exported name |
+| worker loop registry | nine names in `loops` (one conditional spread), nine `.close()` inside `allSettled`, prose "nine" |
+| `translate.test.ts` identical-strings literal | **18/18** — the ten keys whose `en` and `ru` are byte-identical are still exactly the ten in the literal |
+| #102's `automation_suspensions` actorless-operator CHECK | no new `reason: "OPERATOR"` write, so nothing for it to refuse |
+
+Two of those numbers were ambiguous on first measurement and were resolved rather than accepted: the
+`DROP TABLE` was a comment, and a whole-file `.close()` count of twelve is not the registry — the nine that
+matter are the ones inside `allSettled`.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 213 files, **2068 passed / 1401 skipped (3469)** |
+| PostgreSQL suites | 50 files, **1133/1133** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1220/1220** |
+
+#102 brings the operations and audit segment on top: 208→213 files and 3392→3469 tests, PostgreSQL
+48→50 files and 1087→1133 cases, E2E 103→106 files and 1189→1220.
+
+Ancestry: the accepted #101 head `79aaee1a`, the previous #102 head `1590582f` and the accepted #100 parent
+`27baa3d9` are all ancestors of the new head.
