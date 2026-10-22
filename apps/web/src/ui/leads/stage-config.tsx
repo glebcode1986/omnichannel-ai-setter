@@ -11,6 +11,7 @@
  * The form says nothing about it; the PR says it out loud.
  */
 import type { StageDisplay } from "@omnichannel/db";
+import type { MessageKey } from "@/i18n/catalogue";
 
 import type { Translator } from "@/i18n/translate";
 import type { LeadTarget } from "@/server/lead-actions";
@@ -48,7 +49,15 @@ export function StageConfig({ t, stages, target, action }: StageConfigProps) {
                   <label className="visually-hidden" htmlFor={`label_${stage.stage}`}>
                     {t.t("stages.label")}
                   </label>
-                  <input id={`label_${stage.stage}`} name={`label_${stage.stage}`} type="text" defaultValue={stage.label} required />
+                  <input
+                    id={`label_${stage.stage}`}
+                    name={`label_${stage.stage}`}
+                    type="text"
+                    // The product's own name for a stage nobody has renamed, so the field a person edits
+                    // starts from what the board actually shows rather than from the enum.
+                    defaultValue={stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label}
+                    required
+                  />
                 </td>
                 <td>
                   <label className="visually-hidden" htmlFor={`position_${stage.stage}`}>

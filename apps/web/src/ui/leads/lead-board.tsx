@@ -44,7 +44,20 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
   // Hidden columns are not drawn, but their leads are not lost: the table below lists every lead
   // whatever stage it is in, which is why hiding a column is safe.
   const visible = stages.filter((stage) => !stage.hidden);
-  const labelOf = (stage: string) => stages.find((candidate) => candidate.stage === stage)?.label ?? stage;
+  /**
+   * A stage's name as a person should read it.
+   *
+   * The stored `label` is the operator's own wording when they have renamed the column, and a built-in
+   * placeholder when they have not — so printing it unconditionally put the raw enum on the board:
+   * `NEW`, `ENGAGED`, `QUALIFYING`, in Russian next to everything else. `isDefault` is exactly the
+   * distinction: translate the one the product supplied, leave the one a person typed alone, because
+   * their words are not ours to translate.
+   */
+  const nameOfStage = (stage: StageDisplay) => (stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label);
+  const labelOf = (stage: string) => {
+    const display = stages.find((candidate) => candidate.stage === stage);
+    return display === undefined ? stage : nameOfStage(display);
+  };
 
   return (
     <>
@@ -53,7 +66,7 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
           const inStage = leads.filter((lead) => lead.stage === stage.stage);
           return (
             <section key={stage.stage} className="lead-column" data-stage={stage.stage}>
-              <h3>{t.t("leads.stageColumn", { label: stage.label, count: inStage.length })}</h3>
+              <h3>{t.t("leads.stageColumn", { label: nameOfStage(stage), count: inStage.length })}</h3>
               <ul>
                 {inStage.map((lead) => (
                   <li key={lead.conversationId} data-lead={lead.conversationId}>
@@ -106,7 +119,7 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
                       <select id={`move-${lead.conversationId}`} name="toStage" defaultValue={lead.stage}>
                         {stages.map((candidate) => (
                           <option key={candidate.stage} value={candidate.stage}>
-                            {candidate.label}
+                            {nameOfStage(candidate)}
                           </option>
                         ))}
                       </select>
