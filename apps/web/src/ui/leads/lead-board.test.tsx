@@ -198,6 +198,53 @@ describe("an empty pipeline", () => {
 });
 
 describe("in Russian", () => {
+  /**
+   * A stage column carries one of two different things under the same field, and the board printed the
+   * wrong one. `label` is the operator's own wording once they rename a column, and a built-in
+   * placeholder until they do — and that placeholder is the raw enum, so an untouched board read
+   * `NEW`, `ENGAGED`, `QUALIFYING` in the middle of a Russian interface while the translations for
+   * exactly those stages sat unused in the catalogue. `isDefault` is the distinction, and it was
+   * already reported.
+   *
+   * Both directions matter, which is why there are two cases: translating what the product supplied,
+   * and leaving alone what a person typed. The second is the one a careless fix breaks — running every
+   * column name through the translator would rewrite the operator's own words whenever they happened
+   * to match a key, and would silently blank the ones that do not.
+   */
+  const russianBoard = (stageList: readonly StageDisplay[]) =>
+    render(
+      <LeadBoard
+        t={createTranslator("ru")}
+        leads={[lead({ stage: "NEW" })]}
+        stages={stageList}
+        target={TARGET}
+        basePath={BASE}
+        filtered={false}
+        moveAction={vi.fn(() => Promise.resolve())}
+      />,
+    );
+
+  it("translates a stage the operator has not renamed, instead of printing the enum", () => {
+    russianBoard(stages([{ stage: "NEW", label: "NEW", isDefault: true }]));
+
+    const heading = catalogues.ru["leads.stageColumn"]
+      .replace("{label}", catalogues.ru["leadStage.NEW"])
+      .replace("{count}", "1");
+    expect(screen.getByText(heading)).toBeDefined();
+    // the move form offers the same name, and the table prints it in the stage cell
+    expect(screen.getAllByText(catalogues.ru["leadStage.NEW"]).length).toBeGreaterThan(1);
+    expect(screen.queryByText("NEW")).toBeNull();
+  });
+
+  it("leaves a column the operator named exactly as they typed it", () => {
+    const named = "Готов записаться";
+    russianBoard(stages([{ stage: "NEW", label: named, isDefault: false }]));
+
+    const heading = catalogues.ru["leads.stageColumn"].replace("{label}", named).replace("{count}", "1");
+    expect(screen.getByText(heading)).toBeDefined();
+    expect(screen.queryByText(catalogues.ru["leadStage.NEW"])).toBeNull();
+  });
+
   it("translates the chrome and leaves the customer's name alone", () => {
     render(
       <LeadBoard
