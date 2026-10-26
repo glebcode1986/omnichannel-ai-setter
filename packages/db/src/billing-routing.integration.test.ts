@@ -42,6 +42,7 @@ import {
   recordVerifiedBillingEvent,
   upsertBillingRoute,
   upsertSellerProfile,
+  type LegalDocumentOffer,
   type OpenCheckoutInput,
   type OpenedCheckout,
 } from "./billing-routing-store";
@@ -53,6 +54,7 @@ import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } f
 import { createTestUser } from "./testing/fixtures";
 import { createWorkspaceWithOwner } from "./repositories/workspaces";
 import { authorizeWorkspaceAccess, type WorkspaceContext } from "./tenancy";
+import type { DbExecutor } from "./client";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
 
@@ -253,8 +255,29 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
   }
 
+  /**
+   * The digest of the offer this request would be shown, which `openCheckoutContract` now requires.
+   *
+   * Read the same way the page reads it, because that is the point of the field: a test that invented a
+   * value would be testing the refusal rather than the path it is interested in. The empty string when no
+   * offer exists at all — there is nothing to echo then, and the store returns that refusal before it ever
+   * compares a digest.
+   */
+  async function digestOf(context: WorkspaceContext, input: Request): Promise<string> {
+    const offer = await readCheckoutOffer(db(), context, {
+      planVersionId: input.planVersionId,
+      interval: input.interval,
+      arrangement: input.arrangement,
+      currency: input.currency,
+      locale: input.locale,
+      supersedeCurrent: true,
+      ...(input.market === undefined ? {} : { market: input.market }),
+    });
+    return offer.available ? offer.offerDigest : "";
+  }
+
   async function openFor(context: WorkspaceContext, input: Request): Promise<OpenedCheckout> {
-    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input) });
+    const opened = await openCheckoutContract(db(), context, { ...input, acceptedDocumentIds: await acceptedIds(context, input), offeredDigest: await digestOf(context, input) });
     if (!opened.available) {
       throw new Error(`checkout refused: ${opened.reason} ${opened.detail.join(", ")}`);
     }
@@ -288,7 +311,11 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     return minted.event;
   }
 
-  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+  // Both of the fields a *submission* carries are left out: the document ids it ticked and the digest of
+  // the offer it was shown. Neither can come from a request builder, because both are answers the store
+  // itself produced for that request — so every call site has to fetch them, which is exactly what the
+  // page does.
+  type Request = Omit<OpenCheckoutInput, "acceptedDocumentIds" | "offeredDigest">;
 
   const request = (overrides: Partial<Request> = {}): Request => ({
     planVersionId,
@@ -406,7 +433,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         sellerProfileId: "seller-mor",
         provider: "attacker",
         providerAccountRef: "acct_attacker",
-      } as Omit<OpenCheckoutInput, "acceptedDocumentIds">;
+      } as Request;
 
       const opened = await openFor(context, forged);
 
@@ -893,6 +920,181 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       ).rejects.toThrow(/billing_arrangements_clock_check/u);
     });
 
+    /**
+     * Astra's second blocking finding on PR #100: a delayed renewal moved the paid-through date
+     * *backwards*. The maximum the code computed only guarded the fallback it uses when a provider states
+     * no period of its own — so a provider that does state one, which is the normal case, wrote its value
+     * straight into the subscription. Event-id idempotency cannot help: a reordered delivery is a
+     * different event, legitimately processed, carrying an older term.
+     */
+    const FIRST_END = new Date("2026-11-07T12:00:00.000Z");
+    const LATER_END = new Date("2026-12-07T12:00:00.000Z");
+    const LATER_STILL = new Date("2027-01-07T12:00:00.000Z");
+    const RENEW_AT = new Date("2026-11-01T12:00:00.000Z");
+
+    async function paidThrough(label: string, end: Date) {
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `${label}-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: end,
+        }),
+        NOW,
+      );
+      return { context, workspaceId, opened };
+    }
+
+    it("will not let a renewal that arrives late move the paid term backwards", async () => {
+      const { workspaceId, opened } = await paidThrough("reorder", LATER_END);
+
+      const stale = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reorder-stale-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: RENEW_AT,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          // An earlier term than the one already paid for: the February renewal arriving after March's.
+          periodEndsAt: FIRST_END,
+        }),
+        RENEW_AT,
+      );
+
+      // Recorded and audited, because the divergence is worth seeing — but it changes nothing.
+      expect(stale).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+        state: "ACTIVE",
+        periodEndsAt: LATER_END,
+      });
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { currentPeriodEnd: true } })).toEqual({
+        currentPeriodEnd: LATER_END,
+      });
+      // And the access it would have taken away is still there.
+      expect((await readEntitlement(db(), workspaceId, new Date("2026-11-20T12:00:00.000Z"))).paidWorkAllowed).toBe(true);
+    });
+
+    it("cannot be made to grant service by moving a date while a lookup is pending", async () => {
+      // Astra's second re-review finding, and the one a synchronous test cannot reach. Asserting at the
+      // entry point answers a question about one instant; the store then awaits a route lookup, a
+      // transaction and several queries, and a caller that still holds the object it passed in can move a
+      // `Date` inside it while any of those are pending. Re-asserting after each await would not close it,
+      // because there is always another await — so the entry point copies the authenticated facts out and
+      // everything downstream reads the copy.
+      //
+      // This drives the real store against the real database, with only the route lookup gated, because
+      // the window being tested is one that exists between awaits rather than inside a mock.
+      const { workspaceId, opened } = await paidThrough("interleaved", FIRST_END);
+      const event = await verified("test-psp", {
+        routeCode: "direct-eu",
+        providerEventId: `interleaved-renewed-${workspaceId}`,
+        kind: "SUBSCRIPTION_RENEWED",
+        occurredAt: RENEW_AT,
+        arrangementId: opened.arrangementId,
+        settled: money(4_900, "EUR"),
+        periodEndsAt: LATER_END,
+      });
+
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const real = db();
+      const gated = new Proxy(real, {
+        get(target, property, receiver) {
+          if (property === "billingRoute") {
+            return {
+              ...target.billingRoute,
+              findUnique: async (args: Parameters<typeof real.billingRoute.findUnique>[0]) => {
+                await gate;
+                return real.billingRoute.findUnique(args);
+              },
+            };
+          }
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      });
+
+      const processing = recordVerifiedBillingEvent(gated, event, RENEW_AT);
+      // The caller still holds the event, and the lookup has not returned yet.
+      event.periodEndsAt?.setUTCFullYear(2099);
+      release();
+      const result = await processing;
+
+      // The renewal it was minted for still applies, and the year it was moved to never reaches a row.
+      expect(result).toMatchObject({ outcome: "APPLIED", effect: "EXTEND" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { periodEndsAt: true } })).toEqual({ periodEndsAt: LATER_END });
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { currentPeriodEnd: true } })).toEqual({
+        currentPeriodEnd: LATER_END,
+      });
+      // And the event row records the term that was authenticated, not the one somebody wrote afterwards.
+      const row = await db().billingEvent.findFirstOrThrow({ where: { providerEventId: `interleaved-renewed-${workspaceId}` }, select: { detail: true } });
+      expect(JSON.stringify(row.detail)).not.toContain("2099");
+    });
+
+    it("still extends when the renewal genuinely buys more time", async () => {
+      // The control. A fix that answered `NONE` to every renewal would pass the case above and silently
+      // stop renewing anybody's subscription, which is a worse defect than the one being fixed.
+      const { workspaceId, opened } = await paidThrough("forward", FIRST_END);
+
+      const extended = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `forward-renewed-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: RENEW_AT,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: LATER_END,
+        }),
+        RENEW_AT,
+      );
+
+      expect(extended).toMatchObject({ outcome: "APPLIED", effect: "EXTEND" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { periodEndsAt: true } })).toEqual({ periodEndsAt: LATER_END });
+    });
+
+    it("keeps the furthest term when two renewals with different identifiers race", async () => {
+      // Distinct event ids, so idempotency does not serialize them, and the two transactions genuinely
+      // interleave. Whichever lands second, the workspace must end up with the later term: the loser of
+      // the race is a renewal that bought less time, not a correction.
+      const { workspaceId, opened } = await paidThrough("race", FIRST_END);
+
+      const renewal = async (suffix: string, end: Date) =>
+        recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `race-${suffix}-${workspaceId}`,
+            kind: "SUBSCRIPTION_RENEWED",
+            occurredAt: RENEW_AT,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            periodEndsAt: end,
+          }),
+          RENEW_AT,
+        );
+
+      const [near, far] = await Promise.all([renewal("near", LATER_END), renewal("far", LATER_STILL)]);
+
+      // Both were processed — neither is a duplicate — and between them exactly one extended the term.
+      expect([near.outcome, far.outcome]).toEqual(["APPLIED", "APPLIED"]);
+      expect([near.effect, far.effect].filter((effect) => effect === "EXTEND").length).toBeGreaterThanOrEqual(1);
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { periodEndsAt: true } })).toEqual({ periodEndsAt: LATER_STILL });
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { currentPeriodEnd: true } })).toEqual({
+        currentPeriodEnd: LATER_STILL,
+      });
+    });
+
     it("does nothing with a renewal that arrives before the first settlement", async () => {
       // Reordering, which every provider does eventually. Extending a path that is not paying for
       // anything would grant a term nobody bought.
@@ -1167,7 +1369,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
 
       // A second checkout that has not said it is migrating is refused. This is "never create a second
       // active charge path silently", and the default is the refusal.
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: await acceptedIds(context, request()), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "ARRANGEMENT_EXISTS" });
 
@@ -1453,6 +1655,363 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(2);
     });
 
+    /**
+     * Astra's first blocking finding on PR #100, by name: an older-term reversal revoked a newer paid term
+     * on the **same** arrangement. The superseded-arrangement case above did not cover it — there the two
+     * terms are two rows, and `END` already refused to touch a live path for a dead one. Here there is one
+     * arrangement, one route and two consecutive paid terms, so nothing structural distinguishes them and
+     * the only thing that can is attribution.
+     */
+    const TERM_ONE_END = new Date("2026-11-07T12:00:00.000Z");
+    const RENEWED_AT = new Date("2026-11-01T12:00:00.000Z");
+    const TERM_TWO_END = new Date("2026-12-07T12:00:00.000Z");
+    const AFTER_RENEWAL = new Date("2026-11-02T12:00:00.000Z");
+    const TERM_THREE_END = new Date("2027-01-07T12:00:00.000Z");
+
+    /** Settles the first term and renews into a second one, both on a single arrangement. */
+    async function twoPaidTerms(label: string) {
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `${label}-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_ONE_END,
+        }),
+        NOW,
+      );
+      const renewed = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `${label}-renewed-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: RENEWED_AT,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_TWO_END,
+        }),
+        RENEWED_AT,
+      );
+      expect(renewed, "the second term has to be bought before a reversal of the first means anything").toMatchObject({
+        outcome: "APPLIED",
+        effect: "EXTEND",
+      });
+      return { context, workspaceId, opened };
+    }
+
+    for (const kind of ["REFUNDED", "CHARGEBACK"] as const) {
+      it(`will not let a ${kind} naming the first term revoke the second one on the same arrangement`, async () => {
+        const { workspaceId, opened } = await twoPaidTerms(`same-arr-stated-${kind}`);
+
+        const reversed = await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `same-arr-stated-${kind}-${workspaceId}`,
+            kind,
+            occurredAt: NOW,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            // The provider says which term it is taking back, and it is the one that has already elapsed.
+            periodEndsAt: TERM_ONE_END,
+          }),
+          AFTER_RENEWAL,
+        );
+
+        expect(reversed, kind).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+        // Read the rows back rather than trusting the effect: the defect wrote `INACTIVE` and `ENDED`.
+        expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true, canceledAt: true } })).toEqual({
+          state: "ACTIVE",
+          periodEndsAt: TERM_TWO_END,
+          canceledAt: null,
+        });
+        expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { state: true, endedAt: true, currentPeriodEnd: true } })).toEqual({
+          state: "ACTIVE",
+          endedAt: null,
+          currentPeriodEnd: TERM_TWO_END,
+        });
+        expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(true);
+      });
+    }
+
+    it("will not let a reversal that names no term at all revoke a term bought after it", async () => {
+      // The half the ledger answers. Plenty of providers send a reversal with no period on it, and the
+      // first version of this fix treated that as "ambiguous, so leave everything alone" — which broke the
+      // ordinary case of refunding the only payment ever made. What distinguishes them is retained: the
+      // event that granted the term in force occurred *after* the payment being taken back.
+      const { workspaceId, opened } = await twoPaidTerms("same-arr-unstated");
+
+      const reversed = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `same-arr-unstated-${workspaceId}`,
+          kind: "REFUNDED",
+          occurredAt: NOW,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+        }),
+        AFTER_RENEWAL,
+      );
+
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+        state: "ACTIVE",
+        periodEndsAt: TERM_TWO_END,
+      });
+    });
+
+    for (const kind of ["REFUNDED", "CHARGEBACK"] as const) {
+      it(`will not let a ${kind} raised after the renewal revoke it when no period is stated`, async () => {
+        // Astra's re-review finding, and the hole in the first version of this fix. A reversal's
+        // `occurredAt` is when the *reversal* was raised, not when the charge it reverses was made — so a
+        // refund issued today for last month's invoice is legitimately newer than today's renewal, and the
+        // timestamp comparison the first fix used let exactly this through. The case the earlier
+        // regression covered was an *old* reversal delivered late, which is the easy half.
+        const { workspaceId, opened } = await twoPaidTerms(`new-reversal-old-charge-${kind}`);
+
+        const reversed = await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `new-reversal-old-charge-${kind}-${workspaceId}`,
+            kind,
+            // Raised *after* the renewal that bought the term in force.
+            occurredAt: AFTER_RENEWAL,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            // And naming no term, so only identity can attribute it.
+          }),
+          AFTER_RENEWAL,
+        );
+
+        expect(reversed, kind).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+        expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true, canceledAt: true } })).toEqual({
+          state: "ACTIVE",
+          periodEndsAt: TERM_TWO_END,
+          canceledAt: null,
+        });
+        expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { state: true, endedAt: true } })).toEqual({
+          state: "ACTIVE",
+          endedAt: null,
+        });
+        expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(true);
+      });
+    }
+
+    it("still revokes an ordinary refund of the only payment ever made, whatever it states", async () => {
+      // The control that stops the identity check turning into "a reversal naming nothing never does
+      // anything". One payment has granted a term on this arrangement, so there is no other term it could
+      // be about: the money being returned is the money that bought the access.
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `single-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_ONE_END,
+        }),
+        NOW,
+      );
+
+      const reversed = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `single-refunded-${workspaceId}`,
+          kind: "REFUNDED",
+          // Raised later than the payment, naming no term and no reference: the shape a minimal provider
+          // sends, and the one an over-cautious guard would wrongly ignore.
+          occurredAt: new Date("2026-10-20T12:00:00.000Z"),
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+        }),
+        new Date("2026-10-20T12:00:00.000Z"),
+      );
+
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "END" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "INACTIVE" });
+      expect((await readEntitlement(db(), workspaceId, new Date("2026-10-20T12:00:00.000Z"))).paidWorkAllowed).toBe(false);
+    });
+
+    it("revokes the current term when the reversal states the period that term covers", async () => {
+      // The genuine current-charge control. A previous version of this suite used a matching
+      // `providerReference` as the proof, and Astra was right that it is not one: the interface permits a
+      // *subscription* id there, which two separately paid terms legitimately share. What the payload can
+      // actually prove is the period, so that is what this asserts.
+      const { workspaceId, opened } = await twoPaidTerms("states-current-term");
+
+      const reversed = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `states-current-term-${workspaceId}`,
+          kind: "REFUNDED",
+          occurredAt: AFTER_RENEWAL,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_TWO_END,
+        }),
+        AFTER_RENEWAL,
+      );
+
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "END" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true } })).toEqual({ state: "INACTIVE" });
+      // The charge path ends with it. Asserted here because this case absorbed an earlier one that
+      // checked it — see the note in the handoff: that test was removed by accident while this block
+      // replaced its neighbour, and the assertion is carried over rather than quietly dropped.
+      expect(await db().billingArrangement.findUniqueOrThrow({ where: { id: opened.arrangementId }, select: { state: true } })).toEqual({ state: "ENDED" });
+      expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(false);
+    });
+
+    for (const kind of ["REFUNDED", "CHARGEBACK"] as const) {
+      it(`will not let a ${kind} sharing the subscription reference revoke a separately paid term`, async () => {
+        // Astra's round-three finding. `providerReference` is documented as the provider's subscription
+        // *or* charge object, so on a recurring arrangement both paid terms carry the same value and a
+        // refund of the first charge is indistinguishable from one of the second by that field alone.
+        const { context, workspaceId } = await freshWorkspace();
+        const opened = await openFor(context, request());
+        await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-settled-${kind}-${workspaceId}`,
+            kind: "PAYMENT_SETTLED",
+            occurredAt: NOW,
+            checkoutContractId: opened.checkoutContractId,
+            settled: money(4_900, "EUR"),
+            periodEndsAt: TERM_ONE_END,
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          NOW,
+        );
+        await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-renewed-${kind}-${workspaceId}`,
+            kind: "SUBSCRIPTION_RENEWED",
+            occurredAt: RENEWED_AT,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            periodEndsAt: TERM_TWO_END,
+            // The same subscription object, as a recurring provider sends it.
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          RENEWED_AT,
+        );
+
+        const reversed = await recordVerifiedBillingEvent(
+          db(),
+          await verified("test-psp", {
+            routeCode: "direct-eu",
+            providerEventId: `shared-ref-reversed-${kind}-${workspaceId}`,
+            kind,
+            occurredAt: AFTER_RENEWAL,
+            arrangementId: opened.arrangementId,
+            settled: money(4_900, "EUR"),
+            // No period, and a reference that names the subscription rather than a charge.
+            providerReference: `sub-shared-${workspaceId}`,
+          }),
+          AFTER_RENEWAL,
+        );
+
+        expect(reversed, kind).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+        expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+          state: "ACTIVE",
+          periodEndsAt: TERM_TWO_END,
+        });
+        expect((await readEntitlement(db(), workspaceId, AFTER_RENEWAL)).paidWorkAllowed).toBe(true);
+      });
+    }
+
+    it("will not let a refund of the shorter grant end the longer term a delayed renewal bought", async () => {
+      // Astra's second round-three finding, and the one that invalidates "the latest event granted the
+      // current term". The monotonic rule above deliberately lets a delayed renewal buy a term reaching
+      // *farther* than one already applied, so ordering grants by `occurredAt` picks the wrong one.
+      const { context, workspaceId } = await freshWorkspace();
+      const opened = await openFor(context, request());
+      await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reordered-settled-${workspaceId}`,
+          kind: "PAYMENT_SETTLED",
+          occurredAt: NOW,
+          checkoutContractId: opened.checkoutContractId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_ONE_END,
+        }),
+        NOW,
+      );
+      // A: raised later, buys the shorter term.
+      const shorter = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reordered-shorter-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: AFTER_RENEWAL,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_TWO_END,
+          providerReference: `charge-shorter-${workspaceId}`,
+        }),
+        AFTER_RENEWAL,
+      );
+      // B: raised earlier, arrives after, and buys the longer term — which the monotonic rule accepts.
+      const longer = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reordered-longer-${workspaceId}`,
+          kind: "SUBSCRIPTION_RENEWED",
+          occurredAt: RENEWED_AT,
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          periodEndsAt: TERM_THREE_END,
+          providerReference: `charge-longer-${workspaceId}`,
+        }),
+        RENEWED_AT,
+      );
+      expect([shorter.effect, longer.effect]).toEqual(["EXTEND", "EXTEND"]);
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { periodEndsAt: true } })).toEqual({ periodEndsAt: TERM_THREE_END });
+
+      // Now take back the shorter grant. It is the most recent grant by event time, and it is not the one
+      // paying for the term in force.
+      const reversed = await recordVerifiedBillingEvent(
+        db(),
+        await verified("test-psp", {
+          routeCode: "direct-eu",
+          providerEventId: `reordered-refund-${workspaceId}`,
+          kind: "REFUNDED",
+          occurredAt: new Date("2026-11-03T12:00:00.000Z"),
+          arrangementId: opened.arrangementId,
+          settled: money(4_900, "EUR"),
+          providerReference: `charge-shorter-${workspaceId}`,
+        }),
+        new Date("2026-11-03T12:00:00.000Z"),
+      );
+
+      expect(reversed).toMatchObject({ outcome: "APPLIED", effect: "NONE" });
+      expect(await db().workspaceSubscription.findUniqueOrThrow({ where: { workspaceId }, select: { state: true, periodEndsAt: true } })).toEqual({
+        state: "ACTIVE",
+        periodEndsAt: TERM_THREE_END,
+      });
+      expect((await readEntitlement(db(), workspaceId, new Date("2026-11-03T12:00:00.000Z"))).paidWorkAllowed).toBe(true);
+    });
+
     it("cancels at the end of the term already paid for", async () => {
       const { context, workspaceId } = await freshWorkspace();
       const opened = await openFor(context, request());
@@ -1586,6 +2145,639 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     });
   });
 
+  describe("the offer an acceptance is bound to", () => {
+    /**
+     * Astra's P1 on PR #101. The form carried the plan, the interval and the document ids, and nothing
+     * identifying the *commercial* offer — so a route reconfigured between the GET that drew the ticks and
+     * the POST that accepted them produced a contract naming a different selling entity, a different
+     * jurisdiction and a different tax treatment than the person had been shown. A global required
+     * document legitimately applies to both sellers, so the document ids cannot bind any of that.
+     */
+    async function displayedOffer(context: WorkspaceContext) {
+      const offer = await readCheckoutOffer(db(), context, request({ supersedeCurrent: true }));
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+      return offer;
+    }
+
+    /** Submits exactly what a page displaying `offer` would post, and nothing else. */
+    async function submit(context: WorkspaceContext, offer: Awaited<ReturnType<typeof displayedOffer>>) {
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      return openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        offeredDigest: offer.offerDigest,
+      });
+    }
+
+    it("opens when the offer is still the one that was displayed", async () => {
+      // The control, and the reason the refusals below mean something: posting a digest the server itself
+      // produced must not stop an ordinary checkout.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      const opened = await submit(context, offer);
+
+      expect(opened).toMatchObject({ available: true });
+    });
+
+    it("refuses a submission that names no offer at all, instead of skipping the comparison", async () => {
+      // The guard cannot be switchable off by the client it exists to distrust, and leaving the field out
+      // is the cheapest possible way to try. While the digest was optional this restored the original
+      // defect in full: the acceptance was recorded against whatever the store resolved at POST time with
+      // nothing binding it to what anybody had been shown, and the stored contract could not afterwards be
+      // told apart from one that *had* been bound.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        // What `offeredDigestFrom` returns for a form with no `offer` field — a value no digest can equal,
+        // so the ordinary comparison refuses it and there is no `undefined` path to get wrong.
+        offeredDigest: "",
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+    });
+
+    it("refuses when the selling entity and the tax treatment changed after the terms were displayed", async () => {
+      const { context, workspaceId } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+      expect(offer.seller.legalName, "the harness must start on the direct route").toBe("Example SRL");
+      expect(offer.settlementModel).toBe("DIRECT_PSP");
+
+      // Trusted operator configuration changes, exactly as it may at any moment: the direct route is
+      // withdrawn and the Merchant-of-Record route becomes the one that admits this request.
+      await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: false } });
+      try {
+        const refused = await submit(context, offer);
+
+        expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+        // And nothing was written: no contract naming a seller nobody agreed to, and no acceptance.
+        expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+        expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(0);
+      } finally {
+        await db().billingRoute.update({ where: { code: "direct-eu" }, data: { enabled: true } });
+      }
+    });
+
+    it("refuses when the same seller's own legal identity changed after the terms were displayed", async () => {
+      // The case Astra asked for by name. Nothing about the route changes here — the entity a person was
+      // told they were buying from is simply not the entity now recorded, and a disclosure is the thing
+      // being consented to rather than a label on it.
+      const { context, workspaceId } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      await upsertSellerProfile(db(), {
+        code: "seller-ro",
+        legalName: "Example SRL (renamed)",
+        displayName: "Example",
+        jurisdiction: "RO",
+        supportEmail: "billing@example.test",
+        legalConfigRef: "config/ro",
+      });
+      try {
+        const refused = await submit(context, offer);
+
+        expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+        expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+      } finally {
+        await upsertSellerProfile(db(), {
+          code: "seller-ro",
+          legalName: "Example SRL",
+          displayName: "Example",
+          jurisdiction: "RO",
+          supportEmail: "billing@example.test",
+          legalConfigRef: "config/ro",
+        });
+      }
+    });
+
+    it("refuses a seller switch when every required document is global, which is where nothing else catches it", async () => {
+      // The configuration Astra's reproduction used, and it needs saying why it is a case of its own.
+      // With the harness's seller-specific `PUBLIC_OFFER` required, switching sellers happens to be caught
+      // by `DOCUMENT_NOT_APPLICABLE`, because the accepted offer document belongs to the other entity — so
+      // that path does not demonstrate this defect at all. Make the required set global, which is a
+      // legitimate configuration, and the incidental guard disappears.
+      //
+      // Entirely self-contained: its own sellers, its own routes in a currency nothing else uses, and its
+      // own plan. An earlier version of this case dropped the requirement on the *shared* catalogue
+      // instead and broke three later cases — and publications are append-only, so "restoring" it only
+      // added another version and broke two more. Shared append-only state cannot be borrowed.
+      const { context, workspaceId } = await freshWorkspace();
+      for (const [code, legalName, jurisdiction] of [
+        ["seller-digest-direct", "Digest Direct SRL", "RO"],
+        ["seller-digest-mor", "Digest Reseller Inc", "US"],
+      ] as const) {
+        await upsertSellerProfile(db(), { code, legalName, displayName: code, jurisdiction, supportEmail: `billing@${code}.test` });
+      }
+      await upsertBillingRoute(db(), {
+        code: "digest-direct",
+        provider: "test-psp",
+        providerAccountRef: "acct_digest_direct",
+        sellerProfileCode: "seller-digest-direct",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: ["USD"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 10,
+      });
+      await upsertBillingRoute(db(), {
+        code: "digest-mor",
+        provider: "test-mor",
+        providerAccountRef: "acct_digest_mor",
+        sellerProfileCode: "seller-digest-mor",
+        settlementModel: "MERCHANT_OF_RECORD",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "TAX_REMITTANCE", "INVOICES", "VERIFIED_WEBHOOKS"],
+        currencies: ["USD"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 20,
+      });
+      const usdPlan = (
+        await publishPlanVersion(db(), {
+          code: "digest-binding-plan",
+          name: "Digest binding plan",
+          grants: { features: [], limits: {}, quotas: {} },
+          prices: [{ currency: "USD", interval: "MONTH", amountCents: 4_900 }],
+        })
+      ).planVersionId;
+
+      const usd = { planVersionId: usdPlan, interval: "MONTH", arrangement: "RECURRING", currency: "USD", locale: "en", at: NOW, supersedeCurrent: true } as const;
+      const offer = await readCheckoutOffer(db(), context, usd);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason} ${offer.detail.join(", ")}`);
+      }
+      // Neither new seller has published a `PUBLIC_OFFER`, so the only required document is the global
+      // terms — which is the whole point.
+      expect(
+        offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.kind),
+        "no required document may name the seller in this case",
+      ).toEqual(["TERMS_OF_SERVICE"]);
+      expect(offer.seller.legalName).toBe("Digest Direct SRL");
+      expect(offer.settlementModel).toBe("DIRECT_PSP");
+
+      const required = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      await db().billingRoute.update({ where: { code: "digest-direct" }, data: { enabled: false } });
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...usd,
+        acceptedDocumentIds: required,
+        offeredDocumentIds: required,
+        offeredDigest: offer.offerDigest,
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "OFFER_CHANGED" });
+      // Nothing written: no contract naming a seller nobody agreed to, and no acceptance of its terms.
+      expect(await db().checkoutContract.count({ where: { workspaceId } })).toBe(0);
+      expect(await db().legalAcceptance.count({ where: { workspaceId } })).toBe(0);
+    });
+
+    it("still enforces the ticks when the offer itself has not moved", async () => {
+      // The digest must not become a way around the acceptance: a submission carrying the right offer and
+      // none of the ticks is still refused for what it did not accept.
+      const { context } = await freshWorkspace();
+      const offer = await displayedOffer(context);
+
+      const refused = await openCheckoutContract(db(), context, {
+        ...request({ supersedeCurrent: true }),
+        acceptedDocumentIds: [],
+        offeredDocumentIds: offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId),
+        offeredDigest: offer.offerDigest,
+      });
+
+      expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
+    });
+  });
+
+  describe("a language spelled two ways", () => {
+    /**
+     * Astra's P2 on PR #101. `legal_documents.locale` is what "which version is current in this reader's
+     * language?" groups by, in TypeScript and in `current_legal_documents()`. Both grouped by the stored
+     * spelling while the locale *negotiation* canonicalized before matching — so `en-US` and `en-us` were
+     * two languages: each got a version 1, each stayed current, neither superseded the other, and which
+     * one a reader was offered came down to row order. Publishing a replacement under the other spelling
+     * therefore left the superseded text on the checkout page and let the coverage trigger accept consent
+     * to it.
+     *
+     * Both halves of the fix need a non-canonical row to exist, and `publishLegalDocument` now refuses to
+     * create one — so these write it the way the only thing that still can would: a statement run by hand,
+     * or a publication from before this change. That is also what makes them regressions rather than
+     * tautologies: the row they read is not one the fixed writer produced.
+     *
+     * Both publication orders are here because the defect's outcome was decided by neither of them.
+     * `negotiateDocumentLocale` returns the *first* candidate whose canonical tag matches, and the
+     * candidates arrive in `locale ASC` order — so which of two spellings a reader was offered came down
+     * to the database's collation. Measured against this harness, `en-us` sorts before `en-US`, so the
+     * alias-is-newer order happens to land on the right row and the alias-is-older order lands on the
+     * superseded one; under a collation that sorts the other way it is the reverse. Neither case is
+     * therefore sufficient alone, and both pass once the winner is computed from `effective_from` and
+     * `version` instead of from row order.
+     */
+
+    /** A seller, a route, a currency and a plan nothing else in this file touches. */
+    async function isolatedSeller(code: string, currency: string): Promise<string> {
+      await upsertSellerProfile(db(), {
+        code,
+        legalName: `Alias ${code} SA`,
+        displayName: "Alias",
+        jurisdiction: "CH",
+        supportEmail: `billing@${code}.test`,
+      });
+      await upsertBillingRoute(db(), {
+        code: `${code}-direct`,
+        provider: "test-psp",
+        providerAccountRef: "acct_alias",
+        sellerProfileCode: code,
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: [currency],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 90,
+      });
+      // Its own currency, so this seller's route is the only one that can admit the request and no other
+      // case in this file can be reached by it.
+      return (
+        await publishPlanVersion(db(), {
+          code: `${code}-plan`,
+          name: "Alias",
+          grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} },
+          availability: "PUBLIC",
+          prices: [{ currency, interval: "MONTH", amountCents: 9_900 }],
+        })
+      ).planVersionId;
+    }
+
+    /** A document row written verbatim, bypassing the canonicalization the store now applies. */
+    async function writeRawDocument(row: {
+      readonly id: string;
+      readonly kind: string;
+      readonly locale: string;
+      readonly version: number;
+      readonly sellerProfileCode: string;
+      readonly effectiveFrom: string;
+    }): Promise<void> {
+      const written = await db().$executeRawUnsafe(
+        `INSERT INTO "legal_documents"
+           ("id","kind","version","locale","seller_profile_id","content_ref","required_for_checkout","effective_from","created_at")
+         SELECT $1, $2::"LegalDocumentKind", $3, $4, s."id", $5, true, $6::timestamp, $6::timestamp
+           FROM "seller_profiles" s WHERE s."code" = $7`,
+        row.id,
+        row.kind,
+        row.version,
+        row.locale,
+        `https://legal.example.test/offer/${row.id}`,
+        row.effectiveFrom,
+        row.sellerProfileCode,
+      );
+      // A seller code that matched nothing would insert no row and every assertion below would pass
+      // vacuously against a catalogue holding only the canonical version.
+      expect(written, `the raw ${row.locale} row was not written`).toBe(1);
+    }
+
+    /** Everything a page would tick, with the current version of one kind swapped for a stale id. */
+    const withStale = (offer: { readonly documents: readonly LegalDocumentOffer[] }, kind: string, staleId: string): readonly string[] =>
+      offer.documents.filter((document) => document.requiredForCheckout).map((document) => (document.kind === kind ? staleId : document.legalDocumentId));
+
+    it("offers one current version when the replacement was written in the other spelling", async () => {
+      const planVersionId = await isolatedSeller("seller-alias-a", "CHF");
+      const ask = { planVersionId, currency: "CHF", locale: "en-US" } as const;
+      const superseded = await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en-US",
+        contentRef: "https://legal.example.test/offer/alias-a/en-US/1",
+        sellerProfileCode: "seller-alias-a",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      // The replacement, in force, spelled the way the product never spells it.
+      await writeRawDocument({
+        id: "raw-alias-a",
+        kind: "PUBLIC_OFFER",
+        locale: "en-us",
+        version: 2,
+        sellerProfileCode: "seller-alias-a",
+        effectiveFrom: "2026-06-01T00:00:00.000Z",
+      });
+
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(ask), NOW);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+
+      // One tick for this kind, not two, and it is the replacement rather than whichever spelling sorted
+      // first. Before the fix this was two required documents, both version 1 of one offer.
+      const offered = offer.documents.filter((document) => document.kind === "PUBLIC_OFFER");
+      expect(offered.map((document) => document.legalDocumentId)).toEqual(["raw-alias-a"]);
+
+      // And the stale id is refused once the replacement is effective — the half that matters, because a
+      // reader with an open tab is holding exactly that id.
+      const stale = withStale(offer, "PUBLIC_OFFER", superseded.legalDocumentId);
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
+      expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+      expect(await db().checkoutContract.count({ where: { workspaceId: context.workspaceId } })).toBe(0);
+
+      // The control, in a workspace of its own so no refused attempt can be what stopped it: accepting
+      // the replacement opens the checkout. Without this a guard that refused everything would pass.
+      const second = await freshWorkspace();
+      const current = offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      const opened = await openCheckoutContract(db(), second.context, { ...request(ask), acceptedDocumentIds: current, offeredDocumentIds: current, offeredDigest: offer.offerDigest });
+      expect(opened).toMatchObject({ available: true });
+      if (!opened.available) {
+        return;
+      }
+
+      // And the database refuses the same thing on its own, which is the half the store cannot speak for.
+      // `openCheckoutContract` resolves the current versions in TypeScript and returns
+      // `DOCUMENT_SUPERSEDED` before any row is written, so the refusal above proves the store and says
+      // nothing about `current_legal_documents()` — and that function is what the acceptance trigger
+      // matches an accepted id against. With it grouping by the stored spelling, both aliases were
+      // "current" and an acceptance of the superseded one was allowed straight through.
+      //
+      // The coverage trigger cannot catch this: it matches an acceptance to a requirement by *kind*, so
+      // one acceptance of the kind satisfies it however many rows the function returned.
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_acceptances"
+             ("id","workspace_id","actor_user_id","legal_document_id","checkout_contract_id","locale","accepted_at","created_at")
+           VALUES ($1,$2,$3,$4,$5,'en-US',NOW(),NOW())`,
+          `raw-acceptance-${opened.checkoutContractId}`,
+          second.workspaceId,
+          second.ownerUserId,
+          superseded.legalDocumentId,
+          opened.checkoutContractId,
+        ),
+      ).rejects.toThrow(/is superseded/u);
+    });
+
+    it("continues one version sequence across spellings, whichever spelling was published first", async () => {
+      const planVersionId = await isolatedSeller("seller-alias-b", "NOK");
+      const ask = { planVersionId, currency: "NOK", locale: "en-GB" } as const;
+      // The other publication order: the alias is already in the catalogue when the canonical version is
+      // published. `locale` sorts before `effective_from` in the query that reads these, so this is the
+      // order in which "the first row of the group wins" silently returns the older document.
+      await writeRawDocument({
+        id: "raw-alias-b",
+        kind: "PUBLIC_OFFER",
+        locale: "en-gb",
+        version: 1,
+        sellerProfileCode: "seller-alias-b",
+        effectiveFrom: "2026-01-01T00:00:00.000Z",
+      });
+      const replacement = await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en-GB",
+        contentRef: "https://legal.example.test/offer/alias-b/en-GB/2",
+        sellerProfileCode: "seller-alias-b",
+        effectiveFrom: new Date("2026-06-01T00:00:00.000Z"),
+      });
+
+      // Version allocation saw the alias as the same language. A second version 1 is the state the whole
+      // defect rests on: two first versions of one document, neither able to supersede the other.
+      expect(replacement.version).toBe(2);
+
+      const { context } = await freshWorkspace();
+      const offer = await readCheckoutOffer(db(), context, request(ask), NOW);
+      if (!offer.available) {
+        throw new Error(`offer unavailable: ${offer.reason}`);
+      }
+      const offered = offer.documents.filter((document) => document.kind === "PUBLIC_OFFER");
+      expect(offered.map((document) => document.legalDocumentId)).toEqual([replacement.legalDocumentId]);
+      expect(offered.map((document) => document.version)).toEqual([2]);
+
+      const stale = withStale(offer, "PUBLIC_OFFER", "raw-alias-b");
+      const refused = await openCheckoutContract(db(), context, { ...request(ask), acceptedDocumentIds: stale, offeredDocumentIds: stale, offeredDigest: offer.offerDigest });
+      expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
+    });
+
+    it("refuses to store a spelling the database cannot group, and refuses to publish one at all", async () => {
+      // The two halves of the backstop. `publishLegalDocument` canonicalizes everything it can name a
+      // language for and refuses what it cannot; the CHECK refuses the separator form that no canonical
+      // tag has, so a hand-run statement cannot leave `ru_RU` in a column that is also displayed to a
+      // reader as the language a contract is published in.
+      await expect(
+        publishLegalDocument(db(), {
+          kind: "REFUND_POLICY",
+          locale: "nonsense tag",
+          contentRef: "https://legal.example.test/refunds/x/1",
+          effectiveFrom: NOW,
+        }),
+      ).rejects.toThrow(DbInputError);
+
+      const stored = await publishLegalDocument(db(), {
+        kind: "REFUND_POLICY",
+        locale: "RU-ru",
+        contentRef: "https://legal.example.test/refunds/ru/1",
+        requiredForCheckout: false,
+        effectiveFrom: NOW,
+      });
+      const row = await db().legalDocument.findUniqueOrThrow({ where: { id: stored.legalDocumentId }, select: { locale: true } });
+      expect(row.locale).toBe("ru-RU");
+
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_documents" ("id","kind","version","locale","content_ref","required_for_checkout","effective_from","created_at")
+           VALUES ('raw-underscore','REFUND_POLICY'::"LegalDocumentKind",99,'ru_RU','https://legal.example.test/refunds/raw',false,NOW(),NOW())`,
+        ),
+      ).rejects.toThrow(/legal_documents_locale_well_formed/u);
+
+      // And the state the whole defect rested on is now unreachable: two rows of one kind and one
+      // language sharing a version number. The declared unique is on the stored spelling, so `RU-ru` v1
+      // and `ru-RU` v1 satisfied it and neither could supersede the other.
+      await expect(
+        db().$executeRawUnsafe(
+          `INSERT INTO "legal_documents" ("id","kind","version","locale","content_ref","required_for_checkout","effective_from","created_at")
+           VALUES ('raw-alias-version','REFUND_POLICY'::"LegalDocumentKind",$1,'RU-ru','https://legal.example.test/refunds/alias',false,NOW(),NOW())`,
+          stored.version,
+        ),
+      ).rejects.toThrow(/legal_documents_kind_language_version_key/u);
+    });
+  });
+
+  describe("the seller snapshot a digest was checked against", () => {
+    /**
+     * Astra's P1 on the #101 remediation, and the same mistake I had already written down after #100: a
+     * validate-then-use boundary that crosses an `await` needs the *snapshot*, not a second read.
+     *
+     * `resolveCheckout` read the selling entity and the digest was computed from that row. The write path
+     * then re-read `sellerProfile` and copied the **second** result into the immutable contract, the audit
+     * entry and the returned offer. `upsertSellerProfile` takes neither of this transaction's two locks
+     * and the transaction is `READ COMMITTED`, so an operator update committing between the two reads
+     * changed the persisted legal name and jurisdiction without invalidating the digest that had just been
+     * compared. The acceptance then named an entity nobody had been shown — the exact defect the digest
+     * exists to prevent, reintroduced one layer below the guard.
+     *
+     * The interleaving is forced rather than waited for. A timer would be a guess, so the real Prisma
+     * client is wrapped in a proxy that commits the operator's update at the precise moment the first
+     * seller read has resolved, on a *different* pooled connection and therefore its own transaction —
+     * every query here still runs against real PostgreSQL. Nothing about the store is reimplemented: the
+     * proxy forwards every call untouched and only chooses *when* the competing commit lands.
+     */
+    async function raceSeller(context: WorkspaceContext, input: Request, accepted: readonly string[], digest: string) {
+      let sellerRereads = 0;
+      let committedDuringTransaction = false;
+
+      // The selling entity is *not* fetched by `sellerProfile.findUnique` on the resolve path: it arrives
+      // as a nested `select` under the route read, which is why the only such call this transaction ever
+      // made was the second read this fix removes. So the barrier hangs off the route read — guaranteed to
+      // happen in every version, and before anything the write path does — and a `sellerProfile` read is
+      // counted rather than triggered on, because after the fix there must be none at all.
+      const interceptTx = (tx: DbExecutor): DbExecutor =>
+        new Proxy(tx, {
+          get(target, property, receiver) {
+            if (property !== "billingRoute" && property !== "sellerProfile") {
+              return Reflect.get(target, property, receiver) as unknown;
+            }
+            const model = property;
+            const delegate = Reflect.get(target, property, receiver) as object;
+            return new Proxy(delegate, {
+              get(owner, call, ownerReceiver) {
+                const original = Reflect.get(owner, call, ownerReceiver) as unknown;
+                if (typeof call !== "string" || !call.startsWith("find") || typeof original !== "function") {
+                  return original;
+                }
+                // `findUniqueOrThrow` and not any route read: the candidate routes are selected by an
+                // earlier `findMany`, and committing the rename before *that* would change the seller the
+                // POST resolves, so the digest would legitimately stop matching and the submission would
+                // be refused `OFFER_CHANGED`. That is correct behaviour but a different case. The window
+                // this test is for opens once the route read carrying the seller has resolved — the digest
+                // has then been computed from the old row and is about to be compared and accepted.
+                const isBarrier = model === "billingRoute" && call === "findUniqueOrThrow";
+                return async (...args: unknown[]) => {
+                  const row = await (original as (...a: unknown[]) => Promise<unknown>).apply(owner, args);
+                  if (model === "sellerProfile") {
+                    sellerRereads += 1;
+                    return row;
+                  }
+                  if (isBarrier && !committedDuringTransaction) {
+                    // The operator renames the selling entity and moves its jurisdiction, committed from
+                    // another pooled connection — its own transaction — while this one is still open and
+                    // has already resolved the offer. Before the fix the second read below returned this
+                    // row and the contract was written from it.
+                    await db().sellerProfile.update({
+                      where: { code: "seller-race" },
+                      data: { legalName: "Seller Race NEW LEGAL ENTITY", jurisdiction: "UA" },
+                    });
+                    committedDuringTransaction = true;
+                  }
+                  return row;
+                };
+              },
+            });
+          },
+        });
+
+      const client = new Proxy(db(), {
+        get(target, property, receiver) {
+          if (property !== "$transaction") {
+            return Reflect.get(target, property, receiver) as unknown;
+          }
+          return (callback: (tx: DbExecutor) => Promise<unknown>, ...rest: readonly unknown[]) =>
+            target.$transaction((tx) => callback(interceptTx(tx)), ...(rest as []));
+        },
+      });
+
+      const opened = await openCheckoutContract(client, context, {
+        ...input,
+        acceptedDocumentIds: accepted,
+        offeredDocumentIds: accepted,
+        offeredDigest: digest,
+      });
+      return { opened, sellerRereads, committedDuringTransaction };
+    }
+
+    it("persists the entity the digest was checked against, not one committed mid-transaction", async () => {
+      await upsertSellerProfile(db(), {
+        code: "seller-race",
+        legalName: "Seller Race SRL",
+        displayName: "Race",
+        jurisdiction: "RO",
+        supportEmail: "billing@race.test",
+      });
+      await upsertBillingRoute(db(), {
+        code: "race-direct",
+        provider: "test-psp",
+        providerAccountRef: "acct_race",
+        sellerProfileCode: "seller-race",
+        settlementModel: "DIRECT_PSP",
+        capabilities: ["RECURRING_SUBSCRIPTIONS", "REFUNDS", "TAX_CALCULATION", "INVOICES", "VERIFIED_WEBHOOKS", "PRORATION"],
+        currencies: ["SEK"],
+        intervals: ["MONTH"],
+        enabled: true,
+        priority: 95,
+      });
+      await publishLegalDocument(db(), {
+        kind: "PUBLIC_OFFER",
+        locale: "en",
+        contentRef: "https://legal.example.test/offer/race/en/1",
+        sellerProfileCode: "seller-race",
+        effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const planVersionId = (
+        await publishPlanVersion(db(), {
+          code: "race-plan",
+          name: "Race",
+          grants: { features: ["AI_DRAFTS"], limits: {}, quotas: {} },
+          availability: "PUBLIC",
+          prices: [{ currency: "SEK", interval: "MONTH", amountCents: 9_900 }],
+        })
+      ).planVersionId;
+
+      const ask = request({ planVersionId, currency: "SEK", locale: "en", supersedeCurrent: true });
+      const { context } = await freshWorkspace();
+      // What the page displayed, and the digest it would post back.
+      const displayed = await readCheckoutOffer(db(), context, ask, NOW);
+      if (!displayed.available) {
+        throw new Error(`offer unavailable: ${displayed.reason} ${displayed.detail.join(", ")}`);
+      }
+      expect(displayed.seller.legalName).toBe("Seller Race SRL");
+      expect(displayed.seller.jurisdiction).toBe("RO");
+
+      const accepted = displayed.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId);
+      const raced = await raceSeller(context, ask, accepted, displayed.offerDigest);
+
+      // The competing write really did commit, and it really did commit while the checkout was open.
+      // Without this the assertions below would hold against a database nobody had changed.
+      expect(raced.committedDuringTransaction).toBe(true);
+      expect(await db().sellerProfile.findUniqueOrThrow({ where: { code: "seller-race" }, select: { legalName: true } })).toEqual({
+        legalName: "Seller Race NEW LEGAL ENTITY",
+      });
+
+      const opened = raced.opened;
+      expect(opened).toMatchObject({ available: true });
+      if (!opened.available) {
+        return;
+      }
+      // The returned offer, the contract row and the audit entry all have to name what was accepted.
+      expect(opened.seller).toMatchObject({ legalName: "Seller Race SRL", jurisdiction: "RO" });
+      const contract = await db().checkoutContract.findUniqueOrThrow({
+        where: { id: opened.checkoutContractId },
+        select: { sellerLegalName: true, sellerJurisdiction: true },
+      });
+      expect(contract).toEqual({ sellerLegalName: "Seller Race SRL", sellerJurisdiction: "RO" });
+
+      const page = await searchAuditEvents(db(), context, { kinds: ["CHECKOUT_OPENED"] });
+      const row = page.rows.find((event) => event.subjectId === opened.checkoutContractId);
+      expect(row?.summary).toContain("Seller Race SRL");
+      expect(JSON.stringify(row?.detail ?? {})).toContain('"sellerJurisdiction":"RO"');
+
+      // And the structural half of the fix: the transaction never reads `sellerProfile` on its own at all.
+      // The entity arrives once, nested under the route read the digest was computed from, so there is no
+      // second read left for a later commit to change. A convenience re-read added anywhere below the
+      // digest comparison would make this one, and the assertions above would go with it.
+      expect(raced.sellerRereads).toBe(0);
+    });
+  });
+
   describe("the acceptance snapshot", () => {
     it("offers the seller's own public offer and nothing that is not yet in force", async () => {
       const { context } = await freshWorkspace();
@@ -1604,7 +2796,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const { context, workspaceId } = await freshWorkspace();
       const documents = await acceptedIds(context, request());
 
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1) });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: documents.slice(0, 1), offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
       if (!refused.available) {
@@ -1624,6 +2816,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const refused = await openCheckoutContract(db(), context, {
         ...request(),
         acceptedDocumentIds: [...mine.filter((id) => id !== theirs.id), theirs.id],
+        offeredDigest: await digestOf(context, request()),
       });
 
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_NOT_APPLICABLE" });
@@ -1982,7 +3175,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         effectiveFrom: new Date("2026-03-01T00:00:00.000Z"),
       });
 
-      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: staleIds });
+      const refused = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: staleIds, offeredDigest: await digestOf(context, request()) });
 
       expect(refused).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
       if (!refused.available) {
@@ -2133,8 +3326,8 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         effectiveFrom: new Date("2026-01-15T00:00:00.000Z"),
       });
 
-      const blamed = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds });
-      const explained = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDocumentIds: offeredIds });
+      const blamed = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
+      const explained = await openCheckoutContract(db(), context, { ...request(), acceptedDocumentIds: offeredIds, offeredDocumentIds: offeredIds, offeredDigest: await digestOf(context, request()) });
 
       // Without the token the store cannot tell the two apart, and says the honest conservative thing.
       expect(blamed).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
@@ -2158,6 +3351,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         ...request(),
         acceptedDocumentIds: offeredIds.slice(0, 1),
         offeredDocumentIds: offeredIds,
+        offeredDigest: await digestOf(context, request()),
       });
 
       expect(refused).toMatchObject({ available: false, reason: "TERMS_NOT_ACCEPTED" });
@@ -2245,6 +3439,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         const refused = await openCheckoutContract(db(), context, {
           ...request(),
           acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
         });
 
         expect(refused).toMatchObject({ available: false, reason: "PROVIDER_UNAVAILABLE" });
@@ -2288,6 +3483,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const opened = await openCheckoutContract(db(), context, {
         ...request({ locale: "RU-ru" }),
         acceptedDocumentIds: await acceptedIds(context, request({ locale: "RU-ru" })),
+        offeredDigest: await digestOf(context, request({ locale: "RU-ru" })),
       });
 
       expect(opened.available).toBe(true);
@@ -2300,7 +3496,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
     it("refuses a locale that is not a language tag at all", async () => {
       const { context } = await freshWorkspace();
 
-      await expect(openCheckoutContract(db(), context, { ...request({ locale: "not a tag" }), acceptedDocumentIds: [] })).rejects.toThrow(DbInputError);
+      await expect(openCheckoutContract(db(), context, { ...request({ locale: "not a tag" }), acceptedDocumentIds: [], offeredDigest: "" })).rejects.toThrow(DbInputError);
     });
 
     it("never throws for a locale nobody published, in any of the product's own locales", async () => {
@@ -2314,6 +3510,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
         const attempt = await openCheckoutContract(db(), context, {
           ...request({ locale }),
           acceptedDocumentIds: offer.available ? offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId) : [],
+          offeredDigest: offer.available ? offer.offerDigest : "",
         });
         if (!attempt.available) {
           expect(CHECKOUT_REFUSALS.includes(attempt.reason), locale).toBe(true);
@@ -2357,6 +3554,7 @@ describe.skipIf(!databaseTestsEnabled())("billing routing, seller profiles and a
       const staleRefusal = await openCheckoutContract(db(), second, {
         ...request(),
         acceptedDocumentIds: before.map((row) => row.legalDocumentId),
+        offeredDigest: await digestOf(second, request()),
       });
       expect(staleRefusal).toMatchObject({ available: false, reason: "DOCUMENT_SUPERSEDED" });
     });

@@ -26,6 +26,8 @@
  * a transaction-scoped advisory lock and reads before writing. The unique index stays as the backstop for
  * anything that does not come through here.
  */
+import { createHash } from "node:crypto";
+
 import {
   acceptedInOwnLanguage,
   canonicalLanguageTag,
@@ -57,7 +59,7 @@ import {
 
 import { recordSystemAuditEvent, recordWorkspaceAuditEvent } from "./audit-store";
 import type { DbClient, DbExecutor } from "./client";
-import { assertVerifiedBillingEvent, billingProviderRegistered, type VerifiedBillingEvent } from "./billing-events";
+import { billingProviderRegistered, snapshotVerifiedBillingEvent, type VerifiedBillingEvent } from "./billing-events";
 import { DbInputError } from "./errors";
 import { requireRole, scopeOf, type WorkspaceContext } from "./tenancy";
 
@@ -335,6 +337,18 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
   if (!isReadableDocumentUrl(input.contentRef)) {
     throw new DbInputError("contentRef", "a legal document is published at an absolute https URL somebody can open");
   }
+  // Canonicalized once, here, and stored that way — because every other part of this file identifies a
+  // document by its locale and they have to mean the same thing by it.
+  //
+  // Astra's P2 on #101: publishing kept `input.locale` verbatim and allocated versions by that raw
+  // string, while `negotiateDocumentLocale` canonicalizes before matching. So `en-US` and `en-us` each
+  // became v1 of the same kind, both current, neither superseding the other, and which spelling a reader
+  // was offered came down to row order rather than to `effectiveFrom` or `version`. Two aliases of one
+  // language tag are one identity, and the only place that can be settled is where the row is written.
+  const locale = canonicalLanguageTag(input.locale);
+  if (locale === undefined || locale === null) {
+    throw new DbInputError("locale", "a legal document is published in a well-formed BCP-47 language tag");
+  }
   return db.$transaction(async (tx) => {
     const seller =
       input.sellerProfileCode === undefined
@@ -350,16 +364,20 @@ export async function publishLegalDocument(db: DbClient, input: LegalDocumentInp
     // anything could turn it into a sentence. Both are rare owner-or-operator acts, so serializing them
     // against each other costs nothing.
     await serialize(tx, LEGAL_CATALOGUE_LOCK);
-    const latest = await tx.legalDocument.findFirst({
-      where: { kind: input.kind, locale: input.locale },
-      orderBy: { version: "desc" },
-      select: { version: true },
-    });
-    const version = (latest?.version ?? 0) + 1;
+    // Versions are allocated per *canonical* locale, and existing rows are matched the same way rather
+    // than by string equality — so a catalogue that already holds a non-canonical spelling still gets one
+    // sequence instead of two. The comparison is in TypeScript because the canonical form of a language
+    // tag is not something SQL can compute: no SQL expression knows that `iw` and `he` are one language.
+    // What the database does enforce is the part it can decide — `current_legal_documents()` groups by the
+    // locale case-folded and separator-folded, so two spellings of one language cannot both be current
+    // even for a row that never came through this function.
+    const published = await tx.legalDocument.findMany({ where: { kind: input.kind }, select: { locale: true, version: true } });
+    const sameLanguage = published.filter((row) => canonicalLanguageTag(row.locale) === locale);
+    const version = Math.max(0, ...sameLanguage.map((row) => row.version)) + 1;
     const row = await tx.legalDocument.create({
       data: {
         kind: input.kind,
-        locale: input.locale,
+        locale,
         version,
         contentRef: input.contentRef,
         effectiveFrom: input.effectiveFrom,
@@ -488,6 +506,24 @@ export interface CheckoutOffer {
    * different sentence from "there is no plan for you".
    */
   readonly checkoutReady: boolean;
+  /**
+   * An opaque identity of the commercial terms this offer displayed (#47).
+   *
+   * The form posts it back and `openCheckoutContract` recomputes it from its own fresh resolution inside
+   * the opening transaction. It exists because consent is to *terms*, and the terms are not only the plan
+   * and the price: they are the selling legal entity, its jurisdiction, and whether the tax is remitted by
+   * that entity or by the provider at its own hosted checkout. None of that was bound to the acceptance
+   * before — the form carried the plan, the interval and the document ids, and global documents
+   * legitimately apply to every seller, so a route reconfigured between the GET and the POST produced a
+   * contract naming a different seller under terms nobody had been shown. Astra demonstrated it on #101.
+   *
+   * Opaque on purpose, and *compared* rather than trusted: the client cannot name a seller, a provider or
+   * a route with it. All it can do is prove which offer it was shown, and a value that does not match what
+   * the server resolves now is refused with `OFFER_CHANGED` so the person reads the new terms and accepts
+   * them deliberately. A digest rather than a stored row because it needs no lifecycle: the authority is
+   * always the fresh resolution, and this only answers "is that still what you saw".
+   */
+  readonly offerDigest: string;
 }
 
 export const CHECKOUT_REFUSALS = [
@@ -513,6 +549,15 @@ export const CHECKOUT_REFUSALS = [
    * would send somebody looking for a fault that is not theirs.
    */
   "DOCUMENT_SUPERSEDED",
+  /**
+   * The commercial terms changed between the page that was accepted and the submission (#47).
+   *
+   * Its own reason rather than a silent re-resolution, because the thing that changed is what somebody
+   * consented to: which legal entity is selling, under which jurisdiction, who remits the tax, at what
+   * price. The answer is "here are the new terms, accept them if you still want to" — which is a
+   * different sentence from every document refusal, and the only one that keeps the acceptance honest.
+   */
+  "OFFER_CHANGED",
   /**
    * No provider adapter can settle a checkout on the selected route (#47, #41).
    *
@@ -644,8 +689,51 @@ async function resolveCheckout(
       // Whether this deployment could settle what it is about to offer. The registry is process-local, so
       // this answers for *this* process — which is the one that will hand the customer to the provider.
       checkoutReady: billingProviderRegistered(row.provider),
+      offerDigest: offerDigestOf({
+        seller: row.sellerProfile,
+        settlementModel: route.settlementModel,
+        taxRemittedBy: taxRemittedBy(route),
+        arrangement: request.arrangement,
+        interval: request.interval,
+        base: money(price.amountCents, price.currency),
+      }),
     },
   };
+}
+
+/**
+ * The commercial terms of an offer, as one string.
+ *
+ * Every field here is something a person is shown and consents to, and nothing here is something they
+ * choose: the seller and its jurisdiction, who remits the tax, the shape and length of the commitment and
+ * the price. Deliberately **not** the document ids — those are bound separately and have their own
+ * refusals, and `DOCUMENT_SUPERSEDED` says "read the new terms" far better than a digest mismatch could.
+ * Deliberately not the route id or the provider either: the client must never hold an authoritative
+ * pointer to one, and a seller changing provider without changing any disclosed term is not a change to
+ * what was agreed.
+ */
+function offerDigestOf(terms: {
+  readonly seller: { readonly legalName: string; readonly jurisdiction: string };
+  readonly settlementModel: SettlementModel;
+  readonly taxRemittedBy: "PROVIDER" | "SELLER";
+  readonly arrangement: ArrangementKind;
+  readonly interval: ChargeInterval;
+  readonly base: Money;
+}): string {
+  return createHash("sha256")
+    .update(
+      [
+        terms.seller.legalName,
+        terms.seller.jurisdiction,
+        terms.settlementModel,
+        terms.taxRemittedBy,
+        terms.arrangement,
+        terms.interval,
+        String(terms.base.amountMinor),
+        terms.base.currency,
+      ].join("\u0000"),
+    )
+    .digest("hex");
 }
 
 /**
@@ -697,14 +785,41 @@ async function readLegalDocumentOffers(db: DbExecutor, sellerProfileId: string, 
   });
 
   type Row = (typeof rows)[number];
-  // The current document per (kind, locale), with the seller-specific precedence applied.
+
+  /**
+   * Which of two documents of one kind and one language is the current one.
+   *
+   * Computed rather than taken from the query's order on purpose. `orderBy` sorts by the stored locale
+   * before the date, so once two spellings of one language are collapsed into a single group the first
+   * row of that group is whichever spelling sorts first — not the newest. A rename published as `en-GB`
+   * after an `en-gb` would have lost to it, and the reader would have been offered, and the trigger would
+   * have enforced, a version that had already been replaced.
+   *
+   * Specificity first, because a selling entity's own text displaces the platform's whatever its date;
+   * then the later `effectiveFrom`; then the higher version, which is the tie-break for two documents
+   * made effective at the same instant.
+   */
+  function supersedes(candidate: Row, chosen: Row): boolean {
+    if ((candidate.sellerProfileId !== null) !== (chosen.sellerProfileId !== null)) {
+      return candidate.sellerProfileId !== null;
+    }
+    if (candidate.effectiveFrom.getTime() !== chosen.effectiveFrom.getTime()) {
+      return candidate.effectiveFrom.getTime() > chosen.effectiveFrom.getTime();
+    }
+    return candidate.version > chosen.version;
+  }
+
+  // The current document per (kind, canonical language), with the seller-specific precedence applied.
   const current = new Map<string, Row>();
   for (const row of rows) {
-    const key = `${row.kind}\u0000${row.locale}`;
+    // Grouped by the *canonical* language, not by the stored spelling. `publishLegalDocument`
+    // canonicalizes on the way in and `current_legal_documents()` groups the same way in SQL, but a row
+    // written before that — or by hand — can still spell one language two ways, and a group per spelling
+    // would offer a reader two current versions of one document and let an acceptance of either satisfy
+    // the checkout. One language, one group, whatever it is spelled like.
+    const key = `${row.kind}\u0000${canonicalLanguageTag(row.locale) ?? row.locale}`;
     const chosen = current.get(key);
-    // Rows arrive newest first within a (kind, locale), so the first wins — unless a seller-specific one
-    // turns up later, which displaces a global one whatever its date.
-    if (chosen === undefined || (row.sellerProfileId !== null && chosen.sellerProfileId === null)) {
+    if (chosen === undefined || supersedes(row, chosen)) {
       current.set(key, row);
     }
   }
@@ -780,6 +895,21 @@ export interface OpenCheckoutInput extends CheckoutRequest {
    * from what the store itself would offer now.
    */
   readonly offeredDocumentIds?: readonly string[];
+  /**
+   * The `offerDigest` of the offer the page displayed (#47).
+   *
+   * **Required**, unlike `offeredDocumentIds`, and the difference is the point. That one can only soften a
+   * refusal, so omitting it costs the caller a better sentence and nothing else. This one *is* the
+   * enforcement: a submission that cannot name the offer it was shown is a submission whose consent is
+   * bound to nothing, and if absence were allowed to skip the comparison then the client this check exists
+   * to distrust could switch it off by leaving the field out.
+   *
+   * A form that posts no such field therefore arrives here as the empty string, which no digest can equal,
+   * and is refused by the ordinary comparison rather than by a special case. A caller with no page behind
+   * it — a script, a future API — has to read the offer first and echo its digest, which it must do anyway
+   * to know which documents to accept.
+   */
+  readonly offeredDigest: string;
   /**
    * A time-bounded charge in another currency or asset, from an adapter that quoted one.
    *
@@ -870,6 +1000,17 @@ async function write(
     if (!resolved.available) {
       return resolved.refusal;
     }
+    // Before any document question, because this one is more fundamental: a document refusal says "read
+    // the new terms of the thing you were buying", while this says "the thing you were buying is not what
+    // you were shown". Compared against the resolution above, which came from operator configuration a
+    // client cannot write.
+    if (input.offeredDigest !== resolved.offer.offerDigest) {
+      return {
+        available: false,
+        reason: "OFFER_CHANGED",
+        detail: ["the seller, the tax treatment or the price changed after the terms were displayed"],
+      } satisfies CheckoutRefusal;
+    }
     const accepted = resolved.documents.filter((document) => input.acceptedDocumentIds.includes(document.legalDocumentId));
     const unknown = input.acceptedDocumentIds.filter((id) => !resolved.documents.some((document) => document.legalDocumentId === id));
     if (unknown.length > 0) {
@@ -929,10 +1070,19 @@ async function write(
     }
 
     const charge = input.quote?.charge ?? resolved.offer.base;
-    const seller = await tx.sellerProfile.findUniqueOrThrow({
-      where: { id: resolved.sellerProfileId },
-      select: { legalName: true, displayName: true, jurisdiction: true, supportEmail: true },
-    });
+    // The snapshot the digest was computed from, and deliberately **not** a second read of the row.
+    //
+    // Astra's P1 on the #101 remediation. This used to re-read `sellerProfile` here and copy that second
+    // result into the contract, the audit entry and the returned offer. `upsertSellerProfile` takes
+    // neither of this transaction's two locks and the transaction is `READ COMMITTED`, so an operator
+    // update committing between `resolveCheckout`'s read and this one changed the persisted legal name
+    // and jurisdiction *without* invalidating the digest that had just been compared — the acceptance
+    // then named an entity nobody had been shown, which is the exact defect the digest exists to prevent,
+    // reintroduced one layer below the guard.
+    //
+    // One read per transaction is the whole fix: what was checked is what is written. A later convenience
+    // read of this row anywhere below the comparison would be the same defect again.
+    const seller = resolved.offer.seller;
 
     // Ending the superseded path before the new one is created, because the single-live index would
     // otherwise refuse the insert. `ENDED` first and `SUPERSEDED` after the successor exists: the CHECK
@@ -1134,16 +1284,24 @@ export interface BillingEventResult {
 /**
  * Applies one verified provider event to the workspace's normalized billing state.
  *
- * The first line is the whole security model: `assertVerifiedBillingEvent` refuses anything that
- * `billing-events.ts` did not mint, so a success-page handler cannot reach this path even by
- * constructing an object of the right shape and casting it.
+ * The first line is the whole security model, and it does two things rather than one.
+ * `snapshotVerifiedBillingEvent` refuses anything `billing-events.ts` did not mint — so a success-page
+ * handler cannot reach this path even by constructing an object of the right shape and casting it — and it
+ * returns a private copy of the authenticated facts.
+ *
+ * The copy is the part that is easy to leave out, and leaving it out was a real defect: asserting answers
+ * a question about one instant, and this function then awaits a route lookup, a transaction and several
+ * queries. A caller that still holds the object it passed in can move a `Date` inside it while any of
+ * those are pending, and every read after the await would see the new value. Re-asserting after each
+ * await does not close it, because there is always another await. So nothing below reads the caller's
+ * object again: `event` here *is* the snapshot.
  *
  * Idempotent by index. A redelivered webhook is read before it is written, under an advisory lock on the
  * route and event identifier, and returns `DUPLICATE` with the effect the first delivery had — so a
  * provider retrying for an hour neither double-charges nor double-extends.
  */
-export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
-  assertVerifiedBillingEvent(event);
+export async function recordVerifiedBillingEvent(db: DbClient, delivered: VerifiedBillingEvent, now = new Date()): Promise<BillingEventResult> {
+  const event = snapshotVerifiedBillingEvent(delivered);
 
   const route = await db.billingRoute.findUnique({
     where: { code: event.routeCode },
@@ -1252,6 +1410,13 @@ export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBi
       now,
     });
 
+    // Read back the term the grant actually put in force — `apply` has already written it in this
+    // transaction — so the event row records the relationship rather than leaving it to be inferred.
+    const grantedTerm =
+      (applied === "ACTIVATE" || applied === "EXTEND") && arrangement !== null
+        ? (await tx.billingArrangement.findUnique({ where: { id: arrangement.id }, select: { currentPeriodEnd: true } }))?.currentPeriodEnd ?? null
+        : null;
+
     const row = await writeEvent(tx, {
       event,
       routeId: route.id,
@@ -1261,6 +1426,7 @@ export async function recordVerifiedBillingEvent(db: DbClient, event: VerifiedBi
       effect: applied,
       now,
       ...(decision.quote === undefined ? {} : { quote: decision.quote }),
+      ...(grantedTerm === null ? {} : { appliedTermEndsAt: grantedTerm }),
     });
     await recordSystemAuditEvent(
       tx,
@@ -1306,6 +1472,17 @@ type ArrangementRow = {
   readonly currentPeriodEnd: Date | null;
   readonly startedAt: Date | null;
 } | null;
+
+/** The later of two optional instants, or whichever one exists. Null only when neither does. */
+function laterOf(left: Date | null, right: Date | null): Date | null {
+  if (left === null) {
+    return right;
+  }
+  if (right === null) {
+    return left;
+  }
+  return left.getTime() >= right.getTime() ? left : right;
+}
 
 /**
  * Writes what the effect means, and reports what it actually did.
@@ -1389,15 +1566,49 @@ async function apply(
     // like a live renewal under a subscription that is ending — provider state and application state are
     // never summed. The event is still written with `effect: NONE` and audited, which is what makes the
     // divergence visible; resolving it is `reconcileProviderState`'s job.
-    const settled = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true } });
+    const settled = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { state: true, periodEndsAt: true } });
     if (settled !== null && (settled.state === "CANCELED_PENDING_END" || settled.state === "INACTIVE")) {
       return "NONE";
     }
+    // A renewal may only move the paid term forward.
+    //
+    // Providers redeliver, and they redeliver out of order: a renewal raised for February can arrive after
+    // the one raised for March, with its own event id, so idempotency on the id does not help. Writing the
+    // stated end unconditionally therefore *removes* access the workspace has already bought — the
+    // subscription's `periodEndsAt` goes backwards and `paidWorkAllowed` starts refusing work inside a term
+    // somebody paid for. The maximum below used to guard only the computed fallback, which is the case a
+    // provider that states its own period never reaches.
+    //
+    // So the term is compared against what is already paid for, taking both rows into account because
+    // either can be ahead: the arrangement carries the provider's view and the subscription carries the
+    // entitlement's. A renewal that does not extend past that is a reordering or a redelivery; it is
+    // recorded and audited with `effect: NONE` and changes nothing, which is the same answer this branch
+    // already gives a renewal for a cancelled subscription.
     const interval = chargeIntervalOf(arrangement.interval);
-    const from = arrangement.currentPeriodEnd !== null && arrangement.currentPeriodEnd.getTime() > now.getTime() ? arrangement.currentPeriodEnd : now;
+    const paidThrough = laterOf(arrangement.currentPeriodEnd, settled?.periodEndsAt ?? null);
+    const from = paidThrough !== null && paidThrough.getTime() > now.getTime() ? paidThrough : now;
     const periodEndsAt = event.periodEndsAt ?? periodEndFor(interval, from);
-    await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { currentPeriodEnd: periodEndsAt } });
-    await setSubscription(tx, workspaceId, { planVersionId: arrangement.planVersionId, state: "ACTIVE", periodEndsAt });
+    if (paidThrough !== null && periodEndsAt.getTime() <= paidThrough.getTime()) {
+      return "NONE";
+    }
+    // The comparison above is not enough on its own, and finding that out is what the racing case in
+    // `billing-routing.integration.test.ts` is for. Two renewals with different event ids are two
+    // transactions: both read the same `paidThrough`, both decide they extend it, and the one that commits
+    // *second* wins — so a renewal buying less time can still overwrite one buying more. Idempotency keys
+    // on the provider's event id, which is precisely what differs here.
+    //
+    // So the write carries the comparison instead of trusting the read. Under READ COMMITTED the second
+    // transaction blocks on the row and then re-evaluates the predicate against the committed value, which
+    // is the same reason `billing_arrangements_one_live_key` is an index rather than a check in this file:
+    // a decision an application makes before a write is a decision another writer can invalidate.
+    const advanced = await extendSubscription(tx, workspaceId, { planVersionId: arrangement.planVersionId, periodEndsAt });
+    if (!advanced) {
+      return "NONE";
+    }
+    await tx.billingArrangement.updateMany({
+      where: { id: arrangement.id, OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { lt: periodEndsAt } }] },
+      data: { currentPeriodEnd: periodEndsAt },
+    });
     return "EXTEND";
   }
 
@@ -1436,19 +1647,90 @@ async function apply(
   if (arrangement.state === "ENDED" || arrangement.state === "SUPERSEDED") {
     return "NONE";
   }
-  await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { state: "ENDED", endedAt: now } });
   const existing = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { periodEndsAt: true } });
+  const paidThrough = laterOf(arrangement.currentPeriodEnd, existing?.periodEndsAt ?? null);
+
+  // A reversal revokes the term it paid for — not whichever term happens to be current.
+  //
+  // Providers send reversals late, and a refund or chargeback for an old invoice can arrive months after a
+  // newer term on the *same* arrangement was bought and paid for. The previous shape of this branch asked
+  // only whether the arrangement was still live and then wrote `INACTIVE`, so a February chargeback took
+  // away access somebody had paid for through April. Nothing correlated the money being taken back with
+  // the term that was granting service.
+  //
+  // The event's own `periodEndsAt` is the provider's statement of which term it concerns, and it is
+  // retained on every event row that states one (see `writeEvent`), so the audit trail can answer this
+  // afterwards too. When the reversal names a term that ends before what is already paid for, it is
+  // historical. When it names no term at all it is ambiguous, and an ambiguous reversal is not grounds to
+  // delete access that a separate payment bought.
+  //
+  // Both cases leave every row alone and record `effect: NONE`, which is this file's existing answer for a
+  // divergence it will not resolve by guessing: `reconcileProviderState` reads the provider and settles
+  // it. The alternative — revoking on a maybe — bills the customer for a month they then cannot use.
+  if ((input.kind === "REFUNDED" || input.kind === "CHARGEBACK") && paidThrough !== null && paidThrough.getTime() > now.getTime()) {
+    // Two questions, because a reversal can be identified two ways and the common case has neither field
+    // missing nor a mystery to solve: the only payment ever made, refunded at once, *is* the current term
+    // and must still revoke it.
+    //
+    // First, what the provider says. A stated period that ends before what is already paid for names an
+    // earlier term outright.
+    if (event.periodEndsAt !== undefined && event.periodEndsAt.getTime() < paidThrough.getTime()) {
+      return "NONE";
+    }
+    // Second, what the ledger says — and this is where comparing timestamps was wrong.
+    //
+    // A reversal's `occurredAt` is when the *reversal* was raised, not when the charge it reverses was
+    // made: `NormalizedBillingEvent` says so, and a refund issued today for last month's invoice is
+    // legitimately newer than today's renewal. Comparing the two therefore let exactly the case this
+    // guard exists for through — a new reversal of an old charge — which Astra demonstrated on PR #100
+    // after the first version of this fix. Time cannot answer the question; identity has to.
+    //
+    // So the ledger is asked how many payments have granted a term on this arrangement at all — and only
+    // that, because nothing else in an authenticated payload can carry the answer.
+    //
+    // **One** grant means there is nothing to confuse: the money being returned is the money that bought
+    // the access, whatever the provider chose to state, and it goes. That is the ordinary refund, and an
+    // earlier attempt at this guard broke it.
+    //
+    // **More than one** means a separately paid term may be in force, and the reversal has to *show* it
+    // concerns that term. Two things that look like proof are not:
+    //
+    // - `providerReference` cannot serve. Its own contract is "the provider's own subscription **or**
+    //   charge object", so on a recurring arrangement two separately paid terms legitimately share one
+    //   subscription id, and a refund of the first charge carries it just as the second does. Matching on
+    //   it revoked a term the reversal said nothing about — Astra demonstrated that with
+    //   `providerReference='sub-shared'` after the previous version of this guard.
+    // - "the most recent grant" cannot serve either. Selecting by `occurredAt` descending picks by event
+    //   time, while the monotonic renewal rule above deliberately lets a *delayed* event buy a term that
+    //   reaches **farther** than one already applied. So the latest event is not necessarily the payment
+    //   that bought the term in force, and a refund of the shorter one would end the longer one.
+    //
+    // What remains is the one proof the payload does carry: a stated period that reaches the term in
+    // force, handled by the check above. Without it, a reversal on a multi-grant arrangement changes
+    // nothing, is recorded with `effect: NONE` and audited, and `reconcileProviderState` reads the
+    // provider to settle it. Refusing to guess costs a disputed term staying live until that read; the
+    // alternative deletes a term somebody paid for, which is worse and irreversible from here.
+    const grants =
+      event.periodEndsAt !== undefined
+        ? 0
+        : await tx.billingEvent.count({ where: { arrangementId: arrangement.id, effect: { in: ["ACTIVATE", "EXTEND"] } } });
+    if (grants > 1) {
+      return "NONE";
+    }
+  }
+
+  await tx.billingArrangement.update({ where: { id: arrangement.id }, data: { state: "ENDED", endedAt: now } });
   if (existing === null) {
     return "END";
   }
-  const paidThrough = existing.periodEndsAt;
-  if (input.kind === "SUBSCRIPTION_CANCELED" && paidThrough !== null && paidThrough.getTime() > now.getTime()) {
+  if (input.kind === "SUBSCRIPTION_CANCELED" && existing.periodEndsAt !== null && existing.periodEndsAt.getTime() > now.getTime()) {
     // Cancel at period end: the workspace keeps what it paid for. The accepted default, and the only
     // branch where the end date is in the future.
-    await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "CANCELED_PENDING_END", canceledAt: now, periodEndsAt: paidThrough } });
+    await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "CANCELED_PENDING_END", canceledAt: now, periodEndsAt: existing.periodEndsAt } });
     return "END";
   }
-  // A refund or a chargeback takes the money back, so the term it paid for is over now. Data is kept.
+  // A refund or a chargeback for the current term takes the money back, so that term is over now. Data is
+  // kept.
   await tx.workspaceSubscription.update({ where: { workspaceId }, data: { state: "INACTIVE", canceledAt: now } });
   return "END";
 }
@@ -1459,7 +1741,7 @@ async function apply(
  * Takes a workspace id rather than a context, for the reason `readEntitlement` does: the caller is a
  * verified webhook or a reconciliation sweep and there is no session to have. Inventing one so this would
  * type-check is how a background path acquires authority nobody granted — and the authority that matters
- * here was established by `assertVerifiedBillingEvent`, not by a role.
+ * here was established by `snapshotVerifiedBillingEvent` at the entry point, not by a role.
  */
 async function setSubscription(
   tx: DbExecutor,
@@ -1468,6 +1750,39 @@ async function setSubscription(
 ): Promise<void> {
   const data = { planVersionId: input.planVersionId, state: input.state, periodEndsAt: input.periodEndsAt, graceStartedAt: null, canceledAt: null };
   await tx.workspaceSubscription.upsert({ where: { workspaceId }, create: { workspaceId, ...data }, update: data });
+}
+
+/**
+ * Moves the subscription's paid term forward, and says whether it actually moved.
+ *
+ * `updateMany` with the term in the predicate rather than `upsert`, because this is a compare-and-set: the
+ * database decides whether this renewal is the later one, at the moment of writing, holding the row. An
+ * `upsert` would write whatever it was given and the last writer would win regardless of which term it
+ * bought.
+ *
+ * `false` means the row is already at or beyond this term — a redelivery, or a reordered renewal that lost
+ * a race — and the caller records `effect: NONE`. The missing-row case still has to create one, and that
+ * create is safe because `workspaceId` is unique: a concurrent create fails rather than duplicating.
+ */
+async function extendSubscription(
+  tx: DbExecutor,
+  workspaceId: string,
+  input: { readonly planVersionId: string; readonly periodEndsAt: Date },
+): Promise<boolean> {
+  const data = { planVersionId: input.planVersionId, state: "ACTIVE" as const, periodEndsAt: input.periodEndsAt, graceStartedAt: null, canceledAt: null };
+  const { count } = await tx.workspaceSubscription.updateMany({
+    where: { workspaceId, OR: [{ periodEndsAt: null }, { periodEndsAt: { lt: input.periodEndsAt } }] },
+    data,
+  });
+  if (count > 0) {
+    return true;
+  }
+  const existing = await tx.workspaceSubscription.findUnique({ where: { workspaceId }, select: { workspaceId: true } });
+  if (existing !== null) {
+    return false;
+  }
+  await tx.workspaceSubscription.create({ data: { workspaceId, ...data } });
+  return true;
 }
 
 async function writeEvent(
@@ -1480,6 +1795,8 @@ async function writeEvent(
     readonly arrangementId: string | null;
     readonly effect: EntitlementEffect;
     readonly quote?: QuoteVerdict;
+    /** The term this event actually put in force, where it granted one. Computed terms included. */
+    readonly appliedTermEndsAt?: Date;
     readonly now: Date;
   },
 ): Promise<{ readonly id: string }> {
@@ -1498,7 +1815,21 @@ async function writeEvent(
       effect: input.effect,
       // Normalized detail only. No raw payload, no signature, no header: a stored signature is a secret
       // in a table nobody treats as one.
-      detail: { ...(input.quote === undefined ? {} : { quote: input.quote }) },
+      //
+      // The term is retained whenever the provider states one, because a reversal arriving later has to be
+      // attributable to the term it paid for rather than to whichever term is current — see the `END`
+      // branch in `apply`. Where a provider states no period the arrangement's own `currentPeriodEnd`
+      // after this event is the answer, ordered by `occurredAt`; this field does not invent one.
+      detail: {
+        ...(input.quote === undefined ? {} : { quote: input.quote }),
+        ...(input.event.periodEndsAt === undefined ? {} : { periodEndsAt: input.event.periodEndsAt.toISOString() }),
+        ...(input.event.providerReference === undefined ? {} : { providerReference: input.event.providerReference }),
+        // The term this payment actually put in force, which is not always the one it stated: an event
+        // with no period of its own gets the interval computed for it, and that computed term is just as
+        // much a fact about what was bought. Recorded so the ledger can answer "which term did this
+        // payment buy" for every grant rather than only for the talkative ones.
+        ...(input.appliedTermEndsAt === undefined ? {} : { appliedTermEndsAt: input.appliedTermEndsAt.toISOString() }),
+      },
     },
     select: { id: true },
   });

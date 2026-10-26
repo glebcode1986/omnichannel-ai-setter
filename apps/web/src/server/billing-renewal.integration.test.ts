@@ -139,6 +139,9 @@ describe.skipIf(!databaseTestsEnabled())("asking the provider to stop renewing",
       locale: "en",
       acceptedDocumentIds: offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId),
       offeredDocumentIds: offer.documents.map((document) => document.legalDocumentId),
+      // The digest of the offer this fixture was actually shown. Required since #103: a submission that
+      // does not carry it is a submission against an offer nobody displayed.
+      offeredDigest: offer.offerDigest,
     });
     if (!opened.available) {
       throw new Error(`the fixture could not open a checkout: ${opened.reason}`);

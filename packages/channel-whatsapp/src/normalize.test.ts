@@ -14,6 +14,7 @@ import {
   AT,
   BINDING,
   BUSINESS_DISPLAY_NUMBER,
+  BUSINESS_WA_ID,
   CUSTOMER_NAME,
   CUSTOMER_WA_ID,
   config,
@@ -329,5 +330,51 @@ describe("a message the business sent from its own app", () => {
     });
 
     expect(normalize(mixed)).toMatchObject([{ type: "INBOUND_MESSAGE", senderExternalId: CUSTOMER_WA_ID }]);
+  });
+});
+
+/**
+ * The spelling the refusal above depends on, which is not obvious from reading it.
+ *
+ * `envelope` puts the digits-only spelling in `metadata.display_phone_number`, because that is what Meta's
+ * webhook carries, while `BUSINESS_DISPLAY_NUMBER` is the punctuated form the Graph `/phone_numbers` edge
+ * returns. So the refusal case above already compares two different spellings of one number and passes
+ * only because the comparison is canonical — restore raw equality and it fails.
+ *
+ * These three cover what that case cannot: the plain spelling, and the two ways a canonical comparison
+ * could refuse something it must not.
+ */
+describe("recognising the business's own number whichever way it is spelled", () => {
+  const fromSelf = (from: string, displayPhoneNumber: string | null) =>
+    envelope(
+      {
+        contacts: [{ wa_id: CUSTOMER_WA_ID }],
+        messages: [{ from, id: "wamid.self", timestamp: seconds(AT), type: "text", text: { body: "hello" } }],
+        // `null` means the field is absent altogether, which overriding the whole metadata object expresses.
+        ...(displayPhoneNumber === null ? { metadata: { phone_number_id: BINDING.phoneNumberId } } : {}),
+      },
+      displayPhoneNumber === null ? {} : { displayPhoneNumber },
+    );
+
+  it("refuses it when both sides carry the plain webhook spelling", () => {
+    expect(normalize(fromSelf(BUSINESS_WA_ID, "15550000001"))).toEqual([]);
+  });
+
+  it("does not refuse a customer message when the numbers genuinely differ", () => {
+    // The control the refusal needs: comparing by digits must not swallow real customers.
+    expect(normalize(fromSelf(CUSTOMER_WA_ID, BUSINESS_DISPLAY_NUMBER))[0]).toMatchObject({
+      type: "INBOUND_MESSAGE",
+      senderExternalId: CUSTOMER_WA_ID,
+    });
+  });
+
+  it("does not refuse when the payload states no display number at all", () => {
+    expect(normalize(fromSelf(BUSINESS_WA_ID, null))[0]?.type).toBe("INBOUND_MESSAGE");
+  });
+
+  it("does not treat two spellings that carry no digits as the same number", () => {
+    // Both reduce to the empty string, which equality on the reduced form alone would call a match — and
+    // would then refuse a message from a sender the payload simply did not name.
+    expect(normalize(fromSelf("anonymous", "unknown"))[0]?.type).toBe("INBOUND_MESSAGE");
   });
 });

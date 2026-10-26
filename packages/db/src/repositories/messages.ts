@@ -3,6 +3,7 @@ import { isValidIdentifier, type MediaReference, type MessageKind } from "@omnic
 import type { DbClient } from "../client";
 import { TenantRecordNotFoundError } from "../errors";
 import type { Message } from "../generated/prisma/client";
+import { cancelPendingFollowUps } from "../followup-store";
 import { profileScopeOf, type BusinessProfileContext } from "../tenancy";
 
 export interface NewInboundMessage {
@@ -83,6 +84,12 @@ export async function appendInboundMessage(
         stateVersion: { increment: 1 },
       },
     });
+    // The customer wrote back, so any follow-up waiting to chase their silence is about a question that
+    // has moved on (#55). Cancelled in *this* transaction, under the lock this append already holds, so
+    // "they replied" and "the chase is off" are one fact rather than two that a crash could separate.
+    // `claimFollowUp` re-asks the same question at execution anyway; this is the prompt path, and a
+    // follow-up that is already superseded in the table is one no worker has to reason about.
+    await cancelPendingFollowUps(tx, scope, input.conversationId, "NEW_INBOUND", input.occurredAt);
     return message;
   });
 }

@@ -29,7 +29,7 @@ import { revalidatePath } from "next/cache";
 import { loadWebEnv } from "../env";
 import { requestLocale } from "@/i18n/request-locale";
 import { ensureBillingAdapters } from "./billing-adapters";
-import { acceptedDocumentIdsFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
+import { acceptedDocumentIdsFrom, offeredDigestFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
 import { checkoutSelectionFrom } from "./checkout-screen";
 import { getDb } from "./db";
 import { getLogger } from "./logger";
@@ -97,6 +97,7 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
       locale,
       acceptedDocumentIds: acceptedDocumentIdsFrom(formData),
       offeredDocumentIds: offeredDocumentIdsFrom(formData),
+      offeredDigest: offeredDigestFrom(formData),
     });
     if (!opened.available) {
       finish(target, outcomeOf(opened.reason));

@@ -433,6 +433,100 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
       expect((await database.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } })).status).toBe("SCHEDULED");
     }, 120_000);
 
+    it("claims normally while the release catalogue has not moved, which is what the next case changes", async () => {
+      // The control. Without it a guard that refused every claim would satisfy the case below.
+      const operationId = await composeDelivery("Nothing moved underneath this one.");
+      const store = createDeliveryStore(database.db);
+      const context = await store.loadForSend(operationId, NOW);
+      if (context === undefined) {
+        throw new Error("no delivery context");
+      }
+
+      expect((await store.claim(context, NOW)).kind).toBe("CLAIMED");
+    }, 120_000);
+
+    it("refuses a claim when the release catalogue moved after the instant the coordinator captured", async () => {
+      // Astra's P1 on PR #103. The claim takes the release-catalogue key precisely because the candidate
+      // that would change its answer may not exist yet when the claim starts — and it then re-resolved the
+      // catalogue with `claimedAt`, an instant the coordinator captured *before* the transaction began. A
+      // release committed while this claim waited for that key was therefore excluded by
+      // `createdAt <= claimedAt`: the lock was acquired, and the query hid the writer it had been taken
+      // for. Taking a lock does not repair a query that excludes the winning writer.
+      //
+      // `claimedAt` is `NOW`, a fixed instant in the past, and the record below is stamped by the
+      // database's own clock — committed strictly after the guard was judged, which is the shape of the
+      // race without having to orchestrate one. That the claim really waits for the key is the subject of
+      // `release-lock.integration.test.ts`; this is about what it sees once it has it.
+      //
+      // In a database of its own because **release evidence is append-only** — a trigger refuses the
+      // delete — so a candidate recorded here could never be taken back, and every later case in this
+      // file would fail closed against a premise it never set.
+      const fresh = await createMigratedTestDatabase();
+      try {
+        const seeded = await seedWorkspace(fresh.db, "release-gate");
+        const [only] = seeded.profiles as [SeededProfile];
+        const composedAt = new Date(NOW.getTime() + 1_000);
+        const compose = async (operationId: string, text: string) => {
+          await fresh.db.deliveryJobRecord.create({
+            data: {
+              workspaceId: only.context.workspaceId,
+              businessProfileId: only.businessProfileId,
+              humanText: text,
+              composedByUserId: only.context.userId,
+              conversationId: only.conversationId,
+              operationId,
+              correlationId: operationId,
+              status: "SCHEDULED",
+              scheduledFor: composedAt,
+              selectedDelayMs: 0,
+              authority: "HUMAN_APPROVED",
+              approvedByUserId: only.context.userId,
+              approvedAt: composedAt,
+              approvedReviewMode: "NORMAL",
+              decisionKey: `compose-${operationId}`,
+            },
+          });
+          return operationId;
+        };
+
+        const store = createDeliveryStore(fresh.db);
+        const control = await compose("op_release_control", "Claimed while the catalogue was empty.");
+        const operationId = await compose("op_release_gate", "Judged while the platform was unreleased.");
+
+        // The control, in this same database: with an empty catalogue the claim goes through, so the
+        // refusal below is the catalogue changing rather than anything about these fixtures.
+        const controlContext = await store.loadForSend(control, composedAt);
+        if (controlContext === undefined) {
+          throw new Error("no delivery context");
+        }
+        expect((await store.claim(controlContext, composedAt)).kind).toBe("CLAIMED");
+
+        const judged = await store.loadForSend(operationId, composedAt);
+        if (judged === undefined) {
+          throw new Error("no delivery context");
+        }
+
+        // One unreviewed candidate is enough: an establishable rollout is the only thing that permits,
+        // and a catalogue that cannot be established fails closed. No review, nothing approved.
+        await fresh.db.releaseRecord.create({
+          data: {
+            sha: "e".repeat(40),
+            actorUserId: only.context.userId,
+            stage: "INTERNAL",
+            rollbackPlan: "redeploy the previous tag",
+            summary: "recorded while a claim was in flight",
+          },
+        });
+
+        expect((await store.claim(judged, composedAt)).kind).toBe("STATE_CHANGED");
+        // And no send was attempted: the job is still where the scheduler left it.
+        const after = await fresh.db.deliveryJobRecord.findUniqueOrThrow({ where: { operationId }, select: { status: true } });
+        expect(after.status).toBe("SCHEDULED");
+      } finally {
+        await fresh.dispose();
+      }
+    }, 120_000);
+
     it("refuses a second claim after the send was already recorded", async () => {
       const operationId = await composeDelivery("Sent once already.");
       const store = createDeliveryStore(database.db);
@@ -813,9 +907,16 @@ describe.skipIf(!databaseTestsEnabled())("delivery store (PostgreSQL)", () => {
           }),
       },
       {
-        what: "a Business Profile default policy appearing where there was none",
+        // Written since, not appearing from nothing: every Business Profile is created with its default,
+        // so the transition a production profile can actually make is an edit. The `none` half of the
+        // guard — a row appearing where the decision saw none — is proved further down, by deleting the
+        // default and inserting one underneath a claim that is already in flight.
+        what: "the Business Profile default policy being written since",
         change: () =>
-          database.db.automationPolicy.create({ data: { ...scope(), channelAccountId: null, mode: "OFF", mandatoryReviewReasons: [] } }),
+          database.db.automationPolicy.updateMany({
+            where: { ...scope(), channelAccountId: null },
+            data: { confidenceThreshold: 0.99 },
+          }),
       },
       {
         // Nothing rewrites an authority today — it is granted once, when the delivery is scheduled. The

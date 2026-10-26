@@ -20,12 +20,17 @@
  * missing is authority nobody noticed it did not have. So the rule is structural instead.
  *
  * `recordVerifiedBillingEvent` takes a `VerifiedBillingEvent`, and the only values of that type are the
- * frozen objects this module mints — tracked in a module-private `WeakSet`, exactly as `tenancy.ts`
- * tracks the contexts it issued. Minting happens in two functions and both go through a registered
- * provider adapter: `verifyProviderDelivery`, which hands the adapter a raw signed delivery to
- * authenticate, and `reconcileProviderState`, which asks the adapter what the provider itself says is
- * true. A caller with a plan identifier and good intentions has no way to produce one, and a structural
- * type assertion does not help them: the WeakSet is not reachable and the objects are frozen.
+ * objects this module mints — tracked in a module-private `WeakMap` that holds each one's authenticated
+ * facts, in the spirit of how `tenancy.ts` tracks the contexts it issued. A map rather than a set because
+ * an event can be altered after minting without changing its identity: `Object.freeze` is shallow, a
+ * `Date` is mutable whatever is done to the object holding it, and a membership test cannot see either.
+ * `isMintedBillingEvent` therefore recomputes the facts and compares. Minting happens in two functions
+ * and both go through a registered provider adapter: `verifyProviderDelivery`, which hands the adapter a
+ * raw signed delivery to authenticate, and `reconcileProviderState`, which asks the adapter what the
+ * provider itself says is true. A caller with a plan identifier and good intentions has no way to produce
+ * one, and a structural type assertion does not help them: the map is not reachable, the objects are
+ * frozen, their nested money and dates are snapshots rather than the adapter's own, and an edit after
+ * minting makes the check fail rather than pass.
  *
  * Nothing here parses a provider's payload, and nothing here holds a secret. The adapter owns signature
  * verification and raw parsing, and what crosses this line is normalized and provider-neutral — which is
@@ -66,14 +71,55 @@ export interface NormalizedBillingEvent {
  * A normalized event that an adapter has authenticated, or that the provider itself asserted.
  *
  * The brand is not a convention. There is no exported way to put one of these together by hand, and
- * casting to the type does not produce one — `recordVerifiedBillingEvent` checks membership of a WeakSet
- * this module never exposes.
+ * casting to the type does not produce one — `recordVerifiedBillingEvent` checks the event against the
+ * authenticated facts this module recorded for it, in a map it never exposes.
  */
 export type VerifiedBillingEvent = NormalizedBillingEvent & {
   readonly activationSource: ActivationSource;
 };
 
-const mintedEvents = new WeakSet<object>();
+const mintedEvents = new WeakMap<object, string>();
+
+/**
+ * The authenticated facts of an event, as one string.
+ *
+ * Every field a downstream decision reads: the identity of the event, what it says happened, when, to
+ * which arrangement, and for how much until when. An edit to any of them produces a different value, so
+ * the object is no longer the event that was authenticated.
+ */
+function fingerprint(event: VerifiedBillingEvent): string {
+  const at = (value: Date | undefined): string => (value === undefined ? "-" : String(value.getTime()));
+  return [
+    event.routeCode,
+    event.providerEventId,
+    event.kind,
+    event.activationSource,
+    at(event.occurredAt),
+    event.checkoutContractId ?? "-",
+    event.arrangementId ?? "-",
+    event.settled === undefined ? "-" : String(event.settled.amountMinor),
+    event.settled === undefined ? "-" : event.settled.currency,
+    at(event.settledAt),
+    at(event.periodEndsAt),
+    event.providerReference ?? "-",
+  ].join("\u0000");
+}
+
+/**
+ * A copy that shares nothing mutable with whoever held the original.
+ *
+ * `Object.freeze` is shallow, so a frozen event still hands out the adapter's own `Date` objects and its
+ * own money object. Copying them is what makes the frozen shell mean anything.
+ */
+function snapshot(event: VerifiedBillingEvent): VerifiedBillingEvent {
+  return Object.freeze({
+    ...event,
+    occurredAt: new Date(event.occurredAt.getTime()),
+    ...(event.settled === undefined ? {} : { settled: Object.freeze({ amountMinor: event.settled.amountMinor, currency: event.settled.currency }) }),
+    ...(event.settledAt === undefined ? {} : { settledAt: new Date(event.settledAt.getTime()) }),
+    ...(event.periodEndsAt === undefined ? {} : { periodEndsAt: new Date(event.periodEndsAt.getTime()) }),
+  });
+}
 
 /** A raw delivery, exactly as it arrived. Only an adapter looks inside it. */
 export interface RawProviderDelivery {
@@ -429,22 +475,48 @@ function mint(normalized: NormalizedBillingEvent, activationSource: ActivationSo
   if (normalized.settled !== undefined && (!Number.isInteger(normalized.settled.amountMinor) || !isCurrencyCode(normalized.settled.currency))) {
     return null;
   }
-  // Frozen, so that a caller holding a minted event cannot edit the amount in it and hand it on; the
-  // WeakSet would still recognize the object.
-  const event = Object.freeze({ ...normalized, activationSource }) as VerifiedBillingEvent;
-  mintedEvents.add(event);
+  // A copy, frozen, with its own dates and money: a caller holding a minted event cannot edit the amount
+  // or the period in it and hand it on, and the adapter cannot reach into one it already handed over.
+  const event = snapshot({ ...normalized, activationSource });
+  mintedEvents.set(event, fingerprint(event));
   return event;
 }
 
 /**
- * Whether this module minted the event.
+ * Whether this module minted the event, and whether it is still the event that was minted.
  *
  * A predicate rather than an assertion, so the refusal can be phrased by whoever is refusing — the store
  * answers a forged event with its own input error, and nothing is gained by this file owning that
  * sentence. The asymmetry that matters is unchanged: anybody may ask "is this verified?", and nobody
- * outside this file may make the answer yes, because the WeakSet is not reachable and the objects are
- * frozen.
+ * outside this file may make the answer yes, because the map is not reachable and the recorded facts are
+ * recomputed rather than trusted.
  */
 export function isMintedBillingEvent(event: VerifiedBillingEvent): boolean {
-  return typeof event === "object" && event !== null && mintedEvents.has(event);
+  if (typeof event !== "object" || event === null) {
+    return false;
+  }
+  const authenticated = mintedEvents.get(event);
+  return authenticated !== undefined && authenticated === fingerprint(event);
+}
+
+/**
+ * The authenticated copy a caller cannot reach, or `null` if this module did not mint the event.
+ *
+ * Asserting alone was not enough, and PR #100's review showed why: `isMintedBillingEvent` answers a
+ * question about one instant, and a store that checks and then awaits a query is holding an object its
+ * caller still has a reference to — a renewal minted for January was moved to 2099 while a route lookup
+ * was pending, and bought service until 2099. Re-checking after every await would not fix it either,
+ * because there is always another await. So the facts are copied out once, here, and everything
+ * downstream reads the copy. The copy is itself minted, so it stays verified for anything that asks again.
+ *
+ * `null` rather than a throw, for the same reason the predicate is a predicate: the layer that refuses
+ * owns the sentence it refuses with.
+ */
+export function snapshotMintedBillingEvent(event: VerifiedBillingEvent): VerifiedBillingEvent | null {
+  if (!isMintedBillingEvent(event)) {
+    return null;
+  }
+  const copy = snapshot(event);
+  mintedEvents.set(copy, fingerprint(copy));
+  return copy;
 }

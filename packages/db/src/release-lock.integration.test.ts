@@ -58,9 +58,15 @@ describe.skipIf(!databaseTestsEnabled())("the release-catalogue advisory key", (
    * establishes, by finding none when nothing has written.
    */
   const locksOnKey = async (tx: { $queryRaw: typeof database.db.$queryRaw }) => {
+    // Scoped to **this** database, and that is not tidiness. `pg_locks` is cluster-wide while advisory
+    // locks are per-database, every suite in this project runs in a migrated database of its own, and
+    // vitest runs those files in parallel — so an unscoped count sees the catalogue key held by a claim
+    // in somebody else's database and the control below fails for a reason that has nothing to do with
+    // this suite. It was a latent flake; adding claims elsewhere only made the coincidence likely.
     const rows = await tx.$queryRaw<{ locks: bigint }[]>`
       SELECT count(*)::bigint AS locks FROM pg_locks
       WHERE "locktype" = 'advisory' AND "objid" IS NOT NULL
+        AND "database" = (SELECT oid FROM pg_database WHERE datname = current_database())
         AND (("classid"::bigint << 32) | "objid"::bigint)::bigint
             = hashtextextended(${releaseCatalogueLockKey()}, 0)::bigint`;
     return rows[0]?.locks ?? 0n;
