@@ -12,6 +12,7 @@ packages/
   db/                  # @omnichannel/db
   queue/               # @omnichannel/queue
   ai/                  # @omnichannel/ai
+  billing-stripe/      # @omnichannel/billing-stripe
   channel-core/        # @omnichannel/channel-core
   channel-instagram/   # @omnichannel/channel-instagram
   channel-whatsapp/    # @omnichannel/channel-whatsapp
@@ -56,9 +57,19 @@ ADR-008's dependency direction is enforced mechanically by `pnpm lint:boundaries
 | `channel-core` | core (pure) | `domain` |
 | `application` | core (pure) | `domain`, `channel-core` |
 | `db`, `queue`, `ai` | infrastructure | `domain`, `channel-core`, `application` (ports), `observability` |
+| `billing-stripe` | infrastructure | `domain`, `application` (ports), `observability` |
 | `channel-instagram`, `channel-whatsapp` | channel adapter | `domain`, `channel-core`, `observability` |
 | `observability`, `env` | support (leaf) | — |
 | `web`, `worker` | app (composition root) | any non-app package |
+
+For billing (ADR-017, ADR-020): `application` owns the provider-neutral billing port — the adapter
+interface, the normalized event, the checkout hand-off and the registry that mints verified events —
+and `packages/billing-stripe` implements it for one provider, speaking to Stripe over HTTP with no vendor
+SDK. `billing-stripe -> db` is forbidden, and that edge is the point rather than tidiness: an adapter that
+could reach the database could activate a paid entitlement without a verified provider event, which is the
+single rule the port exists to make structurally impossible. The persistence package re-exports the port's
+surface for its own callers and owns one sentence of its own, the refusal of an event the port did not
+mint.
 
 Infrastructure implements ports that `application` declares; `application` never imports concrete infrastructure. For AI (ADR-010 as amended by the PR #26 architecture review): `application` owns the provider-neutral `ReplyModel` / `EmbeddingProvider` ports and the runtime boundary schema/DTO that validates model output, and maps validated output into pure `domain` values; `packages/ai` implements those ports and keeps provider SDKs private; `domain` holds only semantic types (e.g. `AiDraft`) with no provider DTOs. `db -> ai` is forbidden: application orchestrates embedding generation and passes vectors/query inputs to `db` retrieval. `application -> observability` is forbidden: pass correlation IDs as values, and if a use case needs logging, define/inject a core port.
 

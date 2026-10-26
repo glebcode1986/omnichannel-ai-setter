@@ -60,10 +60,12 @@ on 2026-10-13 and had been assumed otherwise until then:
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
 #43), #99 (P6-05, #42), #100 (P6-08, #46) and #101 (P6-09, #47). Phase 7 continues the same chain with
-the P7-01 branch above (#59). **#41 / P6-04 is blocked** on the owner's choice
-of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
-implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
-the only Phase 6 work left needs the owner's provider decision.
+the P7-01 branch above (#59). **#41 / P6-04 is unblocked and implemented:** the owner's decision of
+2026-10-09 named Stripe as the first production adapter against a Ukrainian-FOP seller, with a Romanian
+company as a second seller route and WayForPay and Cryptomus as additional payment routes, all priced in
+EUR on a monthly term. PR #104 carries the provider-neutral port extension and the Stripe adapter; see
+"P6-04" below. #44 (P6-07, commercial E2E) is now the only Phase 6 work left, and it depends on this
+adapter path rather than on a decision.
 
 `#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
 
@@ -812,6 +814,69 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    breaks in correlation propagation, which is its own change — feature flags, and the remaining typed
    actions. **#59 stays open.**
 
+1. **P6-04 / Issue #41 — the Stripe adapter, and the port it needed.** Branch
+   `feat/p6-04-billing-provider-port`, based on #103. The owner's decision of 2026-10-09 settled the
+   blocked product choice: Stripe first, against the Ukrainian-FOP seller, EUR, monthly, with the Romanian
+   company and WayForPay/Cryptomus preserved as server-configured routes.
+
+   **No vendor SDK, and the reason is written down as ADR-020.** The repository has zero vendor API SDKs,
+   seven third-party HTTP APIs already integrated by hand (including one that builds its own multipart
+   rather than taking `openai`), no new runtime dependency since Phase 1, and a
+   `CORE_FORBIDDEN_THIRD_PARTY` list with no payments entry — so taking `stripe` would turn "application
+   and domain never import a provider SDK" from a lint into a promise. Nothing in the specs forbids an
+   SDK, which is exactly why the argument is an ADR rather than a comment.
+
+   **The port moved to `application`**, because ADR-017 says so in as many words and because an adapter
+   package cannot name an interface that lives in the persistence package. `billing-stripe -> db` is a
+   forbidden edge: an adapter that could reach the database could activate an entitlement without a
+   verified event, which is the one rule this boundary exists for. `db` re-exports the port's surface and
+   keeps one sentence of its own — the refusal of an event the port did not mint.
+
+   **The port gained a third verification outcome, and that gap was only visible from an adapter.**
+   `verify` returning `null` meant "forgery", so an authentic event the product does not map had the same
+   answer — and the two owe the provider opposite replies, because a provider that is refused redelivers
+   for three days. `EVENT`, `ACKNOWLEDGED` and `REFUSED` now say which. It also gained
+   `openManagementSession` and `setRenewal`, both optional, because the owner's decision requires the
+   provider's own portal and cancel-at-period-end where the provider has them, and a capability list that
+   claimed every provider did would make a screen promise a page that does not exist.
+
+   Facts verified against the live documentation on 2026-10-12, API version pinned at `2026-09-30.endive`:
+   the signed payload is `timestamp + "." + rawBody`, HMAC-SHA256 keyed with the `whsec_` secret; only the
+   `v1` scheme counts, because Stripe deliberately sends a fake `v0` with test events; **every** `v1` is
+   tried, because rolling a secret leaves two active for 24 hours; the tolerance is five minutes and a
+   tolerance of zero is documented as wrong; each retry carries a fresh timestamp; `created` is seconds
+   and explicitly not an ordering key.
+
+   **Three things the documentation contradicted a reasonable guess about**, each now a test:
+   `current_period_end` is no longer on the subscription object — it lives on `items.data[]`, and reading
+   the old place loses every period end silently; reactivation in the default `flexible` billing mode is
+   confirmed by `cancel_at` being null rather than by `cancel_at_period_end`, so a single-field reader is
+   right in one billing mode and wrong in the other; and `Stripe-Should-Retry` is documented as guidance
+   the status code does not carry, so it overrides the status-code table rather than the reverse.
+
+   **Attribution travels in metadata because the store leaves no other way.**
+   `recordVerifiedBillingEvent` resolves an arrangement from the event's own id or from the checkout
+   contract it names, and from nothing else — there is no lookup by provider reference. So the contract id
+   goes into `client_reference_id` *and* into `subscription_data[metadata]`, and every renewal reads it
+   back from `invoice.parent.subscription_details.metadata`, which the docs define as an immutable
+   snapshot taken at invoice finalization. Without it every month after the first would be `UNATTRIBUTED`.
+
+   **The callers are in this PR, which is the point.** Eight billing functions had no production caller;
+   this registers the adapter from `STRIPE_ROUTES` (one entry per route, so two sellers do not share an
+   account), adds `/api/billing/webhooks/stripe`, and hands the customer to the provider *after* the
+   contract commits — a session opened first would leave a paid session with nothing to attribute.
+
+   **One gap found while wiring it, and closed:** catalogue prices are immutable by trigger, and
+   `publishAcceptedCatalog` published none of the provider price ids — so `provider_price_id` could never
+   be set in a deployment that published its catalogue the normal way, and no Stripe checkout could ever
+   be priced. The publisher now takes an optional provider-price map, because publication is the only
+   moment at which it can be stored.
+
+   **Deliberately not implemented:** refunds and disputes. A refund arrives on a charge, a charge carries
+   no subscription metadata, and attributing one needs a second API call and a decision about partial
+   refunds that Issue #41 does not ask for. The endpoint is not subscribed to those types, and an
+   unexpected one is answered `ACKNOWLEDGED` rather than mapped to something that looks handled.
+
 1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
    `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:
    `settings/billing/checkout`, with the seller's legal identity, the price, who remits the tax, and one
@@ -916,9 +981,9 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    one-live index becomes a trap: one unfinished attempt would refuse every later purchase until somebody
    read the table. `loops` in `worker.started` gained `checkout_expiry`.
 
-   **Not in this issue:** no provider adapter is registered outside tests (#41, blocked on the owner's
-   provider and jurisdiction choice), and the checkout UI with its acceptance control is #47 —
-   `CHECKOUT_AVAILABLE` is still `false`.
+   **Not in this issue:** no provider adapter was registered outside tests, and the checkout UI with its
+   acceptance control is #47. Both are closed since: #47 landed the checkout screen, and #41 registers the
+   Stripe adapter from configuration and hands the customer to it.
 
 1. **P6-05 / Issue #42 — the billing screen.** Branch `feat/p6-05-billing-settings-ui`, based on #98.
    `readBillingOverview` drops `providerPriceId` and the opaque customer/subscription references by

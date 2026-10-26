@@ -40,6 +40,8 @@ const DELIBERATELY_PUBLIC: Readonly<Record<string, string>> = {
   "api/health/route.ts": "a liveness probe that deliberately touches no database, queue or external API",
   "api/auth/[...nextauth]/route.ts": "Auth.js's own handler: it is the thing that authenticates",
   "api/webhooks/[channel]/[channelAccountId]/route.ts": "a provider webhook, authenticated by its signature rather than by a session",
+  "api/billing/webhooks/stripe/route.ts":
+    "a billing provider's webhook, authenticated by the signing secret of the endpoint it arrived on; there is no session, and the route records nothing it did not first verify through the provider port",
   "api/channels/instagram/callback/route.ts": "an OAuth callback, authenticated by the state nonce it carries",
 };
 
