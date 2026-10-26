@@ -137,6 +137,25 @@ describe("a minted verified billing event", () => {
     }).toThrow(DbInputError);
   });
 
+  it("refuses a delivery whose adapter returned a date as text", async () => {
+    // An adapter is outside the trust boundary, and `occurredAt: Date` is a promise it is free to break —
+    // one that hands back what `JSON.parse` produced gives an ISO string. Nothing between the port and
+    // the database would have noticed: the row would be written from text nobody checked, and the facts
+    // this module authenticates would be computed from it. So the mint refuses, like any malformed field.
+    clearBillingProviders();
+    registerBillingProvider({
+      provider: "test-psp",
+      verify: () => ({ kind: "EVENT" as const, event: { ...normalized, occurredAt: NOW.toISOString() } as unknown as NormalizedBillingEvent }),
+    });
+
+    const delivered = await verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW });
+
+    // `REFUSED` rather than `ACKNOWLEDGED`, and the difference matters: the adapter believed it had a
+    // product event, so telling the provider "received and handled" would discard a payment nobody will
+    // look for again. Refusing leaves the provider redelivering until somebody fixes the adapter.
+    expect(delivered.kind).toBe("REFUSED");
+  });
+
   it("refuses an object this module never minted, however well shaped", () => {
     const forged = {
       routeCode: "direct-eu",

@@ -87,6 +87,11 @@ const mintedEvents = new WeakMap<object, string>();
  * which arrangement, and for how much until when. An edit to any of them produces a different value, so
  * the object is no longer the event that was authenticated.
  */
+/** A real, usable instant. `instanceof` because the type is a promise an adapter is free to break. */
+function isInstant(value: Date): boolean {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
 function fingerprint(event: VerifiedBillingEvent): string {
   const at = (value: Date | undefined): string => (value === undefined ? "-" : String(value.getTime()));
   return [
@@ -473,6 +478,19 @@ function mint(normalized: NormalizedBillingEvent, activationSource: ActivationSo
     return null;
   }
   if (normalized.settled !== undefined && (!Number.isInteger(normalized.settled.amountMinor) || !isCurrencyCode(normalized.settled.currency))) {
+    return null;
+  }
+  // The dates, for the same reason as the amount. An adapter is outside this boundary and its word about
+  // a type is not proof: one that hands back a parsed payload gives an ISO *string* where the interface
+  // says `Date`, and nothing between here and the database would have noticed — the row would be written
+  // from text that was never checked, and the authenticated facts would be computed from it.
+  if (!isInstant(normalized.occurredAt)) {
+    return null;
+  }
+  if (normalized.settledAt !== undefined && !isInstant(normalized.settledAt)) {
+    return null;
+  }
+  if (normalized.periodEndsAt !== undefined && !isInstant(normalized.periodEndsAt)) {
     return null;
   }
   // A copy, frozen, with its own dates and money: a caller holding a minted event cannot edit the amount
