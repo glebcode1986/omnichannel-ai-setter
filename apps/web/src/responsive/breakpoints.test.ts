@@ -319,6 +319,24 @@ describe("the supported widths", () => {
     expect(css, "and no container query either").not.toContain("@container");
   });
 
+  it("caps every auto-fit floor at the container, not at a width it hopes for", () => {
+    // The minimum in `minmax` is a floor the track keeps even when the container is narrower, so
+    // `minmax(20rem, 1fr)` draws a 320px column inside a 288px box. The style page did exactly that at
+    // 320px while every wider measurement was clean — a grid that is supposed to fit, not fitting.
+    // Comments are stripped: the prose above that rule quotes the broken form on purpose.
+    const declarations = css.replace(/\/\*[\s\S]*?\*\//gu, "");
+    const floors = [...declarations.matchAll(/repeat\(auto-fit,\s*minmax\((?<floor>.+?),\s*1fr\)\)/gu)].map(
+      (found) => (found.groups?.floor ?? "").trim(),
+    );
+
+    expect(floors.length, "the auto-fit grids this stylesheet declares").toBeGreaterThan(0);
+    for (const floor of floors) {
+      expect(floor, `${floor} is a floor the track keeps below the container's own width`).toMatch(
+        /^min\(.+,\s*100%\)$/u,
+      );
+    }
+  });
+
   it("keeps each label and its control one element, which is what lets the row wrap", () => {
     // CSS pairs no siblings. The old grid paired them by flowing down two rows and across, and that is
     // exactly why it could not wrap. The pairing lives in the markup now, so the markup has to hold it:

@@ -446,7 +446,7 @@ details[open] > summary::before {
 .card-grid {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
 .card {
@@ -672,7 +672,7 @@ details[open] > summary::before {
  */
 .inbox-search {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
   gap: var(--space-1) var(--space-3);
   align-items: end;
   margin-bottom: var(--space-4);
@@ -1185,9 +1185,15 @@ details[open] > summary::before {
 
 /* ---- style training ----------------------------------------------------------------------------- */
 
+/*
+ * `min(…, 100%)` rather than the bare minimum: the minimum in `minmax` is a floor the track keeps even
+ * when the container is narrower, so `minmax(20rem, 1fr)` draws a 320px column inside a 288px box and the
+ * page scrolls sideways at 320px. Capping the floor at the container's own width is what makes auto-fit
+ * actually fit. The same correction applies to every auto-fit grid in this stylesheet.
+ */
 .voice-layers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
   gap: var(--gap);
 }
 
@@ -1595,7 +1601,7 @@ details[open] > summary::before {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: var(--gap);
   align-items: start;
 }
