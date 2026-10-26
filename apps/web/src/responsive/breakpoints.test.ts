@@ -299,6 +299,48 @@ describe("the supported widths", () => {
     }
   });
 
+  it("stacks the filter row on the width that is actually its own", () => {
+    // The row cannot wrap — `grid-auto-flow: column` is exactly what pairs each label with its control —
+    // so it has to be told when to stop being a row, and the window is the wrong thing to ask: the
+    // sidebar spends 232px of the window before the content sees any of it. Keyed to the viewport at
+    // 720px, the row still overflowed at 768 and at 900, where it needs 816px and has 496 and 628.
+    expect(declarationsFor(".shell-main"), "the content box must be a query container").toMatch(
+      /container-type:\s*inline-size/u,
+    );
+
+    const byContainer = balancedBodies("@container main (max-width:").join("\n");
+    expect(declarationsFor(".inbox-search", byContainer), "the filter row stacks by its container").toMatch(
+      /grid-auto-flow:\s*row/u,
+    );
+
+    // And not by the viewport as well: two rules that can disagree are how this was wrong twice.
+    expect(rulesAt(375), "the viewport must not also decide the filter row").not.toContain(".inbox-search");
+  });
+
+  it("gives every row that cannot wrap a way out", () => {
+    const narrow = rulesAt(375);
+    const byContainer = balancedBodies("@container main (max-width:").join("\n");
+
+    // The invariant behind both of this file's phone bugs: a grid with `grid-auto-flow: column` grows a
+    // new column per child and never wraps, so one of three things has to be true of it, or its widest
+    // child decides the width of the page.
+    // Comments are stripped first: this file's own prose quotes the property, and a sentence about a rule
+    // is not a rule.
+    const declarations = baseCss.replace(/\/\*[\s\S]*?\*\//gu, "");
+    const owners = [...declarations.matchAll(/grid-auto-flow:\s*column/gu)].map((found) => selectorOwning(declarations, found.index));
+    expect(owners.length, "the filter row and the lead board are the two").toBe(2);
+
+    for (const owner of owners) {
+      const stacks = /grid-auto-flow:\s*row/u.test(declarationsFor(owner, byContainer));
+      const scrolls = /overflow-x:\s*auto/u.test(declarationsFor(owner));
+      const hidden = /display:\s*none/u.test(declarationsFor(owner, narrow));
+      expect(
+        stacks || scrolls || hidden,
+        `${owner} cannot wrap, so it needs a stacking rule, a scroll boundary or to be hidden on a phone`,
+      ).toBe(true);
+    }
+  });
+
   it("reflows the lead table from the width the board stops being shown", () => {
     // The band between two bounds is where this broke and where no other assertion looks: the board was
     // hidden below 900px, the table became cards below 720px, and at 768px — a width this product claims
