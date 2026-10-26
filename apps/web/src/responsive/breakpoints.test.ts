@@ -120,6 +120,17 @@ function selectorOwning(text: string, offset: number): string {
   return first.trim();
 }
 
+/** The narrowest declared bound whose block gives this selector a rule matching `declaration`. */
+function boundOf(selector: string, declaration: RegExp): number | null {
+  for (const breakpoint of BREAKPOINTS) {
+    const block = balancedBodies(`@media (max-width: ${String(breakpoint.maxWidth)}px)`).join("\n");
+    if (declaration.test(declarationsFor(selector, block))) {
+      return breakpoint.maxWidth;
+    }
+  }
+  return null;
+}
+
 /** The rules that apply at a given width: every narrow-screen block whose bound it is under. */
 function rulesAt(width: number): string {
   return BREAKPOINTS.filter((breakpoint) => width <= breakpoint.maxWidth)
@@ -286,6 +297,17 @@ describe("the supported widths", () => {
         /display:\s*(?:block|grid|flex)/u,
       );
     }
+  });
+
+  it("reflows the lead table from the width the board stops being shown", () => {
+    // The band between two bounds is where this broke and where no other assertion looks: the board was
+    // hidden below 900px, the table became cards below 720px, and at 768px — a width this product claims
+    // to support — the table was the only view of a lead and 117px wider than the room the shell left it.
+    const hidesBoard = boundOf(".lead-board", /display:\s*none/u);
+    const reflowsTable = boundOf(".lead-table", /display:\s*block/u);
+
+    expect(hidesBoard, "the board must be hidden somewhere").not.toBeNull();
+    expect(reflowsTable, "a view that is the only one has to fit, from the width it becomes the only one").toBe(hidesBoard);
   });
 
   it("labels every cell of a lead card with its own column name", () => {

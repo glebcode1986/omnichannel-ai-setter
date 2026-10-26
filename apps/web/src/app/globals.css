@@ -1408,13 +1408,17 @@ details[open] > summary::before {
 }
 
 /*
- * Below the board the table is the only view of a lead, and at 375px its five columns are 131px wider
- * than the screen: the page itself scrolls sideways, which is the loss the comment above set out to
- * prevent and did not. So the row stops being a row. Each lead becomes a card, and each cell carries
- * its own column name — read from data-label, which the cell fills from the same message key the
+ * Below the board the table is the only view of a lead, and it does not fit: at 375px its five columns
+ * are 131px wider than the screen and at 768px, where the shell still spends 232px on its sidebar, they
+ * are 117px wider. Either way the page itself scrolls sideways, which is the loss the comment above set
+ * out to prevent and did not. So the row stops being a row. Each lead becomes a card, and each cell
+ * carries its own column name — read from data-label, which the cell fills from the same message key the
  * header uses, so a translated table stays translated here.
+ *
+ * The bound is the board's own, deliberately: the width at which the board stops being shown is the
+ * width from which the table is the only view, and a view that is the only one has to fit.
  */
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .lead-table,
   .lead-table caption,
   .lead-table thead,
