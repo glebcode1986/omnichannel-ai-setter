@@ -34,12 +34,18 @@ const BREAKPOINTS = [
  * This list exists because the assertion it replaced — `css` matches `overflow-x: auto` anywhere — was
  * green while `.lead-table` was 490px wide at 375px and pushed the whole document sideways. One
  * declaration, somewhere in sixteen hundred lines, answered for every table in the product.
+ *
+ * `tableClass` is the class on the `<table>` itself where it has one, and a test below holds this list
+ * against the markup: a classed table missing from here fails rather than going unnoticed, which is how
+ * `.admin-audit` shipped with no styles at all. The entries with `tableClass: null` wrap tables that
+ * carry no class of their own and are styled through the panel they sit in.
  */
 const TABLE_SURFACES = [
-  { container: ".lead-table", treatment: "reflows", what: "five columns, and the only lead view on a phone" },
-  { container: ".stage-config", treatment: "scrolls", what: "a grid of inputs and order controls" },
-  { container: ".metric-panel", treatment: "scrolls", what: "analytics, five columns" },
-  { container: ".audit-log", treatment: "scrolls", what: "the audit trail, six columns" },
+  { container: ".lead-table", tableClass: "lead-table", treatment: "reflows", what: "five columns, and the only lead view on a phone" },
+  { container: '.card[data-admin="audit"]', tableClass: "admin-audit", treatment: "scrolls", what: "the platform audit, six columns" },
+  { container: ".stage-config", tableClass: null, treatment: "scrolls", what: "a grid of inputs and order controls" },
+  { container: ".metric-panel", tableClass: null, treatment: "scrolls", what: "analytics, five columns" },
+  { container: ".audit-log", tableClass: null, treatment: "scrolls", what: "the audit trail, six columns" },
 ] as const;
 
 /** Representative widths, named so the spec and the test cannot drift apart. */
@@ -149,7 +155,10 @@ function rulesAt(width: number): string {
  * `.metric-panel`: the question here is always what the *container* declares.
  */
 function declarationsFor(selector: string, within: string = css): string {
-  const head = new RegExp(`(?:^|[\n,{}])\\s*${selector.replace(/\./gu, "\\.")}\\s*(?:,[^{]*)?\\{`, "gu");
+  // Every regular-expression character is escaped, not only the dot: a selector may carry an
+  // attribute, and `[data-admin="audit"]` read as a character class matches almost nothing.
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const head = new RegExp(`(?:^|[\n,{}])\\s*${escaped}\\s*(?:,[^{]*)?\\{`, "gu");
   const bodies: string[] = [];
   let found = head.exec(within);
   while (found !== null) {
@@ -171,6 +180,40 @@ function declarationsFor(selector: string, within: string = css): string {
     found = head.exec(within);
   }
   return bodies.join("\n");
+}
+
+/**
+ * Controls that take a cell in the grid. A hidden input is excluded on purpose rather than by oversight:
+ * the browser's own stylesheet gives it `display: none`, so it is not a grid item and carrying state in
+ * one outside a field costs nothing. Every filter bar here has at least one.
+ */
+function visibleControls(text: string): number {
+  return [...text.matchAll(/<(?:input|select|textarea)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"')).length;
+}
+
+/** The bodies of the `field` wrappers in one form, read to their matching closing tag. */
+function balancedDivs(form: string): string[] {
+  const found: string[] = [];
+  const opener = /<div className="field">/gu;
+  let at = opener.exec(form);
+  while (at !== null) {
+    let depth = 0;
+    let i = at.index;
+    for (; i < form.length; i += 1) {
+      if (form.startsWith("<div", i)) {
+        depth += 1;
+      } else if (form.startsWith("</div>", i)) {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+      }
+    }
+    found.push(form.slice(at.index, i + "</div>".length));
+    opener.lastIndex = i + 1;
+    at = opener.exec(form);
+  }
+  return found;
 }
 
 /** Every filter bar in the product, taken out of the component sources. */
@@ -205,16 +248,28 @@ describe("the supported widths", () => {
   });
 
   it("has narrow-screen rules at every width below a tablet, and none needed above", () => {
+    // Read out of the stylesheet, not recomputed from BREAKPOINTS: filtering the same constant with the
+    // same predicate the branches use proves only that `filter` works. A bound the stylesheet declares and
+    // this file does not — a stray 1100px block — is exactly what that version could not see, and it would
+    // hand a 1024px laptop the collapsed phone shell.
+    const declared = [...css.matchAll(/@media \(max-width: (?<bound>\d+)px\)/gu)]
+      .map((found) => Number(found.groups?.bound))
+      .filter((bound, at, all) => all.indexOf(bound) === at)
+      .sort((a, b) => a - b);
+
+    expect(declared, "every bound in the stylesheet is one this file knows about").toEqual(
+      BREAKPOINTS.map((breakpoint) => breakpoint.maxWidth),
+    );
+
     for (const { name, width } of TESTED_WIDTHS) {
-      // Which blocks apply, by their bound. Asked of the widths rather than of the joined text: the text
-      // is the blocks' contents, and a block's own header is not inside it.
-      const applied = BREAKPOINTS.filter((breakpoint) => width <= breakpoint.maxWidth).map((breakpoint) => breakpoint.maxWidth);
+      const applied = declared.filter((bound) => width <= bound);
 
       if (width <= 720) {
         expect(applied, `${name} (${String(width)}px) must pick up both narrow blocks`).toEqual([720, 900]);
         expect(rulesAt(width).length).toBeGreaterThan(0);
       } else if (width <= 900) {
         expect(applied, `${name} (${String(width)}px) is past the phone block`).toEqual([900]);
+        expect(rulesAt(width), "and still gets the tablet block").not.toBe("");
       } else {
         // A desktop uses the base rules only. If a narrow block ever applied here, a full-width layout
         // would silently collapse into a phone one.
@@ -228,8 +283,12 @@ describe("the supported widths", () => {
     const rules = rulesAt(375);
 
     // The sidebar is a grid column at desktop width. On a phone it has to stop being one, or the content
-    // has 375 minus 232 pixels to live in.
-    expect(rules).toMatch(/\.shell\b[\s\S]{0,400}grid-template-columns/);
+    // has 375 minus 232 pixels to live in. Asked of `.shell`'s own rule inside the narrow blocks: a
+    // pattern like /\.shell\b[\s\S]*grid-template-columns/ matches `.shell-nav` followed by any later
+    // rule's track list, so deleting the one override it exists to protect left it green.
+    expect(declarationsFor(".shell", rules), "the shell must drop to one column on a phone").toMatch(
+      /grid-template-columns:\s*1fr/u,
+    );
     expect(css).toContain("--shell-nav-width");
   });
 
@@ -267,7 +326,12 @@ describe("the supported widths", () => {
     expect(fixed.length, "the shell and the inbox are the fixed grids this product has").toBe(2);
     for (const found of fixed) {
       const owner = selectorOwning(baseCss, found.index);
-      expect(narrow, `${owner} has fixed columns (${(found.groups?.columns ?? "").trim()}) and must be overridden on a phone`).toContain(owner);
+      // The owner's own rule in the narrow blocks, not its name anywhere in them: `toContain(".shell")`
+      // is answered by `.shell-nav`, so the backstop could not see the shell losing its override.
+      expect(
+        declarationsFor(owner, narrow),
+        `${owner} has fixed columns (${(found.groups?.columns ?? "").trim()}) and must be overridden on a phone`,
+      ).toMatch(/grid-template-columns:/u);
     }
   });
 
@@ -319,6 +383,35 @@ describe("the supported widths", () => {
     expect(css, "and no container query either").not.toContain("@container");
   });
 
+  it("knows about every table the product renders, so the list above cannot go stale", () => {
+    // The list is hand-written, and a hand-written list of "every surface" is a claim that rots. It had
+    // rotted already: `ui/admin/platform-audit-table.tsx` renders `<table className="admin-audit">`, the
+    // class appeared nowhere in the stylesheet, and the audit page was drawn by the browser's defaults.
+    const rendered = [...componentSources().matchAll(/<table className="(?<name>[\w-]+)"/gu)].map(
+      (found) => found.groups?.name ?? "",
+    );
+    const known = TABLE_SURFACES.flatMap((surface) => (surface.tableClass === null ? [] : [surface.tableClass]));
+
+    expect([...new Set(rendered)].sort(), "a classed table must be named above, with its treatment").toEqual(
+      [...new Set(known)].sort(),
+    );
+  });
+
+  it("lets a surface that renders what a person typed break a word that has nowhere to break", () => {
+    // A track that can shrink still cannot wrap a token with no break opportunity in it. These are the
+    // places a person's own text reaches a narrow column: a message, the context panel, and a lead's next
+    // action, which is free text and is where someone pastes a link. Without this the card bursts
+    // sideways and takes the document with it — the same failure as a grid that cannot wrap, one layer
+    // down. `white-space: nowrap` surfaces are deliberately not in this list: they scroll inside a
+    // boundary instead, which is checked above.
+    const narrow = rulesAt(375);
+
+    expect(declarationsFor(".message-text"), "a message is whatever the customer sent").toMatch(/overflow-wrap:\s*anywhere/u);
+    expect(declarationsFor(".lead-table td", narrow), "a lead's next action is free text").toMatch(
+      /overflow-wrap:\s*anywhere/u,
+    );
+  });
+
   it("caps every auto-fit floor at the container, not at a width it hopes for", () => {
     // The minimum in `minmax` is a floor the track keeps even when the container is narrower, so
     // `minmax(20rem, 1fr)` draws a 320px column inside a 288px box. The style page did exactly that at
@@ -335,6 +428,17 @@ describe("the supported widths", () => {
         /^min\(.+,\s*100%\)$/u,
       );
     }
+
+    // `min-width` is the same promise made directly, and it breaks the same way: the review card leaves
+    // 262px and its textarea asked for 18rem, so the form burst out of the card below a 346px viewport.
+    // Either a floor is zero — the item may shrink — or it is capped at the container it lives in.
+    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;]+);/gu)].map((found) => (found.groups?.floor ?? "").trim());
+    expect(widths.length, "the declared minimum widths").toBeGreaterThan(0);
+    for (const floor of widths) {
+      expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} is a width this element may not fit in`).toBe(
+        true,
+      );
+    }
   });
 
   it("keeps each label and its control one element, which is what lets the row wrap", () => {
@@ -345,9 +449,22 @@ describe("the supported widths", () => {
     expect(forms.length, "the filter bars this product renders").toBeGreaterThan(0);
 
     for (const form of forms) {
+      const fields = balancedDivs(form);
       const labels = [...form.matchAll(/<label htmlFor=/gu)].length;
-      const fields = [...form.matchAll(/<div className="field">/gu)].length;
-      expect(fields, `a filter bar with ${String(labels)} labels needs ${String(labels)} fields`).toBe(labels);
+      expect(fields.length, `a filter bar with ${String(labels)} labels needs ${String(labels)} fields`).toBe(labels);
+
+      // Counting the two is not enough: move a control out of its wrapper and the counts do not change
+      // while the pairing is gone. So each field is read, and what is left outside them is read too.
+      let inside = 0;
+      for (const field of fields) {
+        expect([...field.matchAll(/<label\b/gu)].length, "a field holds its own label").toBe(1);
+        const controls = visibleControls(field);
+        expect(controls, "a field holds its own control").toBe(1);
+        inside += controls;
+      }
+
+      const outside = visibleControls(form) - inside;
+      expect(outside, "a control outside a field is a column of its own again").toBe(0);
     }
   });
 
@@ -395,7 +512,9 @@ describe("the supported widths", () => {
     }
 
     // One label per column, less the row header: that one is the card's title and names itself.
-    const headers = [...board.matchAll(/<th scope="col">/gu)].length;
+    // Matched without the closing bracket: these elements also carry a role attribute, and a pattern that
+    // ends at `>` silently counts zero the moment one is added.
+    const headers = [...board.matchAll(/<th scope="col"/gu)].length;
     const labelled = [...board.matchAll(/data-label=/gu)].length;
     expect(labelled, `${String(headers)} columns, so ${String(headers - 1)} cells need a label`).toBe(headers - 1);
   });

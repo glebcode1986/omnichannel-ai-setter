@@ -28,9 +28,21 @@ provider.
 | Breakpoint | What changes |
 | --- | --- |
 | `max-width: 720px` | the shell's navigation stops being a sidebar column |
-| `max-width: 900px` | two-pane surfaces (Inbox, Review, Leads) show one pane at a time; the analytics panels become a single column |
+| `max-width: 900px` | the Inbox shows one pane at a time; the leads board is hidden and its table becomes one card per lead; the analytics panels become a single column |
 
 Above 900px the base rules apply unchanged.
+
+The Inbox is the only two-pane surface. Review is a single column of cards and the Leads board is hidden
+below 900px rather than folded, so neither has — or needs — a one-pane rule; an earlier version of this
+table said all three were two-pane, and the test that cites this document now asserts the opposite.
+
+Two things are deliberately **not** breakpoints, because a viewport width cannot answer for them:
+
+- **The filter bar** wraps by itself, `repeat(auto-fit, minmax(min(9rem, 100%), 1fr))`. It was keyed to a
+  viewport width three times and was wrong three times, because the shell spends 232px of the window on
+  its sidebar before the content sees any of it, and because the widest bar has seven fields.
+- **Every floor** — `minmax()` minimums and `min-width` — is capped at the container with `min(x, 100%)`.
+  A floor wider than the box it is in is not a floor, it is an overflow.
 
 ## Tested widths
 

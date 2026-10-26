@@ -513,9 +513,15 @@ export default async function SettingsPage({
               type="text"
               maxLength={MAX_TEMPLATE_NAME_CHARS}
               defaultValue={simulationInputs.templateName}
+              aria-describedby="sim-template-hint"
             />
+            {/* Inside the field, not beside it: a direct child of the form is a cell of the wrapping grid
+                like any other, so the hint used to land under whichever field the row happened to put it
+                next to — and it explains this one. */}
+            <p className="muted" id="sim-template-hint">
+              {t.t("sim.templateNameHint")}
+            </p>
           </div>
-          <p className="muted">{t.t("sim.templateNameHint")}</p>
 
           <button className="button" type="submit">
             {t.t("sim.run")}

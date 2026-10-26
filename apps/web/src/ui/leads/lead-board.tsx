@@ -137,29 +137,46 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
 
       {/* Always present: the board's accessible fallback, and the only view that lists a lead sitting in
           a hidden stage. */}
-      <table className="lead-table">
+      {/*
+        The roles repeat what the elements already mean, and they are not redundant: below 900px the
+        stylesheet gives these elements `display: block` to lay each lead out as a card, and a browser
+        derives a table element's implicit role from its computed display. Without the roles written out,
+        the table stops being a table for assistive technology at exactly the widths where it is the only
+        view of a lead — the row header stops identifying its row, and the cells stop having columns.
+      */}
+      <table className="lead-table" role="table">
         <caption>{t.t("leads.tableLabel")}</caption>
-        <thead>
-          <tr>
-            <th scope="col">{t.t("leads.tableHeadContact")}</th>
-            <th scope="col">{t.t("leads.tableHeadStage")}</th>
-            <th scope="col">{t.t("leads.tableHeadOwner")}</th>
-            <th scope="col">{t.t("leads.tableHeadNext")}</th>
-            <th scope="col">{t.t("leads.tableHeadUpdated")}</th>
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">
+              {t.t("leads.tableHeadContact")}
+            </th>
+            <th scope="col" role="columnheader">
+              {t.t("leads.tableHeadStage")}
+            </th>
+            <th scope="col" role="columnheader">
+              {t.t("leads.tableHeadOwner")}
+            </th>
+            <th scope="col" role="columnheader">
+              {t.t("leads.tableHeadNext")}
+            </th>
+            <th scope="col" role="columnheader">
+              {t.t("leads.tableHeadUpdated")}
+            </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody role="rowgroup">
           {leads.map((lead) => (
-            <tr key={lead.conversationId} data-row={lead.conversationId}>
-              <th scope="row">
+            <tr key={lead.conversationId} data-row={lead.conversationId} role="row">
+              <th scope="row" role="rowheader">
                 <Link href={`${basePath}/inbox/${lead.conversationId}`}>{lead.contactName ?? lead.handle}</Link>
               </th>
-              <td data-label={t.t("leads.tableHeadStage")} data-stage={lead.stage}>
+              <td data-label={t.t("leads.tableHeadStage")} data-stage={lead.stage} role="cell">
                 {labelOf(lead.stage)}
               </td>
-              <td data-label={t.t("leads.tableHeadOwner")}>{lead.assignedUserName ?? t.t("leads.unassigned")}</td>
-              <td data-label={t.t("leads.tableHeadNext")}>{lead.nextAction ?? ""}</td>
-              <td data-label={t.t("leads.tableHeadUpdated")}>
+              <td data-label={t.t("leads.tableHeadOwner")} role="cell">{lead.assignedUserName ?? t.t("leads.unassigned")}</td>
+              <td data-label={t.t("leads.tableHeadNext")} role="cell">{lead.nextAction ?? ""}</td>
+              <td data-label={t.t("leads.tableHeadUpdated")} role="cell">
                 <time dateTime={lead.lastMessageAt.toISOString()}>{t.date(lead.lastMessageAt, { dateStyle: "short", timeStyle: "short" })}</time>
               </td>
             </tr>

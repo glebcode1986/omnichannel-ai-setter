@@ -80,9 +80,12 @@ busy day, so it is also a test:
 `apps/web/src/i18n/no-unlocalized-strings.test.ts` scans the production UI for user-facing literals and
 fails on ones that did not come from a catalogue.
 
-The check is deliberately narrow — it looks at JSX text and at the attributes that become accessible names
-— because a guard that cried wolf would be switched off. What it does not catch is still a review
-responsibility.
+The check is deliberately narrow — it looks at JSX text, at the attributes that become accessible names,
+and at the attributes a stylesheet draws on screen with `content: attr(...)` — because a guard that cried
+wolf would be switched off. What it does not catch is still a review responsibility.
+
+The third group exists because a lead becomes a card below 900px and each cell draws its column name from
+`data-label`. That attribute is not an accessible name, and it is still text a person reads.
 
 ## What is not localized
 
