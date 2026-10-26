@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertVerifiedBillingEvent,
   clearBillingProviders,
+  snapshotVerifiedBillingEvent,
   registerBillingProvider,
   verifyProviderDelivery,
   type NormalizedBillingEvent,
@@ -154,6 +155,43 @@ describe("a minted verified billing event", () => {
     // product event, so telling the provider "received and handled" would discard a payment nobody will
     // look for again. Refusing leaves the provider redelivering until somebody fixes the adapter.
     expect(delivered.kind).toBe("REFUSED");
+  });
+
+  it("refuses a delivery whose adapter lied about a field's type, instead of throwing", async () => {
+    // The same class as the date, in the fields that are read before it. An adapter handing back a number
+    // where the interface says a string used to reach `.trim()` and throw out of the port; the webhook
+    // route's catch-all turned that into a 500, so the provider redelivered a delivery that can never
+    // succeed. A refusal is an answer, an exception is not.
+    clearBillingProviders();
+    registerBillingProvider({
+      provider: "test-psp",
+      verify: () => ({ kind: "EVENT" as const, event: { ...normalized, routeCode: 7 } as unknown as NormalizedBillingEvent }),
+    });
+
+    await expect(verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW })).resolves.toEqual({
+      kind: "REFUSED",
+    });
+  });
+
+  it("hands the store a copy, so an edit after the snapshot cannot reach what was recorded", async () => {
+    // The half the fast gate did not exercise at all. `assertVerifiedBillingEvent` answers about one
+    // instant; what defeats the PR #100 scenario is that the store reads a copy taken before its first
+    // await. Reverting the snapshot to return the same object would have stayed green here until now.
+    const event = await mint();
+    const held = snapshotVerifiedBillingEvent(event);
+
+    expect(held).not.toBe(event);
+    expect(held.periodEndsAt?.getTime()).toBe(PERIOD_END.getTime());
+
+    event.periodEndsAt?.setUTCFullYear(2099);
+
+    expect(held.periodEndsAt?.getTime(), "the copy keeps the term it was minted with").toBe(PERIOD_END.getTime());
+    expect(() => {
+      assertVerifiedBillingEvent(held);
+    }, "and is still verified after the original stopped being").not.toThrow();
+    expect(() => {
+      assertVerifiedBillingEvent(event);
+    }).toThrow(DbInputError);
   });
 
   it("refuses an object this module never minted, however well shaped", () => {

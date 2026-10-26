@@ -175,8 +175,10 @@ describe.skipIf(!databaseTestsEnabled())("handing a committed checkout to Stripe
     // And the key that makes a double-click return the first session rather than opening a second.
     expect(sent[0]?.headers["idempotency-key"]).toBe(`checkout:${opened.checkoutContractId}`);
     // The return URLs are built from the configured origin, so neither is a page somebody else owns.
-    expect(fields.get("success_url")).toBe(`${RETURN_BASE}${RETURN_PATH}?outcome=CHECKOUT_RETURNED`);
-    expect(fields.get("cancel_url")).toBe(`${RETURN_BASE}${RETURN_PATH}?outcome=CHECKOUT_ABANDONED`);
+    // The parameter the billing page actually reads, and the two words it accepts. These used to assert
+    // `?outcome=CHECKOUT_RETURNED`, which the page matched nowhere — the test agreed with the defect.
+    expect(fields.get("success_url")).toBe(`${RETURN_BASE}${RETURN_PATH}?checkout=success`);
+    expect(fields.get("cancel_url")).toBe(`${RETURN_BASE}${RETURN_PATH}?checkout=cancelled`);
   }, 180_000);
 
   it("records the provider's session against the contract, once", async () => {

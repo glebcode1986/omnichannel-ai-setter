@@ -80,6 +80,11 @@ export type VerifiedBillingEvent = NormalizedBillingEvent & {
 
 const mintedEvents = new WeakMap<object, string>();
 
+/** A real, usable instant. `instanceof` because the type is a promise an adapter is free to break. */
+function isInstant(value: Date): boolean {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
 /**
  * The authenticated facts of an event, as one string.
  *
@@ -87,11 +92,6 @@ const mintedEvents = new WeakMap<object, string>();
  * which arrangement, and for how much until when. An edit to any of them produces a different value, so
  * the object is no longer the event that was authenticated.
  */
-/** A real, usable instant. `instanceof` because the type is a promise an adapter is free to break. */
-function isInstant(value: Date): boolean {
-  return value instanceof Date && Number.isFinite(value.getTime());
-}
-
 function fingerprint(event: VerifiedBillingEvent): string {
   const at = (value: Date | undefined): string => (value === undefined ? "-" : String(value.getTime()));
   return [
@@ -471,10 +471,24 @@ export async function reconcileProviderState(provider: string, query: Reconcilia
 }
 
 function mint(normalized: NormalizedBillingEvent, activationSource: ActivationSource): VerifiedBillingEvent | null {
+  // Shape before content, and the order is the point: an adapter that hands back a number where the
+  // interface says a string used to reach `.trim()` and throw a `TypeError` out of this function. The
+  // webhook route's catch-all turned that into a 500, so the provider was told to redeliver a delivery
+  // that can never succeed, instead of being refused once. Every refusal below is `null`, which is an
+  // answer; an exception is not.
+  if (typeof normalized !== "object" || normalized === null) {
+    return null;
+  }
+  if (typeof normalized.routeCode !== "string" || typeof normalized.providerEventId !== "string") {
+    return null;
+  }
   if (!isBillingEventKind(normalized.kind)) {
     return null;
   }
   if (normalized.routeCode.trim() === "" || normalized.providerEventId.trim() === "") {
+    return null;
+  }
+  if (normalized.settled !== undefined && (typeof normalized.settled !== "object" || normalized.settled === null)) {
     return null;
   }
   if (normalized.settled !== undefined && (!Number.isInteger(normalized.settled.amountMinor) || !isCurrencyCode(normalized.settled.currency))) {

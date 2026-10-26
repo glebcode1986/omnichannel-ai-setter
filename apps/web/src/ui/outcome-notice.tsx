@@ -55,6 +55,9 @@ const OUTCOMES = [
   "TERMS_CHANGED",
   "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // Produced by `checkout-actions.ts` when the hand-off itself failed. Unregistered until now, so the
+  // one path where the contract stands and the customer was handed nowhere rendered no notice at all.
+  "PROVIDER_UNREACHABLE",
   // The internal console's own outcomes (#59). An operator reads these as closely as a customer reads
   // theirs, and more carefully: the refusals say whether a role is missing or a request was impossible.
   "PAUSED",
@@ -113,6 +116,10 @@ const REFUSALS = new Set<string>([
   "TERMS_CHANGED",
   "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // A fourth, and the one that was produced and rendered nowhere: the contract is written, nothing was
+  // charged, and the customer was handed to no provider. A refusal in tone for the same reason as the
+  // three above — the button did not do what it offered.
+  "PROVIDER_UNREACHABLE",
   // An operator who pressed a control and did not get it. `ALREADY_LIFTED` and `ALREADY_REVOKED` are not
   // refusals: nothing was denied, the work was simply already done.
   "NOT_PERMITTED",

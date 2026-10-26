@@ -14,8 +14,10 @@
  * freezes it; a deferred constraint trigger refuses to let it commit without its acceptances.
  *
  * **Only a verified provider event or an authoritative reconciliation activates anything.** The type
- * `VerifiedBillingEvent` cannot be constructed outside `billing-events.ts`, so a success-page handler has
- * no way to reach this file's activation path even by mistake.
+ * `VerifiedBillingEvent` cannot be constructed outside the provider port — it lives in
+ * `@omnichannel/application`, in `billing/provider-port.ts`, which is where the mint and the map of
+ * authenticated facts are — so a success-page handler has no way to reach this file's activation path
+ * even by mistake. `billing-events.ts` re-exports that surface and owns the refusals, nothing more.
  *
  * **One live charge path per workspace.** Enforced by a partial unique index rather than by a check here,
  * because the race it prevents — two checkouts completing at once — is exactly the one an application
@@ -1285,9 +1287,9 @@ export interface BillingEventResult {
  * Applies one verified provider event to the workspace's normalized billing state.
  *
  * The first line is the whole security model, and it does two things rather than one.
- * `snapshotVerifiedBillingEvent` refuses anything `billing-events.ts` did not mint — so a success-page
- * handler cannot reach this path even by constructing an object of the right shape and casting it — and it
- * returns a private copy of the authenticated facts.
+ * `snapshotVerifiedBillingEvent` refuses anything the provider port did not mint, and anything edited
+ * since it was minted — so a success-page handler cannot reach this path even by constructing an object
+ * of the right shape and casting it — and it returns a private copy of the authenticated facts.
  *
  * The copy is the part that is easy to leave out, and leaving it out was a real defect: asserting answers
  * a question about one instant, and this function then awaits a route lookup, a transaction and several
