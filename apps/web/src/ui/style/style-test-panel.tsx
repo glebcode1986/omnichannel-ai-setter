@@ -44,8 +44,10 @@ export function StyleTestPanel({ t, test, basePath, ask }: StyleTestPanelProps) 
     <section className="knowledge-tester">
       <h2>{t.t("styleTest.title")}</h2>
       <form action={basePath} method="get" role="search" className="inbox-search">
-        <label htmlFor="style-ask">{t.t("styleTest.queryLabel")}</label>
-        <input id="style-ask" name="ask" type="search" defaultValue={ask ?? ""} />
+        <div className="field">
+          <label htmlFor="style-ask">{t.t("styleTest.queryLabel")}</label>
+          <input id="style-ask" name="ask" type="search" defaultValue={ask ?? ""} />
+        </div>
         <button className="button" type="submit">
           {t.t("styleTest.run")}
         </button>

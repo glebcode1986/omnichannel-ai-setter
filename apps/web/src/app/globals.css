@@ -328,14 +328,6 @@ details[open] > summary::before {
 .shell-main {
   padding: var(--space-5);
   min-width: 0;
-  /*
-   * What decides whether a filter row fits is this box, not the window: the sidebar spends 232px of the
-   * window before the content sees any of it. Keying the filter row's stacking to the viewport put it at
-   * 720px and left it broken at 768 and at 900, where the row needs 816px and has 496 and 628. Naming
-   * this box as a container lets the row ask the only width that is actually its own.
-   */
-  container-type: inline-size;
-  container-name: main;
   /* A line of text spanning a 2000px display is unreadable, and a filter row spanning it looks unfinished.
      The board and the inbox still get plenty: this caps, it does not narrow. */
   max-width: var(--content-max);
@@ -671,11 +663,16 @@ details[open] > summary::before {
  * top row and the control that follows it in the bottom row of the same column. Below the breakpoint the
  * flow turns back into rows and everything stacks, which is what a narrow screen wants anyway.
  */
+/*
+ * The row wraps by itself, at every width, with no number in it to be wrong. It could not before: a
+ * label and its control were siblings, nothing in CSS pairs siblings, and `grid-auto-flow: column` was
+ * what paired them — at the price of a grid that grows a column per child and never wraps. Each pair is
+ * one element now, so `auto-fit` can do the arithmetic that three hand-picked breakpoints got wrong at
+ * 768, at 900 and, with seven fields on the settings page, at 1280 and 1440 as well.
+ */
 .inbox-search {
   display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: auto auto;
-  grid-auto-columns: minmax(9rem, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: var(--space-1) var(--space-3);
   align-items: end;
   margin-bottom: var(--space-4);
@@ -686,60 +683,30 @@ details[open] > summary::before {
   box-shadow: var(--shadow-1);
 }
 
-/*
- * Inside a narrow column the row has nowhere to go, so it stacks there regardless of viewport width.
- * `grid-auto-flow: column` does not wrap — that is what makes it pair a label with its control — so a
- * three-filter toolbar squeezed into the inbox's 300px list column would give each field about 70px.
- * The page-level filter bars keep the row; this one is a column by place, not by screen size.
- */
-.inbox-list .inbox-search {
-  grid-auto-flow: row;
-  grid-template-rows: none;
-  grid-auto-columns: auto;
+/* A field is its label and its control together. That pairing is what lets the row wrap. */
+.inbox-search .field {
+  display: grid;
   gap: var(--space-1);
+  align-content: end;
+  min-width: 0;
 }
 
-.inbox-list .inbox-search > button,
-.inbox-list .inbox-search > .button {
-  grid-row: auto;
-  margin-top: var(--space-2);
-}
-
-/* The submit sits on the control row, level with the fields rather than under its own empty label. */
+/*
+ * The submit is a field's width like any other cell, and sits at the bottom of its row beside the
+ * controls rather than under an empty label. The inbox's list column needs no rule of its own any more:
+ * at 276px `auto-fit` resolves to one column there, which is what its override used to say by hand.
+ */
 .inbox-search > button,
 .inbox-search > .button {
-  grid-row: 2;
   white-space: nowrap;
 }
 
-/*
- * Five fields at a 9rem minimum, with the gaps between them, need 816px. Below that the row stops being
- * a row and the fields stack, each full width — the same shape the inbox's list column has always used,
- * for the same reason, now asked of the content box instead of the window.
- */
-@container main (max-width: 820px) {
-  .inbox-search {
-    grid-auto-flow: row;
-    grid-template-rows: none;
-    grid-auto-columns: auto;
-    gap: var(--space-1);
-  }
-
-  .inbox-search > button,
-  .inbox-search > .button {
-    grid-row: auto;
-    margin-top: var(--space-2);
-  }
-}
-
 .inbox-search label {
-  flex-basis: 100%;
   font-size: 13px;
   color: var(--text-muted);
 }
 
 .inbox-search input {
-  flex: 1 1 140px;
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--border);

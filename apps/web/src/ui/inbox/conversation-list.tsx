@@ -66,32 +66,38 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
         stay links because there are five of them and a link is shareable.
       */}
       <form action={basePath} method="get" role="search" className="inbox-search">
-        <label htmlFor="inbox-q">{t.t("inbox.searchLabel")}</label>
-        <input id="inbox-q" name="q" type="search" defaultValue={view.search ?? ""} placeholder={t.t("inbox.searchPlaceholder")} />
+        <div className="field">
+          <label htmlFor="inbox-q">{t.t("inbox.searchLabel")}</label>
+          <input id="inbox-q" name="q" type="search" defaultValue={view.search ?? ""} placeholder={t.t("inbox.searchPlaceholder")} />
+        </div>
 
         {accounts.length === 0 ? undefined : (
           <>
-            <label htmlFor="inbox-account">{t.t("inbox.filterChannel")}</label>
-            <select id="inbox-account" name="account" defaultValue={view.channelAccountId ?? ""}>
-              <option value="">{t.t("inbox.allChannels")}</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {`${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`}
-                </option>
-              ))}
-            </select>
+            <div className="field">
+              <label htmlFor="inbox-account">{t.t("inbox.filterChannel")}</label>
+              <select id="inbox-account" name="account" defaultValue={view.channelAccountId ?? ""}>
+                <option value="">{t.t("inbox.allChannels")}</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {`${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`}
+                  </option>
+                ))}
+              </select>
+            </div>
           </>
         )}
 
-        <label htmlFor="inbox-stage">{t.t("inbox.filterLeadStage")}</label>
-        <select id="inbox-stage" name="stage" defaultValue={view.leadStage ?? ""}>
-          <option value="">{t.t("inbox.allStages")}</option>
-          {LEAD_STAGES.map((stage) => (
-            <option key={stage} value={stage}>
-              {t.t(`leadStage.${stage}` as MessageKey)}
-            </option>
-          ))}
-        </select>
+        <div className="field">
+          <label htmlFor="inbox-stage">{t.t("inbox.filterLeadStage")}</label>
+          <select id="inbox-stage" name="stage" defaultValue={view.leadStage ?? ""}>
+            <option value="">{t.t("inbox.allStages")}</option>
+            {LEAD_STAGES.map((stage) => (
+              <option key={stage} value={stage}>
+                {t.t(`leadStage.${stage}` as MessageKey)}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {/* The state filter travels with the form, or applying a search would silently widen the view. */}
         {view.filter === undefined ? undefined : <input type="hidden" name="filter" value={view.filter} />}

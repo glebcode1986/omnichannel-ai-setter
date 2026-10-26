@@ -173,6 +173,11 @@ function declarationsFor(selector: string, within: string = css): string {
   return bodies.join("\n");
 }
 
+/** Every filter bar in the product, taken out of the component sources. */
+function filterForms(): string[] {
+  return [...componentSources().matchAll(/<form[^>]*className="inbox-search"[\s\S]*?<\/form>/gu)].map((found) => found[0]);
+}
+
 function componentSources(): string {
   const collected: string[] = [];
   const walk = (directory: string): void => {
@@ -299,45 +304,51 @@ describe("the supported widths", () => {
     }
   });
 
-  it("stacks the filter row on the width that is actually its own", () => {
-    // The row cannot wrap — `grid-auto-flow: column` is exactly what pairs each label with its control —
-    // so it has to be told when to stop being a row, and the window is the wrong thing to ask: the
-    // sidebar spends 232px of the window before the content sees any of it. Keyed to the viewport at
-    // 720px, the row still overflowed at 768 and at 900, where it needs 816px and has 496 and 628.
-    expect(declarationsFor(".shell-main"), "the content box must be a query container").toMatch(
-      /container-type:\s*inline-size/u,
+  it("lets the filter row wrap by itself, with no width to get wrong", () => {
+    // Three hand-picked widths were wrong in turn. A 720px viewport rule left the row broken at 768 and
+    // at 900, where the sidebar still takes 232px of the window. A container query at 820px fixed those
+    // and left the settings page — seven fields, needing 1320px — broken at 1280 and at 1440. A row that
+    // wraps has no width to pick, and nothing to get wrong when someone adds an eighth field.
+    expect(declarationsFor(".inbox-search"), "the row must wrap on its own").toMatch(
+      /grid-template-columns:\s*repeat\(auto-fit/u,
     );
+    expect(declarationsFor(".inbox-search .field"), "a field is one element").toMatch(/display:\s*grid/u);
 
-    const byContainer = balancedBodies("@container main (max-width:").join("\n");
-    expect(declarationsFor(".inbox-search", byContainer), "the filter row stacks by its container").toMatch(
-      /grid-auto-flow:\s*row/u,
-    );
+    // No breakpoint of any kind may speak for it. That is the claim, and it is the whole claim.
+    expect(rulesAt(375), "no viewport rule may decide the filter row").not.toContain(".inbox-search");
+    expect(css, "and no container query either").not.toContain("@container");
+  });
 
-    // And not by the viewport as well: two rules that can disagree are how this was wrong twice.
-    expect(rulesAt(375), "the viewport must not also decide the filter row").not.toContain(".inbox-search");
+  it("keeps each label and its control one element, which is what lets the row wrap", () => {
+    // CSS pairs no siblings. The old grid paired them by flowing down two rows and across, and that is
+    // exactly why it could not wrap. The pairing lives in the markup now, so the markup has to hold it:
+    // one stray control outside a field is a column of its own again, in every filter bar it appears in.
+    const forms = filterForms();
+    expect(forms.length, "the filter bars this product renders").toBeGreaterThan(0);
+
+    for (const form of forms) {
+      const labels = [...form.matchAll(/<label htmlFor=/gu)].length;
+      const fields = [...form.matchAll(/<div className="field">/gu)].length;
+      expect(fields, `a filter bar with ${String(labels)} labels needs ${String(labels)} fields`).toBe(labels);
+    }
   });
 
   it("gives every row that cannot wrap a way out", () => {
     const narrow = rulesAt(375);
-    const byContainer = balancedBodies("@container main (max-width:").join("\n");
 
-    // The invariant behind both of this file's phone bugs: a grid with `grid-auto-flow: column` grows a
-    // new column per child and never wraps, so one of three things has to be true of it, or its widest
-    // child decides the width of the page.
-    // Comments are stripped first: this file's own prose quotes the property, and a sentence about a rule
-    // is not a rule.
+    // The invariant behind every phone and tablet bug in this file's history: a grid with
+    // `grid-auto-flow: column` grows a new column per child and never wraps, so it must scroll inside a
+    // boundary or be hidden — or its widest child decides the width of the page. The filter row used to
+    // be the second of these and is no longer one at all. Comments are stripped before the scan, since
+    // this file's own prose quotes the property it searches for.
     const declarations = baseCss.replace(/\/\*[\s\S]*?\*\//gu, "");
     const owners = [...declarations.matchAll(/grid-auto-flow:\s*column/gu)].map((found) => selectorOwning(declarations, found.index));
-    expect(owners.length, "the filter row and the lead board are the two").toBe(2);
+    expect(owners, "the lead board is the only one left").toEqual([".lead-board"]);
 
     for (const owner of owners) {
-      const stacks = /grid-auto-flow:\s*row/u.test(declarationsFor(owner, byContainer));
       const scrolls = /overflow-x:\s*auto/u.test(declarationsFor(owner));
       const hidden = /display:\s*none/u.test(declarationsFor(owner, narrow));
-      expect(
-        stacks || scrolls || hidden,
-        `${owner} cannot wrap, so it needs a stacking rule, a scroll boundary or to be hidden on a phone`,
-      ).toBe(true);
+      expect(scrolls && hidden, `${owner} cannot wrap, so it needs both a scroll boundary and a narrow rule`).toBe(true);
     }
   });
 
