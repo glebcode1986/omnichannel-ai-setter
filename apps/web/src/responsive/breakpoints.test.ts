@@ -27,6 +27,21 @@ const BREAKPOINTS = [
   { maxWidth: 900, what: "phone and small tablet: two-pane surfaces become one pane at a time" },
 ] as const;
 
+/**
+ * Every surface that renders a `<table>`, and how each survives a phone. A table cannot reflow by
+ * itself: either it stops being a table, or it scrolls inside a boundary its container declares.
+ *
+ * This list exists because the assertion it replaced — `css` matches `overflow-x: auto` anywhere — was
+ * green while `.lead-table` was 490px wide at 375px and pushed the whole document sideways. One
+ * declaration, somewhere in sixteen hundred lines, answered for every table in the product.
+ */
+const TABLE_SURFACES = [
+  { container: ".lead-table", treatment: "reflows", what: "five columns, and the only lead view on a phone" },
+  { container: ".stage-config", treatment: "scrolls", what: "a grid of inputs and order controls" },
+  { container: ".metric-panel", treatment: "scrolls", what: "analytics, five columns" },
+  { container: ".audit-log", treatment: "scrolls", what: "the audit trail, six columns" },
+] as const;
+
 /** Representative widths, named so the spec and the test cannot drift apart. */
 export const TESTED_WIDTHS = [
   { name: "phone", width: 375 },
@@ -36,16 +51,115 @@ export const TESTED_WIDTHS = [
   { name: "desktop", width: 1440 },
 ] as const;
 
+/**
+ * The body of every block in the stylesheet, brace-balanced, whose header matches `start`. Reading to a
+ * matched closing brace rather than to the end of the file is the whole point: a slice to EOF makes the
+ * rules "at 800px" contain every later block of any width, so an assertion that a 720px block does *not*
+ * apply at 800px passes only while no 720px block happens to sit below a 900px one.
+ */
+function balancedBodies(start: string): string[] {
+  const bodies: string[] = [];
+  let from = 0;
+  for (;;) {
+    const head = css.indexOf(start, from);
+    if (head === -1) {
+      return bodies;
+    }
+    const open = css.indexOf("{", head);
+    let depth = 0;
+    let at = open;
+    for (; at < css.length; at += 1) {
+      if (css[at] === "{") {
+        depth += 1;
+      } else if (css[at] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+      }
+    }
+    bodies.push(css.slice(open + 1, at));
+    from = at + 1;
+  }
+}
+
+/** The stylesheet with every narrow-screen block removed: what a desktop alone is served. */
+const baseCss = BREAKPOINTS.reduce((text, breakpoint) => {
+  const header = `@media (max-width: ${String(breakpoint.maxWidth)}px)`;
+  let stripped = text;
+  for (;;) {
+    const head = stripped.indexOf(header);
+    if (head === -1) {
+      return stripped;
+    }
+    const open = stripped.indexOf("{", head);
+    let depth = 0;
+    let at = open;
+    for (; at < stripped.length; at += 1) {
+      if (stripped[at] === "{") {
+        depth += 1;
+      } else if (stripped[at] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+      }
+    }
+    stripped = stripped.slice(0, head) + stripped.slice(at + 1);
+  }
+}, css);
+
+/** The selector whose block contains this offset — the rule's own owner, read from the stylesheet. */
+function selectorOwning(text: string, offset: number): string {
+  const before = text.slice(0, offset);
+  const open = before.lastIndexOf("{");
+  // Past the end of whichever came last, and `*/` is two characters wide — off by one here puts the tail
+  // of a comment at the front of the selector.
+  const previous = Math.max(before.lastIndexOf("}") + 1, before.lastIndexOf("*/") + 2, 0);
+  const [first = ""] = before.slice(previous, open).trim().split(",");
+  return first.trim();
+}
+
 /** The rules that apply at a given width: every narrow-screen block whose bound it is under. */
 function rulesAt(width: number): string {
   return BREAKPOINTS.filter((breakpoint) => width <= breakpoint.maxWidth)
     .map((breakpoint) => {
-      const start = css.indexOf(`@media (max-width: ${String(breakpoint.maxWidth)}px)`);
-      expect(start, `the ${String(breakpoint.maxWidth)}px block must exist — ${breakpoint.what}`).toBeGreaterThan(-1);
-      // To the end of the file is deliberate: there are two 900px blocks, and a rule in either counts.
-      return css.slice(start);
+      // Every block of that width, not the first: there are several 900px blocks and a rule in any counts.
+      const bodies = balancedBodies(`@media (max-width: ${String(breakpoint.maxWidth)}px)`);
+      expect(bodies.length, `the ${String(breakpoint.maxWidth)}px block must exist — ${breakpoint.what}`).toBeGreaterThan(0);
+      return bodies.join("\n");
     })
     .join("\n");
+}
+
+/**
+ * Every declaration block whose selector list names exactly this selector. The match requires the
+ * selector to be followed by a comma or the opening brace, so `.metric-panel table` does not answer for
+ * `.metric-panel`: the question here is always what the *container* declares.
+ */
+function declarationsFor(selector: string, within: string = css): string {
+  const head = new RegExp(`(?:^|[\n,{}])\\s*${selector.replace(/\./gu, "\\.")}\\s*(?:,[^{]*)?\\{`, "gu");
+  const bodies: string[] = [];
+  let found = head.exec(within);
+  while (found !== null) {
+    const open = within.indexOf("{", found.index);
+    let depth = 0;
+    let at = open;
+    for (; at < within.length; at += 1) {
+      if (within[at] === "{") {
+        depth += 1;
+      } else if (within[at] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          break;
+        }
+      }
+    }
+    bodies.push(within.slice(open + 1, at));
+    head.lastIndex = at + 1;
+    found = head.exec(within);
+  }
+  return bodies.join("\n");
 }
 
 function componentSources(): string {
@@ -76,18 +190,20 @@ describe("the supported widths", () => {
 
   it("has narrow-screen rules at every width below a tablet, and none needed above", () => {
     for (const { name, width } of TESTED_WIDTHS) {
-      const rules = rulesAt(width);
+      // Which blocks apply, by their bound. Asked of the widths rather than of the joined text: the text
+      // is the blocks' contents, and a block's own header is not inside it.
+      const applied = BREAKPOINTS.filter((breakpoint) => width <= breakpoint.maxWidth).map((breakpoint) => breakpoint.maxWidth);
+
       if (width <= 720) {
-        expect(rules.length, `${name} (${String(width)}px) must pick up both narrow blocks`).toBeGreaterThan(0);
-        expect(rules).toContain("@media (max-width: 720px)");
-        expect(rules).toContain("@media (max-width: 900px)");
+        expect(applied, `${name} (${String(width)}px) must pick up both narrow blocks`).toEqual([720, 900]);
+        expect(rulesAt(width).length).toBeGreaterThan(0);
       } else if (width <= 900) {
-        expect(rules).toContain("@media (max-width: 900px)");
-        expect(rules).not.toContain("@media (max-width: 720px)");
+        expect(applied, `${name} (${String(width)}px) is past the phone block`).toEqual([900]);
       } else {
         // A desktop uses the base rules only. If a narrow block ever applied here, a full-width layout
         // would silently collapse into a phone one.
-        expect(rules, `${name} (${String(width)}px) must not pick up a narrow block`).toBe("");
+        expect(applied, `${name} (${String(width)}px) must not pick up a narrow block`).toEqual([]);
+        expect(rulesAt(width)).toBe("");
       }
     }
   });
@@ -101,20 +217,42 @@ describe("the supported widths", () => {
     expect(css).toContain("--shell-nav-width");
   });
 
-  it("gives every two-pane surface a one-pane rule, and nothing claims a pane it does not render", () => {
+  it("gives the two-pane surface a one-pane rule, and nothing claims a pane it does not render", () => {
     const rules = rulesAt(375);
     const components = componentSources();
 
-    // Each surface that shows a list beside a detail. A new one added without a narrow rule shows both
-    // panes squeezed side by side on a phone, which is how this has broken before.
-    for (const pane of ["inbox", "review", "leads"]) {
-      expect(rules, `${pane} must have a narrow-screen rule`).toContain(pane);
-    }
+    // The inbox is the one surface that shows a list beside a detail. This list used to name "review" and
+    // "leads" as well, and passed on a substring found outside any narrow block — review is a single
+    // column of cards and the leads board is hidden below 900px, so neither was ever the thing at risk.
+    expect(rules, "the inbox must have a narrow-screen rule").toContain(".inbox");
+    expect(declarationsFor(".review-queue"), "review is a single column, not two panes").toMatch(
+      /flex-direction:\s*column/u,
+    );
+
     // The attribute the routes set to say which pane they are. The stylesheet keys off it, so a rename in
     // either place is silent.
     expect(rules).toContain("data-pane");
     expect(components).toContain('data-pane="thread"');
     expect(components).toContain('data-pane="list"');
+  });
+
+  it("leaves no fixed multi-column grid standing on a phone", () => {
+    const narrow = rulesAt(375);
+
+    // The invariant the list above cannot express: a grid whose columns carry a width cannot fit a phone,
+    // whoever adds it. `repeat(auto-fit, …)` collapses by itself and `1fr auto` is two flexible columns,
+    // so neither is at risk. What remains must be overridden in a narrow block — and the search runs over
+    // the base rules only, since a grid declared inside a narrow block is already the override.
+    const fixed = [...baseCss.matchAll(/grid-template-columns:\s*(?<columns>[^;]+);/gu)].filter((found) => {
+      const columns = found.groups?.columns ?? "";
+      return !columns.includes("repeat(auto-fit") && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
+    });
+
+    expect(fixed.length, "the shell and the inbox are the fixed grids this product has").toBe(2);
+    for (const found of fixed) {
+      const owner = selectorOwning(baseCss, found.index);
+      expect(narrow, `${owner} has fixed columns (${(found.groups?.columns ?? "").trim()}) and must be overridden on a phone`).toContain(owner);
+    }
   });
 
   it("keeps a way back to the list on a phone, where the list is a separate screen", () => {
@@ -128,11 +266,45 @@ describe("the supported widths", () => {
     expect(rules).toContain(".inbox-back");
   });
 
-  it("lets a wide table scroll rather than overflow the page", () => {
-    // The analytics and audit surfaces are tables with five and six columns. At 375px a table cannot
-    // reflow, so it has to be allowed to scroll inside its panel — otherwise it pushes the whole
-    // document sideways and every other surface goes with it.
-    expect(css).toMatch(/overflow-x:\s*auto/);
+  it("gives each table its own way to survive a phone, named one by one", () => {
+    const narrow = rulesAt(375);
+
+    for (const { container, treatment, what } of TABLE_SURFACES) {
+      expect(css, `${container} must be styled at all`).toContain(container);
+
+      if (treatment === "scrolls") {
+        expect(declarationsFor(container), `${container} must be the scroll boundary — ${what}`).toMatch(
+          /overflow-x:\s*auto/u,
+        );
+        continue;
+      }
+
+      // Reflow: the element itself stops being a table below the breakpoint, so there is nothing left to
+      // overflow. Asked of the container's own rule — a selector list that merely mentions its name while
+      // styling the cells leaves the table box intact, and the cards break while the name is still there.
+      expect(declarationsFor(container, narrow), `${container} must stop being a table on a phone — ${what}`).toMatch(
+        /display:\s*(?:block|grid|flex)/u,
+      );
+    }
+  });
+
+  it("labels every cell of a lead card with its own column name", () => {
+    const narrow = rulesAt(375);
+    const board = readFileSync(path.join(srcRoot, "ui/leads/lead-board.tsx"), "utf8");
+
+    // The cards read their labels out of the markup. Nothing type-checks that join: drop the attribute
+    // and the stylesheet renders empty labels, drop the rule and the values lose their names.
+    expect(narrow, "the cards take their labels from the markup").toMatch(/content:\s*attr\(data-label\)/u);
+
+    // Each label is the header's own message key, so a translated table stays translated as cards.
+    for (const key of ["tableHeadStage", "tableHeadOwner", "tableHeadNext", "tableHeadUpdated"]) {
+      expect(board, `leads.${key} must label its cell`).toContain(`data-label={t.t("leads.${key}")}`);
+    }
+
+    // One label per column, less the row header: that one is the card's title and names itself.
+    const headers = [...board.matchAll(/<th scope="col">/gu)].length;
+    const labelled = [...board.matchAll(/data-label=/gu)].length;
+    expect(labelled, `${String(headers)} columns, so ${String(headers - 1)} cells need a label`).toBe(headers - 1);
   });
 
   it("names its own tested widths, so the spec cannot drift from the test", () => {

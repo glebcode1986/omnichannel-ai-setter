@@ -154,10 +154,12 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
               <th scope="row">
                 <Link href={`${basePath}/inbox/${lead.conversationId}`}>{lead.contactName ?? lead.handle}</Link>
               </th>
-              <td data-stage={lead.stage}>{labelOf(lead.stage)}</td>
-              <td>{lead.assignedUserName ?? t.t("leads.unassigned")}</td>
-              <td>{lead.nextAction ?? ""}</td>
-              <td>
+              <td data-label={t.t("leads.tableHeadStage")} data-stage={lead.stage}>
+                {labelOf(lead.stage)}
+              </td>
+              <td data-label={t.t("leads.tableHeadOwner")}>{lead.assignedUserName ?? t.t("leads.unassigned")}</td>
+              <td data-label={t.t("leads.tableHeadNext")}>{lead.nextAction ?? ""}</td>
+              <td data-label={t.t("leads.tableHeadUpdated")}>
                 <time dateTime={lead.lastMessageAt.toISOString()}>{t.date(lead.lastMessageAt, { dateStyle: "short", timeStyle: "short" })}</time>
               </td>
             </tr>

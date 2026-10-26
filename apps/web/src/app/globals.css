@@ -1407,6 +1407,67 @@ details[open] > summary::before {
   border-bottom: 1px solid var(--border);
 }
 
+/*
+ * Below the board the table is the only view of a lead, and at 375px its five columns are 131px wider
+ * than the screen: the page itself scrolls sideways, which is the loss the comment above set out to
+ * prevent and did not. So the row stops being a row. Each lead becomes a card, and each cell carries
+ * its own column name — read from data-label, which the cell fills from the same message key the
+ * header uses, so a translated table stays translated here.
+ */
+@media (max-width: 720px) {
+  .lead-table,
+  .lead-table caption,
+  .lead-table thead,
+  .lead-table tbody,
+  .lead-table tr,
+  .lead-table th,
+  .lead-table td {
+    display: block;
+  }
+
+  /* The header row survives for screen readers; on screen the cards carry the names instead. */
+  .lead-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .lead-table tr {
+    margin-bottom: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+  }
+
+  .lead-table tbody th[scope="row"] {
+    padding: 0 0 var(--space-2);
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-m);
+  }
+
+  .lead-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+    gap: var(--space-2);
+    padding: var(--space-2) 0 0;
+    border-bottom: 0;
+  }
+
+  .lead-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+  }
+
+  /* A lead with no next action should not spend a line of the card saying so. */
+  .lead-table td:empty {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
   .lead-board {
     display: none;
@@ -1476,6 +1537,15 @@ details[open] > summary::before {
   border-collapse: collapse;
   margin: 8px 0;
   font-size: 14px;
+}
+
+/*
+ * The stage editor is a grid of inputs and order controls, so it does not become cards the way the
+ * lead table does: it keeps its shape and scrolls inside its own panel, like the metric and audit
+ * panels, rather than letting its widest row decide the width of the page.
+ */
+.stage-config {
+  overflow-x: auto;
 }
 
 .stage-config th,
