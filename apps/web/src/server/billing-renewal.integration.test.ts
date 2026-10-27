@@ -101,7 +101,13 @@ describe.skipIf(!databaseTestsEnabled())("asking the provider to stop renewing",
   const register = (withRenewal: boolean) => {
     registerBillingProvider({
       provider: PROVIDER,
-      verify: (delivery: { readonly body: string }) => ({ kind: "EVENT", event: JSON.parse(delivery.body) as never }),
+      // A real adapter parses a payload and hands back `Date` objects; this one used to hand back the
+      // strings `JSON.parse` produced, and `as never` hid it. The port refuses that now, so the fixture
+      // tells the truth instead of being excused by a cast.
+      verify: (delivery: { readonly body: string }) => {
+        const payload = JSON.parse(delivery.body) as { readonly occurredAt: string } & Record<string, unknown>;
+        return { kind: "EVENT", event: { ...payload, occurredAt: new Date(payload.occurredAt) } as never };
+      },
       ...(withRenewal
         ? {
             setRenewal: async (request: { readonly routeCode: string; readonly providerReference: string; readonly renew: boolean }) => {
@@ -139,6 +145,9 @@ describe.skipIf(!databaseTestsEnabled())("asking the provider to stop renewing",
       locale: "en",
       acceptedDocumentIds: offer.documents.filter((document) => document.requiredForCheckout).map((document) => document.legalDocumentId),
       offeredDocumentIds: offer.documents.map((document) => document.legalDocumentId),
+      // The digest of the offer this fixture was actually shown. Required since #103: a submission that
+      // does not carry it is a submission against an offer nobody displayed.
+      offeredDigest: offer.offerDigest,
     });
     if (!opened.available) {
       throw new Error(`the fixture could not open a checkout: ${opened.reason}`);

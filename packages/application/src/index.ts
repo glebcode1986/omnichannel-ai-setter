@@ -12,6 +12,7 @@ export {
   billingProviderRegistered,
   clearBillingProviders,
   isMintedBillingEvent,
+  snapshotMintedBillingEvent,
   openProviderCheckout,
   openProviderManagementSession,
   reconcileProviderState,
@@ -64,6 +65,7 @@ export { isEligibleForInboundDebounce, nextDeliveryStatus, outboxRetryDelayMs, s
 export {
   draftGenerationBlockers,
   generateDraft,
+  followUpGenerationKey,
   generationKey,
   type DraftGenerationCommand,
   type DraftGenerationDependencies,

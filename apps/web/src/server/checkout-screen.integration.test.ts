@@ -26,7 +26,7 @@ import {
 import { publishAcceptedCatalog } from "@omnichannel/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { acceptedDocumentIdsFrom, offeredDocumentIdsFrom } from "./checkout-form";
+import { acceptedDocumentIdsFrom, offeredDigestFrom, offeredDocumentIdsFrom } from "./checkout-form";
 import { assembleCheckoutScreen, CHECKOUT_REFUSAL_MESSAGES } from "./checkout-screen";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createPaidWorkspace } from "./testing/paid-workspace";
@@ -115,12 +115,15 @@ describe.skipIf(!databaseTestsEnabled())("the checkout acceptance step", () => {
   ) => assembleCheckoutScreen(db(), who, query, BASE, locale, NOW);
 
   /** The form a person would actually submit: every required box ticked, and the offered set declared. */
-  const submission = (ids: readonly string[]): FormData => {
+  const submission = (ids: readonly string[], offerDigest = ""): FormData => {
     const form = new FormData();
     for (const id of ids) {
       form.append("accept", id);
       form.append("offered", id);
     }
+    // The page's hidden `offer` field. Carried through the FormData rather than passed beside it, because
+    // the point of these cases is that what the server enforces is read from what a submission contained.
+    form.append("offer", offerDigest);
     return form;
   };
 
@@ -196,6 +199,7 @@ describe.skipIf(!databaseTestsEnabled())("the checkout acceptance step", () => {
       for (const id of ids) {
         form.append("offered", id);
       }
+      form.append("offer", data.offer?.offerDigest ?? "");
 
       const refused = await openCheckoutContract(db(), made.owner, {
         planVersionId: growthPlanVersionId,
@@ -205,6 +209,7 @@ describe.skipIf(!databaseTestsEnabled())("the checkout acceptance step", () => {
         locale: "en",
         acceptedDocumentIds: acceptedDocumentIdsFrom(form),
         offeredDocumentIds: offeredDocumentIdsFrom(form),
+        offeredDigest: offeredDigestFrom(form),
         at: NOW,
       });
 
@@ -224,8 +229,9 @@ describe.skipIf(!databaseTestsEnabled())("the checkout acceptance step", () => {
         arrangement: "RECURRING",
         currency: "EUR",
         locale: "ru",
-        acceptedDocumentIds: acceptedDocumentIdsFrom(submission(ids)),
-        offeredDocumentIds: offeredDocumentIdsFrom(submission(ids)),
+        acceptedDocumentIds: acceptedDocumentIdsFrom(submission(ids, data.offer?.offerDigest)),
+        offeredDocumentIds: offeredDocumentIdsFrom(submission(ids, data.offer?.offerDigest)),
+        offeredDigest: offeredDigestFrom(submission(ids, data.offer?.offerDigest)),
         at: NOW,
       });
 
@@ -262,7 +268,8 @@ describe.skipIf(!databaseTestsEnabled())("the checkout acceptance step", () => {
           arrangement: "RECURRING",
           currency: "EUR",
           locale: "en",
-          acceptedDocumentIds: acceptedDocumentIdsFrom(submission(ids)),
+          acceptedDocumentIds: acceptedDocumentIdsFrom(submission(ids, data.offer?.offerDigest)),
+          offeredDigest: offeredDigestFrom(submission(ids, data.offer?.offerDigest)),
           at: NOW,
         }),
       ).rejects.toThrow(/open a checkout/u);

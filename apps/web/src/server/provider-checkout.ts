@@ -78,8 +78,12 @@ export async function requestProviderCheckout(input: ProviderCheckoutRequestInpu
     // The contract id, which is what comes back on the settlement and the only thing tying it to a
     // customer. Opaque and workspace-scoped: it names nothing about the person.
     clientReference: input.checkoutContractId,
-    successUrl: absolute(input.returnBaseUrl, `${input.returnPath}?outcome=CHECKOUT_RETURNED`),
-    cancelUrl: absolute(input.returnBaseUrl, `${input.returnPath}?outcome=CHECKOUT_ABANDONED`),
+    // `checkout`, not `outcome`, and these two words: this is the parameter the billing page reads
+    // (`billing-screen.ts`), and it accepts exactly "success" and "cancelled". These URLs used to say
+    // `?outcome=CHECKOUT_RETURNED`, which no reader in the product matches — a customer who paid, and a
+    // customer who backed out, both came back to a page that said nothing had happened.
+    successUrl: absolute(input.returnBaseUrl, `${input.returnPath}?checkout=success`),
+    cancelUrl: absolute(input.returnBaseUrl, `${input.returnPath}?checkout=cancelled`),
   });
   if (handoff === null) {
     return undefined;

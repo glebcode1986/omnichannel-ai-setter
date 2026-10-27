@@ -267,10 +267,20 @@ export async function setRolloutAutopilot(
     if (profile.rolloutAutopilot === input.enabled) {
       return { changed: false };
     }
-    await tx.businessProfile.update({
-      where: { workspaceId_id: { workspaceId: input.workspaceId, id: input.businessProfileId } },
+    // The transition is the predicate, and its count decides — the same correction `liftKillSwitch` and
+    // `revokeSupportAccessSession` took on #102, and the same defect: the read above cannot settle this.
+    // Two operators adding the same profile both see `false`, both pass the check, and an unconditional
+    // `update` lets both report a transition and file an audit row for it, when only one `false -> true`
+    // ever happened. The flag ends up right either way; the record does not.
+    const { count } = await tx.businessProfile.updateMany({
+      where: { workspaceId: input.workspaceId, id: input.businessProfileId, rolloutAutopilot: !input.enabled },
       data: { rolloutAutopilot: input.enabled },
     });
+    if (count === 0) {
+      // Somebody else made this exact transition between the read and the write. Same answer as finding
+      // it already in the wanted state, and deliberately no transition event: there was no transition.
+      return { changed: false };
+    }
     await recordPlatformAuditEvent(tx, context, {
       kind: "ROLLOUT_ALLOWLIST_CHANGED",
       subjectType: "BusinessProfile",
@@ -478,9 +488,37 @@ export type ReleaseInForce =
   | { readonly kind: "INDETERMINATE"; readonly examined: number };
 
 export async function readReleaseInForce(db: DbExecutor, at: Date, limit = ROLLOUT_WINDOW): Promise<ReleaseInForce> {
+  return readCatalogue(db, at, limit);
+}
+
+/**
+ * The catalogue as this transaction can see it **now**, with no as-of bound (#60).
+ *
+ * Astra's P1 on PR #103, and the point is the interaction between two correct pieces. The send claim
+ * takes `pg_advisory_xact_lock_shared` on the release-catalogue key precisely because the candidate that
+ * would change its answer may not exist yet when the claim starts — a row lock cannot cover a row nobody
+ * has written. It then re-resolved the catalogue with `readReleaseInForce(tx, claimedAt)`, and
+ * `claimedAt` is captured by the coordinator *before* the claim transaction begins. So a restrictive
+ * release, or a `CHANGES_REQUESTED` review, committed while this claim was waiting for that key was
+ * excluded by `createdAt <= claimedAt` — the lock was acquired and the query then hid the writer it had
+ * been taken for.
+ *
+ * Taking a lock does not repair a query that excludes the winning writer. The guarded read on the send
+ * path therefore uses this reader: it sees what is committed once the key is held, so a stage or verdict
+ * that landed during the wait makes the claim disagree with the guard and return `STATE_CHANGED`.
+ *
+ * `readReleaseInForce` keeps the as-of bound and keeps its callers: a console showing what was in force
+ * at an instant, and `readRolloutAccess` resolving the facts a decision is being judged from. Those are
+ * deliberately as-of. This one is deliberately not.
+ */
+export async function readReleaseInForceNow(db: DbExecutor, limit = ROLLOUT_WINDOW): Promise<ReleaseInForce> {
+  return readCatalogue(db, undefined, limit);
+}
+
+async function readCatalogue(db: DbExecutor, at: Date | undefined, limit: number): Promise<ReleaseInForce> {
   const window = Math.min(Math.max(Math.trunc(limit), 1), 100);
   const rows = await db.releaseRecord.findMany({
-    where: { createdAt: { lte: at } },
+    where: at === undefined ? {} : { createdAt: { lte: at } },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: window,
     // Narrow on purpose: this runs on the send path, inside the claim transaction, with the Business
@@ -497,7 +535,12 @@ export async function readReleaseInForce(db: DbExecutor, at: Date, limit = ROLLO
     return { kind: "NONE" };
   }
   const reviews = await db.releaseReview.findMany({
-    where: { reviewedSha: { in: [...new Set(rows.map((row) => row.sha))] }, submittedAt: { lte: at } },
+    // `submittedAt` only ever arrives through the spread, so it cannot collide with a key already in
+    // this literal — the duplicate-key shape that cost `listKillSwitches` its expiry predicate.
+    where: {
+      reviewedSha: { in: [...new Set(rows.map((row) => row.sha))] },
+      ...(at === undefined ? {} : { submittedAt: { lte: at } }),
+    },
     select: { reviewer: true, verdict: true, reviewedSha: true, submittedAt: true },
   });
   for (const row of rows) {

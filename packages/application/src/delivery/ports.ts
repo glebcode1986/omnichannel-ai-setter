@@ -83,6 +83,20 @@ export interface DeliverySendContext {
   /** The customer's own last message: where a provider's messaging window starts counting. */
   readonly lastInboundAt?: Date;
   /**
+   * True when this send answers nothing — it was planned, not prompted (a follow-up chasing a silence, #55).
+   *
+   * The provider's automated-response budget is a rule about answering a person *promptly*, and it is
+   * measured from their message. A proactive send has no such message: the customer's last one is hours or
+   * days old by design, so a budget measured from it is always already spent, and applying it would hold
+   * every follow-up for a person instead of sending it. The standard messaging window is unaffected and is
+   * still measured from `lastInboundAt` — that is the provider rule which actually governs a proactive
+   * send, and a follow-up outside the window is refused by it exactly as any other send would be.
+   *
+   * Absent means "this answers the customer", which is the safe default: a send that forgets to declare
+   * itself proactive keeps the deadline and is held, rather than quietly losing a provider rule.
+   */
+  readonly proactive?: boolean;
+  /**
    * On whose authority this send would go out, read from the row the approval was recorded on.
    *
    * Here rather than on the command, because an authority is something that was *granted*. A background job

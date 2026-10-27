@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { acceptedDocumentIdsFrom, field, offeredDocumentIdsFrom } from "./checkout-form";
+import { acceptedDocumentIdsFrom, field, offeredDigestFrom, offeredDocumentIdsFrom } from "./checkout-form";
 
 const form = (entries: readonly [string, string][]): FormData => {
   const data = new FormData();
@@ -39,6 +39,24 @@ describe("reading the accepted documents", () => {
 
     // A clean set, so a refusal the store reports names something real rather than an empty string.
     expect(acceptedDocumentIdsFrom(data)).toEqual(["doc-1", "doc-2"]);
+  });
+});
+
+describe("reading the displayed offer", () => {
+  it("is the empty string when the field is absent, which is a value that cannot match", () => {
+    // Not `undefined`. The store *requires* this value, so an absent field has to arrive as something no
+    // digest can equal rather than as something that skips the comparison — otherwise the client the
+    // check exists to distrust could disable it by leaving the field out.
+    expect(offeredDigestFrom(form([]))).toBe("");
+    expect(offeredDigestFrom(form([["offer", "   "]]))).toBe("");
+    expect(offeredDigestFrom(form([["offer", " abc123 "]]))).toBe("abc123");
+  });
+
+  it("is the empty string for anything that is not a string", () => {
+    const data = form([]);
+    data.append("offer", new Blob(["x"]));
+
+    expect(offeredDigestFrom(data)).toBe("");
   });
 });
 

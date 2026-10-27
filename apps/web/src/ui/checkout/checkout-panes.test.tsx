@@ -48,6 +48,10 @@ const offer = (overrides: Partial<CheckoutOffer> = {}): CheckoutOffer => ({
   base: { amountMinor: 4_900, currency: "EUR" },
   documents: [document_()],
   viewerLocale: "en",
+  // The opaque identity of the displayed commercial terms (#47). A placeholder here on purpose: these
+  // cases are about what the panes *render*, and the value is only ever compared by the store. The case
+  // that proves the binding works is the GET-to-POST regression in `billing-routing.integration`.
+  offerDigest: "offer-digest-fixture",
   checkoutReady: true,
   ...overrides,
 });

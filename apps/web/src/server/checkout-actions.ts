@@ -29,7 +29,7 @@ import { revalidatePath } from "next/cache";
 import { loadWebEnv } from "../env";
 import { requestLocale } from "@/i18n/request-locale";
 import { ensureBillingAdapters } from "./billing-adapters";
-import { acceptedDocumentIdsFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
+import { acceptedDocumentIdsFrom, offeredDigestFrom, offeredDocumentIdsFrom, field } from "./checkout-form";
 import { checkoutSelectionFrom } from "./checkout-screen";
 import { getDb } from "./db";
 import { getLogger } from "./logger";
@@ -90,6 +90,16 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
   const selection = checkoutSelectionFrom({ plan: field(formData, "plan"), interval: field(formData, "interval") });
   const locale = await requestLocale();
 
+  /*
+   * Nothing inside the `try` may redirect, and that is the whole shape of this function.
+   *
+   * `finish` ends in `redirect()`, which does not return a value — it throws, and the `catch` below used
+   * to catch that throw. So a store refusal reached `finish(target, "TERMS_NOT_ACCEPTED")`, the redirect
+   * threw, the catch treated it as a failed hand-off, and the customer was told the provider could not be
+   * reached. Every refusal this action can report was reported as the one thing it was not. The refusal
+   * is therefore decided here and acted on after the `try`, where no catch of ours can see it.
+   */
+  let refusal: CheckoutOutcome | undefined;
   let handoff: Awaited<ReturnType<typeof requestProviderCheckout>>;
   try {
     const opened = await openCheckoutContract(getDb(), context, {
@@ -97,27 +107,34 @@ export async function acceptTermsAndOpenCheckoutAction(target: CheckoutTarget, f
       locale,
       acceptedDocumentIds: acceptedDocumentIdsFrom(formData),
       offeredDocumentIds: offeredDocumentIdsFrom(formData),
+      offeredDigest: offeredDigestFrom(formData),
     });
-    if (!opened.available) {
-      finish(target, outcomeOf(opened.reason));
+    if (opened.available) {
+      handoff = await requestProviderCheckout({
+        db: getDb(),
+        logger: getLogger(),
+        checkoutContractId: opened.checkoutContractId,
+        returnBaseUrl: loadWebEnv().BILLING_RETURN_BASE_URL,
+        returnPath: billingPath(target),
+        ensureAdapters: ensureBillingAdapters,
+      });
+    } else {
+      refusal = outcomeOf(opened.reason);
     }
-    handoff = await requestProviderCheckout({
-      db: getDb(),
-      logger: getLogger(),
-      checkoutContractId: opened.checkoutContractId,
-      returnBaseUrl: loadWebEnv().BILLING_RETURN_BASE_URL,
-      returnPath: billingPath(target),
-      ensureAdapters: ensureBillingAdapters,
-    });
   } catch (error) {
     if (error instanceof WorkspacePermissionError) {
-      finish(target, "REFUSED");
+      refusal = "REFUSED";
+    } else {
+      // The contract committed and the provider could not be reached. Said as its own outcome rather than
+      // as a failure: the acceptance is recorded, nothing was charged, and pressing the button again opens
+      // a session against the same contract — which is why the idempotency key is the contract's id.
+      getLogger().error("billing.checkout_handoff_failed", { errorName: error instanceof Error ? error.name : typeof error });
+      refusal = "PROVIDER_UNREACHABLE";
     }
-    // The contract committed and the provider could not be reached. Said as its own outcome rather than
-    // as a failure: the acceptance is recorded, nothing was charged, and pressing the button again opens
-    // a session against the same contract — which is why the idempotency key is the contract's id.
-    getLogger().error("billing.checkout_handoff_failed", { errorName: error instanceof Error ? error.name : typeof error });
-    finish(target, "PROVIDER_UNREACHABLE");
+  }
+
+  if (refusal !== undefined) {
+    finish(target, refusal);
   }
 
   if (handoff === undefined) {

@@ -14,6 +14,7 @@ import {
 import type { DbClient, DbExecutor } from "../client";
 import { DbInputError, PlanLimitError, rethrowAsTenantNotFound, WorkspacePermissionError } from "../errors";
 import { readEntitlement } from "../entitlement-store";
+import { profileDefaultPolicyWrite } from "../policy-store";
 import {
   authorizedBusinessProfileFilter,
   requireRole,
@@ -90,9 +91,21 @@ export async function listWorkspacesForUser(db: DbExecutor, userId: string): Pro
 }
 
 /**
- * Creates a Business Profile (status SETUP). Allowed for OWNER and for an ADMIN whose scope is ALL, because
- * a new profile is automatically visible to every ALL-scoped member. Provisional rule until team/billing
- * tasks define profile-slot permissions.
+ * Creates a Business Profile (status SETUP) together with its automation settings. Allowed for OWNER and
+ * for an ADMIN whose scope is ALL, because a new profile is automatically visible to every ALL-scoped
+ * member. Provisional rule until team/billing tasks define profile-slot permissions.
+ *
+ * The automation default is created **in the same statement**, and that is not a convenience. Settings are
+ * read by Business Profile and there is no "no settings" state anywhere above this line: the owner's
+ * settings screen renders the stored policy, so a profile without one renders no form, offers no first
+ * save, and leaves automation at OFF with no way to change it — a profile that exists, is listed, accepts a
+ * channel account and cannot be configured. Prisma writes a nested create inside the profile's own
+ * transaction, so the two rows arrive together or neither does, and nothing in between is observable.
+ *
+ * Not a separate call afterwards, for the same reason: two statements can be interrupted between them, and
+ * the thing left behind is exactly the half-made profile described above. Not lazily, on first read,
+ * either — reading settings is permitted to any member who may see the profile, writing them is OWNER/ADMIN
+ * only, and an initialization hidden inside a read would have to break that boundary to work.
  */
 export async function createBusinessProfile(
   db: DbClient,
@@ -119,7 +132,11 @@ export async function createBusinessProfile(
   // serialization this comment promised was therefore a no-op unless a caller happened to already be in
   // a transaction, and nothing said one had to be. `addWorkspaceMember` takes a `DbClient` and opens one
   // for the identical count-then-insert on seats; this now matches it, and
-  // `entitlements.integration.test.ts` pins the lock lifetime the argument rests on.
+  // `entitlements.integration.test.ts` pins the PostgreSQL fact this argument rests on — an advisory
+  // lock taken under autocommit is gone by the next statement, one taken inside a transaction
+  // survives it. It does **not** call this function, so deleting the `serializeCapacity` line below
+  // fails no test today; measured, not assumed. What would close that is an observer reading
+  // `pg_locks` while this transaction's count-and-insert runs.
   //
   // A workspace with no subscription has no stated ceiling and may therefore create its first Business
   // Profile. Creating one does not start the trial — connecting it to a channel does, in
@@ -137,7 +154,15 @@ export async function createBusinessProfile(
     }
 
     const profile = await tx.businessProfile.create({
-      data: { workspaceId, name: normalizeName("name", input.name) },
+      data: {
+        workspaceId,
+        name: normalizeName("name", input.name),
+        // `channelAccountId` left absent: this is the profile default, the policy every channel
+        // account of the profile inherits until one is given an override of its own. The capacity
+        // check above and this nested write are now in one transaction, so a profile cannot exist
+        // without the policy it is born with.
+        automationPolicies: { create: profileDefaultPolicyWrite() },
+      },
       select: { id: true, name: true, status: true },
     });
     return { businessProfileId: toBusinessProfileId(profile.id), name: profile.name, status: profile.status };

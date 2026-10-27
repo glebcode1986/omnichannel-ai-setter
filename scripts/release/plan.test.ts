@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { RELEASE_GATES, releaseDecision } from "../../packages/domain/src/release";
-import { automatedCoverageFor, GATE_EVIDENCE } from "./evidence";
+import { GATE_EVIDENCE } from "./evidence";
 import { commandForSuite, planGateResults } from "./plan";
 
 /** Every command any gate's suites are run by, all succeeding. */
@@ -48,24 +48,29 @@ describe("a planner that has run nothing", () => {
 
   it("omits every gate that has suites, so the decision refuses the release", () => {
     const plan = planGateResults({ commands: [] });
-    const withSuites = RELEASE_GATES.filter((gate) => automatedCoverageFor(gate.id)).map((gate) => gate.id);
 
-    expect(plan.omitted.toSorted()).toEqual(withSuites.toSorted());
+    // Every gate, now — not only the ones with suites. A gate whose table entry merely *describes* what
+    // is outstanding used to settle itself as an admitted limitation; it is unevaluated until a person
+    // writes a verdict for it.
+    expect(plan.omitted.toSorted()).toEqual(RELEASE_GATES.map((gate) => gate.id).toSorted());
     const decision = releaseDecision(plan.results);
     expect(decision.releasable).toBe(false);
     expect(decision.blockers.every((blocker) => blocker.refusal === "GATE_NOT_EVALUATED")).toBe(true);
   });
 
-  it("still admits the gates nothing automated can settle, bounded by their own stated reason", () => {
-    // The one automatic verdict, and it is the opposite kind from a pass. Each carries the admission from
-    // the evidence table as its note, which is what `LAUNCH_READINESS.md` means by a limitation that is
-    // "explicit, bounded and safe" — and a KNOWN_LIMITATION without a note is a blocker, so an empty
-    // admission could not slip through.
+  it("admits nothing on its own, because a note about outstanding work is not somebody accepting it", () => {
+    // This case used to assert the opposite, and the assertion was the defect (Astra's P1 on #103). The
+    // evidence table's `manual` text says what is *not* settled — "no staging environment exists",
+    // "`pnpm evals` is not run by CI", "all seven alerts are unevidenced" — and reading it as the verdict
+    // on itself meant the repository's own description of unfinished work admitted that work as a bounded,
+    // accepted limitation, with nobody having judged the gap. `LAUNCH_READINESS` asks for limitations that
+    // are explicit, bounded **and safe**; only a person can supply the last one.
     const plan = planGateResults({ commands: [] });
-    const admitted = plan.results.filter((result) => result.severity === "KNOWN_LIMITATION");
 
-    expect(admitted.map((result) => result.gateId).toSorted()).toEqual(["BOOKING", "OBSERVABILITY", "STAGING"]);
-    expect(admitted.every((result) => (result.note ?? "").trim() !== "")).toBe(true);
+    expect(plan.results.filter((result) => result.severity === "KNOWN_LIMITATION")).toEqual([]);
+    for (const gateId of ["STAGING", "AI_REGRESSION", "OBSERVABILITY"]) {
+      expect(plan.omitted, `${gateId} must be unevaluated until somebody judges it`).toContain(gateId);
+    }
   });
 });
 
@@ -84,21 +89,53 @@ describe("a planner given a full, passing run", () => {
     // browser, and observing a full cycle with every dashboard closed needs a deployment. A planner that
     // reported PASS here would be claiming the deployment was observed.
     const plan = planGateResults({ commands: everythingPassed });
-    const headless = plan.results.find((result) => result.gateId === "AUTOPILOT_HEADLESS");
 
-    expect(headless?.severity).toBe("KNOWN_LIMITATION");
-    expect(headless?.note).toContain("needs a deployment");
+    // And it does not quietly file it as an accepted limitation either: the suites passing says nothing
+    // about the thing the table says they do not cover, so the gate waits for a written verdict.
+    expect(plan.results.find((result) => result.gateId === "AUTOPILOT_HEADLESS")).toBeUndefined();
+    expect(plan.omitted).toContain("AUTOPILOT_HEADLESS");
+    expect(GATE_EVIDENCE["AUTOPILOT_HEADLESS"]?.manual ?? "").toContain("needs a deployment");
   });
 
-  it("still cannot make the release approvable on its own, because §2 and §14 have nothing to run", () => {
-    // Everything green and the decision is a releasable candidate carrying three admitted limitations.
-    // That is the honest state of this repository, and it is what a release record should say.
+  it("cannot make a release approvable on its own, however green every command was", () => {
+    // The case the whole finding is about, and the one a Commercial Beta would have walked through: three
+    // successful commands, no written verdict anywhere, and the planner used to answer `releasable: true`
+    // with AUTOPILOT enabled — while the staging gate's own note said no staging environment exists and
+    // the AI evaluation gate's note said the golden-case suite is never run by CI.
     const plan = planGateResults({ commands: everythingPassed });
     const decision = releaseDecision(plan.results);
 
-    expect(plan.omitted).toEqual([]);
-    expect(decision.releasable).toBe(true);
-    expect(decision.knownLimitations.map((limitation) => limitation.gateId)).toContain("STAGING");
+    expect(decision.releasable).toBe(false);
+    expect(decision.disabledCapabilities).toEqual([]);
+    for (const gateId of ["STAGING", "AI_REGRESSION", "OBSERVABILITY"]) {
+      expect(plan.omitted).toContain(gateId);
+      expect(decision.blockers.map((blocker) => blocker.gateId)).toContain(gateId);
+    }
+    expect(decision.blockers.filter((blocker) => blocker.gateId === "STAGING")[0]?.refusal).toBe("GATE_NOT_EVALUATED");
+  });
+
+  it("lets a person accept what they have judged, and switches off what their judgement did not cover", () => {
+    // The other half, and the reason the gate above is a refusal rather than a wall: a written verdict is
+    // how somebody records that they looked. `STAGING` guards the release itself, so accepting it has to
+    // be a bounded limitation; `AI_REGRESSION` and `OBSERVABILITY` guard capabilities, so the honest
+    // verdict for evidence nobody has is `HIGH` — which **disables** them rather than permitting them.
+    const plan = planGateResults({
+      commands: everythingPassed,
+      written: {
+        STAGING: { severity: "KNOWN_LIMITATION", evidence: "operator stood up staging and recorded the run", note: "bounded: smoke only, no provider credentials" },
+        AI_REGRESSION: { severity: "HIGH", evidence: "`pnpm evals` was not run for this candidate" },
+        OBSERVABILITY: { severity: "HIGH", evidence: "no alerting integration and no runbooks yet" },
+      },
+    });
+    const decision = releaseDecision(plan.results);
+
+    for (const gateId of ["STAGING", "AI_REGRESSION", "OBSERVABILITY"]) {
+      expect(plan.omitted).not.toContain(gateId);
+    }
+    // Unattended sending is off because nobody evidenced the AI gate — the outcome the finding demands,
+    // and the opposite of what a free-text note used to buy.
+    expect(decision.disabledCapabilities).toContain("AUTOPILOT");
+    expect(decision.disabledCapabilities).toContain("OPERATOR_VISIBILITY");
   });
 });
 

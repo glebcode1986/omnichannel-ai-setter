@@ -53,7 +53,11 @@ const OUTCOMES = [
   "ACCEPTED",
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
+  "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // Produced by `checkout-actions.ts` when the hand-off itself failed. Unregistered until now, so the
+  // one path where the contract stands and the customer was handed nowhere rendered no notice at all.
+  "PROVIDER_UNREACHABLE",
   // The internal console's own outcomes (#59). An operator reads these as closely as a customer reads
   // theirs, and more carefully: the refusals say whether a role is missing or a request was impossible.
   "PAUSED",
@@ -74,6 +78,21 @@ const OUTCOMES = [
   "MOVED",
   "STALE_STAGE",
   "UNCHANGED_STAGE",
+  // Settings answer two refusals of their own: a role that may not change them, and a field too long to
+  // travel back in a refused proposal. Both are refusals, and both have to survive a reload — a person
+  // who was silently not allowed to save reads the screen as a screen that does nothing.
+  "FORBIDDEN",
+  "TOO_LONG",
+  // Custom timing, refused three ways rather than one. "Incomplete", "out of range" and "the wrong way
+  // round" send a person to different fields, and an invalid Custom submission used to be reported as a
+  // success with the previous ranges silently kept.
+  "TIMING_INCOMPLETE",
+  "TIMING_OUT_OF_RANGE",
+  "TIMING_REVERSED",
+  // The takeover pause is the fifth number on the same form and gets the same treatment, because a
+  // cleared box used to be read as "leave it alone" and report a success about something else.
+  "TAKEOVER_INCOMPLETE",
+  "TAKEOVER_OUT_OF_RANGE",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
@@ -95,11 +114,26 @@ const REFUSALS = new Set<string>([
   // because the tone is what stops them trying again and again.
   "TERMS_NOT_ACCEPTED",
   "TERMS_CHANGED",
+  "OFFER_CHANGED",
   "CHECKOUT_UNAVAILABLE",
+  // A fourth, and the one that was produced and rendered nowhere: the contract is written, nothing was
+  // charged, and the customer was handed to no provider. A refusal in tone for the same reason as the
+  // three above — the button did not do what it offered.
+  "PROVIDER_UNREACHABLE",
   // An operator who pressed a control and did not get it. `ALREADY_LIFTED` and `ALREADY_REVOKED` are not
   // refusals: nothing was denied, the work was simply already done.
   "NOT_PERMITTED",
   "ADMIN_REFUSED",
+  // The settings, timing and takeover refusals the accepted predecessors brought. Both sides appended to
+  // this set and the names are disjoint, so the resolution is the union: a `Set` carries no order, and
+  // dropping either side's half would leave a refusal rendered as an ordinary outcome.
+  "FORBIDDEN",
+  "TOO_LONG",
+  "TIMING_INCOMPLETE",
+  "TIMING_OUT_OF_RANGE",
+  "TIMING_REVERSED",
+  "TAKEOVER_INCOMPLETE",
+  "TAKEOVER_OUT_OF_RANGE",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {
