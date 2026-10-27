@@ -1755,6 +1755,109 @@ What a later session has to know about this slice:
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
 
+## Phase 6 commercial chain and the 2026-10-14 corrections
+
+**Date:** 2026-10-14. Nothing is merged to `main` (`940c541`). The chain is two live segments: `#26…#82`
+and `#83 → #84 → #85 → #86 → #87 → #88…#105`, forked from an older #82, so a repository-wide fix needs
+both and branch order is not PR-number order. Measure the graph with `merge-base --is-ancestor`; never
+infer it.
+
+**#82 is blocked on the reviewer's environment, not on its code.** Astra confirmed the head
+`9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`, the exact-head readiness marker and a green run, then issued
+no verdict: its runner has no `TEST_DATABASE_URL`/`TEST_REDIS_URL` and no PostgreSQL, Redis, Docker or
+Podman, so it cannot perform the independent execution the review contract requires. Everything
+downstream waits behind that. Unblocking it is an owner/infrastructure action — either give that
+environment a container runtime or reachable PG17+pgvector and Redis 7 endpoints (`compose.yaml`,
+README §56, and the two variables; the role needs `CREATE DATABASE` because the harness makes a fresh
+database per run, and the `retrieval` migration needs `vector`), or decide that CI's own
+`infrastructure suites` job satisfies the contract. That job is not Claude's machine: it raises
+`pgvector/pgvector:pg17` and `redis:7-alpine` as service containers, and because `pnpm test:db` /
+`test:redis` / `test:e2e` export `REQUIRE_DB_TESTS=1` / `REQUIRE_REDIS_TESTS=1`, a missing variable is a
+hard error rather than a skip — a green run there cannot be a silent skip.
+
+### Two behaviour changes
+
+1. **A failed charge may only suspend the path the workspace is paying on** (#46, PR #100). `apply`'s
+   `SUSPEND` branch was the one entitlement effect that never looked at the arrangement; its three
+   siblings all guard. It read the subscription and wrote `GRACE` regardless of what the failure
+   concerned, so an old provider retrying a **superseded** subscription suspended the live paying path, an
+   event naming an arrangement the event's **route does not own** resolved to no arrangement while the
+   workspace still arrived from the contract, and the last failed charge after a cancellation at period
+   end overwrote `CANCELED_PENDING_END` with `GRACE` — taking away a paid term *and* losing the date
+   saying when it ended. Guarded now; dropping any one of the three clauses fails exactly one test.
+
+2. **The Business Profile capacity lock now holds for the work it protects** (#40, PR #97).
+   `createBusinessProfile` took a `DbExecutor` — a type that deliberately omits `$transaction` — and
+   called `pg_advisory_xact_lock` on it. PostgreSQL releases an `xact` lock when its transaction ends, and
+   under autocommit that is the lock statement itself: asked directly, `pg_locks` reports **0** held
+   afterwards and **1** inside a transaction. The count-then-insert it was meant to serialize ran
+   unprotected. `addWorkspaceMember` always opened its own transaction, which is why seats never had it.
+   **A `DbExecutor` parameter is the tell: that type cannot hold an xact lock across anything.**
+
+   I could not write a test that fails on the unfixed code, and the commit says so. Two concurrent
+   creates in `Promise.all` passed with the lock deleted entirely, three runs out of three; a barrier
+   holding the key from another connection also passed against the defect, because an autocommit lock is
+   still acquired and still contended — it is merely released too early. Forcing the interleave needs a
+   client proxy that pauses between the count and the insert. The defect is argued from PostgreSQL's
+   behaviour and the type signature, and the added test pins that behaviour rather than the race.
+
+### Issue #44's scenario list
+
+Thirteen of sixteen are covered. Five were closed on 2026-10-13/14 and only the first of those was
+broken rather than merely untested: the suspension guard above; a reversal of an older term cannot revoke
+the term that replaced it (both `REFUNDED` and `CHARGEBACK`); all three accepted tiers bought through the
+real checkout from `publishAcceptedCatalog`; two concurrent settlements of one usage hold, where removing
+`FOR UPDATE` now fails exactly those cases; the `only` in `PRICING_PACKAGING.md` §142-148, which needed
+the fixture's plan corrected before the claim was expressible at all; and an entitlement revoked while a
+delayed AUTOPILOT reply waits, refused by the claim's final revalidation.
+
+Three remain, each waiting on something that is not code:
+
+- **recurring add-ons and one-time voice top-ups.** `grantUsageTopUp` and `setWorkspaceAddOn` have no
+  production caller and `addOnVersionId` appears nowhere outside `catalog-store.ts`, so the accepted
+  catalogue publishes and prices five add-ons that cannot be bought. §186-209 settles the *policy*, so
+  this is unimplemented spec rather than an open product question — but `CheckoutContract.planVersionId`
+  is not nullable and a settlement that grants an allowance instead of activating a subscription is a
+  fork in the billing core's semantics. **That needs an ADR, not improvisation.** The narrower open
+  questions are how a recurring add-on is represented at the provider and whether proration is attempted
+  on the first one at all (§201 says "where the provider supports reliable proration").
+- **downgrade over BP/seat capacity** — needs the owner's active-resource selection policy.
+- **the 3-day failed-renewal grace** — `paidWorkPermitted` declines to decide how `GRACE` ends while
+  `BILLING_ENTITLEMENTS.md` names three days. Both cannot be right.
+
+### Reported and deliberately not built
+
+- **Nothing in production creates a workspace or a Business Profile.** `createBusinessProfile` and
+  `createWorkspaceWithOwner` are not exported from `@omnichannel/db`, `db.businessProfile.create` appears
+  in exactly one place — inside the former — and nothing in `apps/web` creates either. `addWorkspaceMember`
+  has no production caller either. So §178's funnel (create account → connect first Business Profile →
+  trial → choose a plan) has no front door, and the capacity gates, the trial start and `readEntitlement`
+  are currently reachable only from tests. Read as not-yet-built rather than broken; it is the whole
+  sign-up surface and wants its own issue.
+- **The analytics tier limits are unenforced in both the catalogue and the code.**
+  `ANALYTICS_RETENTION_DAYS` (30/183/730) is declared, published per tier, asserted at publication and
+  localized for display, and read by nothing — no retention logic exists in `analytics-store.ts` or
+  `analytics-view.ts`, so a Starter workspace can query the 24 months Scale pays for. `ADVANCED_ANALYTICS`
+  is granted to all three tiers by `CORE_FEATURES` and its only reader is the billing screen's display
+  list, so §127's analytics-depth split exists nowhere. #34/#38 scope; §152 gives the durations without
+  saying whether an over-long range is clamped, refused, or clamped with an explanation.
+- **`reconcileProviderState` still has no periodic caller**, so the audit rows the best-effort
+  cancellation writes are for a person to read rather than for anything to repair.
+
+### Reading a verification run
+
+- **Judge CI by conclusion, then job duration, then the log.** The jobs API intermittently returns
+  `conclusion: success` with `steps: 0`, and 502s, while the run is complete and its log intact
+  (`gh run view --log` then labels every line `UNKNOWN STEP`). A refused job is `failure` + 0 steps +
+  ~3 s; a real one with missing metadata is `success` + 0 steps + minutes.
+- **A local full `pnpm test` is not the verdict.** 213 files against one PostgreSQL contend, and every
+  clean-environment run gives a different failure set — twice on 2026-10-14 the failures were in files a
+  `packages/db` transaction cannot touch, and each passed alone. Cap local full suites at
+  `--maxWorkers=3`, compare the *same* suite with and without a change before blaming it, and let the
+  clean runner decide.
+- **`packages/billing-stripe` left behind by a checkout of #104/#105 breaks `scripts/verification/gate.test.ts`
+  on branches that do not have that package**, with ENOENT on a directory holding only `node_modules`.
+  Remove it; it is not a code defect.
 ## PR #82 accepted, and joined to #83 — 2026-10-14
 
 **#82 / P3-02 is accepted at `9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`.** Gemini (Google Antigravity)
@@ -4627,3 +4730,68 @@ refuses the delete — so a candidate recorded in the shared suite could never b
 | PostgreSQL suites | 52 files, **1185/1185** (four consecutive clean runs) |
 | Redis suites | **55/55** |
 | worker + web E2E | 106 files, **1234/1234** |
+
+## P6-07 commercial slice, and the accepted #104 propagated into it — PR #105 — 2026-10-27
+
+**#104 / P6-04 is accepted at `ada34eae24158c0d04c85a1e8e4587937a738db3`.** AntiGravity published a formal
+exact-head review on 2026-10-27T12:07:57Z: GitHub state `APPROVED` on that commit, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ada34eae24158c0d04c85a1e8e4587937a738db3`, with no findings. The acceptance
+covers that SHA and no other. Its container run executed 4,726 tests including `pnpm evals`, which our own
+Actions workflow still does not run — the reviewer's container is currently the only place the evaluation
+suite executes at all.
+
+**#105 is now joined to that head by an ordinary non-rebase merge.** No rebase, no force-push, no squash,
+nothing to `main`, and nothing propagated into #106+. #105 was 20 ahead / 96 behind at merge base
+`cc398c37fb06293b2f793bb192cf5b9971bf010d`; `git merge-base --is-ancestor ada34eae… HEAD` succeeds on the
+new head.
+
+### What the merge reconciled
+
+**One conflict, and it was this file.** Both sides appended at the same point — #105 added its 2026-10-14
+Phase-6 correction section, #104 carried 96 commits' worth of accepted-and-propagated log. The document is
+an append-only chronological record, so the resolution is a **union in date order**: #105's section stays
+where it was written, and the accepted log follows it whole. Nothing was dropped from either side; picking
+a side would have discarded either #105's task findings or the entire history of #83…#103.
+
+**The other two files both sides touched merged cleanly, and were read rather than counted:**
+
+- `packages/db/src/index.ts` — a barrel. #104 adds type exports (`PolicyAuditCursor`, `DueFollowUp`,
+  `FollowUpChannelPort`, …), #105 adds `ensureWorkspaceTrial` and `TRIAL_PLAN_CODE`; disjoint regions. A
+  dropped export here fails typecheck loudly, which is why this one needs no argument.
+- `packages/db/src/repositories/workspaces.ts` — looks like the dangerous one and is not. #104 adds the
+  nested `automationPolicies: { create: profileDefaultPolicyWrite() }` write inside the profile's own
+  transaction; **#105's entire hunk is a comment** restating that creating a Business Profile does not
+  start the trial — `createChannelAccount` does. Different subjects, both kept, and the two comments now
+  sit adjacent without disagreeing.
+
+### What the 2026-10-14 section above no longer describes
+
+That section is kept as the dated record it is, but three of its framing claims are superseded by the log
+that now follows it, and a reader who stops at it will act on stale facts:
+
+- **"#82 is blocked on the reviewer's environment"** — #82 was accepted later the same day; the next
+  section is its acceptance. Everything it said was waiting behind #82 has since moved.
+- **"#83 / P5-08 is the sole current propagation and review gate. #84 onwards are frozen"** — the log runs
+  from #82 through to #103 accepted and #104 accepted. The earliest unresolved gate is now **#105 itself**;
+  #106+ remain held.
+- **"the chain is two live segments"** — the segments are joined. Ancestry is still worth measuring with
+  `merge-base --is-ancestor` rather than inferred from PR numbers, which is why that advice stays.
+
+### The three product questions are decided, and their implementation is not in this merge
+
+The section above lists recurring add-ons/top-ups, downgrade over capacity and the failed-renewal grace as
+waiting on the owner rather than on code. **They were decided on 2026-10-19** (`OWNER_ACCEPTANCE: ADR-021=ACCEPTED
+GRACE=C_3_DAYS DOWNGRADE=SPEC_AS_WRITTEN ANALYTICS=EXPLAINED_SERVER_CLAMP`) and became issues **#106, #107,
+#108 and #109**, explicitly backlog-gated. The analytics tier limits noted as unenforced are #109's scope.
+None of that is implemented here: this is a propagation, and implementing an accepted decision inside one
+would be scope expansion.
+
+**ADR-021's Markdown status deliberately still reads `Proposed`.** The owner's decision accepted it while
+instructing that the published branch keep that status until a future authorized docs/implementation
+commit, and that #105's SHA not be moved to update metadata. This merge moves the SHA for propagation, not
+for metadata, so the status is left exactly as it was rather than quietly corrected.
+
+**Still untasked, and the largest open hole:** nothing in production creates a workspace or a Business
+Profile, so the capacity gates, the trial start and `readEntitlement` remain reachable only from tests.
+`reconcileProviderState` still has no periodic caller either, so the audit rows the best-effort
+cancellation writes are for a person to read rather than for anything to repair.

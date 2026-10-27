@@ -191,6 +191,8 @@ export {
   ACCEPTED_CURRENCY,
   ACCEPTED_PLANS,
   ACCEPTED_TRIAL,
+  ensureWorkspaceTrial,
+  TRIAL_PLAN_CODE,
   publishAcceptedCatalog,
   type ProviderPriceMap,
   type PublishedCatalog,
