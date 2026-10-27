@@ -57,10 +57,58 @@ Two things are deliberately **not** breakpoints, because a viewport width cannot
 These widths are declared in `breakpoints.test.ts` as `TESTED_WIDTHS`, and a test asserts this document
 lists every one of them. The two cannot drift apart without the build failing.
 
+## The overflow harness, and what it measured
+
+`apps/web/src/responsive/harness/` is a reproducible layout check for the one question no source scan can
+answer: **does the document scroll sideways?** It loads the real stylesheet and the real shell around the
+worst case each surface has to survive — one token with no break opportunity in it, which is what a person
+creates by pasting a link into a lead's next action or by having a handle with no separators.
+
+Run it by serving the repository over HTTP and opening
+`apps/web/src/responsive/harness/index.html` (any static server will do;
+`python3 -m http.server` from the repository root is enough). It needs no dev server, no database and no
+network. Each tested width gets its own `<iframe>`, because a media query reads a viewport rather than a
+parent element, and the results appear in the page and on `window.__results`.
+
+**It is not run by CI and it is not a test.** There is no browser in the verify job, so these numbers are a
+manual check, recorded here because they were taken rather than claimed. Two things about the harness are
+worth knowing before trusting a number it prints: it passes a fresh token to the stylesheet on every run,
+because without that the browser served a cached copy and the harness reported the *previous* stylesheet's
+numbers for a changed one; and it measures a surface against `.shell-main`'s **content** box, since
+`clientWidth` includes the 24px of padding on each side and reporting it made every surface look 48px
+safer than it is. Both of those were mistakes in the first version of this file.
+
+Measured with `documentElement.scrollWidth − clientWidth` inside each frame, before and after the repairs
+of Issue #111:
+
+| Viewport | Main column | Document overflow before | After |
+| --- | --- | --- | --- |
+| 320px | 288px | 136px | 0 |
+| 375px | 343px | 81px | 0 |
+| 430px | 398px | 26px | 0 |
+| 720px | 688px | 0 | 0 |
+| 768px | 488px | 0 | 0 |
+| 901px | 621px | 205px | 0 |
+| 1024px | 744px | 82px | 0 |
+| 1440px | 1160px | 0 | 0 |
+| 1920px | 1312px | 0 | 0 |
+
+Two separate defects show up in that column. The phone widths were the **context panel**: an unbroken
+handle made it ask for 440px inside a 288px column, and it had no `overflow-wrap` rule at all. The 901px
+and 1024px widths were the **lead table**: its cells' wrap was declared only inside the 900px block, so
+above that width the table asked for 850px against 621px and 744px of room. 1440px and 1920px show 0 both
+times only because this harness's pasted link needs 850px and there is more room than that — the rule is
+that a surface overflows when it needs more than the main column's content box, so a longer value reaches
+wider windows. The numbers above are measurements of this content, not a bound for all content.
+
 ## Limitations, stated plainly
 
 **jsdom evaluates no media queries and lays nothing out.** No test in this repository asserts that a page
-*looks* right at 375px. What the responsive tests prove is that the rules which make each surface usable
+*looks* right at 375px. It does, however, resolve the **cascade** — specificity and source order — and
+`responsive/cascade.test.ts` uses that: it loads the real stylesheet, renders the markup a route renders,
+and asks `getComputedStyle` which rule won. jsdom does not resolve `var()`, so the answer is the winning
+declaration rather than a pixel value, which is exactly the question when a rule has been shadowed by a
+twin. The tokens those declarations name are asserted separately against `:root`. What the responsive tests prove is that the rules which make each surface usable
 narrow still exist, still name the classes and `data-pane` attributes the components render, and cover
 every two-pane surface. That is the way this breaks in practice — a renamed class leaves a phone showing
 two panes on top of each other, and nothing type-checks the join between a stylesheet, a component and a
@@ -72,9 +120,19 @@ component invents inline — a separate test forbids those — and there are no 
 text to complicate it. A browser-based auditor run in jsdom would report *nothing* here, because it needs
 paint; this is strictly more than such a tool would give.
 
-**Focus visibility is a rule, not a measurement.** `:focus-visible` draws a 3px outline in `--accent`, and
-the contrast test holds that colour to 3:1 against the page. Whether the ring is *visible* over every
-possible background is a manual check.
+**Focus visibility is a rule, and the measured ring is 2px rather than 3.** Two rules declare it:
+`:focus-visible` at (0,1,0) asks for 3px, and an element-qualified list — `input:focus-visible`,
+`select:focus-visible`, `textarea:focus-visible`, `button:focus-visible`, `a:focus-visible`,
+`summary:focus-visible` — asks for 2px at (0,1,1). The more specific one wins, so **every control a person
+can actually focus draws 2px solid `--accent` at a 2px offset**, measured in a browser by pressing Tab
+(`document.activeElement` matching `:focus-visible`, computed `outline` reading `2px solid`). The 3px rule
+is the backstop for anything focusable that is not in that list, and `semantics.test.ts` forbids most of
+what that could be. The contrast test holds `--accent` to 3:1 against the page either way. Whether the
+ring reads well over every possible background is still a manual check.
+
+This paragraph used to say 3px flatly, which was true before the element-qualified rule was added and
+false afterwards. Whether the two rules should be one, and at which width, is a visual decision and is
+noted for scoping rather than taken here.
 
 **Screen-reader output is not captured.** The semantic checks prove a control has an accessible name and
 is reachable by keyboard. They do not prove the announcement reads well, which no automated tool decides.

@@ -17,7 +17,7 @@ import type { AssignableMember, LeadRow, QualificationAnswer, StageDisplay, Stag
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
-import { stageName, stageNameOf } from "@/ui/leads/stage-name";
+import { stageNameOf } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
 
 export interface LeadPanelProps {
@@ -35,8 +35,9 @@ export interface LeadPanelProps {
 const KNOWN_SOURCES = new Set(["AI_SUGGESTED", "HUMAN_CONFIRMED", "HUMAN_SET"]);
 
 export function LeadPanel({ t, lead, stages, members, history, qualification, target, editAction, answerAction }: LeadPanelProps) {
-  // One shared rule for a stage's name, in `stage-name.ts`, rather than a copy per surface.
-  const nameOfStage = (stage: StageDisplay) => stageName(t, stage);
+  // One shared rule for a stage's name, in `stage-name.ts`, rather than a copy per surface. The panel only
+  // ever names a stage it has an id for — the history reads `fromStage` and `toStage` — so the by-id form
+  // is the only one it needs.
   const labelOf = (stage: string) => stageNameOf(t, stages, stage);
 
   return (
