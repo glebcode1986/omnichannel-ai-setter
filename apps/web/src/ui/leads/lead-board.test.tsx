@@ -9,7 +9,7 @@
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LeadRow, StageDisplay } from "@omnichannel/db";
+import { DEFAULT_STAGE_LABELS, type LeadRow, type StageDisplay } from "@omnichannel/db";
 
 import { LeadBoard } from "./lead-board";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
@@ -200,11 +200,17 @@ describe("an empty pipeline", () => {
 describe("in Russian", () => {
   /**
    * A stage column carries one of two different things under the same field, and the board printed the
-   * wrong one. `label` is the operator's own wording once they rename a column, and a built-in
-   * placeholder until they do — and that placeholder is the raw enum, so an untouched board read
-   * `NEW`, `ENGAGED`, `QUALIFYING` in the middle of a Russian interface while the translations for
-   * exactly those stages sat unused in the catalogue. `isDefault` is the distinction, and it was
-   * already reported.
+   * wrong one. `label` is the operator's own wording once they rename a column, and the product's
+   * placeholder until they do — and that placeholder is `DEFAULT_STAGE_LABELS`, an English word, so an
+   * untouched board read "New", "Engaged", "Qualifying" in the middle of a Russian interface. It was
+   * never the `LeadStage` member; an earlier version of this comment said it was, and the fixture below
+   * had been written to match the comment rather than production, which is how a locale test can be
+   * green about the wrong string. The values now come from the exported constant, so the fixture cannot
+   * disagree with what `readStageDisplays()` actually supplies.
+   *
+   * Nor were the `leadStage.*` translations unused before this: the inbox read them for its own stage
+   * badges (`conversation-list.tsx`, `context-panel.tsx`). What was missing was the leads board, and
+   * then its filter.
    *
    * Both directions matter, which is why there are two cases: translating what the product supplied,
    * and leaving alone what a person typed. The second is the one a careless fix breaks — running every
@@ -224,8 +230,8 @@ describe("in Russian", () => {
       />,
     );
 
-  it("translates a stage the operator has not renamed, instead of printing the enum", () => {
-    russianBoard(stages([{ stage: "NEW", label: "NEW", isDefault: true }]));
+  it("translates a stage the operator has not renamed, instead of printing the product's English", () => {
+    russianBoard(stages([{ stage: "NEW", label: DEFAULT_STAGE_LABELS.NEW, isDefault: true }]));
 
     const heading = catalogues.ru["leads.stageColumn"]
       .replace("{label}", catalogues.ru["leadStage.NEW"])
@@ -233,7 +239,7 @@ describe("in Russian", () => {
     expect(screen.getByText(heading)).toBeDefined();
     // the move form offers the same name, and the table prints it in the stage cell
     expect(screen.getAllByText(catalogues.ru["leadStage.NEW"]).length).toBeGreaterThan(1);
-    expect(screen.queryByText("NEW")).toBeNull();
+    expect(screen.queryByText(DEFAULT_STAGE_LABELS.NEW)).toBeNull();
   });
 
   it("leaves a column the operator named exactly as they typed it", () => {

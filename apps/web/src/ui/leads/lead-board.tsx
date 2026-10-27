@@ -20,6 +20,7 @@ import type { LeadRow, StageDisplay } from "@omnichannel/db";
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
+import { stageName, stageNameOf } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
 
 export interface LeadBoardProps {
@@ -44,20 +45,10 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
   // Hidden columns are not drawn, but their leads are not lost: the table below lists every lead
   // whatever stage it is in, which is why hiding a column is safe.
   const visible = stages.filter((stage) => !stage.hidden);
-  /**
-   * A stage's name as a person should read it.
-   *
-   * The stored `label` is the operator's own wording when they have renamed the column, and a built-in
-   * placeholder when they have not — so printing it unconditionally put the raw enum on the board:
-   * `NEW`, `ENGAGED`, `QUALIFYING`, in Russian next to everything else. `isDefault` is exactly the
-   * distinction: translate the one the product supplied, leave the one a person typed alone, because
-   * their words are not ours to translate.
-   */
-  const nameOfStage = (stage: StageDisplay) => (stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label);
-  const labelOf = (stage: string) => {
-    const display = stages.find((candidate) => candidate.stage === stage);
-    return display === undefined ? stage : nameOfStage(display);
-  };
+  // Both names come from `stage-name.ts`, which every surface that shows a stage now shares: the board,
+  // the panel, the column editor and the leads page's own filter. See that module for why.
+  const nameOfStage = (stage: StageDisplay) => stageName(t, stage);
+  const labelOf = (stage: string) => stageNameOf(t, stages, stage);
 
   return (
     <>

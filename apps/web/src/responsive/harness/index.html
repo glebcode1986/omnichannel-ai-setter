@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overflow harness</title>
+    <style>
+      body { margin: 0; padding: 16px; font: 14px/1.5 system-ui, sans-serif; background: #f5f6f8; color: #16191d; }
+      h1 { font-size: 19px; }
+      p { max-width: 70ch; }
+      table { border-collapse: collapse; margin: 16px 0; background: #fff; }
+      th, td { padding: 4px 8px; border: 1px solid #d9dde3; text-align: left; font-variant-numeric: tabular-nums; }
+      td[data-verdict="fits"] { color: #176b3f; }
+      td[data-verdict="overflows"] { color: #a01b28; font-weight: 700; }
+      iframe { border: 0; width: 1px; height: 1px; visibility: hidden; position: absolute; }
+      code { background: #fff; padding: 0 4px; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0e1013; color: #eef1f5; }
+        table, code { background: #1c2026; }
+        th, td { border-color: #2c333c; }
+        td[data-verdict="fits"] { color: #7fd1a3; }
+        td[data-verdict="overflows"] { color: #ff9aa4; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Does the console fit the widths it claims to support?</h1>
+    <p>
+      Each width below gets its own iframe loading <code>surfaces.html</code>, which renders the real shell
+      and the real stylesheet around the worst case each surface has to survive — one token with no break
+      opportunity in it. An iframe is used rather than one resizable container because media queries read a
+      viewport, not a parent element: a container set to 375px still gets the desktop rules.
+    </p>
+    <p>
+      <strong>Document overflow</strong> is <code>documentElement.scrollWidth − clientWidth</code> inside the
+      frame: anything above zero means the page itself scrolls sideways, which is the failure this measures.
+      <strong>Surface overflow</strong> is each surface's own <code>scrollWidth</code> against the width of
+      the main column it sits in; a surface may exceed it only if it declares a scroll boundary of its own,
+      and the last column says whether it does.
+    </p>
+    <p>
+      Open this file directly — no server and no network. Results appear below and are also left on
+      <code>window.__results</code> as JSON.
+    </p>
+
+    <div id="frames"></div>
+    <div id="out">Measuring…</div>
+
+    <script type="module">
+      const WIDTHS = [320, 375, 430, 720, 768, 901, 1024, 1440, 1920];
+      /*
+       * One token per load of this page, passed down to the frames so the stylesheet is fetched fresh.
+       * `performance.timeOrigin` is unique per document and needs no clock to be readable.
+       */
+      const TOKEN = String(Math.round(performance.timeOrigin));
+      const SURFACES = ["lead-table", "lead-board", "inbox-context", "admin-audit"];
+      /** The element inside each section whose width is the question — the panel, not its wrapper. */
+      const SURFACE_TARGET = {
+        "lead-table": "table.lead-table",
+        "lead-board": ".lead-board",
+        "inbox-context": ".inbox-context",
+        "admin-audit": '.card[data-admin="audit"]',
+      };
+
+      /** Load surfaces.html at an exact viewport width, with a fresh stylesheet, and measure. */
+      function measure(width) {
+        return new Promise((resolve) => {
+          const frame = document.createElement("iframe");
+          // Inline, not the `width` attribute: the rule in this page's own stylesheet sets `width: 1px`
+          // to keep the frames out of the way, and a presentational attribute loses to any CSS rule. The
+          // first version of this harness reported a 32px main column at every width for exactly that
+          // reason, which is worth leaving written down: a measurement that comes back identical at nine
+          // different widths is measuring something other than width.
+          frame.style.width = `${String(width)}px`;
+          frame.style.height = "900px";
+          frame.style.visibility = "hidden";
+          frame.src = `surfaces.html?v=${TOKEN}`;
+          frame.addEventListener("load", () => {
+            const view = frame.contentDocument;
+            const root = view.documentElement;
+            const main = view.querySelector(".shell-main");
+            // `clientWidth` includes padding, and `.shell-main` has 24px a side, so the room a surface
+            // really has is the content box. Reporting clientWidth made every surface look 48px safer
+            // than it is.
+            const mainStyle = main === null ? null : view.defaultView.getComputedStyle(main);
+            const room =
+              main === null || mainStyle === null
+                ? 0
+                : main.clientWidth - parseFloat(mainStyle.paddingLeft) - parseFloat(mainStyle.paddingRight);
+            const rows = SURFACES.map((name) => {
+              const section = view.querySelector(`[data-surface="${name}"]`);
+              const target = section?.querySelector(SURFACE_TARGET[name]) ?? section;
+              const boundary = target === null ? "" : view.defaultView.getComputedStyle(target).overflowX;
+              return {
+                surface: name,
+                needs: target === null ? 0 : target.scrollWidth,
+                room,
+                boundary,
+              };
+            });
+            resolve({
+              width,
+              documentOverflow: root.scrollWidth - root.clientWidth,
+              main: main === null ? 0 : main.clientWidth,
+              rows,
+            });
+            frame.remove();
+          });
+          document.getElementById("frames").appendChild(frame);
+        });
+      }
+
+      const results = [];
+      for (const width of WIDTHS) {
+        // Sequentially, so a slow load cannot report another width's numbers.
+        results.push(await measure(width));
+      }
+      window.__results = results;
+
+      const cell = (value, bad) => `<td data-verdict="${bad ? "overflows" : "fits"}">${value}</td>`;
+      document.getElementById("out").innerHTML = `
+        <table>
+          <caption>Document overflow per width (0 = the page does not scroll sideways)</caption>
+          <thead><tr><th scope="col">Viewport</th><th scope="col">Main column</th><th scope="col">Document overflow</th></tr></thead>
+          <tbody>${results
+            .map(
+              (result) =>
+                `<tr><th scope="row">${result.width}px</th><td>${result.main}px</td>${cell(
+                  `${result.documentOverflow}px`,
+                  result.documentOverflow > 0,
+                )}</tr>`,
+            )
+            .join("")}</tbody>
+        </table>
+        <table>
+          <caption>Each surface against the room it has</caption>
+          <thead><tr><th scope="col">Viewport</th><th scope="col">Surface</th><th scope="col">Needs</th><th scope="col">Room</th><th scope="col">overflow-x</th></tr></thead>
+          <tbody>${results
+            .flatMap((result) =>
+              result.rows.map(
+                (row) =>
+                  `<tr><th scope="row">${result.width}px</th><td>${row.surface}</td>${cell(
+                    `${row.needs}px`,
+                    row.needs > row.room && row.boundary !== "auto" && row.boundary !== "scroll",
+                  )}<td>${row.room}px</td><td>${row.boundary}</td></tr>`,
+              ),
+            )
+            .join("")}</tbody>
+        </table>`;
+    </script>
+  </body>
+</html>

@@ -30,8 +30,14 @@ export interface StageDisplay {
   readonly isDefault: boolean;
 }
 
-/** The product's own labels, used wherever a Workspace has not said otherwise. */
-const DEFAULT_LABELS: Readonly<Record<LeadStage, string>> = {
+/**
+ * The product's own labels, used wherever a Workspace has not said otherwise.
+ *
+ * Exported because the UI's locale tests need the real values rather than a restatement of them: a test
+ * that writes its own idea of the placeholder can agree with itself while disagreeing with production,
+ * and one did — it asserted the placeholder was the `LeadStage` member, which it has never been.
+ */
+export const DEFAULT_STAGE_LABELS: Readonly<Record<LeadStage, string>> = {
   NEW: "New",
   ENGAGED: "Engaged",
   QUALIFYING: "Qualifying",
@@ -62,7 +68,7 @@ export async function readStageDisplays(db: DbExecutor, context: BusinessProfile
   return LEAD_STAGES.map((stage, index) => {
     const row = configured.get(stage);
     return row === undefined
-      ? { stage, label: DEFAULT_LABELS[stage], position: index, hidden: false, isDefault: true }
+      ? { stage, label: DEFAULT_STAGE_LABELS[stage], position: index, hidden: false, isDefault: true }
       : { stage, label: row.label, position: row.position, hidden: row.hidden, isDefault: false };
   }).sort((left, right) => left.position - right.position || LEAD_STAGES.indexOf(left.stage) - LEAD_STAGES.indexOf(right.stage));
 }

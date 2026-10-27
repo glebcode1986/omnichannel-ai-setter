@@ -11,9 +11,9 @@
  * The form says nothing about it; the PR says it out loud.
  */
 import type { StageDisplay } from "@omnichannel/db";
-import type { MessageKey } from "@/i18n/catalogue";
 
 import type { Translator } from "@/i18n/translate";
+import { stageName } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
 
 export interface StageConfigProps {
@@ -53,9 +53,9 @@ export function StageConfig({ t, stages, target, action }: StageConfigProps) {
                     id={`label_${stage.stage}`}
                     name={`label_${stage.stage}`}
                     type="text"
-                    // The product's own name for a stage nobody has renamed, so the field a person edits
-                    // starts from what the board actually shows rather than from the enum.
-                    defaultValue={stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label}
+                    // The field a person edits starts from what the board actually shows: the product's
+                    // translated name for a stage nobody has renamed, their own wording once they have.
+                    defaultValue={stageName(t, stage)}
                     required
                   />
                 </td>

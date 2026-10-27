@@ -87,6 +87,24 @@ wolf would be switched off. What it does not catch is still a review responsibil
 The third group exists because a lead becomes a card below 900px and each cell draws its column name from
 `data-label`. That attribute is not an accessible name, and it is still text a person reads.
 
+## A name a person chose is not ours to translate
+
+One field can carry either the product's words or an operator's, and the two must be treated differently.
+`StageDisplay.label` is the case this product has: until a Workspace renames a board column the label is
+the product's own placeholder from `DEFAULT_STAGE_LABELS` — an English word, `"New"`, `"Engaged"` — and the
+row is marked `isDefault: true`; once they rename it, the label is exactly what they typed and `isDefault`
+is `false`.
+
+So the rule is **translate the one the product supplied, and leave the one a person typed alone, byte for
+byte**. Translating both overwrites an operator's wording whenever it happens to match a key's value and
+blanks it when it does not. Translating neither puts English in a Russian console.
+
+It lives in one place, `apps/web/src/ui/leads/stage-name.ts`, and `stage-name.test.ts` holds that no leads
+surface reads a stage's `label` for itself. That guard is the point: the rule had four implementations and
+the fourth — the leads page's own stage filter — did not have it, so one page rendered a dropdown reading
+"New" beside a column heading reading "Новый", from the same array. A rule with four implementations has
+four chances to be the one that is wrong.
+
 ## What is not localized
 
 - **Logs, audit records and reason codes.** They are read by operators and by software across

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overflow surfaces</title>
+    <!--
+      The real stylesheet, loaded the way the app loads it. Nothing is copied in: if a rule changes, this
+      page changes with it, which is the only reason a harness like this is worth keeping in the repository.
+    -->
+    <link rel="stylesheet" id="product-stylesheet" href="../../app/globals.css" />
+    <script>
+      /*
+       * Re-request the stylesheet under whatever token the harness put in this page's own URL.
+       *
+       * Without this the browser serves a cached `globals.css` and the harness reports the numbers of a
+       * previous edit — which happened: a before/after run produced byte-identical results for two
+       * different stylesheets, and only a hand probe with a unique URL showed the real difference. A
+       * measurement that cannot tell two inputs apart is not a measurement.
+       */
+      const token = new URLSearchParams(location.search).get("v");
+      if (token !== null) {
+        const link = document.getElementById("product-stylesheet");
+        link.href = `../../app/globals.css?v=${encodeURIComponent(token)}`;
+      }
+    </script>
+  </head>
+  <body>
+    <!--
+      The shell as the app renders it, because the shell is what makes the content box narrower than the
+      window: it spends `--shell-nav-width` (232px) on its navigation down to 721px, so a 768px window
+      leaves the main column 488px once `.shell-main`'s 24px of padding is taken off each side. A surface
+      measured on its own would look fine at every width and prove nothing.
+
+      The content is the worst case each surface has to survive, not a typical row: one token with no break
+      opportunity in it. That is the shape a person creates by pasting a link into a lead's next action or
+      by having a handle with no separators, and it is the shape that decides whether a table's min-content
+      exceeds its container.
+    -->
+    <div class="shell">
+      <nav class="shell-nav" aria-label="Sections">
+        <a href="#inbox">Inbox</a>
+        <a href="#leads">Leads</a>
+      </nav>
+
+      <main class="shell-main">
+        <h1>Overflow surfaces</h1>
+
+        <!-- 1. The lead table: the surface whose wrap used to exist only below 900px. -->
+        <section data-surface="lead-table">
+          <h2>Lead table, with a pasted link in the next action</h2>
+          <table class="lead-table" role="table">
+            <caption>Leads</caption>
+            <thead role="rowgroup">
+              <tr role="row">
+                <th scope="col" role="columnheader">Contact</th>
+                <th scope="col" role="columnheader">Stage</th>
+                <th scope="col" role="columnheader">Owner</th>
+                <th scope="col" role="columnheader">Next</th>
+                <th scope="col" role="columnheader">Updated</th>
+              </tr>
+            </thead>
+            <tbody role="rowgroup">
+              <tr role="row">
+                <th scope="row" role="rowheader"><a href="#lead">superlongbusinesshandlewithnobreaks</a></th>
+                <td data-label="Stage" role="cell">Новый</td>
+                <td data-label="Owner" role="cell">Unassigned</td>
+                <td data-label="Next" role="cell">
+                  https://example.com/booking/calendar/slots?utm_source=instagram&amp;utm_campaign=autumn-promotion-2026-long
+                </td>
+                <td data-label="Updated" role="cell"><time datetime="2026-10-27T19:00">27.10.26, 19:00</time></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <!-- 2. The board card: the same string, on the surface that already had a scroll boundary. -->
+        <section data-surface="lead-board">
+          <h2>Lead board, same string</h2>
+          <div class="lead-board" aria-label="Board">
+            <section class="lead-column" data-stage="NEW">
+              <h3>Новый · 1</h3>
+              <ul>
+                <li data-lead="cv_1">
+                  <a data-open-lead="true" href="#lead">superlongbusinesshandlewithnobreaks</a>
+                  <p class="muted">instagram · Unassigned</p>
+                  <p class="muted" data-next-action="true">
+                    https://example.com/booking/calendar/slots?utm_source=instagram&amp;utm_campaign=autumn-promotion-2026-long
+                  </p>
+                </li>
+              </ul>
+            </section>
+          </div>
+        </section>
+
+        <!-- 3. The context panel: the narrowest column the product has. -->
+        <section data-surface="inbox-context">
+          <h2>Inbox context panel, unbroken handle</h2>
+          <div class="inbox" data-pane="thread">
+            <div class="inbox-list"><p>list</p></div>
+            <div class="inbox-thread-column"><p class="message-text">a message</p></div>
+            <aside class="inbox-context" aria-label="Context">
+              <section>
+                <h3>Contact</h3>
+                <p><strong>superlongbusinesshandlewithnobreaksatallhere</strong></p>
+                <p class="muted">superlongbusinesshandlewithnobreaksatallhere</p>
+              </section>
+              <section>
+                <h3>Draft</h3>
+                <p class="muted">Intent: booking_request_with_a_very_long_machine_intent_name</p>
+                <ul class="cited-sources">
+                  <li data-source-id="kd_1"><code>kd_01a17eaa-ced4-7729-be12-0b6f10d9f6e8</code></li>
+                </ul>
+              </section>
+            </aside>
+          </div>
+        </section>
+
+        <!-- 4. The platform audit: a surface that scrolls inside its own boundary rather than wrapping. -->
+        <section data-surface="admin-audit">
+          <h2>Platform audit, four columns</h2>
+          <section class="card" data-admin="audit">
+            <h3>Audit</h3>
+            <table class="admin-audit">
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">Who</th>
+                  <th scope="col">What</th>
+                  <th scope="col">Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-severity="HIGH">
+                  <td>27.10.26, 19:00</td>
+                  <td>operator_01a17eaa-ca1f-70bb-9f2e-5c8311de4865</td>
+                  <td>SUPPORT_ACCESS_GRANTED</td>
+                  <td>incident-7421</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
