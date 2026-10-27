@@ -47,7 +47,10 @@
     <div id="out">Measuring…</div>
 
     <script type="module">
-      const WIDTHS = [320, 375, 430, 720, 768, 901, 1024, 1440, 1920];
+      // The widths this product claims, plus the band Issue #112 is about. 900 and 901 sit either side of
+      // the one-pane rule; 1244 and 1245 either side of the width at which the thread stops being the
+      // narrowest of the three panes.
+      const WIDTHS = [320, 375, 430, 720, 768, 900, 901, 960, 1024, 1180, 1244, 1245, 1403, 1404, 1440, 1920];
       /*
        * One token per load of this page, passed down to the frames so the stylesheet is fetched fresh.
        * `performance.timeOrigin` is unique per document and needs no clock to be readable.
@@ -87,6 +90,24 @@
               main === null || mainStyle === null
                 ? 0
                 : main.clientWidth - parseFloat(mainStyle.paddingLeft) - parseFloat(mainStyle.paddingRight);
+            // The Inbox's panes, measured rather than inferred: the question Issue #112 asks is how wide
+            // the reading thread actually is, and `.inbox > * { overflow-y: auto }` forces a computed
+            // `overflow-x: auto` too, so a collapsed thread scrolls inside itself and never reaches the
+            // document-level number above. A pane that is `display: none` reports 0 and is reported as
+            // hidden rather than as zero-width.
+            const pane = (selector) => {
+              const el = view.querySelector(selector);
+              if (el === null) return { present: false, width: 0, top: null };
+              const shown = view.defaultView.getComputedStyle(el).display !== "none";
+              const box = el.getBoundingClientRect();
+              return { present: true, shown, width: shown ? Math.round(box.width) : 0, top: shown ? Math.round(box.top) : null };
+            };
+            const panes = {
+              list: pane(".inbox-list"),
+              thread: pane(".inbox-thread-column"),
+              context: pane(".inbox-context-column"),
+            };
+
             const rows = SURFACES.map((name) => {
               const section = view.querySelector(`[data-surface="${name}"]`);
               const target = section?.querySelector(SURFACE_TARGET[name]) ?? section;
@@ -102,6 +123,8 @@
               width,
               documentOverflow: root.scrollWidth - root.clientWidth,
               main: main === null ? 0 : main.clientWidth,
+              room,
+              panes,
               rows,
             });
             frame.remove();
@@ -119,6 +142,27 @@
 
       const cell = (value, bad) => `<td data-verdict="${bad ? "overflows" : "fits"}">${value}</td>`;
       document.getElementById("out").innerHTML = `
+        <table>
+          <caption>The Inbox's three panes, as laid out (Issue #112: the reading thread must stay legible)</caption>
+          <thead><tr><th scope="col">Viewport</th><th scope="col">Main content box</th><th scope="col">List</th><th scope="col">Thread</th><th scope="col">Context</th><th scope="col">Panes in the thread's row</th></tr></thead>
+          <tbody>${results
+            .map((result) => {
+              const shown = ["list", "thread", "context"].filter((name) => result.panes[name].shown).length;
+              const show = (p) => (p.shown ? `${String(p.width)}px` : "hidden");
+              // A thread narrower than either pane *beside* it is the symptom, so it is flagged on that
+              // comparison rather than on a number somebody picked — and only against panes that really
+              // are beside it. A stacked context panel is wider than the thread by design, so comparing
+              // against it painted the corrected layout red, which is worse than not flagging at all.
+              const tops = ["list", "thread", "context"].map((name) => result.panes[name]).filter((p) => p.shown);
+              const inRow = tops.filter((p) => p.top === result.panes.thread.top);
+              const beside = Math.max(...inRow.filter((p) => p !== result.panes.thread).map((p) => p.width), 0);
+              return `<tr><th scope="row">${result.width}px</th><td>${result.room}px</td><td>${show(result.panes.list)}</td>${cell(
+                show(result.panes.thread),
+                result.panes.thread.shown && result.panes.thread.width < beside,
+              )}<td>${show(result.panes.context)}</td><td>${String(inRow.length)} of ${String(shown)}</td></tr>`;
+            })
+            .join("")}</tbody>
+        </table>
         <table>
           <caption>Document overflow per width (0 = the page does not scroll sideways)</caption>
           <thead><tr><th scope="col">Viewport</th><th scope="col">Main column</th><th scope="col">Document overflow</th></tr></thead>
