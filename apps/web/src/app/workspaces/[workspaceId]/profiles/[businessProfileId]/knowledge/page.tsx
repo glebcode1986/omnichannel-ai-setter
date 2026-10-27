@@ -44,8 +44,10 @@ export default async function KnowledgePage({
       <section className="knowledge-tester">
         <h2>{t.t("tester.title")}</h2>
         <form action={basePath} method="get" role="search" className="inbox-search">
-          <label htmlFor="knowledge-ask">{t.t("tester.queryLabel")}</label>
-          <input id="knowledge-ask" name="ask" type="search" defaultValue={testQuery ?? ""} />
+          <div className="field">
+            <label htmlFor="knowledge-ask">{t.t("tester.queryLabel")}</label>
+            <input id="knowledge-ask" name="ask" type="search" defaultValue={testQuery ?? ""} />
+          </div>
           <button className="button" type="submit">
             {t.t("tester.run")}
           </button>
@@ -66,35 +68,43 @@ export default async function KnowledgePage({
       <section>
         <h2>{t.t("knowledge.listLabel")}</h2>
         <form action={basePath} method="get" role="search" className="inbox-search">
-          <label htmlFor="knowledge-q">{t.t("knowledge.searchLabel")}</label>
-          <input id="knowledge-q" name="q" type="search" defaultValue={filter.search ?? ""} />
+          <div className="field">
+            <label htmlFor="knowledge-q">{t.t("knowledge.searchLabel")}</label>
+            <input id="knowledge-q" name="q" type="search" defaultValue={filter.search ?? ""} />
+          </div>
 
-          <label htmlFor="knowledge-status">{t.t("knowledge.filterStatus")}</label>
-          <select id="knowledge-status" name="status" defaultValue={filter.status ?? ""}>
-            <option value="">{t.t("knowledge.allStatuses")}</option>
-            {KNOWLEDGE_STATUSES.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`knowledgeStatus.${value}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="knowledge-status">{t.t("knowledge.filterStatus")}</label>
+            <select id="knowledge-status" name="status" defaultValue={filter.status ?? ""}>
+              <option value="">{t.t("knowledge.allStatuses")}</option>
+              {KNOWLEDGE_STATUSES.map((value) => (
+                <option key={value} value={value}>
+                  {t.t(`knowledgeStatus.${value}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <label htmlFor="knowledge-indexing">{t.t("knowledge.filterIndexing")}</label>
-          <select id="knowledge-indexing" name="indexing" defaultValue={filter.indexingState ?? ""}>
-            <option value="">{t.t("knowledge.allIndexing")}</option>
-            {KNOWLEDGE_INDEXING_STATES.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`indexing.${value}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="knowledge-indexing">{t.t("knowledge.filterIndexing")}</label>
+            <select id="knowledge-indexing" name="indexing" defaultValue={filter.indexingState ?? ""}>
+              <option value="">{t.t("knowledge.allIndexing")}</option>
+              {KNOWLEDGE_INDEXING_STATES.map((value) => (
+                <option key={value} value={value}>
+                  {t.t(`indexing.${value}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <label htmlFor="knowledge-scope-filter">{t.t("knowledge.filterScope")}</label>
-          <select id="knowledge-scope-filter" name="scope" defaultValue={filter.scope ?? ""}>
-            <option value="">{t.t("knowledge.allScopes")}</option>
-            <option value="WORKSPACE">{t.t("knowledge.scopeWorkspace")}</option>
-            <option value="BUSINESS_PROFILE">{t.t("knowledge.scopeProfile")}</option>
-          </select>
+          <div className="field">
+            <label htmlFor="knowledge-scope-filter">{t.t("knowledge.filterScope")}</label>
+            <select id="knowledge-scope-filter" name="scope" defaultValue={filter.scope ?? ""}>
+              <option value="">{t.t("knowledge.allScopes")}</option>
+              <option value="WORKSPACE">{t.t("knowledge.scopeWorkspace")}</option>
+              <option value="BUSINESS_PROFILE">{t.t("knowledge.scopeProfile")}</option>
+            </select>
+          </div>
 
           <button className="button" type="submit">
             {t.t("inbox.applyFilters")}

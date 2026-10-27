@@ -8,6 +8,9 @@
  * agreeing with an event that never happened.
  */
 import { cleanup, render, screen } from "@testing-library/react";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OutcomeNotice } from "./outcome-notice";
@@ -66,5 +69,70 @@ describe("the outcome notice", () => {
 
     expect(screen.getByText(catalogues.ru["outcome.TOO_LATE"])).toBeDefined();
     expect(catalogues.ru["outcome.TOO_LATE"]).not.toBe(catalogues.ru["outcome.SEND_CANCELLED"]);
+  });
+
+  it("renders a sentence for every outcome a server action can produce", () => {
+    // The gap this closes: `checkout-actions.ts` redirected with `?outcome=PROVIDER_UNREACHABLE` on the
+    // one path where the contract is written and the customer was handed nowhere, and that name was in
+    // neither the list above nor the catalogue — so the page said nothing at all. Producing an outcome
+    // and rendering it are two files apart, and nothing but this holds them together.
+    const serverRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../server");
+    const sources: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const full = path.join(directory, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+        } else if (/\.tsx?$/u.test(entry) && !/\.test\.tsx?$/u.test(entry)) {
+          sources.push(readFileSync(full, "utf8"));
+        }
+      }
+    };
+    walk(serverRoot);
+    // Comments stripped before the scan: a comment explaining a URL that *used* to be produced quotes the
+    // very shape this searches for, and the explanation would be read as a producer.
+    const everything = sources
+      .join("\n")
+      .replace(/\/\*[\s\S]*?\*\//gu, "")
+      .replace(/^[ \t]*\/\/.*$/gmu, "");
+
+    // Read from the declared unions, not from the shape of a call. The first version of this scanned for
+    // `finish(target, "NAME")` and missed an outcome the moment the redirect moved out of a `try` and
+    // became an assignment — a test that only sees one spelling is a test that stops looking when the
+    // code is rewritten. Each `…Outcome` type is the contract: every member of it can reach the URL.
+    const produced = new Set<string>(
+      [...everything.matchAll(/export type \w*Outcome\s*=(?<members>[^;]+);/gu)].flatMap((found) =>
+        [...(found.groups?.members ?? "").matchAll(/"(?<name>[A-Z_]+)"/gu)].map((member) => member.groups?.name ?? ""),
+      ),
+    );
+
+    // And the two literal shapes as well, for an outcome written straight into a URL without a union.
+    for (const found of everything.matchAll(/\?outcome=(?<name>[A-Z_]+)(?![A-Z_$])/gu)) {
+      produced.add(found.groups?.name ?? "");
+    }
+
+    // Two outcomes are built from a prefix and a union member, so the scan cannot read them: they are
+    // named here with every value their union can take. The count is asserted rather than the shape — a
+    // third prefix added later fails this line instead of slipping past unchecked. A bare
+    // `?outcome=${outcome}` is not one of these: that is the redirect helper, and its names are the
+    // literals at its call sites, which the first pattern already collected.
+    const computed = [...everything.matchAll(/\?outcome=[A-Z_]+\$\{/gu)];
+    expect(computed.length, "settings-actions builds two outcomes from a prefix and a union").toBe(2);
+    for (const expansion of [
+      "TAKEOVER_INCOMPLETE",
+      "TAKEOVER_OUT_OF_RANGE",
+      "TIMING_INCOMPLETE",
+      "TIMING_OUT_OF_RANGE",
+      "TIMING_REVERSED",
+    ]) {
+      produced.add(expansion);
+    }
+
+    expect(produced.size, "the server actions produce outcomes").toBeGreaterThan(0);
+    for (const outcome of produced) {
+      render(<OutcomeNotice t={t} outcome={outcome} />);
+      expect(document.querySelector(`[data-outcome="${outcome}"]`), `${outcome} is produced but renders nothing`).not.toBeNull();
+      cleanup();
+    }
   });
 });

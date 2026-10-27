@@ -34,7 +34,20 @@ export interface LeadPanelProps {
 const KNOWN_SOURCES = new Set(["AI_SUGGESTED", "HUMAN_CONFIRMED", "HUMAN_SET"]);
 
 export function LeadPanel({ t, lead, stages, members, history, qualification, target, editAction, answerAction }: LeadPanelProps) {
-  const labelOf = (stage: string) => stages.find((candidate) => candidate.stage === stage)?.label ?? stage;
+  /**
+   * A stage's name as a person should read it.
+   *
+   * The stored `label` is the operator's own wording when they have renamed the column, and a built-in
+   * placeholder when they have not — so printing it unconditionally put the raw enum on the board:
+   * `NEW`, `ENGAGED`, `QUALIFYING`, in Russian next to everything else. `isDefault` is exactly the
+   * distinction: translate the one the product supplied, leave the one a person typed alone, because
+   * their words are not ours to translate.
+   */
+  const nameOfStage = (stage: StageDisplay) => (stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label);
+  const labelOf = (stage: string) => {
+    const display = stages.find((candidate) => candidate.stage === stage);
+    return display === undefined ? stage : nameOfStage(display);
+  };
 
   return (
     <section className="lead-panel" aria-labelledby="lead-panel-heading" data-lead-panel={lead.conversationId}>

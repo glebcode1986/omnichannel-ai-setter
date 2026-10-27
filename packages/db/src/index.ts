@@ -85,6 +85,22 @@ export {
   type PulledKillSwitch,
   type PullKillSwitchInput,
 } from "./platform-actions-store";
+export {
+  listReleases,
+  readRelease,
+  readReleaseInForce,
+  readRolloutAccess,
+  recordRelease,
+  recordReleaseReview,
+  rolloutAccessFrom,
+  setRolloutAutopilot,
+  type RecordedRelease,
+  type RecordReleaseInput,
+  type RecordReleaseReviewInput,
+  type ReleaseInForce,
+  type ReleaseView,
+} from "./release-store";
+export { releaseCatalogueLockKey, type ReleaseCatalogueLockKey } from "./release-lock";
 export { readModePolicies, resolveEffectiveMode, type ModePolicyRow } from "./automation-mode";
 export { createAiDraftStore } from "./ai-draft-store";
 export { createDraftContextStore, type DraftContext, type DraftContextQuery, type DraftContextStore } from "./draft-context-store";
@@ -107,16 +123,30 @@ export {
 } from "./billing-overview";
 export {
   assertVerifiedBillingEvent,
+  billingProviderCanCheckout,
+  billingProviderCanManage,
+  billingProviderCanSetRenewal,
   billingProviderRegistered,
   clearBillingProviders,
+  openProviderCheckout,
+  openProviderManagementSession,
   reconcileProviderState,
+  setProviderRenewal,
   registerBillingProvider,
   verifyProviderDelivery,
   type BillingProviderAdapter,
+  type CheckoutHandoff,
   type NormalizedBillingEvent,
+  type ProviderAcknowledgement,
+  type ProviderCheckoutRequest,
+  type ProviderManagementRequest,
+  type ProviderRenewalRequest,
+  type ProviderRenewalState,
   type RawProviderDelivery,
   type ReconciliationQuery,
   type VerifiedBillingEvent,
+  type VerifiedDelivery,
+  type VerifiedProviderDelivery,
 } from "./billing-events";
 export {
   attachProviderCheckoutReference,
@@ -127,7 +157,9 @@ export {
   openCheckoutContract,
   publishLegalDocument,
   readArrangement,
+  readRenewalTarget,
   readBillingRoutes,
+  recordRenewalStopOutcome,
   readCheckoutOffer,
   readCheckoutRouting,
   recordVerifiedBillingEvent,
@@ -135,6 +167,7 @@ export {
   upsertBillingRoute,
   upsertSellerProfile,
   type ArrangementView,
+  type RenewalTarget,
   type BillingEventOutcome,
   type BillingEventResult,
   type BillingRouteInput,
@@ -158,7 +191,10 @@ export {
   ACCEPTED_CURRENCY,
   ACCEPTED_PLANS,
   ACCEPTED_TRIAL,
+  ensureWorkspaceTrial,
+  TRIAL_PLAN_CODE,
   publishAcceptedCatalog,
+  type ProviderPriceMap,
   type PublishedCatalog,
 } from "./accepted-catalog";
 export {

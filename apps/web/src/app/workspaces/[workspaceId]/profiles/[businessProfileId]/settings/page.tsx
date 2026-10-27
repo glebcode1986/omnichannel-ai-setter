@@ -436,72 +436,92 @@ export default async function SettingsPage({
           {proposalSeal === "" ? undefined : <input type="hidden" name="proposalSeal" value={proposalSeal} />}
           {one(query["auditCursor"]) === undefined ? undefined : <input type="hidden" name="auditCursor" value={one(query["auditCursor"])} />}
 
-          <label htmlFor="settings-ask">{t.t("sim.queryLabel")}</label>
-          <input id="settings-ask" name="ask" type="search" defaultValue={ask ?? ""} />
+          <div className="field">
+            <label htmlFor="settings-ask">{t.t("sim.queryLabel")}</label>
+            <input id="settings-ask" name="ask" type="search" defaultValue={ask ?? ""} />
+          </div>
 
           {/* The facts a hypothetical message cannot carry. Explicit, because every run used to assume
               Instagram inside an open window on a healthy account — so the WhatsApp settings below could
               not affect the answer, and neither Instagram after-window choice was ever exercised. */}
-          <label htmlFor="sim-channel">{t.t("sim.channel")}</label>
-          <select id="sim-channel" name="simChannel" defaultValue={simulationInputs.channel}>
-            {SIMULATION_CHANNELS.map((channel) => (
-              <option key={channel} value={channel}>
-                {t.t(`channel.${channel}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="sim-channel">{t.t("sim.channel")}</label>
+            <select id="sim-channel" name="simChannel" defaultValue={simulationInputs.channel}>
+              {SIMULATION_CHANNELS.map((channel) => (
+                <option key={channel} value={channel}>
+                  {t.t(`channel.${channel}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <label htmlFor="sim-window">{t.t("sim.window")}</label>
-          <select id="sim-window" name="simWindow" defaultValue={simulationInputs.window}>
-            {SIMULATION_WINDOWS.map((window) => (
-              <option key={window} value={window}>
-                {t.t(`simWindow.${window}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="sim-window">{t.t("sim.window")}</label>
+            <select id="sim-window" name="simWindow" defaultValue={simulationInputs.window}>
+              {SIMULATION_WINDOWS.map((window) => (
+                <option key={window} value={window}>
+                  {t.t(`simWindow.${window}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <label htmlFor="sim-account">{t.t("sim.account")}</label>
-          <select id="sim-account" name="simAccount" defaultValue={simulationInputs.account}>
-            {SIMULATION_ACCOUNTS.map((account) => (
-              <option key={account} value={account}>
-                {t.t(`simAccount.${account}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="sim-account">{t.t("sim.account")}</label>
+            <select id="sim-account" name="simAccount" defaultValue={simulationInputs.account}>
+              {SIMULATION_ACCOUNTS.map((account) => (
+                <option key={account} value={account}>
+                  {t.t(`simAccount.${account}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* The input that makes the Instagram choice above mean something: that policy opens a
               human-only review path *only* while the exception is live, so with it assumed away both
               Instagram choices gave the same refusal and nothing selected here could change an answer. */}
-          <label htmlFor="sim-human-support">{t.t("sim.humanSupport")}</label>
-          <select id="sim-human-support" name="simHumanSupport" defaultValue={simulationInputs.humanSupport}>
-            {SIMULATION_HUMAN_SUPPORT.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`simHumanSupport.${value}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="sim-human-support">{t.t("sim.humanSupport")}</label>
+            <select id="sim-human-support" name="simHumanSupport" defaultValue={simulationInputs.humanSupport}>
+              {SIMULATION_HUMAN_SUPPORT.map((value) => (
+                <option key={value} value={value}>
+                  {t.t(`simHumanSupport.${value}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* What would be sent. Outside WhatsApp's service window an ordinary reply is not a route at
               all — an approved template is the only one — so without this the three WhatsApp modes and
               the allowlist below could never change an answer. */}
-          <label htmlFor="sim-reply-kind">{t.t("sim.replyKind")}</label>
-          <select id="sim-reply-kind" name="simReplyKind" defaultValue={simulationInputs.replyKind}>
-            {SIMULATION_REPLY_KINDS.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`simReplyKind.${value}`)}
-              </option>
-            ))}
-          </select>
+          <div className="field">
+            <label htmlFor="sim-reply-kind">{t.t("sim.replyKind")}</label>
+            <select id="sim-reply-kind" name="simReplyKind" defaultValue={simulationInputs.replyKind}>
+              {SIMULATION_REPLY_KINDS.map((value) => (
+                <option key={value} value={value}>
+                  {t.t(`simReplyKind.${value}`)}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <label htmlFor="sim-template">{t.t("sim.templateName")}</label>
-          <input
-            id="sim-template"
-            name="simTemplate"
-            type="text"
-            maxLength={MAX_TEMPLATE_NAME_CHARS}
-            defaultValue={simulationInputs.templateName}
-          />
-          <p className="muted">{t.t("sim.templateNameHint")}</p>
+          <div className="field">
+            <label htmlFor="sim-template">{t.t("sim.templateName")}</label>
+            <input
+              id="sim-template"
+              name="simTemplate"
+              type="text"
+              maxLength={MAX_TEMPLATE_NAME_CHARS}
+              defaultValue={simulationInputs.templateName}
+              aria-describedby="sim-template-hint"
+            />
+            {/* Inside the field, not beside it: a direct child of the form is a cell of the wrapping grid
+                like any other, so the hint used to land under whichever field the row happened to put it
+                next to — and it explains this one. */}
+            <p className="muted" id="sim-template-hint">
+              {t.t("sim.templateNameHint")}
+            </p>
+          </div>
 
           <button className="button" type="submit">
             {t.t("sim.run")}

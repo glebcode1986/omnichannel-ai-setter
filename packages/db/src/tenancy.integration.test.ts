@@ -15,7 +15,6 @@ import {
   getConversation,
   listAuthorizedBusinessProfiles,
   listChannelAccounts,
-  listConversationMessages,
   listInboxConversations,
   listWorkspacesForUser,
   setConversationLeadStage,
@@ -25,6 +24,7 @@ import {
   type BusinessProfileContext,
   type WorkspaceContext,
 } from "./index";
+import { readConversation } from "./inbox-store";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { addTestMember, createTestUser, seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
@@ -254,10 +254,15 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
         expect(await getConversation(db(), context, foreign.conversationId)).toBeNull();
         expect(await getChannelAccount(db(), context, foreign.channelAccount.id)).toBeNull();
         expect(await listInboxConversations(db(), context, { channelAccountId: foreign.channelAccount.id })).toEqual([]);
-        await expect(listConversationMessages(db(), context, foreign.conversationId)).rejects.toThrow(new TenantRecordNotFoundError("Conversation"));
+        // Through `readConversation`, which is the reader the Inbox actually uses. This used to assert
+        // against `listConversationMessages`, a repository function with no caller anywhere — so the
+        // tenancy property it proved was a property of dead code. The production reader refuses by
+        // answering `undefined`, deliberately: "a URL someone typed should produce not-found, and a
+        // thrown tenancy error rendered as a stack trace tells an attacker the row exists".
+        expect(await readConversation(db(), context, foreign.conversationId)).toBeUndefined();
       }
       expect(await getConversation(db(), context, MISSING_ID)).toBeNull();
-      await expect(listConversationMessages(db(), context, MISSING_ID)).rejects.toThrow(new TenantRecordNotFoundError("Conversation"));
+      expect(await readConversation(db(), context, MISSING_ID)).toBeUndefined();
 
       expect((await listInboxConversations(db(), context)).map((conversation) => conversation.id)).toEqual([a1.conversationId]);
       expect((await listChannelAccounts(db(), context)).map((account) => account.id)).toEqual([a1.channelAccount.id]);
@@ -266,7 +271,8 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
         expect(account).not.toHaveProperty("credentialId");
         expect(account).not.toHaveProperty("credential");
       }
-      expect(await listConversationMessages(db(), context, a1.conversationId)).toHaveLength(1);
+      // The positive control: the profile's own conversation reads, with its message.
+      expect((await readConversation(db(), context, a1.conversationId))?.messages).toHaveLength(1);
     });
 
     it("keeps the same provider user as separate contacts and identities per Business Profile", async () => {
@@ -334,7 +340,7 @@ describe.skipIf(!databaseTestsEnabled())("Workspace and Business Profile isolati
           listInboxConversations(db(), forged),
           setConversationLeadStage(db(), forged, a2.conversationId, "LOST"),
           appendInboundMessage(db(), forged, { conversationId: a2.conversationId, kind: "TEXT", occurredAt: new Date() }),
-          listConversationMessages(db(), forged, a2.conversationId),
+          readConversation(db(), forged, a2.conversationId),
           getChannelAccount(db(), forged, a2.channelAccount.id),
           listChannelAccounts(db(), forged),
           createChannelAccount(db(), forged, { channel: "WHATSAPP", externalAccountId: "forged", capabilities: NO_CAPABILITIES }),

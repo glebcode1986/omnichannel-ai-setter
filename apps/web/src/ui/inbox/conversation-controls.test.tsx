@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConversationDetail, PendingSend } from "@omnichannel/db";
 
 import { ConversationControls } from "./conversation-controls";
-import { catalogues, type MessageKey } from "@/i18n/catalogue";
+import { catalogues, pluralCatalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
 
 const t = createTranslator("en");
@@ -60,6 +60,7 @@ const conversation = (overrides: Partial<ConversationDetail> = {}): Conversation
   lastOutboundAt: null,
   messages: [],
   pendingSends: [],
+  pendingSendsBeyondWindow: 0,
   ...overrides,
 });
 
@@ -169,6 +170,33 @@ describe("a reply waiting to go out", () => {
 
     expect(document.querySelector("[data-operation='op_1'] .message-text")).toBeNull();
     expect(screen.getByRole("button", { name: text("control.cancelSend") })).toBeDefined();
+  });
+
+  it("says how many queued sends it is not showing, and how to reach them", () => {
+    // The window holds the ten that go out soonest, which are the ones being raced. Past that the pane
+    // used to render ten cancel buttons and nothing at all to say an eleventh send existed — and the
+    // read's own comment is that a send the operator cannot see is a send they cannot stop. Each hidden
+    // one is reachable by cancelling a visible one, which is why the sentence says so.
+    controls({ pendingSends: [send()], pendingSendsBeyondWindow: 3 });
+
+    expect(document.querySelector("[data-pending-beyond]")?.getAttribute("data-pending-beyond")).toBe("3");
+    expect(document.querySelector("[data-pending-beyond]")?.textContent).toBe(
+      pluralCatalogues.en["control.pendingBeyond"]?.other?.replace("{count}", "3"),
+    );
+  });
+
+  it("says it in the singular for the first one it hides, which is the number it will usually be", () => {
+    controls({ pendingSends: [send()], pendingSendsBeyondWindow: 1 });
+
+    expect(document.querySelector("[data-pending-beyond]")?.textContent).toBe(
+      pluralCatalogues.en["control.pendingBeyond"]?.one?.replace("{count}", "1"),
+    );
+  });
+
+  it("says nothing when the window is the whole queue, which is the ordinary case", () => {
+    controls({ pendingSends: [send()], pendingSendsBeyondWindow: 0 });
+
+    expect(document.querySelector("[data-pending-beyond]")).toBeNull();
   });
 });
 

@@ -182,6 +182,26 @@ Grace timing and exact provider retry mechanics stay configurable because provid
 - Account/data deletion is a separate explicit workflow governed by retention policy.
 - Resume/undo cancellation may be supported while the paid period is still active and provider capability permits it.
 
+### Telling the provider — best-effort, and in that order (accepted)
+
+A cancellation is **committed locally first**, and that is what the customer is told. The request asking
+the provider to stop renewing happens afterwards and may fail: a decision somebody made must not depend on
+a third party being reachable, and a provider timeout that lost a cancellation would be much the worse of
+the two failures.
+
+Whatever happens to that request is written to the audit trail, including that it could not be made and
+that the provider has no such request to make. That record is the difference between a cancellation which
+takes effect by itself and one somebody has to act on before the next charge, and it is the only durable
+consequence: a failed request to stop renewing changes nothing about what the workspace is entitled to
+today, because only a verified event ends an entitlement.
+
+There is deliberately **no retry loop** around it. The repair path for a product state behind the
+provider's is `reconcileProviderState` (ADR-019), and until something calls it periodically the audit row
+is for a person. A retry here would be an unsupervised loop impersonating reconciliation.
+
+And a renewal that arrives anyway **cannot undo the cancellation** — see `BILLING_ROUTING.md`
+§"What an event may do": recorded, never resurrected.
+
 ## Accepted refund / chargeback behavior
 
 ### Refund

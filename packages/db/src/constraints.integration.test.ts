@@ -1,7 +1,14 @@
 import { NO_CAPABILITIES } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { authorizeBusinessProfileAccess, createBusinessProfile, createChannelAccount, createContactWithChannelIdentity } from "./index";
+import {
+  authorizeBusinessProfileAccess,
+  authorizePlatformAccess,
+  createBusinessProfile,
+  createChannelAccount,
+  createContactWithChannelIdentity,
+  recordPlatformAuditEvent,
+} from "./index";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createTestUser, seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
@@ -795,5 +802,76 @@ describe.skipIf(!databaseTestsEnabled())("schema constraints (PostgreSQL)", () =
     ]);
     expect(rules.filter((rule) => rule.delete_rule !== "CASCADE").every((rule) => rule.delete_rule === "RESTRICT")).toBe(true);
     expect(rules.every((rule) => rule.update_rule === "RESTRICT")).toBe(true);
+  });
+
+  /**
+   * Every trigger that enforces something fires in replica mode too.
+   *
+   * A trigger created with a plain `CREATE TRIGGER` is origin-only, so `SET session_replication_role =
+   * 'replica'` — a plain `SET`, not DDL, available to this very connection — makes it silent for the rest
+   * of the session, with `pg_trigger` left reporting it present and enabled. Two things turn on that:
+   * every immutability guard protecting a record somebody relies on as evidence, and every advisory-lock
+   * trigger that orders a write against a delivery claim already in flight. The second is the one worth
+   * the test, because its silence refuses nothing and logs nothing — the lock is simply not taken, every
+   * suite still passes, and the race the lock was bought to prevent is back.
+   *
+   * Asserted as an exact roster rather than a count, so a trigger added later without `ENABLE ALWAYS` is
+   * a failing test rather than a quiet hole.
+   */
+  it("fires every enforcing trigger in replica mode, and names the one exception", async () => {
+    const triggers = await db().$queryRaw<{ name: string; table: string; enabled: string }[]>`
+      SELECT t."tgname" AS name, c."relname" AS "table", t."tgenabled"::text AS enabled
+      FROM "pg_trigger" t
+      JOIN "pg_class" c ON c."oid" = t."tgrelid"
+      JOIN "pg_namespace" n ON n."oid" = c."relnamespace"
+      WHERE NOT t."tgisinternal" AND n."nspname" = 'public'
+      ORDER BY t."tgname"`;
+
+    expect(triggers.length).toBeGreaterThan(20);
+    // `A` is ENABLE ALWAYS; `O` is the plain default. Nothing may be disabled (`D`) or replica-only (`R`).
+    expect(triggers.filter((trigger) => trigger.enabled !== "A" && trigger.enabled !== "O")).toEqual([]);
+    expect(triggers.filter((trigger) => trigger.enabled === "O").map((trigger) => trigger.name)).toEqual([
+      // The one exception, and it is deliberate: this checks a property of the *transaction* that wrote
+      // the row — that the parent candidate was created by the same one — rather than a property of the
+      // row. A replication apply, and a data-only restore inserting parents and children separately, are
+      // both legitimate writers that cannot satisfy it, so firing in replica mode would refuse the one
+      // case the mode exists for. The append-only guard on the same table is what binds everything after.
+      "release_gate_results_sealed",
+    ]);
+  });
+
+  it("refuses an edit to an append-only record inside replica mode, and still takes the ordering key", async () => {
+    // The flag above could be right while the trigger did nothing, so this asserts the behaviour. Both
+    // halves: a refusal that leaves a trace, and a lock whose absence would leave none.
+    const actor = await createTestUser(db(), "replica-probe");
+    await db().platformMember.create({ data: { userId: actor, role: "OPERATIONS", note: "replica probe" } });
+    const context = await authorizePlatformAccess(db(), actor);
+    const event = await recordPlatformAuditEvent(db(), context, {
+      kind: "WORKSPACE_INSPECTED",
+      subjectType: "Workspace",
+      subjectId: a.workspaceId,
+      reason: "replica-mode probe",
+      workspaceId: a.workspaceId,
+    });
+
+    await expect(
+      db().$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL session_replication_role = 'replica'`;
+        await tx.$executeRaw`UPDATE "platform_audit_events" SET "reason" = 'edited' WHERE "id" = ${event.id}`;
+      }),
+    ).rejects.toThrow(/append-only/u);
+    expect((await db().platformAuditEvent.findUniqueOrThrow({ where: { id: event.id } })).reason).toBe("replica-mode probe");
+
+    // And the advisory key, which refuses nothing: the proof is that the lock is held after the write.
+    const held = await db().$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL session_replication_role = 'replica'`;
+      await tx.$executeRaw`
+        INSERT INTO "automation_suspensions" ("id", "scope", "workspace_id", "reason", "note", "since", "by_user_id", "updated_at")
+        VALUES (gen_random_uuid()::text, 'WORKSPACE', ${a.workspaceId}, 'OPERATOR', 'replica probe', now(), ${actor}, now())`;
+      const rows = await tx.$queryRaw<{ locks: bigint }[]>`
+        SELECT count(*)::bigint AS locks FROM "pg_locks" WHERE "locktype" = 'advisory' AND "pid" = pg_backend_pid()`;
+      return rows[0]?.locks ?? 0n;
+    });
+    expect(held, "the kill switch's ordering key must be taken even in replica mode").toBeGreaterThan(0n);
   });
 });

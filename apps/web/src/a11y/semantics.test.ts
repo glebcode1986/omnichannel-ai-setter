@@ -174,6 +174,34 @@ describe("the production UI's semantics", () => {
     expect(report(findings)).toEqual([]);
   });
 
+  it("keeps a table a table where the stylesheet stops it being one", () => {
+    // A browser reads a table element's implicit role off its computed display, so `display: block` on a
+    // table, a row or a cell silently drops table, row, rowgroup and cell from the accessibility tree.
+    // The stylesheet does exactly that on purpose below 900px, to lay each lead out as a card — which is
+    // the width band where that table is the *only* view of a lead, the kanban board being hidden. So the
+    // markup has to write the roles out, or a screen-reader user gets a run of generic blocks.
+    const stylesheet = readFileSync(path.join(uiRoot, "app/globals.css"), "utf8");
+    const board = readFileSync(path.join(uiRoot, "ui/leads/lead-board.tsx"), "utf8");
+
+    expect(stylesheet, "this test exists because the stylesheet does this").toMatch(
+      /\.lead-table[^{}]*\{[^{}]*display:\s*block/u,
+    );
+
+    expect(board).toContain('<table className="lead-table" role="table">');
+    expect(board, "both row groups").toContain('<thead role="rowgroup">');
+    expect(board).toContain('<tbody role="rowgroup">');
+
+    // Counted, not spot-checked: a column added without its role is the way this comes back.
+    const counts = (pattern: RegExp): number => [...board.matchAll(pattern)].length;
+    expect(counts(/<tr\b/gu), "every row says so").toBe(counts(/role="row"/gu));
+    expect(counts(/<th scope="col"/gu), "every column header says so").toBe(counts(/role="columnheader"/gu));
+    expect(counts(/<th scope="row"/gu), "every row header says so").toBe(counts(/role="rowheader"/gu));
+    expect(counts(/<td\b/gu), "every cell says so").toBe(counts(/role="cell"/gu));
+
+    // And the name a cell draws for itself must not be announced on top of the column it now has again.
+    expect(stylesheet, "the drawn label is for eyes only").toMatch(/content:\s*attr\(data-label\)\s*\/\s*""/u);
+  });
+
   it("looks at every production component, so a clean result means something", () => {
     const files = productionFiles();
 

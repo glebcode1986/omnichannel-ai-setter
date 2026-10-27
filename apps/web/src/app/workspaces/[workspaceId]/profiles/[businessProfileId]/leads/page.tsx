@@ -75,21 +75,27 @@ export default async function LeadsPage({
       <OutcomeNotice t={t} outcome={one(query["outcome"])} />
 
       <form action={leadsPath} method="get" role="search" className="inbox-search">
-        <label htmlFor="leads-q">{t.t("inbox.searchLabel")}</label>
-        <input id="leads-q" name="q" type="search" defaultValue={search ?? ""} />
+        <div className="field">
+          <label htmlFor="leads-q">{t.t("inbox.searchLabel")}</label>
+          <input id="leads-q" name="q" type="search" defaultValue={search ?? ""} />
+        </div>
 
-        <label htmlFor="leads-stage">{t.t("leads.tableHeadStage")}</label>
-        <select id="leads-stage" name="stage" defaultValue={filter.stage ?? ""}>
-          <option value="">{t.t("inbox.filterAll")}</option>
-          {stages.map((display) => (
-            <option key={display.stage} value={display.stage}>
-              {display.label}
-            </option>
-          ))}
-        </select>
+        <div className="field">
+          <label htmlFor="leads-stage">{t.t("leads.tableHeadStage")}</label>
+          <select id="leads-stage" name="stage" defaultValue={filter.stage ?? ""}>
+            <option value="">{t.t("inbox.filterAll")}</option>
+            {stages.map((display) => (
+              <option key={display.stage} value={display.stage}>
+                {display.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <label htmlFor="leads-tag">{t.t("leads.tags")}</label>
-        <input id="leads-tag" name="tag" type="text" defaultValue={tag ?? ""} />
+        <div className="field">
+          <label htmlFor="leads-tag">{t.t("leads.tags")}</label>
+          <input id="leads-tag" name="tag" type="text" defaultValue={tag ?? ""} />
+        </div>
 
         <button className="button" type="submit">
           {t.t("inbox.applyFilters")}

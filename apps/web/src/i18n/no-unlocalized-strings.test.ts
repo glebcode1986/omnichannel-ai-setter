@@ -44,6 +44,15 @@ const NOT_PROSE = /^[\s\d\p{P}\p{S}]*$/u;
 /** Attributes a screen reader reads out. An English one of these is as broken as English prose. */
 const ACCESSIBLE_NAME_ATTRIBUTES = new Set(["aria-label", "title", "placeholder", "alt"]);
 
+/*
+ * Attributes a stylesheet draws on screen with `content: attr(...)`. They are not accessible names — the
+ * lead cards give theirs an empty alternative text on purpose, because the restored table roles already
+ * name the column — but they are read by a person looking at a phone, which is the whole reason this gate
+ * exists. A column name hardcoded into one would show in English on a Russian console with nothing to
+ * report it.
+ */
+const DRAWN_TEXT_ATTRIBUTES = new Set(["data-label"]);
+
 interface Finding {
   readonly file: string;
   readonly line: number;
@@ -116,8 +125,11 @@ export function unlocalizedLiterals(fileName: string, source: string): readonly 
       }
     }
 
-    // An accessible name, in either quote style or as an expression.
-    if (ts.isJsxAttribute(node) && ACCESSIBLE_NAME_ATTRIBUTES.has(node.name.getText(parsed))) {
+    // An accessible name or a label a stylesheet draws, in either quote style or as an expression.
+    if (
+      ts.isJsxAttribute(node) &&
+      (ACCESSIBLE_NAME_ATTRIBUTES.has(node.name.getText(parsed)) || DRAWN_TEXT_ATTRIBUTES.has(node.name.getText(parsed)))
+    ) {
       const text = literalText(node.initializer);
       if (text !== undefined && isProse(text)) {
         report(node, `${node.name.getText(parsed)}="${text}"`);

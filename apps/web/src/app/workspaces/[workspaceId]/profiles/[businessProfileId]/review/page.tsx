@@ -49,15 +49,17 @@ export default async function ReviewPage({
       <OutcomeNotice t={t} outcome={one(query["outcome"])} />
 
       <form action={reviewPath} method="get" className="inbox-search" role="search">
-        <label htmlFor="review-reason">{t.t("review.filterReason")}</label>
-        <select id="review-reason" name="reason" defaultValue={view.reasonCode ?? ""}>
-          <option value="">{t.t("review.allReasons")}</option>
-          {REASON_CODES.map((code) => (
-            <option key={code} value={code}>
-              {code}
-            </option>
-          ))}
-        </select>
+        <div className="field">
+          <label htmlFor="review-reason">{t.t("review.filterReason")}</label>
+          <select id="review-reason" name="reason" defaultValue={view.reasonCode ?? ""}>
+            <option value="">{t.t("review.allReasons")}</option>
+            {REASON_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code}
+              </option>
+            ))}
+          </select>
+        </div>
         {view.view === undefined ? undefined : <input type="hidden" name="view" value={view.view} />}
         <button className="button" type="submit">
           {t.t("inbox.applyFilters")}

@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 
 import { evaluatePolicy } from "@omnichannel/application";
+import { NO_STAGED_ROLLOUT } from "@omnichannel/domain";
 
 import { afterWindowFor, capabilitiesFor, capabilityHintsFor, humanAgentFor, templateRouteFor, windowFor } from "./simulation";
 import type { SimulationInputs } from "./simulation";
@@ -113,6 +114,12 @@ function decide(inputs: SimulationInputs, policy: PolicyView) {
     // changing the outcome. A restrictive value here would have the billing gate refuse every case, and
     // the suite would pass while proving nothing about the inputs it exists to compare.
     commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+    // And the staged rollout, for exactly the same reason and arriving with the P7-02 merge: `rollout`
+    // became required on `PolicyInput`, so the compiler names every caller that has to decide. A posture
+    // that withheld autopilot would make the rollout gate refuse every case here and the suite would pass
+    // while proving nothing about the simulation inputs it exists to compare. `NO_STAGED_ROLLOUT` is the
+    // posture of a deployment with no staged release in force, which is what a test database is.
+    rollout: NO_STAGED_ROLLOUT,
     draft: {
       usable: true,
       confidence: 0.95,

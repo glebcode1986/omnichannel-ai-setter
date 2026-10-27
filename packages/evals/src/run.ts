@@ -21,7 +21,7 @@ import {
   type ReplyModel,
   type SaveDraftInput,
 } from "@omnichannel/application";
-import { NO_CAPABILITIES, resolveStyleProfile, type ReasonCode } from "@omnichannel/domain";
+import { NO_CAPABILITIES, NO_STAGED_ROLLOUT, resolveStyleProfile, type ReasonCode } from "@omnichannel/domain";
 
 import type { CaseAssertions, GoldenCase } from "./case";
 import { createFixtureModel, FIXTURE_MODEL, FIXTURE_PROVIDER } from "./fixture-model";
@@ -239,6 +239,9 @@ function policyInputFor(kase: GoldenCase, draft: SaveDraftInput | undefined, now
     // needs to assert a billing refusal it will say so, and the policy engine's own suite is where that
     // gate is pinned (#40).
     commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+    // Golden cases are about the policy's own logic, so no staged release is in force here — the same
+    // state a development checkout is in (#60).
+    rollout: NO_STAGED_ROLLOUT,
     limits: {
       confidenceThreshold: 0.8,
       mandatoryReviewReasons: ["MISSING_FACT", "PAYMENT_DISPUTE", "LEGAL_INTERPRETATION", "MEDICAL_OR_HIGH_RISK", "CREDENTIAL_OR_SECURITY", "REPUTATIONAL_COMPLAINT", "HIGH_VALUE_COMMITMENT", "UNSUPPORTED_PROMISE", "UNSUPPORTED_MEDIA"],

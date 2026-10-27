@@ -23,9 +23,30 @@
   --ok: #176b3f;
   --warn: #8a5300;
   --stop: #a01b28;
-  --radius: 8px;
+  --radius: 10px;
+  --radius-sm: 6px;
   --gap: 12px;
   --shell-nav-width: 232px;
+
+  /* A spacing ladder, so padding is chosen from a scale rather than invented per block. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* One type scale. `--text-s` is the label/meta size, `--text-m` the body the browser already sets. */
+  --text-s: 13px;
+  --text-m: 15px;
+  --text-l: 19px;
+  --text-xl: 26px;
+
+  /* Depth is a hairline and a very soft shadow, never a thick border: the product is read all day. */
+  --shadow-1: 0 1px 2px rgb(16 20 26 / 6%);
+  --shadow-2: 0 2px 8px rgb(16 20 26 / 8%);
+  --field-height: 38px;
+  --content-max: 1360px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,6 +63,9 @@
     --ok: #62d29a;
     --warn: #e0b054;
     --stop: #ff8f9a;
+    /* A shadow over a dark surface has to be darker than the surface, not lighter. */
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-2: 0 2px 10px rgb(0 0 0 / 45%);
   }
 }
 
@@ -59,6 +83,196 @@ body {
 a {
   color: var(--accent);
 }
+
+/* ---- type -------------------------------------------------------------------------------------- */
+
+h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 0;
+  font-size: var(--text-l);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  margin: 0;
+  font-size: var(--text-m);
+  font-weight: 620;
+}
+
+/* ---- form controls ----------------------------------------------------------------------------- */
+
+/*
+ * The base layer, and the reason it exists: controls used to be styled only where a component happened
+ * to name them — `.inbox-search input`, `.knowledge-editor select`, `.lead-move select`. Anything on a
+ * screen that did not match one of those selectors was drawn by the browser, so a filter row could show
+ * a styled text field next to a raw native dropdown. Styling the elements themselves means a control is
+ * never accidentally un-designed; the component rules below still win where they say something more.
+ */
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  min-height: var(--field-height);
+  width: 100%;
+  max-width: 100%;
+}
+
+textarea {
+  padding: var(--space-2) var(--space-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  min-height: 0;
+  accent-color: var(--accent);
+}
+
+/* The native dropdown is the single most out-of-place control on a custom surface, so it is replaced
+   with the same box as a text field plus a drawn chevron. `currentColor` keeps it right in both themes. */
+select {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% + 1px), calc(100% - 13px) calc(50% + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--border-strong);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/*
+ * A field is a label above its control. Declared once so every screen spaces them the same way, and so a
+ * label reads as a label rather than as body text that happens to sit above an input.
+ */
+label {
+  display: block;
+  font-size: var(--text-s);
+  font-weight: 560;
+  color: var(--text-muted);
+  letter-spacing: 0.01em;
+}
+
+label > input,
+label > select,
+label > textarea {
+  margin-top: var(--space-1);
+}
+
+/* A checkbox and its words belong on one line, which the block rule above would otherwise break. */
+label:has(> input[type="checkbox"]),
+label:has(> input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-m);
+  color: var(--text);
+}
+
+label:has(> input[type="checkbox"]) > input,
+label:has(> input[type="radio"]) > input {
+  margin-top: 0;
+}
+
+/* ---- disclosure -------------------------------------------------------------------------------- */
+
+/* `details` had no styling at all, so an expandable section looked like stray text with a triangle. */
+details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 0 var(--space-4);
+}
+
+details[open] {
+  padding-bottom: var(--space-4);
+}
+
+summary {
+  cursor: pointer;
+  padding: var(--space-3) 0;
+  font-weight: 560;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: var(--space-2);
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform: translateY(-1px);
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* Pointers that are fingers get targets a finger can hit, without enlarging a mouse-driven desktop. */
+@media (pointer: coarse) {
+  :root {
+    --field-height: 44px;
+  }
+
+  .button,
+  .nav-link,
+  summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}
+
 
 /* Always visible, never traded away for appearance: the shell must be operable from the keyboard. */
 :focus-visible {
@@ -100,15 +314,24 @@ a {
 .shell-nav {
   background: var(--surface);
   border-right: 1px solid var(--border);
-  padding: 16px 12px;
+  padding: var(--space-4) var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
 }
 
 .shell-main {
-  padding: 24px;
+  padding: var(--space-5);
   min-width: 0;
+  /* A line of text spanning a 2000px display is unreadable, and a filter row spanning it looks unfinished.
+     The board and the inbox still get plenty: this caps, it does not narrow. */
+  max-width: var(--content-max);
+  width: 100%;
 }
 
 .nav-list {
@@ -122,10 +345,11 @@ a {
 
 .nav-link {
   display: block;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   color: var(--text);
   text-decoration: none;
+  font-size: var(--text-m);
 }
 
 .nav-link:hover {
@@ -188,7 +412,32 @@ a {
   }
 
   .shell-main {
-    padding: 16px;
+    padding: var(--space-4);
+  }
+
+  .shell-nav {
+    position: static;
+    max-height: none;
+    padding: var(--space-3) var(--space-4);
+    gap: var(--space-3);
+  }
+
+  /*
+   * On a phone the sidebar becomes a header, and everything in it sits above the page. Collapsed, that
+   * was the workspace name, a switch link, the sections toggle, a setup link and a whole language form —
+   * most of a screen of chrome before the heading. The secondary controls now collapse with the sections
+   * they sit beside: open "Разделы" and they are all there, closed and the phone opens on the page.
+   */
+  .shell-nav:has(.nav-list[data-collapsed="true"]) > a,
+  .shell-nav:has(.nav-list[data-collapsed="true"]) > form {
+    display: none;
+  }
+
+  .workspace-switch {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
   }
 }
 
@@ -197,14 +446,15 @@ a {
 .card-grid {
   display: grid;
   gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
 .card {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: var(--space-4);
+  box-shadow: var(--shadow-1);
 }
 
 .card h3 {
@@ -266,13 +516,25 @@ a {
 }
 
 .button {
-  padding: 8px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--field-height);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
+  font-weight: 560;
+  text-decoration: none;
   cursor: pointer;
+  box-shadow: var(--shadow-1);
+}
+
+.button:hover {
+  border-color: var(--border-strong);
 }
 
 .button[data-variant="primary"] {
@@ -298,7 +560,9 @@ a {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--gap);
-  margin-bottom: 20px;
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
 }
 
 .page-header h1 {
@@ -382,22 +646,67 @@ a {
   display: none;
 }
 
+/*
+ * A filter row, not a stack of full-width fields. Every control here is a block-level `label` wrapping a
+ * full-width input, so without a basis each one claims the whole line — which is what made this read as
+ * an unfinished form. They share the row and wrap to their own lines only when there is no room.
+ */
+/*
+ * A filter row, not a stack of full-width fields.
+ *
+ * The markup here is a flat sequence — `<label for>` followed by its own control, repeated — so a flex
+ * row cannot keep a pair together: the label is one item, the control another, and a control at full
+ * width pushed itself onto a line of its own every time. That is what made this read as an unfinished
+ * form rather than a toolbar.
+ *
+ * A two-row grid filled **column first** pairs them without touching the markup: each label lands in the
+ * top row and the control that follows it in the bottom row of the same column. Below the breakpoint the
+ * flow turns back into rows and everything stacks, which is what a narrow screen wants anyway.
+ */
+/*
+ * The row wraps by itself, at every width, with no number in it to be wrong. It could not before: a
+ * label and its control were siblings, nothing in CSS pairs siblings, and `grid-auto-flow: column` was
+ * what paired them — at the price of a grid that grows a column per child and never wraps. Each pair is
+ * one element now, so `auto-fit` can do the arithmetic that three hand-picked breakpoints got wrong at
+ * 768, at 900 and, with seven fields on the settings page, at 1280 and 1440 as well.
+ */
 .inbox-search {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
+  gap: var(--space-1) var(--space-3);
   align-items: end;
-  margin-bottom: var(--gap);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+}
+
+/* A field is its label and its control together. That pairing is what lets the row wrap. */
+.inbox-search .field {
+  display: grid;
+  gap: var(--space-1);
+  align-content: end;
+  min-width: 0;
+}
+
+/*
+ * The submit is a field's width like any other cell, and sits at the bottom of its row beside the
+ * controls rather than under an empty label. The inbox's list column needs no rule of its own any more:
+ * at 276px `auto-fit` resolves to one column there, which is what its override used to say by hand.
+ */
+.inbox-search > button,
+.inbox-search > .button {
+  white-space: nowrap;
 }
 
 .inbox-search label {
-  flex-basis: 100%;
   font-size: 13px;
   color: var(--text-muted);
 }
 
 .inbox-search input {
-  flex: 1 1 140px;
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -729,7 +1038,9 @@ a {
 }
 
 .review-edit textarea {
-  min-width: 18rem;
+  /* A floor the card cannot satisfy is not a floor, it is an overflow: the review card leaves 262px and
+     18rem is 288. Capped at the card's own width, the same way the auto-fit floors are. */
+  min-width: min(18rem, 100%);
   resize: vertical;
 }
 
@@ -876,9 +1187,15 @@ a {
 
 /* ---- style training ----------------------------------------------------------------------------- */
 
+/*
+ * `min(…, 100%)` rather than the bare minimum: the minimum in `minmax` is a floor the track keeps even
+ * when the container is narrower, so `minmax(20rem, 1fr)` draws a 320px column inside a 288px box and the
+ * page scrolls sideways at 320px. Capping the floor at the container's own width is what makes auto-fit
+ * actually fit. The same correction applies to every auto-fit grid in this stylesheet.
+ */
 .voice-layers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
   gap: var(--gap);
 }
 
@@ -934,11 +1251,65 @@ a {
 }
 
 .lead-column {
-  padding: 10px;
+  padding: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  background: var(--surface);
+  min-width: min(16rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The column's own heading: a quiet label with its count, not another line of body text. */
+.lead-column > h3 {
+  font-size: var(--text-s);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.lead-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/*
+ * A lead is a card. The list had no styling at all, so a name, its tags, the next action and a move form
+ * ran together as one block of text and the board read as a wall rather than as things you can pick up.
+ */
+.lead-column li {
   background: var(--surface-raised);
-  min-width: 16rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-shadow: var(--shadow-1);
+}
+
+.lead-column li > p {
+  margin: 0;
+  font-size: var(--text-s);
+}
+
+/* The person's name is the one thing on the card that is not secondary. */
+.lead-column li a[data-open-lead] {
+  color: var(--text);
+  font-weight: 600;
+  font-size: var(--text-m);
+  text-decoration: none;
+}
+
+.lead-column li a[data-open-lead]:hover {
+  text-decoration: underline;
 }
 
 .lead-column h3 {
@@ -977,8 +1348,20 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
-  gap: 4px;
-  font-size: 13px;
+  gap: var(--space-2);
+  font-size: var(--text-s);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.lead-move select {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.lead-move .button {
+  flex: 0 0 auto;
+  padding: 0 var(--space-3);
 }
 
 .lead-move select {
@@ -1010,6 +1393,95 @@ a {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
+}
+
+/*
+ * Below the board the table is the only view of a lead, and it does not fit: at 375px its five columns
+ * are 131px wider than the screen and at 768px, where the shell still spends 232px on its sidebar, they
+ * are 117px wider. Either way the page itself scrolls sideways, which is the loss the comment above set
+ * out to prevent and did not. So the row stops being a row. Each lead becomes a card, and each cell
+ * carries its own column name — read from data-label, which the cell fills from the same message key the
+ * header uses, so a translated table stays translated here.
+ *
+ * The bound is the board's own, deliberately: the width at which the board stops being shown is the
+ * width from which the table is the only view, and a view that is the only one has to fit.
+ */
+@media (max-width: 900px) {
+  .lead-table,
+  .lead-table caption,
+  .lead-table thead,
+  .lead-table tbody,
+  .lead-table tr,
+  .lead-table th,
+  .lead-table td {
+    display: block;
+  }
+
+  /*
+   * The header row stays in the accessibility tree — clipped, never `display: none` — and it is a real
+   * header row there because the markup writes the table roles out by hand. Changing an element's display
+   * takes its implicit role with it, so without those attributes this would be five orphan words read
+   * before the first card. On screen the cards carry the names instead.
+   */
+  .lead-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .lead-table tr {
+    margin-bottom: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-raised);
+  }
+
+  .lead-table tbody th[scope="row"] {
+    padding: 0 0 var(--space-2);
+    border-bottom: 1px solid var(--border);
+    font-size: var(--text-m);
+  }
+
+  .lead-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+    gap: var(--space-2);
+    padding: var(--space-2) 0 0;
+    border-bottom: 0;
+  }
+
+  .lead-table td {
+    /* A lead's next action is free text and a person will paste a link into it. The value track is
+       `minmax(0, 1fr)`, so it can shrink — but a token with nowhere to break still cannot, and the card
+       would burst sideways rather than wrap. */
+    overflow-wrap: anywhere;
+  }
+
+  .lead-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+  }
+
+  /*
+   * The same name twice is worse than none: the cell already has its column through the restored roles,
+   * so the drawn label is for eyes only and its alternative text is empty. Declared separately and behind
+   * `@supports` on purpose — a browser that does not know the `content: value / alt` form would treat the
+   * whole declaration as invalid and the labels would vanish from the cards instead.
+   */
+  @supports (content: "x" / "y") {
+    .lead-table td::before {
+      content: attr(data-label) / "";
+    }
+  }
+
+  /* A lead with no next action should not spend a line of the card saying so. */
+  .lead-table td:empty {
+    display: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1083,6 +1555,15 @@ a {
   font-size: 14px;
 }
 
+/*
+ * The stage editor is a grid of inputs and order controls, so it does not become cards the way the
+ * lead table does: it keeps its shape and scrolls inside its own panel, like the metric and audit
+ * panels, rather than letting its widest row decide the width of the page.
+ */
+.stage-config {
+  overflow-x: auto;
+}
+
 .stage-config th,
 .stage-config td {
   text-align: left;
@@ -1127,12 +1608,25 @@ a {
   background: var(--surface);
 }
 
+/*
+ * Pre-existing, found while measuring this branch: a flex item's automatic minimum size is its content,
+ * and a `<select>`'s content is its longest option. Rename a lead stage to a sentence and the analytics
+ * and audit filter bars take the page sideways with it, at any width the option outgrows. `min-width: 0`
+ * lets the item shrink; the select then truncates its own text, which is what a select is for.
+ */
 .filter-bar label {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
   font-size: 0.875rem;
   color: var(--text-muted);
+}
+
+.filter-bar select,
+.filter-bar input {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .filter-bar select,
@@ -1146,7 +1640,7 @@ a {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: var(--gap);
   align-items: start;
 }
@@ -1214,6 +1708,33 @@ a {
 
 .audit-log {
   overflow-x: auto;
+}
+
+/*
+ * The platform audit shipped with no styles at all, so its six columns of timestamps, operator ids and
+ * reasons were drawn by the browser and decided the width of the admin page. Same treatment as the other
+ * wide tables: the card it sits in is the scroll boundary, and the table keeps its shape inside it.
+ */
+.card[data-admin="audit"] {
+  overflow-x: auto;
+}
+
+.admin-audit {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.admin-audit th,
+.admin-audit td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-audit th {
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .audit-log th,

@@ -16,10 +16,12 @@ import {
   assembleAdminAudit,
   assembleAdminConversation,
   assembleAdminHome,
+  assembleAdminReleases,
   assembleAdminWorkspace,
   type AdminAuditData,
   type AdminConversationData,
   type AdminHomeData,
+  type AdminReleasesData,
   type AdminWorkspaceData,
 } from "@/server/admin-screen";
 import { getDb } from "@/server/db";
@@ -62,4 +64,10 @@ export async function loadAdminAudit(searchParams: RawSearchParams): Promise<Adm
   const context = await requirePlatformContext();
   const t = await requestTranslator();
   return { t, ...(await assembleAdminAudit(getDb(), context, searchParams, `${ADMIN_BASE_PATH}/audit`)) };
+}
+
+export async function loadAdminReleases(): Promise<AdminReleasesData & { readonly t: Translator }> {
+  const context = await requirePlatformContext();
+  const t = await requestTranslator();
+  return { t, ...(await assembleAdminReleases(getDb(), context, `${ADMIN_BASE_PATH}/releases`)) };
 }

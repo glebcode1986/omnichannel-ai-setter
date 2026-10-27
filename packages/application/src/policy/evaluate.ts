@@ -126,6 +126,30 @@ export function evaluatePolicy(input: PolicyInput): PolicyDecision {
     // a person exactly as it would in DRAFT.
     reasons.add("BILLING_FEATURE_OFF");
   }
+  // --- Staged rollout (#60, LAUNCH_READINESS.md §18) -------------------------------------------------
+  //
+  // One more reason a reply may not go out unattended, in a product that is mid-rollout. It only ever
+  // subtracts: the plan's feature, the profile's mode and the kill switch all still apply, and nothing
+  // here can grant unattended sending to a profile the others refused.
+  //
+  // Authority-aware, and that is not a softening — it is what makes the gate usable. Stages one to three
+  // of §18 *are* human-approved sending ("limited design partners, DRAFT-first"), so an unconditional
+  // gate would block the very traffic those stages consist of, which is the `AUTOMATION_SUSPENDED` shape
+  // above applied where it does not belong. Non-terminal for the same reason: the reply waits for a
+  // person exactly as it would in DRAFT, and nothing is lost.
+  //
+  // It is worth saying why this is the opposite treatment from the kill switch, since both are operator
+  // statements about the product rather than about this conversation. A kill switch is an *incident*: the
+  // whole point is that outbound stops now, including replies a colleague approved a minute ago, because
+  // whoever pulled it does not yet know what is wrong. A rollout stage is a *plan*: it says which
+  // customers may have the product send on their behalf without anybody watching, and it has nothing to
+  // say about a colleague answering their own customer. The consequence is deliberate — an approval
+  // recorded before a rollout was pulled back still sends — and it is the right one: if the reason for
+  // pulling back is that sending is unsafe at all, the tool for that is the switch, which is immediate,
+  // unconditional and needs no reviewer.
+  if (approved === undefined && input.mode === "AUTOPILOT" && !input.rollout.autopilot) {
+    reasons.add("ROLLOUT_AUTOPILOT_NOT_RELEASED");
+  }
   // The four below are all the same kind of gate: "a person should look at this". A person has, so they
   // are not asked again. What the person could not have changed — the account, the kill switch, the
   // channel's capabilities, the window — is checked above and below regardless of who is sending.

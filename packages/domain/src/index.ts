@@ -54,6 +54,7 @@ export * from "./onboarding";
 export * from "./platform";
 export * from "./reason-codes";
 export * from "./reconciliation";
+export * from "./release";
 export * from "./style-profile";
 export * from "./suspension";
 export * from "./values";

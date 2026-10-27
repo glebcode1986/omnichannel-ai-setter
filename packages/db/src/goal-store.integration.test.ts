@@ -257,4 +257,58 @@ describe.skipIf(!databaseTestsEnabled())("conversation goals", () => {
     expect(await setNextAction(db(), profile.context, { conversationId: theirs.conversationId, nextAction: "Reach across" })).toEqual({ status: "GONE" });
     expect((await readGoals(db(), profile.context, theirs.conversationId)).all).toEqual([]);
   }, 180_000);
+
+  it("finds the primary goal behind a long history, not only inside the window", async () => {
+    // `primary` used to be found inside the fifty newest goals. A conversation with more than that would
+    // have reported no primary goal while an active one existed — and `undefined` also means "there
+    // isn't one", so nothing in the answer could have said otherwise. A derived authority value computed
+    // inside a bound chosen for display is the shape this exists to rule out.
+    //
+    // Fifty-five suggestions on top of the primary, which is one more than the window holds.
+    const { profile } = await fresh("goal-long-history");
+
+    const set = await setPrimaryGoal(db(), profile.context, { conversationId: profile.conversationId, kind: "BOOK_APPOINTMENT", at: AT });
+    if (set.status !== "SET") {
+      throw new Error(`the fixture expected SET, got ${set.status}`);
+    }
+    // Backdated, because `setPrimaryGoal` stamps `createdAt` with the real clock and the window is
+    // ordered by it: left alone, the primary goal would be the newest row and the window would contain
+    // it, which is the one arrangement this test cannot be run against.
+    await db().conversationGoal.updateMany({
+      where: { conversationId: profile.conversationId, isPrimary: true },
+      data: { createdAt: AT },
+    });
+    for (let index = 0; index < 55; index += 1) {
+      await db().conversationGoal.create({
+        data: {
+          workspaceId: profile.context.workspaceId,
+          businessProfileId: profile.businessProfileId,
+          conversationId: profile.conversationId,
+          kind: "ANSWER_QUESTION",
+          // Closed rather than active, because the unique index permits one active primary per
+          // conversation and these are the history the window fills up with, not rivals to it.
+          status: "ACHIEVED",
+          // The provenance CHECK pairs `HUMAN_SET` with an actor and `AI_SUGGESTED` with a draft; the
+          // terminal CHECK pairs `ACHIEVED` with a moment. Both halves of each pair, or the row cannot
+          // exist — which is the schema being right and the fixture having to say what it means.
+          source: "HUMAN_SET",
+          setByUserId: profile.context.userId,
+          achievedAt: new Date(AT.getTime() + 2000 * (index + 1)),
+          isPrimary: false,
+          createdAt: new Date(AT.getTime() + 1000 * (index + 1)),
+        },
+      });
+    }
+
+    const goals = await readGoals(db(), profile.context, profile.conversationId);
+
+    // The window is a window, and the primary goal is outside it.
+    expect(goals.all).toHaveLength(50);
+    expect(goals.all.some((goal) => goal.isPrimary && goal.status === "ACTIVE")).toBe(false);
+    // And it is still found, because it has its own query.
+    expect(goals.primary?.kind).toBe("BOOK_APPOINTMENT");
+    expect(goals.primary?.isPrimary).toBe(true);
+    expect(goals.primary?.status).toBe("ACTIVE");
+  }, 300_000);
+
 });

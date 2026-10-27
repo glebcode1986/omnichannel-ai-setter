@@ -9,12 +9,14 @@
  */
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { KillSwitchRow, ReconciliationRow, SupportSessionRow, SupportSnapshot } from "@omnichannel/db";
+import type { KillSwitchRow, ProfileDiagnostic, ReconciliationRow, ReleaseView, SupportSessionRow, SupportSnapshot } from "@omnichannel/db";
 import { noSupportScope, PLAN_FEATURES, type PlanFeature, type SupportScope } from "@omnichannel/domain";
 
 import { KillSwitches } from "./kill-switches";
 import { PlatformAuditTable } from "./platform-audit-table";
 import { ReconciliationQueue } from "./reconciliation-queue";
+import { ReleaseHistory } from "./release-history";
+import { RolloutAllowlist } from "./rollout-allowlist";
 import { SupportAccess } from "./support-access";
 import { WorkspaceSummary } from "./workspace-summary";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
@@ -32,7 +34,7 @@ const snapshot = (overrides: Partial<SupportSnapshot> = {}): SupportSnapshot => 
   name: "Acme",
   createdAt: NOW,
   members: 3,
-  profiles: [{ businessProfileId: "bp-1", name: "Main", status: "ACTIVE", channelAccounts: 1 }],
+  profiles: [{ businessProfileId: "bp-1", name: "Main", status: "ACTIVE", channelAccounts: 1, rolloutAutopilot: false }],
   channels: [
     {
       channelAccountId: "ca-1",
@@ -344,5 +346,154 @@ describe("the internal audit table", () => {
     render(<PlatformAuditTable t={t} rows={[]} />);
 
     expect(global.document.querySelector('[data-audit="none"]')?.textContent).toBe(text("admin.noAudit"));
+  });
+});
+
+describe("the release record", () => {
+  const candidate = (overrides: Partial<ReleaseView> = {}): ReleaseView => ({
+    releaseId: "rel-1",
+    sha: "a".repeat(40),
+    stage: "LIMITED_AUTOPILOT",
+    rollbackPlan: "redeploy the previous tag",
+    summary: "P7-02",
+    migrations: [],
+    enabledFlags: [],
+    createdAt: NOW,
+    results: [],
+    reviews: [],
+    decision: { releasable: true, blockers: [], disabledCapabilities: [], knownLimitations: [] },
+    reviewer: "PASS",
+    approved: true,
+    ...overrides,
+  });
+
+  it("distinguishes 'no release recorded' from 'cannot tell', because the send path does", () => {
+    // The two are opposite answers: nothing recorded means no stage is being enforced, and a window full
+    // of unapproved proposals means unattended sending is refused. A screen that drew them the same way
+    // would describe the permissive state while the product was in the restrictive one.
+    render(<ReleaseHistory t={t} inForce={{ kind: "NONE" }} candidates={[]} />);
+    expect(global.document.querySelector('[data-in-force="NONE"]')?.textContent).toBe(text("admin.releaseNoneInForce"));
+
+    cleanup();
+    render(<ReleaseHistory t={t} inForce={{ kind: "INDETERMINATE", examined: 10 }} candidates={[]} />);
+    const indeterminate = global.document.querySelector('[data-in-force="INDETERMINATE"]')?.textContent ?? "";
+    expect(indeterminate).toContain("10");
+    expect(indeterminate).not.toBe(text("admin.releaseNoneInForce"));
+  });
+
+  it("names the capabilities a HIGH switched off, which is the only place an operator can see them", () => {
+    render(
+      <ReleaseHistory
+        t={t}
+        inForce={{ kind: "IN_FORCE", stage: "GENERAL_AVAILABILITY", disabledCapabilities: ["AUTOPILOT"], sha: "a".repeat(40) }}
+        candidates={[]}
+      />,
+    );
+
+    expect(global.document.querySelector('[data-switched-off="AUTOPILOT"]')?.textContent).toContain("AUTOPILOT");
+  });
+
+  it("shows each candidate's own reviewer status, not the newest verdict in the list", () => {
+    // The mistake the whole record exists to prevent: a PASS given to an earlier commit read as the
+    // current position of a later one.
+    render(
+      <ReleaseHistory
+        t={t}
+        inForce={{ kind: "NONE" }}
+        candidates={[candidate(), candidate({ releaseId: "rel-2", sha: "b".repeat(40), reviewer: "NOT_REVIEWED", approved: false })]}
+      />,
+    );
+
+    expect(global.document.querySelector('[data-candidate="rel-1"]')?.getAttribute("data-reviewer")).toBe("PASS");
+    expect(global.document.querySelector('[data-candidate="rel-2"]')?.getAttribute("data-reviewer")).toBe("NOT_REVIEWED");
+  });
+
+  it("lists why a candidate is not releasable, rather than only that it is not", () => {
+    render(
+      <ReleaseHistory
+        t={t}
+        inForce={{ kind: "NONE" }}
+        candidates={[
+          candidate({
+            approved: false,
+            decision: {
+              releasable: false,
+              blockers: [{ gateId: "MEDIA", refusal: "GATE_NOT_EVALUATED" }],
+              disabledCapabilities: [],
+              knownLimitations: [],
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(global.document.querySelector('[data-blockers="1"]')?.textContent).toContain("MEDIA");
+    expect(global.document.querySelector('[data-blockers="1"]')?.textContent).toContain(text("admin.releaseRefusal.GATE_NOT_EVALUATED"));
+  });
+
+  it("localizes the stage and the reviewer status rather than interpolating an enum", () => {
+    render(<ReleaseHistory t={ru} inForce={{ kind: "IN_FORCE", stage: "COMMERCIAL_BETA", disabledCapabilities: [], sha: "a".repeat(40) }} candidates={[]} />);
+
+    const line = global.document.querySelector('[data-in-force="IN_FORCE"]')?.textContent ?? "";
+    expect(line).toContain(catalogues.ru["admin.rolloutStage.COMMERCIAL_BETA"]);
+    expect(line).not.toContain("COMMERCIAL_BETA");
+  });
+});
+
+describe("the limited-rollout allowlist", () => {
+  const profile = (overrides: Partial<ProfileDiagnostic> = {}): ProfileDiagnostic => ({
+    businessProfileId: "bp-1",
+    name: "Main",
+    status: "ACTIVE",
+    channelAccounts: 1,
+    rolloutAutopilot: false,
+    ...overrides,
+  });
+
+  it("sends the enabling field only when adding, because an unchecked box submits nothing", () => {
+    // A single toggle would have made "remove from the list" indistinguishable from "the browser did not
+    // send the field", and the direction that failure takes is the permissive one.
+    render(<RolloutAllowlist t={t} workspaceId="ws-1" profiles={[profile()]} canOperate action={vi.fn()} />);
+    expect(global.document.querySelector<HTMLInputElement>('input[name="enabled"]')?.value).toBe("on");
+
+    cleanup();
+    render(<RolloutAllowlist t={t} workspaceId="ws-1" profiles={[profile({ rolloutAutopilot: true })]} canOperate action={vi.fn()} />);
+    expect(global.document.querySelector('input[name="enabled"]')).toBeNull();
+  });
+
+  it("requires a reason, because selecting a profile for unattended sending is audited", () => {
+    render(<RolloutAllowlist t={t} workspaceId="ws-1" profiles={[profile()]} canOperate action={vi.fn()} />);
+
+    expect(global.document.querySelector<HTMLInputElement>('input[name="reason"]')?.required).toBe(true);
+  });
+
+  it("says that being on the list is not the same as sending unattended", () => {
+    // The note is part of the pane rather than a tooltip: the stage, the plan, the profile's mode and the
+    // kill switch all still apply, and a control whose label promised otherwise would be lying.
+    render(<RolloutAllowlist t={t} workspaceId="ws-1" profiles={[profile()]} canOperate action={vi.fn()} />);
+
+    expect(global.document.querySelector('[data-admin="rollout-note"]')?.textContent).toBe(text("admin.rolloutAutopilotNote"));
+  });
+
+  it("offers no control to a role that cannot operate it, and says so", () => {
+    render(<RolloutAllowlist t={t} workspaceId="ws-1" profiles={[profile()]} canOperate={false} action={vi.fn()} />);
+
+    expect(global.document.querySelector('[data-admin="rollout-toggle"]')).toBeNull();
+    expect(global.document.querySelector('[data-admin="cannot-operate-rollout"]')?.textContent).toBe(text("admin.notYourRole"));
+  });
+
+  it("shows which profiles are on the list, which is the question only SQL could answer before", () => {
+    render(
+      <RolloutAllowlist
+        t={t}
+        workspaceId="ws-1"
+        profiles={[profile(), profile({ businessProfileId: "bp-2", name: "Second", rolloutAutopilot: true })]}
+        canOperate
+        action={vi.fn()}
+      />,
+    );
+
+    expect(global.document.querySelector('[data-profile="bp-1"]')?.getAttribute("data-allowlisted")).toBe("false");
+    expect(global.document.querySelector('[data-profile="bp-2"]')?.getAttribute("data-allowlisted")).toBe("true");
   });
 });

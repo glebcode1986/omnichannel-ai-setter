@@ -202,9 +202,10 @@ async function resolveMode(
   channelAccountId: string,
   override: AiMode | null,
 ): Promise<AiMode> {
-  if (override !== null) {
-    return override;
-  }
+  // No early return for the override. It used to short-circuit here and then hand the same override to
+  // `resolveEffectiveMode` anyway — harmless while the two agreed about which wins, and a second copy of
+  // the half of the rule that is easiest to get wrong. The only thing saved was a query the answer does
+  // not depend on; the read stays because a caller that skipped it would learn nothing either way.
   const policies = await db.automationPolicy.findMany({
     where: { ...scope, OR: [{ channelAccountId }, { channelAccountId: null }] },
     select: { channelAccountId: true, mode: true },

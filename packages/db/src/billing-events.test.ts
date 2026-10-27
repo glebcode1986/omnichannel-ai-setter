@@ -21,9 +21,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertVerifiedBillingEvent,
   clearBillingProviders,
+  snapshotVerifiedBillingEvent,
   registerBillingProvider,
   verifyProviderDelivery,
   type NormalizedBillingEvent,
+  type VerifiedBillingEvent,
 } from "./billing-events";
 import { DbInputError } from "./errors";
 
@@ -57,7 +59,10 @@ describe("a minted verified billing event", () => {
     };
     registerBillingProvider({
       provider: "test-psp",
-      verify: () => normalized,
+      // The port's delivery is a union now: an adapter says whether it authenticated an event at all,
+      // separately from what the event was. The cases below are unchanged — what they mutate is still the
+      // adapter's own object, reached through `normalized`.
+      verify: () => ({ kind: "EVENT" as const, event: normalized }),
     });
   });
 
@@ -65,25 +70,25 @@ describe("a minted verified billing event", () => {
     clearBillingProviders();
   });
 
-  const mint = () => {
-    const minted = verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW });
-    if (minted === null) {
-      throw new Error("the stub adapter refused its own delivery");
+  const mint = async (): Promise<VerifiedBillingEvent> => {
+    const delivered = await verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW });
+    if (delivered.kind !== "EVENT") {
+      throw new Error(`the stub adapter refused its own delivery: ${delivered.kind}`);
     }
-    return minted;
+    return delivered.event;
   };
 
-  it("is accepted as verified when nothing has touched it", () => {
+  it("is accepted as verified when nothing has touched it", async () => {
     // The control. Every refusal below is only meaningful because this one passes: without it, a mint that
     // produced an event the assertion always rejected would look like perfect tamper detection.
-    const event = mint();
+    const event = await mint();
     expect(() => {
       assertVerifiedBillingEvent(event);
     }).not.toThrow();
   });
 
-  it("does not share its money with the adapter that produced it", () => {
-    const event = mint();
+  it("does not share its money with the adapter that produced it", async () => {
+    const event = await mint();
 
     // The adapter still holds the object it returned. Before the fix this *was* the event's own `settled`,
     // so raising it here raised the authenticated amount.
@@ -95,8 +100,8 @@ describe("a minted verified billing event", () => {
     }).not.toThrow();
   });
 
-  it("does not share its dates with the adapter either", () => {
-    const event = mint();
+  it("does not share its dates with the adapter either", async () => {
+    const event = await mint();
 
     normalized.periodEndsAt.setUTCFullYear(2099);
     normalized.occurredAt.setUTCFullYear(2099);
@@ -110,11 +115,11 @@ describe("a minted verified billing event", () => {
     }).not.toThrow();
   });
 
-  it("stops being verified once somebody edits the date inside it", () => {
+  it("stops being verified once somebody edits the date inside it", async () => {
     // A `Date` cannot be made immutable, so the guarantee is not that this edit is impossible — it is that
     // an edited event is no longer the event that was authenticated. `periodEndsAt` is the field that
     // decides how long a workspace keeps paid access, which is why it is the one worth proving.
-    const event = mint();
+    const event = await mint();
     event.periodEndsAt?.setUTCFullYear(2099);
 
     expect(() => {
@@ -122,12 +127,68 @@ describe("a minted verified billing event", () => {
     }).toThrow(DbInputError);
   });
 
-  it("stops being verified once somebody edits the instant it occurred", () => {
+  it("stops being verified once somebody edits the instant it occurred", async () => {
     // `occurredAt` orders a reversal against the payment that bought the current term, so moving it is how
     // an old refund would be made to look like a new one.
-    const event = mint();
+    const event = await mint();
     event.occurredAt.setUTCFullYear(2099);
 
+    expect(() => {
+      assertVerifiedBillingEvent(event);
+    }).toThrow(DbInputError);
+  });
+
+  it("refuses a delivery whose adapter returned a date as text", async () => {
+    // An adapter is outside the trust boundary, and `occurredAt: Date` is a promise it is free to break —
+    // one that hands back what `JSON.parse` produced gives an ISO string. Nothing between the port and
+    // the database would have noticed: the row would be written from text nobody checked, and the facts
+    // this module authenticates would be computed from it. So the mint refuses, like any malformed field.
+    clearBillingProviders();
+    registerBillingProvider({
+      provider: "test-psp",
+      verify: () => ({ kind: "EVENT" as const, event: { ...normalized, occurredAt: NOW.toISOString() } as unknown as NormalizedBillingEvent }),
+    });
+
+    const delivered = await verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW });
+
+    // `REFUSED` rather than `ACKNOWLEDGED`, and the difference matters: the adapter believed it had a
+    // product event, so telling the provider "received and handled" would discard a payment nobody will
+    // look for again. Refusing leaves the provider redelivering until somebody fixes the adapter.
+    expect(delivered.kind).toBe("REFUSED");
+  });
+
+  it("refuses a delivery whose adapter lied about a field's type, instead of throwing", async () => {
+    // The same class as the date, in the fields that are read before it. An adapter handing back a number
+    // where the interface says a string used to reach `.trim()` and throw out of the port; the webhook
+    // route's catch-all turned that into a 500, so the provider redelivered a delivery that can never
+    // succeed. A refusal is an answer, an exception is not.
+    clearBillingProviders();
+    registerBillingProvider({
+      provider: "test-psp",
+      verify: () => ({ kind: "EVENT" as const, event: { ...normalized, routeCode: 7 } as unknown as NormalizedBillingEvent }),
+    });
+
+    await expect(verifyProviderDelivery({ provider: "test-psp", body: "raw", headers: {}, receivedAt: NOW })).resolves.toEqual({
+      kind: "REFUSED",
+    });
+  });
+
+  it("hands the store a copy, so an edit after the snapshot cannot reach what was recorded", async () => {
+    // The half the fast gate did not exercise at all. `assertVerifiedBillingEvent` answers about one
+    // instant; what defeats the PR #100 scenario is that the store reads a copy taken before its first
+    // await. Reverting the snapshot to return the same object would have stayed green here until now.
+    const event = await mint();
+    const held = snapshotVerifiedBillingEvent(event);
+
+    expect(held).not.toBe(event);
+    expect(held.periodEndsAt?.getTime()).toBe(PERIOD_END.getTime());
+
+    event.periodEndsAt?.setUTCFullYear(2099);
+
+    expect(held.periodEndsAt?.getTime(), "the copy keeps the term it was minted with").toBe(PERIOD_END.getTime());
+    expect(() => {
+      assertVerifiedBillingEvent(held);
+    }, "and is still verified after the original stopped being").not.toThrow();
     expect(() => {
       assertVerifiedBillingEvent(event);
     }).toThrow(DbInputError);
@@ -152,8 +213,8 @@ describe("a minted verified billing event", () => {
     }).toThrow(DbInputError);
   });
 
-  it("keeps its own fields unwritable", () => {
-    const event = mint();
+  it("keeps its own fields unwritable", async () => {
+    const event = await mint();
 
     expect(() => {
       // `freeze` still earns its place: it stops the simplest edit of all, replacing the field outright.

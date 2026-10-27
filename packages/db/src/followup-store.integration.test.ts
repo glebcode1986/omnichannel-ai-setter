@@ -409,6 +409,64 @@ describe.skipIf(!databaseTestsEnabled())("follow-ups", () => {
       expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "OPTED_OUT" });
     }, 180_000);
 
+    it("stops when the platform-wide switch is pulled, which it did not before", async () => {
+      // The defect this exists for: the predicate here listed `WORKSPACE`, `BUSINESS_PROFILE` and
+      // `CHANNEL_ACCOUNT` and **omitted `GLOBAL`** — so the switch an operator pulls when something is
+      // wrong and they do not yet know what did not cover follow-ups, and a scheduled one went out
+      // behind it. Every other path read `GLOBAL`; this one asked the question with its own `where`.
+      const { followUpId, profile } = await scenario();
+      const global = await db().automationSuspension.create({
+        data: { scope: "GLOBAL", reason: "OPERATOR", since: NOW, byUserId: profile.context.userId },
+        select: { id: true },
+      });
+
+      try {
+        const claim = await claimFollowUp(db(), followUpId, DUE);
+
+        expect(claim).toEqual({ status: "STOPPED", followUpId, reason: "OPTED_OUT" });
+      } finally {
+        // Lifted in a `finally`, because a GLOBAL switch left standing stops automated outbound for every
+        // other test in this file — which is the whole point of the scope and makes it the one fixture
+        // that must not leak. The first version of this test did leak it, and ten later tests failed.
+        await db().automationSuspension.update({ where: { id: global.id }, data: { liftedAt: NOW, liftedByUserId: profile.context.userId } });
+      }
+    }, 180_000);
+
+    it("is not stopped by a switch that has expired, or by one that has not started", async () => {
+      // The other half, and the one that was safe-but-wrong: the predicate selected neither `since` nor
+      // `until`, so a switch that had run out on its own clock cancelled follow-ups for ever, and one
+      // scheduled for tomorrow cancelled them today. The domain decides the window now, as it does for
+      // the delivery claim.
+      const lapsed = await scenario();
+      await db().automationSuspension.create({
+        data: {
+          scope: "BUSINESS_PROFILE",
+          workspaceId: lapsed.profile.context.workspaceId,
+          businessProfileId: lapsed.profile.businessProfileId,
+          reason: "OPERATOR",
+          since: new Date(NOW.getTime() - 7_200_000),
+          until: new Date(NOW.getTime() - 3_600_000),
+          byUserId: lapsed.profile.context.userId,
+        },
+      });
+
+      expect((await claimFollowUp(db(), lapsed.followUpId, DUE)).status, "an expired switch is not a switch").toBe("READY");
+
+      const future = await scenario();
+      await db().automationSuspension.create({
+        data: {
+          scope: "BUSINESS_PROFILE",
+          workspaceId: future.profile.context.workspaceId,
+          businessProfileId: future.profile.businessProfileId,
+          reason: "OPERATOR",
+          since: new Date(DUE.getTime() + 86_400_000),
+          byUserId: future.profile.context.userId,
+        },
+      });
+
+      expect((await claimFollowUp(db(), future.followUpId, DUE)).status, "a switch that has not started is not a switch").toBe("READY");
+    }, 180_000);
+
     it("stops when the goal was achieved", async () => {
       const { followUpId, goalId, profile } = await scenario();
 

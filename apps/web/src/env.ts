@@ -35,6 +35,56 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   INSTAGRAM_HUMAN_AGENT_APPROVAL: z.enum(["APPROVED", "NOT_APPROVED", "UNKNOWN"]).default("UNKNOWN"),
 
   /**
+   * Where a provider sends a customer back to, as an absolute HTTPS origin (Issue #41).
+   *
+   * Configured, never derived from the incoming request, for the same reason `INSTAGRAM_REDIRECT_URI` is:
+   * `Host` is a header, and a success URL built from one is a success URL an attacker can point at their
+   * own page. Optional — without it no checkout hand-off is offered at all, because a hand-off with
+   * nowhere to return to would leave a paying customer on the provider's page with no way back.
+   */
+  BILLING_RETURN_BASE_URL: z.url({ protocol: /^https$/ }).optional(),
+
+  /**
+   * The Stripe accounts this deployment can bill through, one per `BillingRoute` (Issue #41, ADR-020).
+   *
+   * A list because one process serves more than one seller: ADR-019 binds each route to exactly one
+   * seller profile and exactly one provider account, and the P6-04 decision keeps the Ukrainian FOP and
+   * the Romanian company as separate legal entities whose events must never meet. A single
+   * `STRIPE_SECRET_KEY` could not express that, and a second route would need a code change to exist.
+   *
+   * JSON, validated here, and never logged: `parseEnv` turns a failure into an error that names the
+   * variable and no value, so a malformed list cannot print a key. Optional, because a deployment that
+   * does not take payments must still boot — and where it is absent no Stripe adapter is registered at
+   * all, so a billing webhook is refused before verification rather than accepted unverified.
+   *
+   * `webhookSecrets` is a list of one, or of two while an endpoint secret is being rolled: Stripe keeps
+   * the previous secret active for up to 24 hours and signs each delivery once per active secret.
+   */
+  STRIPE_ROUTES: z
+    .string()
+    .transform((value) => JSON.parse(value) as unknown)
+    .pipe(
+      z
+        .array(
+          z.object({
+            /** The product's own `billing_routes.code`. Never a Stripe identifier. */
+            routeCode: z.string().min(1).max(64),
+            /** A restricted key is preferred to a secret one; both are accepted and neither is logged. */
+            secretKey: z.string().min(1).max(256),
+            webhookSecrets: z.array(z.string().min(1).max(256)).min(1).max(2),
+          }),
+        )
+        .min(1)
+        .max(8)
+        // Duplicated route codes would silently drop one account's configuration, and the one that
+        // vanished would be the one whose webhooks then verified against the wrong secret.
+        .refine((routes) => new Set(routes.map((route) => route.routeCode)).size === routes.length, {
+          message: "each billing route code appears once",
+        }),
+    )
+    .optional(),
+
+  /**
    * Meta app credentials for WhatsApp Embedded Signup (ADR-015, Issue #19).
    *
    * All three are optional so a deployment that does not offer WhatsApp still boots; where any is absent
