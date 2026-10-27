@@ -4795,3 +4795,61 @@ for metadata, so the status is left exactly as it was rather than quietly correc
 Profile, so the capacity gates, the trial start and `readEntitlement` remain reachable only from tests.
 `reconcileProviderState` still has no periodic caller either, so the audit rows the best-effort
 cancellation writes are for a person to read rather than for anything to repair.
+
+## P6-07 accepted, and propagated into the responsive console work — PR #110 — 2026-10-27
+
+PR #105 was accepted with a formal `APPROVED` bound by GitHub to exactly `95886fa`, so the queue tip now
+carries P7-01 through P6-07. PR #110 (`feat/ui-craft`, Issue #35 — "make the console fit the widths it
+claims to support") had been cut from the P7-01 head and never moved since: eight commits ahead,
+seventy-four behind, merge base `8f35d35` — which is the tip of `feat/p7-01-admin-operations` itself, so
+nothing had been propagated into this branch before.
+
+One ordinary non-rebase merge of `95886fa` into `feebf177`. Both parents are in the new head's ancestry,
+checked in both directions with `merge-base --is-ancestor` rather than inferred from the PR's base ref.
+`git merge-tree --write-tree` was run first and reported zero conflicts; the merge then produced none.
+
+### What this merge is, measured rather than described
+
+`git diff 95886fa..<new head>` outside `apps/web/` and `docs/` is **empty**. Every package, every script
+and the worker are byte-identical to the accepted P6-07 head, and the whole difference is this branch's own
+sixteen files. That is worth stating because it bounds the risk of the half I cannot run locally: the
+`infrastructure suites` job tests `packages/*`, `apps/worker` and `scripts/*` against a real PostgreSQL and
+Redis, and this merge changes none of them.
+
+### The fallout check this branch specifically needed
+
+This branch's claim is about every width every surface supports, and its tests are source scans over
+`apps/web/src/app` and `apps/web/src/ui`. A merge that adds console surface therefore does not conflict —
+it changes what those scans are asked about. What the incoming chain adds is an admin releases route, a
+release history pane and a rollout allowlist. Checked one at a time:
+
+- **No new classed table.** `TABLE_SURFACES` is hand-written and held against the markup, so a classed
+  `<table>` missing from it fails rather than going unnoticed. The two rendered classes are still
+  `lead-table` and `admin-audit`; the new panes are `<ul>`s.
+- **No new filter bar**, so the label-and-control pairing invariant covers the same six forms.
+- **No new grid and no new `min-width`**: the incoming chain never touches `globals.css`, which is where
+  the auto-fit floor, fixed-column and `grid-auto-flow: column` invariants read from.
+- **Every class the new components name is defined in the stylesheet, except two lists** —
+  `.admin-releases`, which arrives with this merge, and `.admin-profiles`, which was already on this
+  branch's own base and shipped unstyled.
+
+**`.admin-releases` is deliberately left unstyled, and this is the judgement a reviewer may want to
+disagree with.** The line this branch drew is that what overflows by construction gets a rule — a
+six-column table, a column grid, an auto-fit floor — and what wraps by itself does not. `.admin-audit` was
+styled for exactly that reason; `.admin-profiles` was left. A `<ul>` with no rule takes the browser's
+`list-style: disc` and `padding-inline-start: 40px` and wraps, so the new pane is plainer than its
+neighbours but fits. The one token in it with no break opportunity is a migration identifier
+(`candidate.migrations.at(-1)`, up to 37 characters) — and the admin cards on this branch's own base already
+render a workspace id, a Meta account id and a correlation id the same way. So this is not a new shape
+arriving with the merge; it is the existing shape appearing once more. Styling it here would be adding
+scope inside a propagation.
+
+### Verification
+
+`pnpm verify` green on the merged head with no infrastructure, the way CI's first job runs it: 150 test
+files passed, 75 skipped, 2223 tests passed, 1481 skipped. Every skip is an `*.integration.test.ts` gated
+on `TEST_DATABASE_URL`/`TEST_REDIS_URL`, which is the second job's work. `pnpm evals` 20/20 was run
+locally because CI still has no step for it — that is my own execution, not independent evidence.
+
+**Still untasked, unchanged by this merge:** nothing in production creates a workspace or a Business
+Profile, and `reconcileProviderState` has no periodic caller.
