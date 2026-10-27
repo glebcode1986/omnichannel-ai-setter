@@ -17,6 +17,7 @@ import type { AssignableMember, LeadRow, QualificationAnswer, StageDisplay, Stag
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
+import { stageName, stageNameOf } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
 
 export interface LeadPanelProps {
@@ -34,20 +35,9 @@ export interface LeadPanelProps {
 const KNOWN_SOURCES = new Set(["AI_SUGGESTED", "HUMAN_CONFIRMED", "HUMAN_SET"]);
 
 export function LeadPanel({ t, lead, stages, members, history, qualification, target, editAction, answerAction }: LeadPanelProps) {
-  /**
-   * A stage's name as a person should read it.
-   *
-   * The stored `label` is the operator's own wording when they have renamed the column, and a built-in
-   * placeholder when they have not — so printing it unconditionally put the raw enum on the board:
-   * `NEW`, `ENGAGED`, `QUALIFYING`, in Russian next to everything else. `isDefault` is exactly the
-   * distinction: translate the one the product supplied, leave the one a person typed alone, because
-   * their words are not ours to translate.
-   */
-  const nameOfStage = (stage: StageDisplay) => (stage.isDefault ? t.t(`leadStage.${stage.stage}` as MessageKey) : stage.label);
-  const labelOf = (stage: string) => {
-    const display = stages.find((candidate) => candidate.stage === stage);
-    return display === undefined ? stage : nameOfStage(display);
-  };
+  // One shared rule for a stage's name, in `stage-name.ts`, rather than a copy per surface.
+  const nameOfStage = (stage: StageDisplay) => stageName(t, stage);
+  const labelOf = (stage: string) => stageNameOf(t, stages, stage);
 
   return (
     <section className="lead-panel" aria-labelledby="lead-panel-heading" data-lead-panel={lead.conversationId}>

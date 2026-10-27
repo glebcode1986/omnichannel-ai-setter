@@ -11,6 +11,7 @@ import { isLeadStage } from "@omnichannel/domain";
 import { LeadBoard } from "@/ui/leads/lead-board";
 import { LeadPanel } from "@/ui/leads/lead-panel";
 import { StageConfig } from "@/ui/leads/stage-config";
+import { stageName } from "@/ui/leads/stage-name";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
 import { requireBusinessProfileContext } from "@/server/request-context";
@@ -84,9 +85,12 @@ export default async function LeadsPage({
           <label htmlFor="leads-stage">{t.t("leads.tableHeadStage")}</label>
           <select id="leads-stage" name="stage" defaultValue={filter.stage ?? ""}>
             <option value="">{t.t("inbox.filterAll")}</option>
+            {/* The same name the board and the panel show. Printing `display.label` here put the
+                product's English placeholder in the filter beside a translated column heading, from the
+                same array — see `ui/leads/stage-name.ts`. */}
             {stages.map((display) => (
               <option key={display.stage} value={display.stage}>
-                {display.label}
+                {stageName(t, display)}
               </option>
             ))}
           </select>

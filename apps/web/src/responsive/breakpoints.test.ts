@@ -39,14 +39,71 @@ const BREAKPOINTS = [
  * against the markup: a classed table missing from here fails rather than going unnoticed, which is how
  * `.admin-audit` shipped with no styles at all. The entries with `tableClass: null` wrap tables that
  * carry no class of their own and are styled through the panel they sit in.
+ *
+ * `source` and `columns` are the width each surface actually needs, and a test below counts them out of
+ * that component's own markup. They used to be a sentence — "the platform audit, six columns" — and three
+ * of the four sentences were wrong: the audit renders four columns and severity is an attribute on the
+ * row, the audit trail renders five, and `.metric-panel` has no five-column table at all but four tables
+ * of which the widest has six. Nothing read those words, so nothing could disagree with them. A number a
+ * test counts is a contract; a number in prose is a wish.
  */
 const TABLE_SURFACES = [
-  { container: ".lead-table", tableClass: "lead-table", treatment: "reflows", what: "five columns, and the only lead view on a phone" },
-  { container: '.card[data-admin="audit"]', tableClass: "admin-audit", treatment: "scrolls", what: "the platform audit, six columns" },
-  { container: ".stage-config", tableClass: null, treatment: "scrolls", what: "a grid of inputs and order controls" },
-  { container: ".metric-panel", tableClass: null, treatment: "scrolls", what: "analytics, five columns" },
-  { container: ".audit-log", tableClass: null, treatment: "scrolls", what: "the audit trail, six columns" },
+  {
+    container: ".lead-table",
+    tableClass: "lead-table",
+    treatment: "reflows",
+    source: "ui/leads/lead-board.tsx",
+    columns: [5],
+    what: "the only lead view on a phone",
+  },
+  {
+    container: '.card[data-admin="audit"]',
+    tableClass: "admin-audit",
+    treatment: "scrolls",
+    source: "ui/admin/platform-audit-table.tsx",
+    columns: [4],
+    what: "the platform audit — severity is an attribute on the row, not a column",
+  },
+  {
+    container: ".stage-config",
+    tableClass: null,
+    treatment: "scrolls",
+    source: "ui/leads/stage-config.tsx",
+    columns: [4],
+    what: "a grid of inputs and order controls",
+  },
+  {
+    container: ".metric-panel",
+    tableClass: null,
+    treatment: "scrolls",
+    source: "ui/analytics/metrics-view.tsx",
+    columns: [3, 2, 3, 6],
+    what: "analytics: four tables in one panel, and the widest decides whether the panel fits",
+  },
+  {
+    container: ".audit-log",
+    tableClass: null,
+    treatment: "scrolls",
+    source: "ui/analytics/audit-table.tsx",
+    columns: [5],
+    what: "the audit trail",
+  },
 ] as const;
+
+/**
+ * The semantic columns of each `<table>` in a component, in source order.
+ *
+ * Counted from `<th scope="col">` rather than from `<th>`, because a row header is not a column, and read
+ * per table rather than per file: `.metric-panel` holds four of them and it is the widest that decides
+ * whether the panel fits. Splitting on `<table` gives each table the text up to the next one, and the last
+ * its file's tail — which is sound here only because nothing follows the final `</table>` in these files.
+ */
+function columnsOf(source: string): number[] {
+  return readFileSync(path.join(srcRoot, source), "utf8")
+    .split("<table")
+    .slice(1)
+    .map((table) => [...table.matchAll(/<th scope="col"/gu)].length);
+}
 
 /** Representative widths, named so the spec and the test cannot drift apart. */
 export const TESTED_WIDTHS = [
@@ -397,19 +454,42 @@ describe("the supported widths", () => {
     );
   });
 
-  it("lets a surface that renders what a person typed break a word that has nowhere to break", () => {
-    // A track that can shrink still cannot wrap a token with no break opportunity in it. These are the
-    // places a person's own text reaches a narrow column: a message, the context panel, and a lead's next
-    // action, which is free text and is where someone pastes a link. Without this the card bursts
-    // sideways and takes the document with it — the same failure as a grid that cannot wrap, one layer
-    // down. `white-space: nowrap` surfaces are deliberately not in this list: they scroll inside a
-    // boundary instead, which is checked above.
-    const narrow = rulesAt(375);
+  it("counts each table surface's columns from its own markup, so the numbers cannot rot", () => {
+    for (const { container, source, columns } of TABLE_SURFACES) {
+      expect(columnsOf(source), `${container} is drawn by ${source}`).toEqual([...columns]);
+    }
+  });
 
-    expect(declarationsFor(".message-text"), "a message is whatever the customer sent").toMatch(/overflow-wrap:\s*anywhere/u);
-    expect(declarationsFor(".lead-table td", narrow), "a lead's next action is free text").toMatch(
-      /overflow-wrap:\s*anywhere/u,
-    );
+  it("lets every surface that renders what a person typed break a word that has nowhere to break", () => {
+    // A track that can shrink still cannot wrap a token with no break opportunity in it. Without this the
+    // element bursts sideways and, because `.shell-main` declares no `overflow`, takes the document with
+    // it — the same failure as a grid that cannot wrap, one layer down. `white-space: nowrap` surfaces are
+    // deliberately not here: they scroll inside a boundary instead, which is checked above.
+    //
+    // Asked of the BASE rules, which is the correction of a real defect rather than a stricter question.
+    // The lead cell's wrap used to be declared inside the 900px block, and the assertion that checked it
+    // asked `rulesAt(375)` — so it could only ever see the narrow side, and above 900px a pasted link
+    // really did take the leads page sideways at 1024px and at 1440px. An assertion written against the
+    // narrow rules cannot fail for the wide ones, however the product behaves there.
+    //
+    // The list is enumerated rather than spot-checked because it had rotted the other way too: the
+    // comment here named three surfaces and the body asserted two, and the unasserted one — the context
+    // panel, the narrowest column the product has — had no rule at all.
+    const SURFACES_CARRYING_A_PERSON_S_TEXT = [
+      { selector: ".message-text", what: "a message is whatever the customer sent" },
+      { selector: ".lead-table td", what: "a lead's next action is free text, and where someone pastes a link" },
+      { selector: ".lead-table th", what: "the row header is the contact name, falling back to the handle" },
+      { selector: ".inbox-context p", what: "the contact name, the handle, and the draft's intent" },
+      { selector: ".reason-codes", what: "a cited source id is one token" },
+    ] as const;
+
+    for (const { selector, what } of SURFACES_CARRYING_A_PERSON_S_TEXT) {
+      expect(declarationsFor(selector, baseCss), `${selector}: ${what}`).toMatch(/overflow-wrap:\s*anywhere/u);
+    }
+
+    // And the property is inherited, so a wrapper declaring it covers the `<strong>` and the `<span>`
+    // inside it. That is why `.inbox-context p` is the entry rather than a list of its children.
+    expect(css).not.toMatch(/\.inbox-context strong/u);
   });
 
   it("caps every auto-fit floor at the container, not at a width it hopes for", () => {

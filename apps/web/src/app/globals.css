@@ -647,28 +647,22 @@ details[open] > summary::before {
 }
 
 /*
- * A filter row, not a stack of full-width fields. Every control here is a block-level `label` wrapping a
- * full-width input, so without a basis each one claims the whole line — which is what made this read as
- * an unfinished form. They share the row and wrap to their own lines only when there is no room.
- */
-/*
  * A filter row, not a stack of full-width fields.
  *
- * The markup here is a flat sequence — `<label for>` followed by its own control, repeated — so a flex
- * row cannot keep a pair together: the label is one item, the control another, and a control at full
- * width pushed itself onto a line of its own every time. That is what made this read as an unfinished
- * form rather than a toolbar.
+ * Each label and its control are one element — a `.field` wrapper — because CSS pairs no siblings. While
+ * they were siblings the only thing that kept a pair together was `grid-auto-flow: column`, and that buys
+ * the pairing at the price of a grid which grows a column per child and never wraps: its widest child
+ * decides the width of the page. With the pairing in the markup, `auto-fit` can wrap the row by itself.
  *
- * A two-row grid filled **column first** pairs them without touching the markup: each label lands in the
- * top row and the control that follows it in the bottom row of the same column. Below the breakpoint the
- * flow turns back into rows and everything stacks, which is what a narrow screen wants anyway.
- */
-/*
- * The row wraps by itself, at every width, with no number in it to be wrong. It could not before: a
- * label and its control were siblings, nothing in CSS pairs siblings, and `grid-auto-flow: column` was
- * what paired them — at the price of a grid that grows a column per child and never wraps. Each pair is
- * one element now, so `auto-fit` can do the arithmetic that three hand-picked breakpoints got wrong at
- * 768, at 900 and, with seven fields on the settings page, at 1280 and 1440 as well.
+ * So there is no breakpoint here and no width to get wrong, which is the whole point: three hand-picked
+ * numbers were wrong in turn — at 768 and 900, where the shell still spends 232px on its sidebar, and
+ * then at 1280 and 1440 once the settings page reached seven fields. A row that wraps on its own is
+ * right at every width, including the ones nobody measured. `min(9rem, 100%)` caps the track floor at the
+ * container, so the last field in a narrow panel shrinks instead of overflowing it.
+ *
+ * (Three stacked comments used to stand here, two of them describing the sibling markup and the
+ * column-first grid that this rule replaced. They were left behind by iterating in place and they
+ * contradicted both each other and the rule below them.)
  */
 .inbox-search {
   display: grid;
@@ -880,8 +874,19 @@ details[open] > summary::before {
   font-size: 13px;
 }
 
+/*
+ * The context panel is the narrowest column the product has — `minmax(240px, 300px)` at desktop width —
+ * and it is where a person's own words arrive: the contact name, the handle it falls back to, and the
+ * draft's intent. None of those is guaranteed a break opportunity, and a handle in particular is one
+ * token. `overflow-wrap` is inherited, so declaring it here also covers the `<strong>` the name sits in
+ * and the `<span class="badge">` a stage label sits in, without naming either.
+ *
+ * The reason codes and cited sources beside this already had the same treatment; what was missing was the
+ * half a person typed, which is the half that cannot be predicted.
+ */
 .inbox-context p {
   margin: 0 0 4px;
+  overflow-wrap: anywhere;
 }
 
 .context-times {
@@ -1295,11 +1300,6 @@ details[open] > summary::before {
   box-shadow: var(--shadow-1);
 }
 
-.lead-column li > p {
-  margin: 0;
-  font-size: var(--text-s);
-}
-
 /* The person's name is the one thing on the card that is not secondary. */
 .lead-column li a[data-open-lead] {
   color: var(--text);
@@ -1312,36 +1312,16 @@ details[open] > summary::before {
   text-decoration: underline;
 }
 
-.lead-column h3 {
-  margin: 0 0 8px;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
-.lead-column ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.lead-column li {
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
+/*
+ * Every secondary line on a card — the channel, the owner, the next action, the suggestion's hint — is a
+ * `.muted` paragraph, and this is the only rule that sizes them. A second rule for `.lead-column li > p`
+ * used to sit above: at (0,1,2) it could never beat this selector's (0,2,0), so it was inert, and it read
+ * as though the card's type came from the scale when the literal below decided it. The literal is now the
+ * token, so the card follows the type scale like everything else.
+ */
 .lead-column .muted {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-s);
 }
 
 .lead-move {
@@ -1388,11 +1368,29 @@ details[open] > summary::before {
   color: var(--text-muted);
 }
 
+/*
+ * `overflow-wrap` belongs in the base rule, at every width, and this is the correction of a real defect
+ * rather than tidying: it used to be declared only inside the 900px block, so a lead's next action — free
+ * text, and where a person pastes a link — had no break opportunity at all above 900px. The base rules
+ * are the whole escape there, the table declares no `table-layout: fixed` and `.shell-main` declares no
+ * `overflow`, so one unbroken token made the table's min-content exceed its container and took the whole
+ * leads page sideways at 1024px and at 1440px. The board card holding the same string was safe the whole
+ * time, because `.lead-board` has a scroll boundary; the table, the surface kept deliberately a table,
+ * had none.
+ *
+ * `anywhere` rather than `break-word` on purpose: only `anywhere` reduces the element's min-content
+ * contribution, which is the thing that decides whether the table fits. Nothing is truncated — the token
+ * wraps, so no value is lost or hidden from a reader or from a screen reader.
+ *
+ * `th` as well as `td`: the row header carries the contact name, which falls back to the handle, and a
+ * handle is exactly the kind of token with nowhere to break.
+ */
 .lead-table th,
 .lead-table td {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -1452,13 +1450,6 @@ details[open] > summary::before {
     gap: var(--space-2);
     padding: var(--space-2) 0 0;
     border-bottom: 0;
-  }
-
-  .lead-table td {
-    /* A lead's next action is free text and a person will paste a link into it. The value track is
-       `minmax(0, 1fr)`, so it can shrink — but a token with nowhere to break still cannot, and the card
-       would burst sideways rather than wrap. */
-    overflow-wrap: anywhere;
   }
 
   .lead-table td::before {
@@ -1711,7 +1702,7 @@ details[open] > summary::before {
 }
 
 /*
- * The platform audit shipped with no styles at all, so its six columns of timestamps, operator ids and
+ * The platform audit shipped with no styles at all, so its four columns of timestamps, operator ids and
  * reasons were drawn by the browser and decided the width of the admin page. Same treatment as the other
  * wide tables: the card it sits in is the scroll boundary, and the table keeps its shape inside it.
  */

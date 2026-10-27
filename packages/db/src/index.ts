@@ -287,6 +287,7 @@ export {
   recordQualification,
   saveStageDisplays,
   transitionLeadStage,
+  DEFAULT_STAGE_LABELS,
   type AssignableMember,
   type LeadEditOutcome,
   type LeadFilter,
