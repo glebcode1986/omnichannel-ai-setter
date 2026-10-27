@@ -29,6 +29,7 @@ import { followUpGenerationKey } from "@omnichannel/application";
 import { boundedMaxAttempts, isWithinDaypart, type FollowUpStopReason } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
+import { coveringSuspensionAt } from "./suspension-covering";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export type FollowUpOutcome =
@@ -463,18 +464,22 @@ export async function claimFollowUp(db: DbClient, followUpId: string, now: Date,
 
     // Suspension is an opt-out at the scope level: somebody stopped automated outbound for this
     // workspace, profile or account, and a follow-up is automated outbound.
-    const suspended = await tx.automationSuspension.findFirst({
-      where: {
-        liftedAt: null,
-        OR: [
-          { scope: "WORKSPACE", workspaceId: scope.workspaceId },
-          { scope: "BUSINESS_PROFILE", workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId },
-          { scope: "CHANNEL_ACCOUNT", workspaceId: scope.workspaceId, channelAccountId: conversation.channelAccountId },
-        ],
-      },
-      select: { id: true },
-    });
-    if (suspended !== null) {
+    //
+    // Through the one reader the delivery claim uses, not a predicate of its own. The hand-written
+    // version here listed `WORKSPACE`, `BUSINESS_PROFILE` and `CHANNEL_ACCOUNT` and **omitted `GLOBAL`**,
+    // so the platform-wide stop — the switch an operator pulls when something is wrong and they do not
+    // yet know what — did not cover follow-ups, and a scheduled one would have gone out behind it. It
+    // also ignored the window, which was the safe direction and still wrong: a switch that had expired on
+    // its own clock cancelled follow-ups for ever.
+    //
+    // `now` is the instant this claim is deciding about, so the switch is judged at the same moment as
+    // everything else in the transaction.
+    const suspended = await coveringSuspensionAt(
+      tx,
+      { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId, channelAccountId: conversation.channelAccountId },
+      now,
+    );
+    if (suspended !== undefined) {
       return stop("OPTED_OUT", "CANCELLED");
     }
 

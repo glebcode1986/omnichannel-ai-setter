@@ -24,6 +24,14 @@
  *
  * `--dry-run` writes nothing and reports the decision, which is the honest way to ask what a deployment
  * would do.
+ *
+ * **One trap this command warns about rather than hides.** Catalogue prices are immutable — a trigger
+ * refuses an `UPDATE` on `plan_prices` with "catalogue prices are immutable: publish a new version
+ * instead" — so provider price identifiers can only be stored at publication. A deployment that publishes
+ * the catalogue before its payment provider is configured can never attach them afterwards, and
+ * `readCheckoutRouting` would find none, leaving the payment step unavailable in exactly the deployment
+ * that followed this step. Supplying them is a deployment-configuration question that has not been
+ * answered yet, so for now the command says so plainly every time it publishes without them.
  */
 import process from "node:process";
 
@@ -103,6 +111,13 @@ async function main(): Promise<number> {
     }
 
     const published = await publishAcceptedCatalog(db);
+    // Said on the way out, not buried in a doc comment: whoever runs this is the person who can still act
+    // on it, and after this transaction commits nobody can.
+    console.warn(
+      "Note: published without provider price identifiers. Catalogue prices are immutable, so they cannot " +
+        "be attached to these versions later — a deployment that intends to take payments needs them " +
+        "supplied at publication, and will otherwise have no priced provider checkout.",
+    );
     console.log(`${decision.action === "PUBLISH" ? "Published" : "Republished"}: ${decision.reason}`);
     for (const plan of published.plans) {
       console.log(`  plan     ${plan.code} v${String(plan.version)}`);

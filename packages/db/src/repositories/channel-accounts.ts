@@ -7,7 +7,8 @@ import type { ChannelAccountStatus, Prisma } from "../generated/prisma/client";
 
 /** Connection state of a channel account, mirrored from the schema enum. */
 export type ChannelAccountStatusValue = ChannelAccountStatus;
-import { recordAuditEvent } from "../audit-store";
+import { ACCEPTED_TRIAL, ensureWorkspaceTrial, TRIAL_PLAN_CODE } from "../accepted-catalog";
+import { recordAuditEvent, recordSystemAuditEvent } from "../audit-store";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "../tenancy";
 
 /** Channel account fields safe to return to callers; credential references stay inside persistence. */
@@ -123,8 +124,8 @@ export async function connectChannelAccount(
   // `featureWithheld`, not `featureAllowed`: this asks whether the *plan* refuses the channel, not
   // whether paid work is allowed. Connecting a channel is configuration — a business whose card failed may
   // still reconnect one, and a workspace with no plan at all must be able to connect its first, because
-  // that is the act which starts its trial. What stops when a workspace is unpaid is sending, and that is
-  // gated where sending happens.
+  // that is the act which starts its trial, at the end of this function. What stops when a workspace is
+  // unpaid is sending, and that is gated where sending happens.
   const entitlement = await readEntitlement(db as unknown as DbClient, scope.workspaceId, at);
   if (featureWithheld(entitlement, input.channel === "WHATSAPP" ? "WHATSAPP" : "INSTAGRAM")) {
     throw new ChannelConnectError("not_entitled");
@@ -185,6 +186,33 @@ export async function connectChannelAccount(
       channelAccountId: account.id,
       detail: { channel: input.channel, reconnected: existing !== null },
     });
+
+    // The accepted trial starts here, which is the act the policy names: a Business Profile that is
+    // successfully connected (#44). Called on every successful connection rather than only the first,
+    // because the guarantee is the unique workspace in `workspace_subscriptions` and not this call site
+    // — so a workspace that already has a subscription of any kind keeps it, and a trial that failed to
+    // start because this process died a line ago starts on the next connection instead of never.
+    const trial = await ensureWorkspaceTrial(db, scope.workspaceId, at);
+    if (trial.started) {
+      // Audited at the workspace, because a subscription belongs to no one profile — and audited only
+      // when this call is the one that started it, so a reconnection does not file the same fact twice.
+      await recordSystemAuditEvent(db, { workspaceId: scope.workspaceId }, {
+        kind: "SUBSCRIPTION_CHANGED",
+        summary: `Trial started: ${String(ACCEPTED_TRIAL.days)} days, no card`,
+        subjectType: "Workspace",
+        subjectId: scope.workspaceId,
+        actorUserId: context.userId,
+        // The product's own vocabulary. No provider identifier and no amount: nothing was charged.
+        detail: {
+          fromState: null,
+          toState: "TRIALING",
+          fromPlan: null,
+          toPlan: TRIAL_PLAN_CODE,
+          trialEndsAt: trial.trialEndsAt?.toISOString() ?? null,
+          startedBy: "CHANNEL_CONNECTED",
+        },
+      });
+    }
     return account;
   } catch (error) {
     // The live-account index is global on purpose: one provider account may be live in one place only.

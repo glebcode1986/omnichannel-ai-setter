@@ -9,6 +9,7 @@
  * source of the scope, so a caller cannot pass a profile it was not authorized for.
  */
 import {
+  activeSuspension,
   evaluateOnboarding,
   isOnboardingStep,
   isSkippableOnboardingStep,
@@ -18,6 +19,7 @@ import {
   type OnboardingStep,
 } from "@omnichannel/domain";
 
+import { loadCoveringSuspensions } from "./suspension-covering";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
 import type { DbClient } from "./client";
 import { DbInputError } from "./errors";
@@ -35,7 +37,7 @@ export interface OnboardingSnapshot {
  * show a checklist built from two different instants, which is the same class of mistake the delivery
  * claim exists to prevent — smaller stakes here, same reasoning.
  */
-export async function readOnboarding(db: DbClient, context: BusinessProfileContext): Promise<OnboardingSnapshot> {
+export async function readOnboarding(db: DbClient, context: BusinessProfileContext, at = new Date()): Promise<OnboardingSnapshot> {
   const scope = profileScopeOf(context);
 
   const [profile, channels, policies, knowledgeDocumentCount, styleProfileCount, styleExampleCount, blockingReviewItemCount, skips] =
@@ -69,20 +71,29 @@ export async function readOnboarding(db: DbClient, context: BusinessProfileConte
 
   // A kill switch covering the whole workspace or profile is what separates "eligible" from "would send
   // right now", so it is read here rather than assumed absent (Issue #56).
-  const suspensions = await db.automationSuspension.findMany({
-    where: {
-      liftedAt: null,
-      OR: [
-        { scope: "GLOBAL" },
-        { scope: "WORKSPACE", workspaceId: scope.workspaceId },
-        { scope: "BUSINESS_PROFILE", workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId },
-        { scope: "CHANNEL_ACCOUNT", workspaceId: scope.workspaceId },
-      ],
-    },
-    select: { scope: true, channelAccountId: true },
-  });
-  const profileWideSuspension = suspensions.some((row) => row.scope !== "CHANNEL_ACCOUNT");
-  const suspendedAccounts = new Set(suspensions.filter((row) => row.scope === "CHANNEL_ACCOUNT").map((row) => row.channelAccountId));
+  //
+  // Through the one reader, and judged by the domain. The hand-written version here selected neither
+  // `since` nor `until`, so a switch that had expired on its own clock — or one scheduled to start
+  // tomorrow — read as in force for ever. That is the safe direction for a send and the wrong one for a
+  // screen: onboarding told a business its outbound was suspended with nothing an operator could lift.
+  const suspensions = await loadCoveringSuspensions(db, { workspaceId: scope.workspaceId, businessProfileId: scope.businessProfileId });
+  /**
+   * Whether anything covers this account right now, asked of the domain.
+   *
+   * The clock rule is not re-implemented here. An empty channel-account id answers the wider question —
+   * "is this profile paused however the accounts stand" — because `covers` compares the id only for the
+   * `CHANNEL_ACCOUNT` scope and an empty string is no real account.
+   */
+  const pausedFor = (channelAccountId: string) =>
+    activeSuspension(
+      {
+        workspaceId: scope.workspaceId,
+        businessProfileId: scope.businessProfileId,
+        channelAccountId,
+      } as never,
+      suspensions,
+      at,
+    ) !== undefined;
 
   const accountPolicy = (channelAccountId: string) =>
     policies.find((policy) => policy.channelAccountId === channelAccountId) ?? policies.find((policy) => policy.channelAccountId === null);
@@ -94,7 +105,7 @@ export async function readOnboarding(db: DbClient, context: BusinessProfileConte
       status: account.status,
       canCarryText: carriesText(account.capabilities),
       mode: accountPolicy(account.id)?.mode ?? account.defaultAiMode,
-      outboundSuspended: profileWideSuspension || suspendedAccounts.has(account.id),
+      outboundSuspended: pausedFor(account.id),
       caveats: caveatsOf(account.capabilities),
     })),
     policyConfigured: policies.length > 0,

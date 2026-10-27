@@ -7,6 +7,7 @@
  */
 import { KillSwitches } from "@/ui/admin/kill-switches";
 import { ReconciliationQueue } from "@/ui/admin/reconciliation-queue";
+import { RolloutAllowlist } from "@/ui/admin/rollout-allowlist";
 import { SupportAccess } from "@/ui/admin/support-access";
 import { WorkspaceSummary } from "@/ui/admin/workspace-summary";
 import { OutcomeNotice } from "@/ui/outcome-notice";
@@ -16,6 +17,7 @@ import {
   pullKillSwitchAction,
   reexamineOperationAction,
   revokeSupportSessionAction,
+  setRolloutAutopilotAction,
 } from "@/server/admin-actions";
 import { ADMIN_BASE_PATH, loadAdminWorkspace } from "@/server/admin-page";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -55,6 +57,14 @@ export default async function AdminWorkspacePage({
       ) : (
         <>
           <WorkspaceSummary t={t} snapshot={data.snapshot} />
+
+          <RolloutAllowlist
+            t={t}
+            workspaceId={workspaceId}
+            profiles={data.snapshot.profiles}
+            canOperate={data.can.OPERATE_RELEASE}
+            action={setRolloutAutopilotAction.bind(null, path)}
+          />
 
           <SupportAccess
             t={t}

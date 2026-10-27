@@ -21,7 +21,7 @@
 import type { PlanFeature } from "@omnichannel/domain";
 
 import { publishAddOnVersion, type AddOnVersionRecord } from "./catalog-store";
-import type { DbClient } from "./client";
+import type { DbClient, DbExecutor } from "./client";
 import { publishPlanVersion, type CatalogPriceInput, type PlanVersionRecord } from "./entitlement-store";
 
 /** The initial public price book's currency. The architecture stays multi-currency; this is the first one. */
@@ -30,9 +30,13 @@ export const ACCEPTED_CURRENCY = "EUR";
 /**
  * The accepted trial, as product configuration rather than as code.
  *
- * It starts after the first Business Profile is successfully connected, not at account creation — which is
- * why a workspace with no subscription may still create that first profile, and why the capacity check
- * treats an unstated ceiling as uncapped (#40).
+ * It starts when a Business Profile is first successfully connected to a channel, not at account creation
+ * — which is why a workspace with no subscription may still create that first profile, and why the
+ * capacity check treats an unstated ceiling as uncapped (#40).
+ *
+ * These numbers were a constant nothing read for two phases: no code started a trial, no plan version
+ * expressed these grants, and a test asserted the constant against itself. `publishAcceptedCatalog`
+ * publishes them as a plan version now, and `ensureWorkspaceTrial` is what puts a workspace on it.
  */
 export const ACCEPTED_TRIAL = {
   days: 14,
@@ -41,6 +45,19 @@ export const ACCEPTED_TRIAL = {
   seats: 3,
   voiceTranscriptionMinutes: 100,
 } as const;
+
+/**
+ * The plan code a trialling workspace is on.
+ *
+ * A real, immutable plan version rather than a special case in the entitlement reader: a trial grants
+ * features and ceilings exactly as a paid tier does, and expressing it as a version means
+ * `readEntitlement`, the capacity checks and the usage reservations all answer for it without knowing it
+ * is a trial. What makes it a trial is the subscription's `TRIALING` state and its `trialEndsAt`.
+ *
+ * Published `PRIVATE`, because it is not for sale: nobody chooses it, and the billing screen must not
+ * offer it beside Starter, Growth and Scale.
+ */
+export const TRIAL_PLAN_CODE = "trial";
 
 /** Every feature a paid tier includes. The tiers differ in capacity, not in what the assistant can do. */
 const CORE_FEATURES: readonly PlanFeature[] = [
@@ -116,6 +133,27 @@ export const ACCEPTED_ADDONS = [
 export interface PublishedCatalog {
   readonly plans: readonly PlanVersionRecord[];
   readonly addOns: readonly AddOnVersionRecord[];
+  /** The version a trialling workspace is put on. Not among `plans`: it is not for sale. */
+  readonly trial: PlanVersionRecord;
+}
+
+/**
+ * Which provider price a published catalogue price corresponds to.
+ *
+ * Keyed by the product's own vocabulary — a plan or add-on code and an interval — and valued with the
+ * provider's opaque id. The map belongs to a deployment rather than to the catalogue: the accepted prices
+ * are the same everywhere, and the Stripe (or other provider) price objects that mirror them are created
+ * per account, so a deployment serving two sellers has two of them.
+ *
+ * It has to be given at publication because catalogue prices are **immutable**: a trigger refuses an
+ * `UPDATE` on `plan_prices`, with "catalogue prices are immutable: publish a new version instead". So a
+ * provider price id that is not supplied here can never be supplied at all, and `readCheckoutRouting`
+ * would find none — which means no provider checkout could be priced and the whole payment step would be
+ * unavailable in exactly the deployment that published its catalogue the normal way.
+ */
+export interface ProviderPriceMap {
+  /** `{ "growth": { "MONTH": "price_…", "YEAR": "price_…" } }`, by plan or add-on code. */
+  readonly [code: string]: Readonly<Partial<Record<"MONTH" | "YEAR" | "ONE_TIME", string>>> | undefined;
 }
 
 /**
@@ -129,8 +167,12 @@ export interface PublishedCatalog {
  * Voice allowances are stated in the spec as minutes and stored as seconds, because the metric is
  * `VOICE_TRANSCRIPTION_SECONDS` and the provider reports seconds. The conversion happens here, once,
  * rather than at every place that compares a reading against an allowance.
+ *
+ * `providerPrices` is optional, and omitting it publishes exactly what it published before: a
+ * provider-neutral catalogue. A deployment that intends to take payments supplies the map, because this
+ * is the only moment at which it can be stored.
  */
-export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCatalog> {
+export async function publishAcceptedCatalog(db: DbClient, providerPrices: ProviderPriceMap = {}): Promise<PublishedCatalog> {
   const plans: PlanVersionRecord[] = [];
   for (const plan of ACCEPTED_PLANS) {
     plans.push(
@@ -149,10 +191,24 @@ export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCat
           // No `AI_GENERATION_CYCLES`: core generation is unmetered customer-facing on every paid tier.
           quotas: { VOICE_TRANSCRIPTION_SECONDS: plan.voiceMinutes * MINUTE_SECONDS },
         },
-        prices: [monthly(plan.monthlyCents), annual(plan.annualCents)],
+        prices: [monthly(plan.monthlyCents, providerPrices[plan.code]?.MONTH), annual(plan.annualCents, providerPrices[plan.code]?.YEAR)],
       }),
     );
   }
+
+  // The trial, as a plan version of its own. Published `PRIVATE` by default, priced at nothing, and
+  // carrying the same core features as the paid tiers — the accepted trial differs from them in capacity
+  // and in having an end date, not in what the assistant may do.
+  const trial = await publishPlanVersion(db, {
+    code: TRIAL_PLAN_CODE,
+    name: "Trial",
+    displayOrder: 0,
+    grants: {
+      features: [...CORE_FEATURES],
+      limits: { BUSINESS_PROFILES: ACCEPTED_TRIAL.businessProfiles, SEATS: ACCEPTED_TRIAL.seats },
+      quotas: { VOICE_TRANSCRIPTION_SECONDS: ACCEPTED_TRIAL.voiceTranscriptionMinutes * MINUTE_SECONDS },
+    },
+  });
 
   const addOns: AddOnVersionRecord[] = [];
   for (const addOn of ACCEPTED_ADDONS) {
@@ -165,14 +221,78 @@ export async function publishAcceptedCatalog(db: DbClient): Promise<PublishedCat
         availability: "PUBLIC",
         ...("limits" in addOn ? { limits: addOn.limits } : {}),
         ...("minutes" in addOn ? { quotas: { VOICE_TRANSCRIPTION_SECONDS: addOn.minutes * MINUTE_SECONDS } } : {}),
-        prices: "monthlyCents" in addOn ? [monthly(addOn.monthlyCents)] : [once(addOn.onceCents)],
+        prices:
+          "monthlyCents" in addOn
+            ? [monthly(addOn.monthlyCents, providerPrices[addOn.code]?.MONTH)]
+            : [once(addOn.onceCents, providerPrices[addOn.code]?.ONE_TIME)],
       }),
     );
   }
 
-  return { plans, addOns };
+  return { plans, addOns, trial };
 }
 
-const monthly = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "MONTH", amountCents });
-const annual = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "YEAR", amountCents });
-const once = (amountCents: number): CatalogPriceInput => ({ currency: ACCEPTED_CURRENCY, interval: "ONE_TIME", amountCents });
+// `providerPriceId` is omitted rather than set to `undefined`, because the store distinguishes the two:
+// absent leaves the column null, and the catalogue stays provider-neutral where a deployment has not
+// mapped it.
+const priced = (interval: CatalogPriceInput["interval"], amountCents: number, providerPriceId: string | undefined): CatalogPriceInput => ({
+  currency: ACCEPTED_CURRENCY,
+  interval,
+  amountCents,
+  ...(providerPriceId === undefined ? {} : { providerPriceId }),
+});
+/**
+ * Starts the accepted no-card trial for a workspace, if it has never had a subscription (#44).
+ *
+ * The act this answers is "a Business Profile was successfully connected", and the whole product depended
+ * on it happening while nothing did it: `ACCEPTED_TRIAL` was a constant read by one test, no plan version
+ * expressed its grants, and the only production writer of `workspace_subscriptions` was the settlement
+ * path — which pins `ACTIVE`. So a real workspace reached a connected channel with no subscription at all,
+ * `readEntitlement` answered `INACTIVE` with no grants, and every paid capability was off before anybody
+ * had been asked for money. Two comments elsewhere in this package already described this as "the act
+ * which starts its trial"; this is the code that makes them true.
+ *
+ * **Exactly once, structurally.** `workspace_subscriptions.workspace_id` is unique, and the insert is
+ * `ON CONFLICT DO NOTHING` — so a workspace that already has *any* subscription keeps it, whether that is
+ * a running trial, a paid term or a cancelled one. Two concurrent connections cannot both start a trial,
+ * and a replay cannot restart an expired one. There is no read-then-write to lose a race in.
+ *
+ * **Idempotent rather than once-only at the call site**, which is why it is safe to call on every
+ * successful connection: a trial that failed to start because the process died after the account was
+ * written starts on the next connection instead of never. The guarantee lives in the index, not in
+ * whoever remembered to call this.
+ *
+ * Returns whether this call is the one that started it, so a caller can audit the fact once.
+ */
+export async function ensureWorkspaceTrial(
+  db: DbExecutor,
+  workspaceId: string,
+  now: Date,
+): Promise<{ readonly started: boolean; readonly trialEndsAt?: Date }> {
+  const trial = await db.planVersion.findFirst({
+    where: { plan: { code: TRIAL_PLAN_CODE } },
+    orderBy: { version: "desc" },
+    select: { id: true },
+  });
+  if (trial === null) {
+    // No trial version has been published in this deployment, so there is nothing to put the workspace
+    // on. Silent rather than thrown: a connection must not fail because a catalogue was not published,
+    // and the workspace is left exactly as it was — with no grants, which is the conservative answer.
+    return { started: false };
+  }
+  const trialEndsAt = new Date(now.getTime() + ACCEPTED_TRIAL.days * DAY_MS);
+  const created = await db.workspaceSubscription.createMany({
+    data: [{ workspaceId, planVersionId: trial.id, state: "TRIALING", trialEndsAt }],
+    // The whole guarantee. `ON CONFLICT DO NOTHING` on the unique workspace, so an existing subscription
+    // of any kind is left alone and nothing throws — a thrown unique violation inside a caller's
+    // transaction would abort work that had already succeeded.
+    skipDuplicates: true,
+  });
+  return created.count === 1 ? { started: true, trialEndsAt } : { started: false };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
+const monthly = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("MONTH", amountCents, providerPriceId);
+const annual = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("YEAR", amountCents, providerPriceId);
+const once = (amountCents: number, providerPriceId?: string): CatalogPriceInput => priced("ONE_TIME", amountCents, providerPriceId);

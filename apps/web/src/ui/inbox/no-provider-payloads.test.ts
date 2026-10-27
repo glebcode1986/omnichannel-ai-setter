@@ -34,6 +34,11 @@ const paneDirs = [
   // meet on a page, so the most tempting place to reach for the route itself — which carries the
   // provider's name and its account reference.
   path.resolve(inboxDir, "../checkout"),
+  // The operator console (#59, #60). Held to the same criterion as a customer's panes and arguably more
+  // strictly: these screens read across every tenant, so a component that reached for a provider blob
+  // here would be showing one tenant's provider state on a page about another. The roster was opt-in and
+  // this directory was simply never added to it, which is the kind of omission that reads as coverage.
+  path.resolve(inboxDir, "../admin"),
 ];
 
 /**

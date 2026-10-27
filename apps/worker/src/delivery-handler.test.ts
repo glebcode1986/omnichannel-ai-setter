@@ -1,6 +1,7 @@
 import type { DeliveryChannelState, DeliveryDependencies, DeliverySendContext, DeliveryStateGuard, PolicyLimits } from "@omnichannel/application";
 import { createLogger } from "@omnichannel/observability";
 import type { DeliveryJob } from "@omnichannel/queue";
+import { NO_STAGED_ROLLOUT } from "@omnichannel/domain";
 import { describe, expect, it } from "vitest";
 
 import { createDeliveryHandler } from "./delivery-handler";
@@ -38,6 +39,8 @@ function harness(overrides: { send?: DeliveryDependencies["sender"]["send"]; del
     operationId: "op_1",
     workspaceId: "ws_1",
     commercial: { paidWorkAllowed: true, aiDrafts: true, autopilot: true },
+    // No staged release is in force in a unit fixture (#60).
+    rollout: NO_STAGED_ROLLOUT,
     draftId: "draft_1",
     conversationId: "conv_1",
     channel: "INSTAGRAM",

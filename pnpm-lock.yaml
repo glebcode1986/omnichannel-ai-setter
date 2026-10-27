@@ -211,6 +211,9 @@ importers:
       '@omnichannel/application':
         specifier: workspace:*
         version: link:../../packages/application
+      '@omnichannel/billing-stripe':
+        specifier: workspace:*
+        version: link:../../packages/billing-stripe
       '@omnichannel/channel-core':
         specifier: workspace:*
         version: link:../../packages/channel-core
@@ -351,6 +354,18 @@ importers:
       zod:
         specifier: ^4.6.5
         version: 4.6.5
+
+  packages/billing-stripe:
+    dependencies:
+      '@omnichannel/application':
+        specifier: workspace:*
+        version: link:../application
+      '@omnichannel/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@omnichannel/observability':
+        specifier: workspace:*
+        version: link:../observability
 
   packages/channel-core:
     dependencies:

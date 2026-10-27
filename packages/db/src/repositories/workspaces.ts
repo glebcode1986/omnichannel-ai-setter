@@ -139,8 +139,9 @@ export async function createBusinessProfile(
   // `pg_locks` while this transaction's count-and-insert runs.
   //
   // A workspace with no subscription has no stated ceiling and may therefore create its first Business
-  // Profile — which is the act the accepted trial policy says *starts* the trial, so refusing it would
-  // make the product unreachable from its own front door.
+  // Profile. Creating one does not start the trial — connecting it to a channel does, in
+  // `createChannelAccount` — so refusing this would make the product unreachable from its own front door
+  // and the trial unstartable.
   return db.$transaction(async (tx) => {
     await serializeCapacity(tx, `workspace-profiles:${workspaceId}`);
     const verdict = capacityVerdict({

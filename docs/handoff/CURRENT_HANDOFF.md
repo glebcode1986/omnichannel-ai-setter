@@ -41,9 +41,9 @@ No stored choice means `SERVICE_WINDOW_ONLY`. Empty autopilot allowlist means no
 
 ## Execution state right now
 
-**The chain now runs to #101 plus the P7-01 branch**, each branch stacked on its predecessor and each
-CI-green with evidence posted. PRs #79–#101 are completed by Claude and awaiting review; **P7-01 / Issue
-#59 is the current task**, and it stays open after this slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
+**The chain now runs to #102 plus the P7-02 branch**, each branch stacked on its predecessor and each
+CI-green with evidence posted. PRs #79–#102 are completed by Claude and awaiting review; **P7-02 / Issue
+#60 is the current task**. Issue #59 stays open after its slice. Everything in Phase 1 and Phase 2 has an independent PASS at its published
 head, including **#72 / P3-03 at `9955ecf6c114145d54bb7dd46abbc902267bd00c`**, **#71 / P2-09 at
 `38df858508ec61e2c6821e47a0a5225c86768223`**, **#70 / P2-08 at
 `c15a9a6f558d9270263ad7573669f76ca3af8ac0`**, **#69 / P2-07 at
@@ -60,10 +60,12 @@ on 2026-10-13 and had been assumed otherwise until then:
 
 Phase 6 continues the same chain: #95 (P6-01, Issue #38), #96 (P6-02, #39), #97 (P6-03, #40), #98 (P6-06,
 #43), #99 (P6-05, #42), #100 (P6-08, #46) and #101 (P6-09, #47). Phase 7 continues the same chain with
-the P7-01 branch above (#59). **#41 / P6-04 is blocked** on the owner's choice
-of first production provider and selling jurisdiction; it is the only Phase 6 issue that cannot be
-implemented without that decision. #44 (P6-07, commercial E2E) depends on the chosen adapter path, so after #47
-the only Phase 6 work left needs the owner's provider decision.
+the P7-01 branch above (#59). **#41 / P6-04 is unblocked and implemented:** the owner's decision of
+2026-10-09 named Stripe as the first production adapter against a Ukrainian-FOP seller, with a Romanian
+company as a second seller route and WayForPay and Cryptomus as additional payment routes, all priced in
+EUR on a monthly term. PR #104 carries the provider-neutral port extension and the Stripe adapter; see
+"P6-04" below. #44 (P6-07, commercial E2E) is now the only Phase 6 work left, and it depends on this
+adapter path rather than on a decision.
 
 `#83 -> #84 -> #85 -> #86 -> #87 -> #88 -> ... -> #103 -> #104 -> #105`
 
@@ -812,6 +814,69 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    breaks in correlation propagation, which is its own change — feature flags, and the remaining typed
    actions. **#59 stays open.**
 
+1. **P6-04 / Issue #41 — the Stripe adapter, and the port it needed.** Branch
+   `feat/p6-04-billing-provider-port`, based on #103. The owner's decision of 2026-10-09 settled the
+   blocked product choice: Stripe first, against the Ukrainian-FOP seller, EUR, monthly, with the Romanian
+   company and WayForPay/Cryptomus preserved as server-configured routes.
+
+   **No vendor SDK, and the reason is written down as ADR-020.** The repository has zero vendor API SDKs,
+   seven third-party HTTP APIs already integrated by hand (including one that builds its own multipart
+   rather than taking `openai`), no new runtime dependency since Phase 1, and a
+   `CORE_FORBIDDEN_THIRD_PARTY` list with no payments entry — so taking `stripe` would turn "application
+   and domain never import a provider SDK" from a lint into a promise. Nothing in the specs forbids an
+   SDK, which is exactly why the argument is an ADR rather than a comment.
+
+   **The port moved to `application`**, because ADR-017 says so in as many words and because an adapter
+   package cannot name an interface that lives in the persistence package. `billing-stripe -> db` is a
+   forbidden edge: an adapter that could reach the database could activate an entitlement without a
+   verified event, which is the one rule this boundary exists for. `db` re-exports the port's surface and
+   keeps one sentence of its own — the refusal of an event the port did not mint.
+
+   **The port gained a third verification outcome, and that gap was only visible from an adapter.**
+   `verify` returning `null` meant "forgery", so an authentic event the product does not map had the same
+   answer — and the two owe the provider opposite replies, because a provider that is refused redelivers
+   for three days. `EVENT`, `ACKNOWLEDGED` and `REFUSED` now say which. It also gained
+   `openManagementSession` and `setRenewal`, both optional, because the owner's decision requires the
+   provider's own portal and cancel-at-period-end where the provider has them, and a capability list that
+   claimed every provider did would make a screen promise a page that does not exist.
+
+   Facts verified against the live documentation on 2026-10-12, API version pinned at `2026-09-30.endive`:
+   the signed payload is `timestamp + "." + rawBody`, HMAC-SHA256 keyed with the `whsec_` secret; only the
+   `v1` scheme counts, because Stripe deliberately sends a fake `v0` with test events; **every** `v1` is
+   tried, because rolling a secret leaves two active for 24 hours; the tolerance is five minutes and a
+   tolerance of zero is documented as wrong; each retry carries a fresh timestamp; `created` is seconds
+   and explicitly not an ordering key.
+
+   **Three things the documentation contradicted a reasonable guess about**, each now a test:
+   `current_period_end` is no longer on the subscription object — it lives on `items.data[]`, and reading
+   the old place loses every period end silently; reactivation in the default `flexible` billing mode is
+   confirmed by `cancel_at` being null rather than by `cancel_at_period_end`, so a single-field reader is
+   right in one billing mode and wrong in the other; and `Stripe-Should-Retry` is documented as guidance
+   the status code does not carry, so it overrides the status-code table rather than the reverse.
+
+   **Attribution travels in metadata because the store leaves no other way.**
+   `recordVerifiedBillingEvent` resolves an arrangement from the event's own id or from the checkout
+   contract it names, and from nothing else — there is no lookup by provider reference. So the contract id
+   goes into `client_reference_id` *and* into `subscription_data[metadata]`, and every renewal reads it
+   back from `invoice.parent.subscription_details.metadata`, which the docs define as an immutable
+   snapshot taken at invoice finalization. Without it every month after the first would be `UNATTRIBUTED`.
+
+   **The callers are in this PR, which is the point.** Eight billing functions had no production caller;
+   this registers the adapter from `STRIPE_ROUTES` (one entry per route, so two sellers do not share an
+   account), adds `/api/billing/webhooks/stripe`, and hands the customer to the provider *after* the
+   contract commits — a session opened first would leave a paid session with nothing to attribute.
+
+   **One gap found while wiring it, and closed:** catalogue prices are immutable by trigger, and
+   `publishAcceptedCatalog` published none of the provider price ids — so `provider_price_id` could never
+   be set in a deployment that published its catalogue the normal way, and no Stripe checkout could ever
+   be priced. The publisher now takes an optional provider-price map, because publication is the only
+   moment at which it can be stored.
+
+   **Deliberately not implemented:** refunds and disputes. A refund arrives on a charge, a charge carries
+   no subscription metadata, and attributing one needs a second API call and a decision about partial
+   refunds that Issue #41 does not ask for. The endpoint is not subscribed to those types, and an
+   unexpected one is answered `ACKNOWLEDGED` rather than mapped to something that looks handled.
+
 1. **P6-09 / Issue #47 — the acceptance control, and the evidence behind it.** Branch
    `feat/p6-09-terms-acceptance-ux`, based on #100. The checkout step is now a real surface:
    `settings/billing/checkout`, with the seller's legal identity, the price, who remits the tax, and one
@@ -916,9 +981,9 @@ way. See that branch's own commit for why the guarantee is about rewriting rathe
    one-live index becomes a trap: one unfinished attempt would refuse every later purchase until somebody
    read the table. `loops` in `worker.started` gained `checkout_expiry`.
 
-   **Not in this issue:** no provider adapter is registered outside tests (#41, blocked on the owner's
-   provider and jurisdiction choice), and the checkout UI with its acceptance control is #47 —
-   `CHECKOUT_AVAILABLE` is still `false`.
+   **Not in this issue:** no provider adapter was registered outside tests, and the checkout UI with its
+   acceptance control is #47. Both are closed since: #47 landed the checkout screen, and #41 registers the
+   Stripe adapter from configuration and hands the customer to it.
 
 1. **P6-05 / Issue #42 — the billing screen.** Branch `feat/p6-05-billing-settings-ui`, based on #98.
    `readBillingOverview` drops `providerPriceId` and the opaque customer/subscription references by
@@ -1646,9 +1711,153 @@ is satisfied; the owner asked for Stage E to begin while the Stage D chain is in
 12. Continue architecture/product design in parallel without letting future prepared phases bypass dependency
    gates.
 
+## P7-02 / Issue #60 — launch readiness, staged rollout and release evidence
+
+`docs/specs/RELEASE_PROCESS.md` is the operational companion; `LAUNCH_READINESS.md` stays the contract.
+
+What a later session has to know about this slice:
+
+1. **A release can now actually be recorded.** `pnpm release:record` and `pnpm release:review`, both
+   requiring the new `OPERATE_RELEASE` platform permission, both audited. Before them the release tables,
+   the gate catalogue, the severity model and the §18 send gate were reachable only from tests — so the
+   stage in force was always "none", and "none" is the one state in which the rollout gate permits
+   everybody. A schema nobody can write to is not an implementation of §20.
+2. **The §18 gate fails closed when it cannot tell.** `readReleaseInForce` reports `NONE`, `IN_FORCE` or
+   `INDETERMINATE`, and only the first permits. The earlier version searched a window of ten candidates
+   and reported "no release" when it found nothing approved — so recording ten unreviewed proposals, the
+   most common state a candidate is in, would have switched unattended sending on platform-wide.
+3. **`HIGH` disables something.** `releaseDecision(...).disabledCapabilities` is carried into the rollout
+   posture, so a release whose autopilot gate returned `HIGH` keeps autopilot off whatever stage it names.
+   It was computed and read by nothing, which made the severity decoration.
+4. **The release catalogue has its own advisory key.** `release-lock.ts` plus a trigger on all three
+   tables, taken shared by the delivery claim — the `entitlement-lock.ts` pattern, for the same reason: a
+   candidate that would change the answer may not exist yet when the claim starts, so no row lock covers
+   it. The claim's existing "every read is locked" invariant test caught the unlocked version.
+5. **Evidence lives in `scripts/release/evidence.ts`, not in a test.** `suites` are test files and
+   `implementation` is source offered as evidence of itself — separate fields, because three production
+   files listed as suites is how §16's gate came to look covered.
+6. **CI does not run `pnpm evals`**, so §5's gate is settled by a person. The one-line fix is staged at
+   `docs/handoff/ci-evals-step.patch`; it is not applied because this repository's push credential cannot
+   write `.github/workflows`. **Someone with that scope should apply it.**
+7. Four limitations are stated in `RELEASE_PROCESS.md` rather than hidden: the CI gap above, no
+   per-feature rollout (§18's "repeat a staged rollout" has one global stage plus one allowlist), reviewer
+   independence being a process property rather than a constraint, and only `AUTOPILOT` being a capability
+   the send path can actually switch off.
+8. **Fixture clocks must be in the past.** A trigger refuses a review `submitted_at` in the future,
+   because `reviewerStatusOf` takes the newest matching verdict and these tables are append-only — a
+   `PASS` stamped 2099 could never be withdrawn. A suite stamping fixtures with tomorrow's date fails on
+   its own fixtures.
+9. **One commit may be proposed at several stages, once each** (`@@unique([sha, stage])`), and reviews are
+   keyed by `reviewed_sha` with no foreign key to a candidate. Advancing a stage is a new release decision
+   that inherits the verdict already given about that code. Pulling a rollout back during an incident is
+   the kill switch's job, not this table's.
+
 Historical note: the original launch sequence (review #2, then launch #3 from a merged `main`) was
 superseded by the owner's stacked review-lag mode. Those tasks are implemented and are in the chain above.
 
+## Phase 6 commercial chain and the 2026-10-14 corrections
+
+**Date:** 2026-10-14. Nothing is merged to `main` (`940c541`). The chain is two live segments: `#26…#82`
+and `#83 → #84 → #85 → #86 → #87 → #88…#105`, forked from an older #82, so a repository-wide fix needs
+both and branch order is not PR-number order. Measure the graph with `merge-base --is-ancestor`; never
+infer it.
+
+**#82 is blocked on the reviewer's environment, not on its code.** Astra confirmed the head
+`9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`, the exact-head readiness marker and a green run, then issued
+no verdict: its runner has no `TEST_DATABASE_URL`/`TEST_REDIS_URL` and no PostgreSQL, Redis, Docker or
+Podman, so it cannot perform the independent execution the review contract requires. Everything
+downstream waits behind that. Unblocking it is an owner/infrastructure action — either give that
+environment a container runtime or reachable PG17+pgvector and Redis 7 endpoints (`compose.yaml`,
+README §56, and the two variables; the role needs `CREATE DATABASE` because the harness makes a fresh
+database per run, and the `retrieval` migration needs `vector`), or decide that CI's own
+`infrastructure suites` job satisfies the contract. That job is not Claude's machine: it raises
+`pgvector/pgvector:pg17` and `redis:7-alpine` as service containers, and because `pnpm test:db` /
+`test:redis` / `test:e2e` export `REQUIRE_DB_TESTS=1` / `REQUIRE_REDIS_TESTS=1`, a missing variable is a
+hard error rather than a skip — a green run there cannot be a silent skip.
+
+### Two behaviour changes
+
+1. **A failed charge may only suspend the path the workspace is paying on** (#46, PR #100). `apply`'s
+   `SUSPEND` branch was the one entitlement effect that never looked at the arrangement; its three
+   siblings all guard. It read the subscription and wrote `GRACE` regardless of what the failure
+   concerned, so an old provider retrying a **superseded** subscription suspended the live paying path, an
+   event naming an arrangement the event's **route does not own** resolved to no arrangement while the
+   workspace still arrived from the contract, and the last failed charge after a cancellation at period
+   end overwrote `CANCELED_PENDING_END` with `GRACE` — taking away a paid term *and* losing the date
+   saying when it ended. Guarded now; dropping any one of the three clauses fails exactly one test.
+
+2. **The Business Profile capacity lock now holds for the work it protects** (#40, PR #97).
+   `createBusinessProfile` took a `DbExecutor` — a type that deliberately omits `$transaction` — and
+   called `pg_advisory_xact_lock` on it. PostgreSQL releases an `xact` lock when its transaction ends, and
+   under autocommit that is the lock statement itself: asked directly, `pg_locks` reports **0** held
+   afterwards and **1** inside a transaction. The count-then-insert it was meant to serialize ran
+   unprotected. `addWorkspaceMember` always opened its own transaction, which is why seats never had it.
+   **A `DbExecutor` parameter is the tell: that type cannot hold an xact lock across anything.**
+
+   I could not write a test that fails on the unfixed code, and the commit says so. Two concurrent
+   creates in `Promise.all` passed with the lock deleted entirely, three runs out of three; a barrier
+   holding the key from another connection also passed against the defect, because an autocommit lock is
+   still acquired and still contended — it is merely released too early. Forcing the interleave needs a
+   client proxy that pauses between the count and the insert. The defect is argued from PostgreSQL's
+   behaviour and the type signature, and the added test pins that behaviour rather than the race.
+
+### Issue #44's scenario list
+
+Thirteen of sixteen are covered. Five were closed on 2026-10-13/14 and only the first of those was
+broken rather than merely untested: the suspension guard above; a reversal of an older term cannot revoke
+the term that replaced it (both `REFUNDED` and `CHARGEBACK`); all three accepted tiers bought through the
+real checkout from `publishAcceptedCatalog`; two concurrent settlements of one usage hold, where removing
+`FOR UPDATE` now fails exactly those cases; the `only` in `PRICING_PACKAGING.md` §142-148, which needed
+the fixture's plan corrected before the claim was expressible at all; and an entitlement revoked while a
+delayed AUTOPILOT reply waits, refused by the claim's final revalidation.
+
+Three remain, each waiting on something that is not code:
+
+- **recurring add-ons and one-time voice top-ups.** `grantUsageTopUp` and `setWorkspaceAddOn` have no
+  production caller and `addOnVersionId` appears nowhere outside `catalog-store.ts`, so the accepted
+  catalogue publishes and prices five add-ons that cannot be bought. §186-209 settles the *policy*, so
+  this is unimplemented spec rather than an open product question — but `CheckoutContract.planVersionId`
+  is not nullable and a settlement that grants an allowance instead of activating a subscription is a
+  fork in the billing core's semantics. **That needs an ADR, not improvisation.** The narrower open
+  questions are how a recurring add-on is represented at the provider and whether proration is attempted
+  on the first one at all (§201 says "where the provider supports reliable proration").
+- **downgrade over BP/seat capacity** — needs the owner's active-resource selection policy.
+- **the 3-day failed-renewal grace** — `paidWorkPermitted` declines to decide how `GRACE` ends while
+  `BILLING_ENTITLEMENTS.md` names three days. Both cannot be right.
+
+### Reported and deliberately not built
+
+- **Nothing in production creates a workspace or a Business Profile.** `createBusinessProfile` and
+  `createWorkspaceWithOwner` are not exported from `@omnichannel/db`, `db.businessProfile.create` appears
+  in exactly one place — inside the former — and nothing in `apps/web` creates either. `addWorkspaceMember`
+  has no production caller either. So §178's funnel (create account → connect first Business Profile →
+  trial → choose a plan) has no front door, and the capacity gates, the trial start and `readEntitlement`
+  are currently reachable only from tests. Read as not-yet-built rather than broken; it is the whole
+  sign-up surface and wants its own issue.
+- **The analytics tier limits are unenforced in both the catalogue and the code.**
+  `ANALYTICS_RETENTION_DAYS` (30/183/730) is declared, published per tier, asserted at publication and
+  localized for display, and read by nothing — no retention logic exists in `analytics-store.ts` or
+  `analytics-view.ts`, so a Starter workspace can query the 24 months Scale pays for. `ADVANCED_ANALYTICS`
+  is granted to all three tiers by `CORE_FEATURES` and its only reader is the billing screen's display
+  list, so §127's analytics-depth split exists nowhere. #34/#38 scope; §152 gives the durations without
+  saying whether an over-long range is clamped, refused, or clamped with an explanation.
+- **`reconcileProviderState` still has no periodic caller**, so the audit rows the best-effort
+  cancellation writes are for a person to read rather than for anything to repair.
+
+### Reading a verification run
+
+- **Judge CI by conclusion, then job duration, then the log.** The jobs API intermittently returns
+  `conclusion: success` with `steps: 0`, and 502s, while the run is complete and its log intact
+  (`gh run view --log` then labels every line `UNKNOWN STEP`). A refused job is `failure` + 0 steps +
+  ~3 s; a real one with missing metadata is `success` + 0 steps + minutes.
+- **A local full `pnpm test` is not the verdict.** 213 files against one PostgreSQL contend, and every
+  clean-environment run gives a different failure set — twice on 2026-10-14 the failures were in files a
+  `packages/db` transaction cannot touch, and each passed alone. Cap local full suites at
+  `--maxWorkers=3`, compare the *same* suite with and without a change before blaming it, and let the
+  clean runner decide.
+- **`packages/billing-stripe` left behind by a checkout of #104/#105 breaks `scripts/verification/gate.test.ts`
+  on branches that do not have that package**, with ENOENT on a directory holding only `node_modules`.
+  Remove it; it is not a code defect.
 ## PR #82 accepted, and joined to #83 — 2026-10-14
 
 **#82 / P3-02 is accepted at `9040a2cfbd77c4373d97e1f9e5aec48cd25e11c5`.** Gemini (Google Antigravity)
@@ -4352,3 +4561,237 @@ are still readable afterwards: the content was withheld, not destroyed.
 
 PostgreSQL 1133→1140 and `verify` 3469→3476: all seven new cases are database-gated, which is why the
 no-infrastructure run's skipped count rises by exactly seven.
+
+## P7-01 accepted, and propagated into P7-02 / PR #103 — 2026-10-22
+
+#102 passed at `8f35d35054924beeb0540c35f367734554c8c8ab` (Astra review 5618092993, `APPROVED`), closing
+three blockers in one round: the missing content-access audit, the overwritten expiry predicate and the
+discarded conditional-update counts. Two limitations are carried forward rather than smoothed over: the
+reviewer **did not execute** the integration suites against PostgreSQL (56 cases skipped, "not passed") and
+its two-caller probes were "controlled database-double executions, not live-PostgreSQL concurrency
+certification"; and the approval covers the implemented P7-01 slice only — Issue #59 is not declared
+delivered, and no deployment, payment or legal authorization is implied.
+
+### The merge
+
+One ordinary non-rebase merge into `feat/p7-02-launch-readiness`. The directive's figures were re-measured
+before the branch was touched and matched exactly: merge base `1590582f`, #103 twenty-six ahead and
+**eighty-eight behind**, live head `b3f2a6ec`.
+
+**Three real conflicts, all resolved as unions rather than choices.**
+
+`packages/db/src/platform-actions-store.ts` — **the code did not conflict at all.** Both sides had already
+made the identical `AND` repair to `listKillSwitches`: this branch while writing P7-02, and the parent
+under review after Astra flagged it. Only the two explanatory comments collided. Merged into one that
+keeps both consequences, the `inbox-store.ts` precedent this branch cited, and the fact that the same
+repair was found twice independently. Worth recording as a chain property: **a fix made on a later link
+does not travel back up**, so the earlier link kept shipping the defect and collected the review finding
+for it.
+
+`packages/db/src/platform-read-store.ts` — an import line only; this branch adds
+`loadCoveringSuspensions`, the parent widens the type import to `DbClient`. Both kept. The rest auto-merged
+and the parent's invariants were then checked **by name** rather than assumed: both functions still take
+`DbClient`, both still open their own transaction, `CUSTOMER_CONTENT_READ` is still written inside the
+content transaction between the select and the return, `WORKSPACE_INSPECTED` is still written by
+`readSnapshotWithin`, and the refusal for a scope carrying no session id is intact.
+
+`docs/tasks/CLAUDE_EXECUTION_QUEUE.md` — this branch's compact chain line against the parent's
+two-segments paragraph. The paragraph is substantive and was kept.
+
+### What merged clean and still broke
+
+`PolicyInput` gained a **required** `rollout` field on this branch (P7-02's staged-rollout gate), and
+`apps/web/src/server/simulation-inputs.test.ts` arrives from the other side of the merge, so it built a
+policy input that no longer typechecked. Git had nothing to conflict about: neither side touched the same
+lines, and the breakage is that one side's *type* no longer admits the other side's *fixture*.
+
+Caught by `pnpm typecheck`, which is the gate for this shape — not by a test, and not by the merge. Fixed
+by giving the fixture `NO_STAGED_ROLLOUT`, the posture of a deployment with no staged release in force,
+which is what a test database is and which matches the deliberately permissive `commercial` value the file
+already documents: a restrictive posture would make the rollout gate refuse every case and the suite would
+pass while proving nothing about the simulation inputs it exists to compare.
+
+### The fallout that merges clean, checked by name
+
+| shape | result |
+|---|---|
+| migration drift | **No difference detected** |
+| models against tables | 75 `^model` against 75 `CREATE TABLE` |
+| colliding migration timestamps | none |
+| `packages/db/src/index.ts` barrel | no duplicate exported name |
+| worker loop registry | nine names in `loops`, nine `.close()` inside `allSettled`, prose "nine" |
+| #102's actorless-operator CHECK | every database-writing operator pause carries an actor; the only `byUserId: null` cases are the two tests asserting the CHECK refuses exactly that |
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 218 files, **2134 passed / 1450 skipped (3584)** |
+| PostgreSQL suites | 52 files, **1182/1182** |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |
+
+#103 brings the release-evidence and rollout-hold segment: 213→218 files and 3476→3584 tests, PostgreSQL
+50→52 files and 1140→1182 cases, E2E 1220→1234.
+
+Ancestry: the accepted #102 head `8f35d350`, the previous #103 head `b3f2a6ec` and the accepted #101 head
+`79aaee1a` are all ancestors of the new head.
+
+## PR #103 round one — four findings in release evidence and rollout enforcement — 2026-10-22
+
+Astra returned `CHANGES_REQUESTED` on `9b96066` with four blocking findings. All four are real and all four
+are fixed.
+
+### [P1] A lock was taken, and the query then hid the writer it was taken for
+
+The send claim takes `pg_advisory_xact_lock_shared` on the release-catalogue key precisely because the
+candidate that would change its answer **may not exist yet** when the claim starts — no row lock can cover
+a row nobody has written. It then re-resolved the catalogue with `readReleaseInForce(tx, claimedAt)`, and
+`claimedAt` is captured by the coordinator *before* the claim transaction begins. So a restrictive release,
+or a `CHANGES_REQUESTED` verdict, committed while the claim waited for that key was excluded by
+`createdAt <= claimedAt`.
+
+Taking a lock does not repair a query that excludes the winning writer. The guarded read now uses a new
+`readReleaseInForceNow`, which has no as-of bound and therefore sees what is committed once the key is
+held; the comparison with the guard then disagrees and the claim returns `STATE_CHANGED`.
+`readReleaseInForce` keeps its bound and its two deliberate callers — the console showing what was in force
+at an instant, and `readRolloutAccess` resolving the facts a decision is judged from.
+
+### [P1] A note about outstanding work became an accepted limitation
+
+`planGateResults` turned any nonempty `manual` note in the evidence table into `KNOWN_LIMITATION`. Those
+notes say what is **not** settled — "no staging environment exists", "`pnpm evals` is not run by CI", "all
+seven alerts §16 requires are unevidenced" — so the repository's own description of unfinished work
+admitted that work, and a Commercial Beta came out `releasable: true` with AUTOPILOT enabled and nobody
+having judged anything. `LAUNCH_READINESS` asks for limitations that are explicit, bounded **and safe**;
+only a person can supply the last one.
+
+A gate with a manual note is now **omitted**, which `releaseDecision` reports as `GATE_NOT_EVALUATED` and
+which blocks — including when every suite passed, because suites passing says nothing about what the table
+says they do not cover. The route forward is a **written verdict**: a person records `KNOWN_LIMITATION`
+with its bound, or `HIGH`, which switches off the capability that gate guards. Measured end to end: three
+successful commands and no written verdict now gives `releasable: false`; with honest written verdicts the
+decision disables **AUTOPILOT and OPERATOR_VISIBILITY** rather than permitting them.
+
+### [P1] Evidence that named a candidate it had never tested
+
+`--sha` was taken verbatim: not checked for shape, not checked to exist, not checked against the checkout
+whose commands were about to run — and the migration list was always read from `HEAD`. Imported
+`--command-results` were a bare `[{command, exitCode}]`, indistinguishable from the same array copied out
+of a run against any other commit. The reviewer's own probe recorded a forty-character string that exists
+nowhere and printed it as releasable.
+
+Now: the SHA must be forty hex characters and must be a commit in this repository; running the commands
+locally requires the candidate to **be** `HEAD`; imported results must arrive in an envelope naming the
+tested SHA and a `reference` saying where they ran, and that SHA must equal the candidate; and the
+migration list is read from the candidate rather than from `HEAD`.
+
+### [P2] The allowlist transition, for the third time
+
+`setRolloutAutopilot` read the flag, compared, then updated unconditionally and audited unconditionally.
+Two operators adding the same profile both saw `false`, both returned `changed: true` and both filed
+`ROLLOUT_ALLOWLIST_CHANGED`, although one `false -> true` had happened. The same correction as
+`liftKillSwitch` and `revokeSupportAccessSession` on #102: the transition is the predicate, and its count
+decides.
+
+### A flake this work surfaced, and its mechanism
+
+`pnpm test:db` failed once in four runs on a test that was not mine: `release-lock.integration`'s control,
+"finds no lock on that key when nothing has written". Its helper counted `pg_locks` filtered only by lock
+type and key. **`pg_locks` is cluster-wide while advisory locks are per-database**, every suite runs in a
+migrated database of its own and vitest runs those files in parallel — so the control saw the catalogue key
+held by a claim in *somebody else's database*. Latent before this round; adding claims made the coincidence
+likely.
+
+Demonstrated rather than inferred: holding the key in `omnichannel` and counting from
+`omnichannel_shadow` gives **1** without a database filter and **0** with one. The helper now scopes to
+`current_database()`, and `pnpm test:db` ran clean four times after.
+
+### Mutation evidence
+
+| reverted | caught by |
+|---|---|
+| the catalogue read back to `claimedAt` | *refuses a claim when the release catalogue moved after the instant the coordinator captured* |
+| a manual note becoming its own verdict | four planner/CLI cases, including *cannot make a release approvable on its own, however green every command was* |
+| the CLI's envelope and SHA checks | *refuses a bare array…* and *refuses results recorded against another commit* |
+| the allowlist's conditional transition | *lets exactly one of two concurrent selections report the transition, in both directions* |
+
+The concurrency cases force the interleaving with a barrier holding both transactions at their first read;
+the claim case runs in a database of its own because **release evidence is append-only** — a trigger
+refuses the delete — so a candidate recorded in the shared suite could never be taken back.
+
+### Verification of this head
+
+| gate | result |
+|---|---|
+| migration drift | **No difference detected.** |
+| `pnpm verify` under `env -i`, no infrastructure | exit 0 — 219 files, **2142 passed / 1453 skipped (3595)** |
+| PostgreSQL suites | 52 files, **1185/1185** (four consecutive clean runs) |
+| Redis suites | **55/55** |
+| worker + web E2E | 106 files, **1234/1234** |
+
+## P6-07 commercial slice, and the accepted #104 propagated into it — PR #105 — 2026-10-27
+
+**#104 / P6-04 is accepted at `ada34eae24158c0d04c85a1e8e4587937a738db3`.** AntiGravity published a formal
+exact-head review on 2026-10-27T12:07:57Z: GitHub state `APPROVED` on that commit, carrying
+`ANTIGRAVITY_REVIEW: PASS head=ada34eae24158c0d04c85a1e8e4587937a738db3`, with no findings. The acceptance
+covers that SHA and no other. Its container run executed 4,726 tests including `pnpm evals`, which our own
+Actions workflow still does not run — the reviewer's container is currently the only place the evaluation
+suite executes at all.
+
+**#105 is now joined to that head by an ordinary non-rebase merge.** No rebase, no force-push, no squash,
+nothing to `main`, and nothing propagated into #106+. #105 was 20 ahead / 96 behind at merge base
+`cc398c37fb06293b2f793bb192cf5b9971bf010d`; `git merge-base --is-ancestor ada34eae… HEAD` succeeds on the
+new head.
+
+### What the merge reconciled
+
+**One conflict, and it was this file.** Both sides appended at the same point — #105 added its 2026-10-14
+Phase-6 correction section, #104 carried 96 commits' worth of accepted-and-propagated log. The document is
+an append-only chronological record, so the resolution is a **union in date order**: #105's section stays
+where it was written, and the accepted log follows it whole. Nothing was dropped from either side; picking
+a side would have discarded either #105's task findings or the entire history of #83…#103.
+
+**The other two files both sides touched merged cleanly, and were read rather than counted:**
+
+- `packages/db/src/index.ts` — a barrel. #104 adds type exports (`PolicyAuditCursor`, `DueFollowUp`,
+  `FollowUpChannelPort`, …), #105 adds `ensureWorkspaceTrial` and `TRIAL_PLAN_CODE`; disjoint regions. A
+  dropped export here fails typecheck loudly, which is why this one needs no argument.
+- `packages/db/src/repositories/workspaces.ts` — looks like the dangerous one and is not. #104 adds the
+  nested `automationPolicies: { create: profileDefaultPolicyWrite() }` write inside the profile's own
+  transaction; **#105's entire hunk is a comment** restating that creating a Business Profile does not
+  start the trial — `createChannelAccount` does. Different subjects, both kept, and the two comments now
+  sit adjacent without disagreeing.
+
+### What the 2026-10-14 section above no longer describes
+
+That section is kept as the dated record it is, but three of its framing claims are superseded by the log
+that now follows it, and a reader who stops at it will act on stale facts:
+
+- **"#82 is blocked on the reviewer's environment"** — #82 was accepted later the same day; the next
+  section is its acceptance. Everything it said was waiting behind #82 has since moved.
+- **"#83 / P5-08 is the sole current propagation and review gate. #84 onwards are frozen"** — the log runs
+  from #82 through to #103 accepted and #104 accepted. The earliest unresolved gate is now **#105 itself**;
+  #106+ remain held.
+- **"the chain is two live segments"** — the segments are joined. Ancestry is still worth measuring with
+  `merge-base --is-ancestor` rather than inferred from PR numbers, which is why that advice stays.
+
+### The three product questions are decided, and their implementation is not in this merge
+
+The section above lists recurring add-ons/top-ups, downgrade over capacity and the failed-renewal grace as
+waiting on the owner rather than on code. **They were decided on 2026-10-19** (`OWNER_ACCEPTANCE: ADR-021=ACCEPTED
+GRACE=C_3_DAYS DOWNGRADE=SPEC_AS_WRITTEN ANALYTICS=EXPLAINED_SERVER_CLAMP`) and became issues **#106, #107,
+#108 and #109**, explicitly backlog-gated. The analytics tier limits noted as unenforced are #109's scope.
+None of that is implemented here: this is a propagation, and implementing an accepted decision inside one
+would be scope expansion.
+
+**ADR-021's Markdown status deliberately still reads `Proposed`.** The owner's decision accepted it while
+instructing that the published branch keep that status until a future authorized docs/implementation
+commit, and that #105's SHA not be moved to update metadata. This merge moves the SHA for propagation, not
+for metadata, so the status is left exactly as it was rather than quietly corrected.
+
+**Still untasked, and the largest open hole:** nothing in production creates a workspace or a Business
+Profile, so the capacity gates, the trial start and `readEntitlement` remain reachable only from tests.
+`reconcileProviderState` still has no periodic caller either, so the audit rows the best-effort
+cancellation writes are for a person to read rather than for anything to repair.

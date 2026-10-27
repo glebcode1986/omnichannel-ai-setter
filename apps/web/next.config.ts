@@ -14,6 +14,7 @@ const nextConfig: NextConfig = {
   // Workspace packages export TypeScript source; Next compiles them as part of the app.
   transpilePackages: [
     "@omnichannel/application",
+    "@omnichannel/billing-stripe",
     "@omnichannel/channel-core",
     "@omnichannel/db",
     "@omnichannel/domain",

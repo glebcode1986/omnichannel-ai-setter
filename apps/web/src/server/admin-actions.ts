@@ -3,7 +3,7 @@
 /**
  * The operator actions the console offers (#59, ADMIN_OPERATIONS.md).
  *
- * Four, and the boundary matters more than the count. Every one re-resolves the platform authorization
+ * Five, and the boundary matters more than the count. Every one re-resolves the platform authorization
  * from the database, calls a typed store function, and leaves the audit row to that function so the record
  * and the change commit together. None of them takes a workspace from a session — an operator has none —
  * so the target is a parameter and the store bounds every query by it.
@@ -27,6 +27,7 @@ import {
   pullKillSwitch,
   requestReconciliation,
   revokeSupportAccessSession,
+  setRolloutAutopilot,
 } from "@omnichannel/db";
 import { isSuspensionScope, type SuspensionScope } from "@omnichannel/domain";
 import { redirect } from "next/navigation";
@@ -46,6 +47,9 @@ export type AdminOutcome =
   | "SESSION_REVOKED"
   | "ALREADY_REVOKED"
   | "REEXAMINED"
+  | "ALLOWLIST_ADDED"
+  | "ALLOWLIST_REMOVED"
+  | "ALLOWLIST_UNCHANGED"
   | "NOT_PERMITTED"
   | "ADMIN_REFUSED";
 
@@ -167,6 +171,36 @@ export async function reexamineOperationAction(path: string, formData: FormData)
     );
     getLogger().info("admin.reconciliation_requested", { operationId });
     finish(path, "REEXAMINED");
+  } catch (error) {
+    finish(path, outcomeOf(error));
+  }
+}
+
+/**
+ * Adds a Business Profile to the limited-rollout autopilot allowlist, or removes it (#60, §18).
+ *
+ * The writer §18's third stage needs. Without it "limited AUTOPILOT on explicitly selected BPs" was a
+ * stage nobody could enter: the column existed, the send path read it, and the only way to set it was
+ * hand-written SQL against production — the practice this console exists to end.
+ *
+ * It decides nothing about whether the profile then sends unattended. The stage has to be there, the plan
+ * has to permit autopilot, the profile has to be in AUTOPILOT, and no kill switch may cover it. This is
+ * one of those conditions, which is why the pane says so beside the control rather than implying that a
+ * checkbox turns sending on.
+ */
+export async function setRolloutAutopilotAction(path: string, formData: FormData): Promise<void> {
+  const context = await requirePlatformContext();
+  const enabled = field(formData, "enabled") === "on";
+  try {
+    const result = await setRolloutAutopilot(getDb(), context, {
+      workspaceId: field(formData, "workspaceId"),
+      businessProfileId: field(formData, "businessProfileId"),
+      enabled,
+      reason: field(formData, "reason"),
+    });
+    // Three outcomes rather than two: an operator who clicked twice should be told nothing happened
+    // rather than shown a success for a change that was not made, because no audit row was written.
+    finish(path, result.changed ? (enabled ? "ALLOWLIST_ADDED" : "ALLOWLIST_REMOVED") : "ALLOWLIST_UNCHANGED");
   } catch (error) {
     finish(path, outcomeOf(error));
   }

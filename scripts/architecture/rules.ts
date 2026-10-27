@@ -124,6 +124,14 @@ export const PACKAGE_RULES: Readonly<Record<string, PackageRule>> = {
     // Implements application-owned AI ports; provider SDKs stay private to this package.
     allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("application"), pkg("observability")],
   },
+  [pkg("billing-stripe")]: {
+    layer: "infrastructure",
+    // Implements the application-owned billing provider port (ADR-017), the same arrangement ADR-010 uses
+    // for the AI ports. It may not see the persistence package: a payment adapter that could reach the
+    // database could activate an entitlement without a verified event, which is the one thing the port
+    // exists to make impossible.
+    allowedWorkspaceDependencies: [pkg("domain"), pkg("application"), pkg("observability")],
+  },
   [pkg("channel-instagram")]: {
     layer: "channel-adapter",
     allowedWorkspaceDependencies: [pkg("domain"), pkg("channel-core"), pkg("observability")],

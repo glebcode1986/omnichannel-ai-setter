@@ -14,8 +14,10 @@
  * freezes it; a deferred constraint trigger refuses to let it commit without its acceptances.
  *
  * **Only a verified provider event or an authoritative reconciliation activates anything.** The type
- * `VerifiedBillingEvent` cannot be constructed outside `billing-events.ts`, so a success-page handler has
- * no way to reach this file's activation path even by mistake.
+ * `VerifiedBillingEvent` cannot be constructed outside the provider port — it lives in
+ * `@omnichannel/application`, in `billing/provider-port.ts`, which is where the mint and the map of
+ * authenticated facts are — so a success-page handler has no way to reach this file's activation path
+ * even by mistake. `billing-events.ts` re-exports that surface and owns the refusals, nothing more.
  *
  * **One live charge path per workspace.** Enforced by a partial unique index rather than by a check here,
  * because the race it prevents — two checkouts completing at once — is exactly the one an application
@@ -43,6 +45,7 @@ import {
   selectRoute,
   settlementModelCoherent,
   taxRemittedBy,
+  isArrangementKind,
   type ArrangementKind,
   type BillingCapability,
   type BillingRouteTerms,
@@ -1185,21 +1188,59 @@ async function write(
 }
 
 /**
- * The provider and account a checkout was routed to.
+ * Everything the provider's own session needs, read server-side from the contract.
  *
  * The one read in this file that returns provider vocabulary, and it exists for the composition root that
  * has to create the provider's session. Takes an id rather than a context because the caller is
  * server-side infrastructure with no session — and returns nothing a page would have any use for.
+ *
+ * `providerPriceRef` comes from the catalogue row the contract's own plan version, interval and base
+ * currency identify — never from a request. A client that could name a price could name a cheaper one,
+ * which is why the port's `priceReference` is documented as the catalogue's and why this read resolves it
+ * rather than accepting it. It is `null` where the catalogue has not been given the provider's price id,
+ * and a checkout then cannot be opened with that provider: a session priced by a default would be a
+ * session charging a number nobody published.
  */
 export async function readCheckoutRouting(
   db: DbExecutor,
   checkoutContractId: string,
-): Promise<{ readonly provider: string; readonly providerAccountRef: string | null; readonly routeCode: string } | null> {
+): Promise<{
+  readonly provider: string;
+  readonly providerAccountRef: string | null;
+  readonly routeCode: string;
+  readonly arrangementKind: ArrangementKind;
+  readonly charge: Money;
+  readonly providerPriceRef: string | null;
+} | null> {
   const row = await db.checkoutContract.findUnique({
     where: { id: checkoutContractId },
-    select: { billingRoute: { select: { provider: true, providerAccountRef: true, code: true } } },
+    select: {
+      planVersionId: true,
+      interval: true,
+      arrangementKind: true,
+      baseCurrency: true,
+      chargeAmountMinor: true,
+      chargeCurrency: true,
+      billingRoute: { select: { provider: true, providerAccountRef: true, code: true } },
+    },
   });
-  return row === null ? null : { provider: row.billingRoute.provider, providerAccountRef: row.billingRoute.providerAccountRef, routeCode: row.billingRoute.code };
+  if (row === null) {
+    return null;
+  }
+  // The base currency, not the charge currency: the catalogue prices a plan in what it published, and a
+  // route that quoted another asset quoted it *from* that price.
+  const price = await db.planPrice.findUnique({
+    where: { planVersionId_currency_interval: { planVersionId: row.planVersionId, currency: row.baseCurrency, interval: row.interval } },
+    select: { providerPriceId: true },
+  });
+  return {
+    provider: row.billingRoute.provider,
+    providerAccountRef: row.billingRoute.providerAccountRef,
+    routeCode: row.billingRoute.code,
+    arrangementKind: arrangementKindOf(row.arrangementKind),
+    charge: money(row.chargeAmountMinor, row.chargeCurrency),
+    providerPriceRef: price?.providerPriceId ?? null,
+  };
 }
 
 /**
@@ -1246,9 +1287,9 @@ export interface BillingEventResult {
  * Applies one verified provider event to the workspace's normalized billing state.
  *
  * The first line is the whole security model, and it does two things rather than one.
- * `snapshotVerifiedBillingEvent` refuses anything `billing-events.ts` did not mint — so a success-page
- * handler cannot reach this path even by constructing an object of the right shape and casting it — and it
- * returns a private copy of the authenticated facts.
+ * `snapshotVerifiedBillingEvent` refuses anything the provider port did not mint, and anything edited
+ * since it was minted — so a success-page handler cannot reach this path even by constructing an object
+ * of the right shape and casting it — and it returns a private copy of the authenticated facts.
  *
  * The copy is the part that is easy to leave out, and leaving it out was a real defect: asserting answers
  * a question about one instant, and this function then awaits a route lookup, a transaction and several
@@ -1815,6 +1856,78 @@ export interface ArrangementView {
 }
 
 /** The workspace's live charge path, as a screen may see it. Null when there is none. */
+/** What a renewal change needs to name: the adapter, its route, and the provider's own handle. */
+export interface RenewalTarget {
+  readonly provider: string;
+  readonly routeCode: string;
+  readonly providerReference: string;
+}
+
+/**
+ * The live arrangement a renewal change would act on, or nothing.
+ *
+ * `null` when there is no active arrangement, or when the provider never gave us a reference for it: a
+ * renewal request naming no object is one the provider cannot answer, and guessing a reference is how a
+ * request ends up changing somebody else's subscription.
+ *
+ * Deliberately not folded into `readArrangement`, which is a screen's view of the charge path and should
+ * not carry an opaque provider handle to a page that must never display it (#41's "provider references
+ * opaque and workspace-scoped").
+ */
+export async function readRenewalTarget(db: DbExecutor, workspaceId: string): Promise<RenewalTarget | null> {
+  const row = await db.billingArrangement.findFirst({
+    where: { workspaceId, state: "ACTIVE" },
+    select: { providerReference: true, billingRoute: { select: { provider: true, code: true } } },
+  });
+  if (row === null || row.providerReference === null) {
+    return null;
+  }
+  return { provider: row.billingRoute.provider, routeCode: row.billingRoute.code, providerReference: row.providerReference };
+}
+
+/**
+ * Records what the provider said when asked to stop renewing — including that it was never asked.
+ *
+ * The cancellation itself is already committed by the time this is called, and deliberately: a customer's
+ * decision must not depend on a third party being reachable. What this writes is the evidence of whether
+ * the provider knows about it, which is the difference between a cancellation that will take effect by
+ * itself and one that still needs somebody to intervene before the next charge.
+ *
+ * Audited rather than stored as state, because there is no state here that the product may act on: only a
+ * verified event ends an entitlement, and a failed request to stop renewing changes nothing about what
+ * the workspace is entitled to today.
+ */
+export async function recordRenewalStopOutcome(
+  db: DbExecutor,
+  context: WorkspaceContext,
+  outcome:
+    | { readonly status: "STOPPED"; readonly routeCode: string; readonly renews: boolean }
+    | { readonly status: "UNSUPPORTED"; readonly routeCode: string }
+    | { readonly status: "NO_ARRANGEMENT" }
+    | { readonly status: "FAILED"; readonly routeCode: string; readonly errorName: string },
+): Promise<void> {
+  const workspaceId = scopeOf(context);
+  const summary =
+    outcome.status === "STOPPED"
+      ? `Asked the provider to stop renewing on route ${outcome.routeCode}; it reports renews=${String(outcome.renews)}`
+      : outcome.status === "UNSUPPORTED"
+        ? `This provider cannot be asked to stop renewing (route ${outcome.routeCode}); the cancellation stands locally and the provider may charge again`
+        : outcome.status === "NO_ARRANGEMENT"
+          ? "No active provider arrangement to stop renewing; the cancellation stands locally"
+          : `Asking the provider to stop renewing failed on route ${outcome.routeCode} (${outcome.errorName}); the cancellation stands locally and the provider may charge again`;
+
+  await recordWorkspaceAuditEvent(db, context, {
+    kind: "BILLING_ARRANGEMENT_CHANGED",
+    summary,
+    subjectType: "Workspace",
+    subjectId: workspaceId,
+    actorUserId: context.userId,
+    // The provider's own reference is not in here on purpose: an audit row is read by people, and #41's
+    // decision keeps provider handles out of anything a screen or an export carries.
+    detail: { ...outcome },
+  });
+}
+
 export async function readArrangement(db: DbExecutor, workspaceId: string): Promise<ArrangementView | null> {
   const row = await db.billingArrangement.findFirst({
     where: { workspaceId, state: { in: ["PENDING", "ACTIVE"] } },
@@ -1903,6 +2016,14 @@ export async function expireStaleCheckouts(db: DbClient, now = new Date(), ttlMs
 
 async function liveArrangement(db: DbExecutor, workspaceId: string): Promise<{ readonly id: string } | null> {
   return db.billingArrangement.findFirst({ where: { workspaceId, state: { in: ["PENDING", "ACTIVE"] } }, select: { id: true } });
+}
+
+/** A stored arrangement kind, narrowed. The column is an enum, so reaching the throw means the row lied. */
+function arrangementKindOf(value: string): ArrangementKind {
+  if (!isArrangementKind(value)) {
+    throw new DbInputError("arrangementKind", `not an arrangement kind: ${value}`);
+  }
+  return value;
 }
 
 /** A stored interval, narrowed. `ONE_TIME` is refused by a CHECK, so reaching the throw means the row lied. */

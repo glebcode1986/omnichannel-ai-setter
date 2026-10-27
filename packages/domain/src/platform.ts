@@ -64,6 +64,15 @@ export const PLATFORM_PERMISSIONS = [
   "READ_PLATFORM_AUDIT",
   /** Grant or remove a platform role. */
   "MANAGE_PLATFORM_MEMBERS",
+  /**
+   * Record a release candidate, file a reviewer's verdict, or change the limited-rollout allowlist (#60).
+   *
+   * One permission for all three because they are one decision taken in instalments: the candidate
+   * proposes a stage, the verdict is what makes it count, and the allowlist is who it applies to. Holding
+   * one without the others would let somebody move the §18 stage in force while being unable to see or
+   * say who it reaches.
+   */
+  "OPERATE_RELEASE",
 ] as const;
 export type PlatformPermission = (typeof PLATFORM_PERMISSIONS)[number];
 export const isPlatformPermission = literalGuard(PLATFORM_PERMISSIONS);
@@ -85,12 +94,33 @@ export const isPlatformPermission = literalGuard(PLATFORM_PERMISSIONS);
  *   break-glass. It is deliberately **not** a superset — it cannot change billing, because "the person
  *   who grants roles" and "the person who moves money" being the same person is the control this
  *   separation exists to provide.
+ * - `OPERATE_RELEASE` goes to `OPERATIONS` and `PLATFORM_ADMIN`, the two that already hold
+ *   `OPERATE_KILL_SWITCH`, because a release decision and a kill switch move the same gate in opposite
+ *   directions and it would be incoherent for one role to be trusted to stop unattended sending and not
+ *   to be trusted to see or state the rollout that started it. `BILLING` and `SUPPORT` do not have it:
+ *   neither an invoice nor a diagnosis is a reason to advance a rollout.
  */
 export const PLATFORM_PERMISSION_MATRIX: Readonly<Record<PlatformRole, readonly PlatformPermission[]>> = {
   SUPPORT: ["READ_METADATA", "READ_BILLING", "OPEN_SUPPORT_SESSION", "READ_PLATFORM_AUDIT"],
   BILLING: ["READ_METADATA", "READ_BILLING", "WRITE_BILLING", "READ_PLATFORM_AUDIT"],
-  OPERATIONS: ["READ_METADATA", "READ_BILLING", "OPEN_SUPPORT_SESSION", "OPERATE_KILL_SWITCH", "OPERATE_RECONCILIATION", "READ_PLATFORM_AUDIT"],
-  PLATFORM_ADMIN: ["READ_METADATA", "OPEN_SUPPORT_SESSION", "BREAK_GLASS", "OPERATE_KILL_SWITCH", "READ_PLATFORM_AUDIT", "MANAGE_PLATFORM_MEMBERS"],
+  OPERATIONS: [
+    "READ_METADATA",
+    "READ_BILLING",
+    "OPEN_SUPPORT_SESSION",
+    "OPERATE_KILL_SWITCH",
+    "OPERATE_RECONCILIATION",
+    "OPERATE_RELEASE",
+    "READ_PLATFORM_AUDIT",
+  ],
+  PLATFORM_ADMIN: [
+    "READ_METADATA",
+    "OPEN_SUPPORT_SESSION",
+    "BREAK_GLASS",
+    "OPERATE_KILL_SWITCH",
+    "OPERATE_RELEASE",
+    "READ_PLATFORM_AUDIT",
+    "MANAGE_PLATFORM_MEMBERS",
+  ],
 };
 
 /** Whether this role holds this permission. The only reader of the matrix. */
@@ -278,6 +308,12 @@ export const PLATFORM_AUDIT_KINDS = [
   "KILL_SWITCH_LIFTED",
   /** An operator asked the system to re-examine an ambiguous operation. Never a resend. */
   "RECONCILIATION_REQUESTED",
+  /** A release candidate was recorded with its gate verdicts. What can move the §18 stage in force. */
+  "RELEASE_RECORDED",
+  /** An independent reviewer's verdict was filed against a commit. */
+  "RELEASE_REVIEW_RECORDED",
+  /** A Business Profile was added to or removed from the limited-rollout autopilot allowlist. */
+  "ROLLOUT_ALLOWLIST_CHANGED",
 ] as const;
 export type PlatformAuditKind = (typeof PLATFORM_AUDIT_KINDS)[number];
 export const isPlatformAuditKind = literalGuard(PLATFORM_AUDIT_KINDS);
@@ -308,6 +344,14 @@ const SEVERITIES: Readonly<Record<PlatformAuditKind, PlatformAuditSeverity>> = {
   KILL_SWITCH_PULLED: "WARNING",
   KILL_SWITCH_LIFTED: "WARNING",
   RECONCILIATION_REQUESTED: "INFO",
+  // `WARNING` for the kill switch's reason read the other way round: a switch is a deliberate, visible,
+  // reversible act that stops the product doing something, and these two are deliberate, visible acts
+  // that can *start* it — they are what moves the §18 stage, and therefore what can permit unattended
+  // sending. Filing a verdict is `INFO` because it changes no permission on its own: a `PASS` matters
+  // only together with gates that already permit a release, and a `CHANGES_REQUESTED` only subtracts.
+  RELEASE_RECORDED: "WARNING",
+  RELEASE_REVIEW_RECORDED: "INFO",
+  ROLLOUT_ALLOWLIST_CHANGED: "WARNING",
 };
 
 export function platformAuditSeverity(kind: PlatformAuditKind): PlatformAuditSeverity {
@@ -325,4 +369,7 @@ export const PLATFORM_ACTION_PERMISSIONS: Readonly<Record<PlatformAuditKind, Pla
   KILL_SWITCH_PULLED: "OPERATE_KILL_SWITCH",
   KILL_SWITCH_LIFTED: "OPERATE_KILL_SWITCH",
   RECONCILIATION_REQUESTED: "OPERATE_RECONCILIATION",
+  RELEASE_RECORDED: "OPERATE_RELEASE",
+  RELEASE_REVIEW_RECORDED: "OPERATE_RELEASE",
+  ROLLOUT_ALLOWLIST_CHANGED: "OPERATE_RELEASE",
 };
