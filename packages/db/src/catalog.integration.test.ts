@@ -374,8 +374,12 @@ describe.skipIf(!databaseTestsEnabled())("the commercial catalogue", () => {
 
       it("shows a member only the profiles they were granted, and the channels of those", async () => {
         const { workspace, profile } = await business("scoped");
-        await connect(profile, "scoped");
+        // The second profile is created **before** the channel is connected, and the order is the whole
+        // fixture: connecting starts the trial, the trial allows one Business Profile, and the case two
+        // above this one asserts that the second is then refused. Written the other way round, this test
+        // failed on `PlanLimitError` — a correct product rule breaking a careless fixture.
         const second = await createBusinessProfile(db(), workspace, { name: "Other" }, NOW);
+        await connect(profile, "scoped");
         const agentId = await createTestUser(db(), `scoped-agent-${String(sequence)}`);
         await addWorkspaceMember(db(), workspace, {
           userId: agentId,
