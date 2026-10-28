@@ -103,10 +103,39 @@
               match the routes: a conversation link in the list, the phone-only "back" link and a
               composer in the thread, a control in the context column.
             -->
+            <!--
+              The list, selector for selector as `ui/inbox/conversation-list.tsx` renders it:
+              `.conversation-rows > li > a.conversation-row` holding `.conversation-name`,
+              `.conversation-badges`, `.conversation-preview` and a `<time>`.
+
+              The first version of this pane invented `<ul class="conversation-list">` — a class the
+              stylesheet never defines and no component renders — so the one pane the Inbox work changed
+              most was the one pane this harness was not measuring, and it reported the two-pane stage
+              clean while a handle was being truncated by 116px with no way to scroll to it. A harness is
+              only worth its markup: check each selector against the component before trusting a number.
+            -->
             <div class="inbox-list">
-              <ul class="conversation-list">
-                <li><a href="#cv1">superlongbusinesshandlewithnobreaks · 2 min</a></li>
-                <li><a href="#cv2">Анна Петрова · 14 мин</a></li>
+              <ul class="conversation-rows">
+                <li>
+                  <a class="conversation-row" href="#cv1" data-selected="false">
+                    <span class="conversation-name">beautystudio_moscow_official</span>
+                    <span class="conversation-badges">
+                      <span class="badge" data-tone="muted" data-channel="INSTAGRAM">Instagram</span>
+                      <span class="badge" data-tone="muted" data-lead="NEW">Новый</span>
+                    </span>
+                    <span class="conversation-preview muted">последнее сообщение, довольно длинное</span>
+                    <time class="muted" datetime="2026-10-28T09:02">28.10.26, 09:02</time>
+                  </a>
+                </li>
+                <li>
+                  <a class="conversation-row" href="#cv2" data-selected="true" aria-current="page">
+                    <span class="conversation-name">superlongbusinesshandlewithnobreaks</span>
+                    <span class="conversation-badges">
+                      <span class="badge" data-tone="ok" data-mode="AUTOPILOT">Автопилот</span>
+                    </span>
+                    <time class="muted" datetime="2026-10-28T08:48">28.10.26, 08:48</time>
+                  </a>
+                </li>
               </ul>
             </div>
             <div class="inbox-thread-column">

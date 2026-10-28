@@ -118,6 +118,28 @@ stages, with the phone-only "back" link appearing only where the list is a separ
 element is zero-sized or clipped; in the two-pane stage no pane declares a scroller of its own, and in the
 three-pane stage each declares exactly one; the context panel keeps its `aria-label` in both.
 
+### What the first attempt at this got wrong
+
+Narrowing the list track and moving the panes' `overflow-y: auto` into the three-pane stage together
+removed a boundary that had been containing something else. `.conversation-name` renders
+`contactName ?? handle` and had no wrap rule of its own, so a long handle was painted outside the list
+pane, under the thread column's opaque background, with **no scroller left to reach it** — 116px of a
+35-character handle lost at a 901px window, 75px at 1024px, 3px still lost at 1244px. An independent review
+proved the same thing from the source.
+
+Two things are worth keeping from it. **A surface whose safety depends on a boundary somewhere else is a
+surface waiting for that boundary to move** — the wrap test's own exemption said as much out loud
+("`white-space: nowrap` surfaces … scroll inside a boundary instead"), and that was the boundary. And the
+harness could not see it, because its list pane rendered `<ul class="conversation-list">`, a class the
+stylesheet never defines and no component renders; the real markup is `.conversation-rows > li >
+a.conversation-row > span.conversation-name`.
+
+The harness now mirrors the route selector for selector and reports, per pane and per width, **content a
+pane cannot show and cannot be scrolled to** — `scrollWidth > clientWidth` with a computed `overflow-x` of
+`visible`. Removing the wrap rule makes it flag every width from 901px to 1403px while document overflow
+stays zero at all of them, which is the whole reason the document-scroll metric was never going to catch
+this.
+
 **What is not covered:** that 480px *reads* well is a judgement, not a measurement. Neither the harness nor
 the arithmetic opens a real route with real data — both render the shell and the stylesheet around
 representative markup — so a component that sets its own width inline would escape both. Nothing does

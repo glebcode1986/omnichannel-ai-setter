@@ -834,8 +834,26 @@ details[open] > summary::before {
   background: var(--surface-sunken);
 }
 
+/*
+ * The row's identifier, and the one cell in it that can be a single unbreakable token.
+ *
+ * `contactName ?? handle` — so when a customer has no name on file this is a handle, and a handle has no
+ * break opportunity in it. The preview beside it is nowrap with an ellipsis, which is right for a
+ * disposable line of someone else's prose and wrong here: an identifier with its end cut off is how you
+ * fail to recognise the conversation you were looking for. Wrapping keeps all of it.
+ *
+ * This is the correction of a regression this branch introduced. Narrowing the list track and moving the
+ * panes' `overflow-y: auto` into the three-pane stage together removed the scroll boundary that had been
+ * containing this cell, and a long handle was then painted outside the pane, under the thread column's
+ * opaque background, with no scroller left to reach it: 116px of a 35-character handle hidden at a 901px
+ * window, 75px at 1024px, measured in a browser. `overflow-wrap: anywhere` is the fix rather than
+ * restoring the boundary, because a horizontal scrollbar inside a 203px pane is not a way to read a name,
+ * and because only `anywhere` reduces the cell's min-content contribution — which is what decides whether
+ * the row fits at all.
+ */
 .conversation-name {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .conversation-badges {

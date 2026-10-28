@@ -98,53 +98,107 @@ interface Track {
 }
 
 /** `minmax(a, b)` and `minmax(0, 1fr)` as a track, in pixels and flex factors. */
-function parseTracks(declaration: string): readonly Track[] {
-  // Read to the matched closing parenthesis rather than the first one: a maximum may be a function of its
-  // own, and `[^)]+?` truncated `min(320px, 33%)` to `min(320px, 33%`, which parsed as no percentage at
-  // all — so the invariant was being asserted against a layout the stylesheet does not describe.
-  const parts: { min: string; max: string }[] = [];
-  const opener = /minmax\(/gu;
-  let at = opener.exec(declaration);
-  while (at !== null) {
-    let depth = 1;
-    let cursor = at.index + at[0].length;
-    const from = cursor;
-    for (; cursor < declaration.length && depth > 0; cursor += 1) {
-      if (declaration[cursor] === "(") {
-        depth += 1;
-      } else if (declaration[cursor] === ")") {
-        depth -= 1;
-      }
+/**
+ * The top-level tracks of a `grid-template-columns` value, split on whitespace outside parentheses.
+ *
+ * Splitting first and parsing each track second is the point. The previous version scanned the value for
+ * `minmax(` and parsed what it found, so a track written the ordinary way — `300px`, `1fr`, `auto` — was
+ * not skipped with a complaint, it was **absent**: absent from the track list, and absent from the gutter
+ * count, which `resolveTracks` derives from `tracks.length`. The only thing standing in the way was a
+ * hard-coded `toHaveLength(2)`, which compares against a constant rather than against the number of
+ * tracks the declaration names. Adding one bare track past that count produced byte-identical output —
+ * same length, same flex factors, same resolved widths — while the real layout gave the thread 92px
+ * against a 205px list. The guard written to prevent Issue #112 would have reported success on it.
+ */
+function splitTracks(declaration: string): readonly string[] {
+  const tracks: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const character of declaration.trim()) {
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
     }
-    const inside = declaration.slice(from, cursor - 1);
-    const comma = (() => {
-      let level = 0;
-      for (const [index, character] of [...inside].entries()) {
-        if (character === "(") level += 1;
-        else if (character === ")") level -= 1;
-        else if (character === "," && level === 0) return index;
+    if (depth === 0 && /\s/u.test(character)) {
+      if (current !== "") {
+        tracks.push(current);
+        current = "";
       }
-      return -1;
-    })();
-    parts.push({ min: inside.slice(0, comma).trim(), max: inside.slice(comma + 1).trim() });
-    opener.lastIndex = cursor;
-    at = opener.exec(declaration);
+      continue;
+    }
+    current += character;
+  }
+  if (current !== "") {
+    tracks.push(current);
+  }
+  return tracks;
+}
+
+/** A length in pixels, or `undefined` if this is not a plain pixel length. */
+function pixels(value: string): number | undefined {
+  const found = /^([\d.]+)px$/u.exec(value);
+  return found === null ? undefined : Number(found[1]);
+}
+
+/**
+ * One track's min, max and flex factor.
+ *
+ * Every form this stylesheet uses is handled, and **anything else fails the test** rather than being
+ * ignored: an unrecognised track is a declaration this model does not describe, and a model that quietly
+ * describes a different layout than the product has is worse than no model. `min(<px>, <percent>)` keeps
+ * both halves, because the percentage is what holds the thread wider than the list at the narrow end of
+ * the two-pane stage.
+ */
+function parseTrack(track: string): Track {
+  const minmax = /^minmax\((?<inside>.*)\)$/u.exec(track);
+  if (minmax === null) {
+    // A bare track: `1fr`, `300px`, or something this model cannot speak for.
+    const flex = /^([\d.]+)fr$/u.exec(track);
+    if (flex !== null) {
+      return { min: 0, max: Number.POSITIVE_INFINITY, flex: Number(flex[1]) };
+    }
+    const fixed = pixels(track);
+    expect(fixed, `${track} is a track this model does not understand — teach it or do not use it`).toBeDefined();
+    return { min: fixed ?? 0, max: fixed ?? 0, flex: 0 };
   }
 
-  return parts.map(({ min, max }) => {
-    const flex = /^([\d.]+)fr$/u.exec(max);
-    // `min(320px, 33%)` is a cap *and* a proportion, and both halves matter: the proportion is what keeps
-    // the thread the wider pane at the narrow end of the two-pane stage, so a track parser that dropped
-    // it would assert the invariant against a layout the stylesheet does not describe.
-    const capped = /^min\(\s*([\d.]+)px\s*,\s*([\d.]+)%\s*\)$/u.exec(max);
-    return {
-      min: Number(/^([\d.]+)px$/u.exec(min)?.[1] ?? 0),
-      max: flex === null ? Number(/^([\d.]+)px$/u.exec(max)?.[1] ?? 0) : Number.POSITIVE_INFINITY,
-      maxPercent: capped === null ? undefined : Number(capped[2]),
-      maxPx: capped === null ? undefined : Number(capped[1]),
-      flex: flex === null ? 0 : Number(flex[1]),
-    };
-  });
+  const inside = minmax.groups?.inside ?? "";
+  let level = 0;
+  let comma = -1;
+  for (const [index, character] of [...inside].entries()) {
+    if (character === "(") {
+      level += 1;
+    } else if (character === ")") {
+      level -= 1;
+    } else if (character === "," && level === 0) {
+      comma = index;
+      break;
+    }
+  }
+  expect(comma, `${track} must be minmax(min, max)`).toBeGreaterThan(-1);
+  const min = inside.slice(0, comma).trim();
+  const max = inside.slice(comma + 1).trim();
+
+  const flex = /^([\d.]+)fr$/u.exec(max);
+  const capped = /^min\(\s*([\d.]+)px\s*,\s*([\d.]+)%\s*\)$/u.exec(max);
+  const minPx = min === "0" ? 0 : pixels(min);
+  expect(minPx, `${track}: the minimum must be a pixel length or 0`).toBeDefined();
+
+  if (flex !== null) {
+    return { min: minPx ?? 0, max: Number.POSITIVE_INFINITY, flex: Number(flex[1]) };
+  }
+  if (capped !== null) {
+    return { min: minPx ?? 0, max: Number(capped[1]), maxPx: Number(capped[1]), maxPercent: Number(capped[2]), flex: 0 };
+  }
+  const maxPx = pixels(max);
+  expect(maxPx, `${track}: the maximum must be a pixel length, an fr, or min(<px>, <percent>)`).toBeDefined();
+  return { min: minPx ?? 0, max: maxPx ?? 0, flex: 0 };
+}
+
+/** Every track in a `grid-template-columns` value — all of them, or the test fails. */
+function parseTracks(declaration: string): readonly Track[] {
+  return splitTracks(declaration).map((track) => parseTrack(track));
 }
 
 /**
@@ -209,13 +263,23 @@ function resolveTracks(tracks: readonly Track[], space: number, gap: number): re
   return used;
 }
 
-/** The main column's content box at a viewport width, from the shell's own declarations. */
+/**
+ * The main column's content box at a viewport width, from the shell's own declarations.
+ *
+ * The 720px block changes **two** things and both have to be here. It drops `.shell` to one column, so
+ * the navigation costs nothing below the bound — and it re-declares `.shell-main { padding: var(--space-4) }`,
+ * 16px a side instead of 24. Subtracting `--space-5` at every width made this 16px too narrow below 721px:
+ * 272px at a 320px window where the real content box is 288px, which is what this PR's own spec table
+ * says. No assertion depended on it, because the only loop that calls it below 900px discards the value —
+ * which is exactly why it was worth fixing rather than noting. The next person to add a narrow width to
+ * the measured table would have been asserting against a model that was wrong by a token.
+ */
 function mainContentBox(viewport: number): number {
   const nav = token("--shell-nav-width");
-  const padding = token("--space-5") * 2;
   const cap = token("--content-max");
-  // The shell drops to one column at the 720px bound, so the navigation costs nothing below it.
-  const main = viewport <= 720 ? viewport : viewport - nav;
+  const narrow = viewport <= 720;
+  const padding = (narrow ? token("--space-4") : token("--space-5")) * 2;
+  const main = narrow ? viewport : viewport - nav;
   return Math.min(main, cap) - padding;
 }
 
@@ -301,6 +365,28 @@ describe("the Inbox's reading thread", () => {
       const thread = at(resolveTracks(tracks, room, gap), 1, "the thread track");
       expect(Math.round(thread), `${viewport}px`).toBe(expected);
     }
+  });
+
+  it("sees a track written without minmax, which is how this guard was defeatable", () => {
+    // The hole the independent review proved: `parseTracks` scanned for `minmax(` and parsed what it
+    // found, so a bare track was absent from the model AND from the gutter count. Adding one past the
+    // hard-coded length produced byte-identical output — same length, same flex factors, same resolved
+    // widths — while the real layout re-collapsed the thread. This is the regression test for that.
+    const withBare = parseTracks("minmax(0, min(320px, 33%)) minmax(0, 1fr) 300px");
+    expect(withBare, "three declared tracks are three tracks").toHaveLength(3);
+    expect(withBare.map((track) => track.flex)).toEqual([0, 1, 0]);
+    expect(at(withBare, 2, "the bare track")).toMatchObject({ min: 300, max: 300, flex: 0 });
+
+    // And the model now answers correctly for it: three tracks, two gutters, and a thread that would
+    // fail the invariant above instead of reporting 404px.
+    const room = mainContentBox(901);
+    const used = resolveTracks(withBare, room, gap);
+    expect(Math.round(at(used, 1, "the thread track")), "the collapse the old parser could not see").toBe(92);
+    expect(at(used, 1, "the thread track")).toBeLessThan(at(used, 0, "the list track"));
+
+    // A bare `1fr` is understood too, and anything this model cannot speak for fails rather than being
+    // ignored — there is no silent path left.
+    expect(parseTracks("1fr 2fr").map((track) => track.flex)).toEqual([1, 2]);
   });
 
   it("would have failed on the layout it was written for", () => {

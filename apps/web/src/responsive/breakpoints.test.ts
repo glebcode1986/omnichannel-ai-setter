@@ -183,15 +183,20 @@ function selectorOwning(text: string, offset: number): string {
   const open = before.lastIndexOf("{");
   // An at-rule's own brace, when this rule is nested inside one. Without it a rule inside a `@container`
   // or `@media` block reports its *prelude* as the selector — `"@container main (min-width: 1124px) {
-  // .inbox"` rather than `".inbox"` — and every assertion that asks a thing about its owner silently
-  // asks about a string that matches nothing. For a rule that is not nested this lands before the
-  // previous `}` and the `Math.max` below discards it.
+  // .inbox"` rather than `".inbox"` — and an assertion asked about that owner is asked about a string
+  // that matches nothing. For a rule that is not nested this lands before the previous `}` and the
+  // `Math.max` below discards it.
   const enclosing = before.lastIndexOf("{", open - 1);
   // Past the end of whichever came last *before the rule's own brace*, and `*/` is two characters wide —
   // off by one here puts the tail of a comment at the front of the selector. The bound matters: these
   // used to be searched over the whole prefix, so a comment sitting *inside* the rule, after its brace,
-  // moved the start of the selector past its end and the owner came back as the empty string. An empty
-  // owner then matches nothing, and every assertion asked about it passes for the wrong reason.
+  // moved the start of the selector past its end and the owner came back as the empty string.
+  //
+  // `declarationsFor("")` returns nothing — measured, zero characters, because no `{` in this stylesheet
+  // is preceded by whitespace alone. So an unresolvable owner makes its assertion **fail**, loudly, which
+  // is how this bug was caught: the owners-set assertion printed `[ "", ".inbox", ".shell" ]`. An earlier
+  // version of this comment said such assertions "pass for the wrong reason", which is the opposite of
+  // what happens, and a comment that calls a working check silent teaches the next reader to distrust it.
   const previous = Math.max(
     before.lastIndexOf("}", open - 1) + 1,
     before.lastIndexOf("*/", open - 1) + 2,
@@ -506,11 +511,16 @@ describe("the supported widths", () => {
     //
     // The list is enumerated rather than spot-checked because it had rotted the other way too: the
     // comment here named three surfaces and the body asserted two, and the unasserted one — the context
-    // panel, the narrowest column the product has — had no rule at all.
+    // panel, the narrowest column the product has — had no rule at all. `.conversation-name` was missing
+    // for a subtler reason: it was covered by a scroll boundary rather than by a rule, so it belonged in
+    // the "scrolls inside a boundary instead" exemption below — until the Inbox's two-pane stage took
+    // that boundary away and a handle went under the next pane unreachably. A surface whose safety
+    // depends on a boundary somewhere else is a surface waiting for that boundary to move.
     const SURFACES_CARRYING_A_PERSON_S_TEXT = [
       { selector: ".message-text", what: "a message is whatever the customer sent" },
       { selector: ".lead-table td", what: "a lead's next action is free text, and where someone pastes a link" },
       { selector: ".lead-table th", what: "the row header is the contact name, falling back to the handle" },
+      { selector: ".conversation-name", what: "a row's identifier, which is a handle when there is no name" },
       { selector: ".inbox-context p", what: "the contact name, the handle, and the draft's intent" },
       { selector: ".reason-codes", what: "a cited source id is one token" },
     ] as const;

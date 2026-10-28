@@ -107,6 +107,21 @@
               thread: pane(".inbox-thread-column"),
               context: pane(".inbox-context-column"),
             };
+            // The cell that regressed, and the question that catches it: does any pane hold content it
+            // cannot show and cannot be scrolled to? `scrollWidth > clientWidth` with a computed
+            // `overflow-x` of `visible` is content painted outside the pane with no way back to it.
+            const unreachable = [".inbox-list", ".inbox-thread-column", ".inbox-context-column"].map((selector) => {
+              const el = view.querySelector(selector);
+              if (el === null) return { selector, hidden: 0, overflowX: "absent" };
+              const style = view.defaultView.getComputedStyle(el);
+              const scrollable = style.overflowX === "auto" || style.overflowX === "scroll";
+              return {
+                selector,
+                hidden: Math.max(0, el.scrollWidth - el.clientWidth),
+                overflowX: style.overflowX,
+                reachable: scrollable,
+              };
+            });
 
             const rows = SURFACES.map((name) => {
               const section = view.querySelector(`[data-surface="${name}"]`);
@@ -125,6 +140,7 @@
               main: main === null ? 0 : main.clientWidth,
               room,
               panes,
+              unreachable,
               rows,
             });
             frame.remove();
@@ -161,6 +177,21 @@
                 result.panes.thread.shown && result.panes.thread.width < beside,
               )}<td>${show(result.panes.context)}</td><td>${String(inRow.length)} of ${String(shown)}</td></tr>`;
             })
+            .join("")}</tbody>
+        </table>
+        <table>
+          <caption>Content a pane cannot show and cannot be scrolled to (0 = nothing is lost)</caption>
+          <thead><tr><th scope="col">Viewport</th><th scope="col">Pane</th><th scope="col">Hidden</th><th scope="col">overflow-x</th><th scope="col">Reachable</th></tr></thead>
+          <tbody>${results
+            .flatMap((result) =>
+              result.unreachable.map(
+                (pane) =>
+                  `<tr><th scope="row">${result.width}px</th><td>${pane.selector}</td>${cell(
+                    `${String(pane.hidden)}px`,
+                    pane.hidden > 0 && pane.reachable !== true,
+                  )}<td>${pane.overflowX}</td><td>${pane.hidden === 0 ? "—" : String(pane.reachable)}</td></tr>`,
+              ),
+            )
             .join("")}</tbody>
         </table>
         <table>
