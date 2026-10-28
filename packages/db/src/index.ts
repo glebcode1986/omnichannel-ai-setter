@@ -30,6 +30,7 @@ export {
   type BusinessProfileContext,
   type BusinessProfileScope,
   canActOnBusinessProfile,
+  mayWriteWorkspaceWide,
   profileScopeOf,
   requireRole,
   scopeOf,
@@ -121,6 +122,13 @@ export {
   type DisplayPrice,
   type SubscriptionSummary,
 } from "./billing-overview";
+export {
+  readWorkspaceOnboarding,
+  type NoTrialReason,
+  type OnboardingProfileState,
+  type OnboardingTrialState,
+  type WorkspaceOnboardingState,
+} from "./onboarding-entry";
 export {
   assertVerifiedBillingEvent,
   billingProviderCanCheckout,

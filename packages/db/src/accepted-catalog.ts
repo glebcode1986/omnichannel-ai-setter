@@ -241,6 +241,29 @@ const priced = (interval: CatalogPriceInput["interval"], amountCents: number, pr
   amountCents,
   ...(providerPriceId === undefined ? {} : { providerPriceId }),
 });
+
+/**
+ * The trial plan version a workspace would be put on, or `null` where this deployment has published none
+ * (#115).
+ *
+ * Extracted so that **the screen's claim and the write's behaviour cannot disagree**. `ensureWorkspaceTrial`
+ * returns a bare `started: false` for two different facts — "this workspace already has a subscription"
+ * and "there is no trial to start here" — and the front door has to tell a person which. Answering that
+ * with a second query written separately is how the two drift: this one deliberately does not filter on
+ * `availability`, because the writer does not either, and a reader that filtered on `PRIVATE` would
+ * announce "no trial is available" about a deployment that will in fact start one from a misfiled version.
+ *
+ * The newest version, for the same reason the writer takes it: that is the one a new subscription is
+ * written against.
+ */
+export async function findTrialPlanVersion(db: DbExecutor): Promise<{ readonly id: string } | null> {
+  return db.planVersion.findFirst({
+    where: { plan: { code: TRIAL_PLAN_CODE } },
+    orderBy: { version: "desc" },
+    select: { id: true },
+  });
+}
+
 /**
  * Starts the accepted no-card trial for a workspace, if it has never had a subscription (#44).
  *
@@ -269,11 +292,7 @@ export async function ensureWorkspaceTrial(
   workspaceId: string,
   now: Date,
 ): Promise<{ readonly started: boolean; readonly trialEndsAt?: Date }> {
-  const trial = await db.planVersion.findFirst({
-    where: { plan: { code: TRIAL_PLAN_CODE } },
-    orderBy: { version: "desc" },
-    select: { id: true },
-  });
+  const trial = await findTrialPlanVersion(db);
   if (trial === null) {
     // No trial version has been published in this deployment, so there is nothing to put the workspace
     // on. Silent rather than thrown: a connection must not fail because a catalogue was not published,

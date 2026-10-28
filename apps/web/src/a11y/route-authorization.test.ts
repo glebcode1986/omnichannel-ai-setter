@@ -36,7 +36,8 @@ const RESOLVERS = ["requireWorkspaceContext", "requireBusinessProfileContext", "
  */
 const DELIBERATELY_PUBLIC: Readonly<Record<string, string>> = {
   "page.tsx": "the landing page, which is what an unauthenticated visitor is meant to see",
-  "workspaces/page.tsx": "the workspace chooser, which calls auth() directly because it has no workspace to name yet",
+  "workspaces/page.tsx":
+    "the workspace chooser and the form that creates the first workspace: it authenticates with requireSessionUserId() and can name no workspace yet, because the thing a WorkspaceContext authorizes does not exist until that form is submitted",
   "api/health/route.ts": "a liveness probe that deliberately touches no database, queue or external API",
   "api/auth/[...nextauth]/route.ts": "Auth.js's own handler: it is the thing that authenticates",
   "api/webhooks/[channel]/[channelAccountId]/route.ts": "a provider webhook, authenticated by its signature rather than by a session",
@@ -131,6 +132,22 @@ function importedModules(file: string): string[] {
  * existing route while all of them were perfectly authorized — so this follows imports two levels, which
  * covers route → dependencies → `request-context` and page → loader.
  */
+/**
+ * The two modules that *define* the resolvers, which therefore name all three by necessity.
+ *
+ * Excluded from every chain, because merely importing one proves nothing (#115). `request-context.ts`
+ * gained `requireSessionUserId` — an authentication-only helper the workspace chooser and the
+ * create-workspace action legitimately need, since neither has a Workspace to name — and from that moment
+ * a page that imported it would have satisfied this walk by *reaching the file where the resolvers live*,
+ * without authorizing anything. The admin assertion below already treated these two as definition sites
+ * for the same reason; this applies it to every route.
+ *
+ * Nothing legitimate loses its authorization to this. A page that calls a resolver names it in its own
+ * source — the import declaration alone puts the identifier in that file's AST — and a page that defers
+ * to a loader names it in the loader, which is a different file either way.
+ */
+const DEFINITION_SITES = ["request-context.ts", "workspace-context.ts"];
+
 function authorizingFiles(relative: string): string[] {
   const own = path.join(appRoot, relative);
   const chain: string[] = [own];
@@ -154,7 +171,7 @@ function authorizingFiles(relative: string): string[] {
   for (const imported of first) {
     chain.push(...importedModules(imported));
   }
-  return [...new Set(chain)];
+  return [...new Set(chain)].filter((file) => file === own || !DEFINITION_SITES.includes(path.basename(file)));
 }
 
 describe("every route in this app", () => {

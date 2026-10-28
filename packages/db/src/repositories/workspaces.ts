@@ -18,13 +18,22 @@ import { profileDefaultPolicyWrite } from "../policy-store";
 import {
   authorizedBusinessProfileFilter,
   requireRole,
+  requireWorkspaceWideWrite,
   scopeOf,
   WORKSPACE_ADMIN_ROLES,
   type WorkspaceContext,
 } from "../tenancy";
 import { recordWorkspaceAuditEvent } from "../audit-store";
 
-const MAX_NAME_LENGTH = 200;
+/**
+ * The longest a Workspace or Business Profile name may be.
+ *
+ * Exported because a form has to refuse an overlong name *before* submitting it, and a second number
+ * written in the web app would be free to disagree with this one: a field that accepted 240 characters
+ * would hand the person a `DbInputError` from two layers down instead of the sentence their own screen
+ * should have told them. One constant, read by both.
+ */
+export const NAME_MAX_LENGTH = 200;
 
 export interface WorkspaceMembershipSummary {
   readonly workspaceId: WorkspaceId;
@@ -43,8 +52,8 @@ export type BusinessProfileScopeGrant = "ALL" | { readonly selected: readonly st
 
 function normalizeName(field: string, value: string): string {
   const name = value.trim();
-  if (name.length === 0 || name.length > MAX_NAME_LENGTH) {
-    throw new DbInputError(field, `must be 1-${MAX_NAME_LENGTH} characters`);
+  if (name.length === 0 || name.length > NAME_MAX_LENGTH) {
+    throw new DbInputError(field, `must be 1-${NAME_MAX_LENGTH} characters`);
   }
   return name;
 }
@@ -68,6 +77,58 @@ export async function createWorkspaceWithOwner(
     select: { id: true, name: true },
   });
   return { workspaceId: toWorkspaceId(workspace.id), name: workspace.name, role: "OWNER" };
+}
+
+/**
+ * The same creation, made safe to submit twice (#115).
+ *
+ * The front door is a form, and a form is submitted twice: a double-click, a retried POST, a back button
+ * into a resubmit. `createWorkspaceWithOwner` is a plain insert with nothing to collide on — the schema
+ * caps identity, not repetition — so two submissions of one intent produce two workspaces with the same
+ * name, and the second is permanent: nothing in the product deletes a workspace. That is the shape this
+ * function exists to refuse.
+ *
+ * **A check followed by an insert is not atomic, so the check is taken under the lock the insert runs
+ * under.** The same transaction-scoped advisory lock the capacity checks in this file use, keyed to the
+ * owner and the name they typed, because two concurrent submissions of the identical form are precisely
+ * the case a read-then-write loses: both read nothing and both insert. Keyed to the *normalized* name, so
+ * `"  Acme  "` and `"Acme"` take the same lock rather than racing each other past it.
+ *
+ * Replay is reported rather than hidden. `replayed` lets the caller say "this already exists" instead of
+ * claiming a creation that did not happen, and the workspace returned is the existing one, so a person
+ * who clicked twice lands where they meant to go either way.
+ *
+ * Deliberately scoped to *this owner's* workspaces, and to the OWNER membership specifically: two
+ * businesses may legitimately both be called "Studio", and a member of someone else's "Studio" has not
+ * thereby created one. A second workspace with a name this owner has already used is refused as a replay —
+ * the documented limit of this strategy, and the better answer anyway, since two identically named
+ * workspaces in one chooser cannot be told apart by the person choosing.
+ */
+export async function createWorkspaceOnce(
+  db: DbClient,
+  input: { readonly name: string; readonly ownerUserId: string },
+): Promise<{ readonly workspace: WorkspaceMembershipSummary; readonly replayed: boolean }> {
+  if (!isValidIdentifier(input.ownerUserId)) {
+    throw new DbInputError("ownerUserId", "must be a valid identifier");
+  }
+  // Normalized before the lock and before the lookup: the stored name is the normalized one, so a key or
+  // a comparison built from the raw field would miss the row it is meant to find.
+  const name = normalizeName("name", input.name);
+  return db.$transaction(async (tx) => {
+    await serializeCapacity(tx, `workspace-create:${input.ownerUserId}:${name}`);
+    const existing = await tx.workspaceMember.findFirst({
+      where: { userId: input.ownerUserId, role: "OWNER", workspace: { name } },
+      select: { role: true, workspace: { select: { id: true, name: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    if (existing !== null) {
+      return {
+        workspace: { workspaceId: toWorkspaceId(existing.workspace.id), name: existing.workspace.name, role: existing.role },
+        replayed: true,
+      };
+    }
+    return { workspace: await createWorkspaceWithOwner(tx, { name, ownerUserId: input.ownerUserId }), replayed: false };
+  });
 }
 
 /**
@@ -115,10 +176,10 @@ export async function createBusinessProfile(
   at = new Date(),
 ): Promise<BusinessProfileSummary> {
   const workspaceId = scopeOf(context);
-  requireRole(context, WORKSPACE_ADMIN_ROLES, "creating Business Profiles");
-  if (context.businessProfileScope.kind !== "ALL") {
-    throw new WorkspacePermissionError("creating Business Profiles");
-  }
+  // The one implementation of "admin or owner, and every profile in scope". This used to inline the two
+  // checks while `requireWorkspaceWideWrite` existed to express exactly them — and that function's own
+  // comment cited *this* call site as the rule it copied, so the rule had two bodies and neither knew.
+  requireWorkspaceWideWrite(context, "creating Business Profiles");
   // Capacity, as capacity rather than as payment (#40).
   //
   // Counted and written under one advisory lock **inside one transaction**, which is the whole mechanism:
@@ -140,8 +201,12 @@ export async function createBusinessProfile(
   //
   // A workspace with no subscription has no stated ceiling and may therefore create its first Business
   // Profile. Creating one does not start the trial — connecting it to a channel does, in
-  // `createChannelAccount` — so refusing this would make the product unreachable from its own front door
+  // `connectChannelAccount` — so refusing this would make the product unreachable from its own front door
   // and the trial unstartable.
+  //
+  // `connectChannelAccount` and not `createChannelAccount`, which this comment named until #115 went
+  // looking for the trial on the strength of it. Only the former calls `ensureWorkspaceTrial`; following
+  // the old name leads to a function that connects an account and starts nothing, with no error to say so.
   return db.$transaction(async (tx) => {
     await serializeCapacity(tx, `workspace-profiles:${workspaceId}`);
     const verdict = capacityVerdict({

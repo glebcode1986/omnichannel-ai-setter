@@ -9,6 +9,30 @@ Get a new workspace from signup to safe first conversation without requiring tec
 ### Step 1 — Workspace
 Collect business/workspace name, timezone, primary language(s), and optional website/brand context. Create the workspace before connecting channels.
 
+**As built (#115, 2026-10-28).** The Workspace is created from `/workspaces` and the Business Profile from
+`/workspaces/[workspaceId]`, both authenticated, both server-authorized, reusing
+`createWorkspaceWithOwner` and `createBusinessProfile`. Three deliberate departures from the paragraph
+above, stated here so the spec is not read as describing something that exists:
+
+- **Only the name is collected.** Timezone, primary languages and website/brand context have nowhere to be
+  stored — `createWorkspaceWithOwner` takes `{ name, ownerUserId }` — so collecting them is schema work and
+  is not done. The interface language is already a *user* preference rather than a workspace one
+  (`users.uiLocale`, LOCALIZATION.md), which is where the reader's locale comes from today.
+- **The owner is the session.** `ownerUserId` is derived from the verified server-side Auth.js session and
+  never from a submitted field, because `createWorkspaceWithOwner` authorizes nothing itself: handed a
+  posted identifier it would create a workspace owned by somebody else.
+- **Submitting twice creates one workspace.** The duplicate check is taken under the same advisory lock as
+  the insert and reports a replay; a workspace cannot be deleted, so a duplicate would be permanent. The
+  documented limit: a second workspace under a name this owner has already used is refused as a replay.
+
+**Creating either one buys nothing.** No trial starts at Workspace or Business Profile creation — it starts
+on the first verified successful channel connection (Step 2), and the entry pane says so. Where a
+deployment has published no trial plan version, it says *that* instead, as a blocker: a connection would
+succeed and grant nothing, and no other surface can report it.
+
+**Sign-in is the remaining gate.** `apps/web/src/auth.ts` has `providers: []`, so no real person can reach
+any of the above yet. ADR-022 proposes the options and a default and is left Proposed for the owner.
+
 ### Step 2 — Connect channels
 Offer Instagram and WhatsApp as independent cards with connection status. A customer may launch with one channel and add the other later.
 

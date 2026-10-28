@@ -34,8 +34,16 @@ import {
 import { publishPlanVersion, readEntitlement, setWorkspaceSubscription } from "./entitlement-store";
 import { commitReservation, readUsage, reserveUsage } from "./usage-store";
 import { searchAuditEvents } from "./audit-store";
+import { DbInputError, PlanLimitError } from "./errors";
+import { readWorkspaceOnboarding } from "./onboarding-entry";
 import { connectChannelAccount } from "./repositories/channel-accounts";
-import { createBusinessProfile, createWorkspaceWithOwner } from "./repositories/workspaces";
+import {
+  addWorkspaceMember,
+  createBusinessProfile,
+  createWorkspaceOnce,
+  createWorkspaceWithOwner,
+  NAME_MAX_LENGTH,
+} from "./repositories/workspaces";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { createTestUser, seedWorkspace, type SeededWorkspace } from "./testing/fixtures";
@@ -275,6 +283,193 @@ describe.skipIf(!databaseTestsEnabled())("the commercial catalogue", () => {
       expect(detail).not.toContain("price_");
       expect(detail).not.toContain("cus_");
     }, 120_000);
+
+    /**
+     * What the front door is allowed to say about all of this (#115).
+     *
+     * The trial's *mechanism* is covered above. These cases are about the sentence a screen builds from
+     * it, which is a separate thing and the one a customer actually reads. `ensureWorkspaceTrial` answers
+     * `started: false` for two unrelated facts — already subscribed, and no trial plan published — so a
+     * page driven by that boolean alone is guaranteed to be wrong in one of the two cases.
+     */
+    describe("as the front door reports it", () => {
+      it("says the trial is awaiting a first connection, and then reads its end from the row", async () => {
+        const { workspace, profile } = await business("entry");
+
+        const before = await readWorkspaceOnboarding(db(), workspace, NOW);
+        expect(before.trial).toEqual({ noTrialReason: "AWAITING_FIRST_CONNECTION" });
+        expect(before.profiles).toHaveLength(1);
+        expect(before.profiles[0]).toMatchObject({ name: "Main", status: "SETUP", connectedChannels: [] });
+
+        await connect(profile, "entry");
+
+        const after = await readWorkspaceOnboarding(db(), workspace, NOW);
+        const row = await db().workspaceSubscription.findUnique({
+          where: { workspaceId: workspace.workspaceId },
+          select: { trialEndsAt: true },
+        });
+        // Read from the row, not computed from the connection date. If the catalogue is published after a
+        // workspace has already connected, the trial starts on the *next* connect and is dated from that
+        // moment — a page that recomputed it from the connection would state a window nobody is on.
+        expect(after.trial).toEqual({ subscriptionState: "TRIALING", planCode: TRIAL_PLAN_CODE, trialEndsAt: row?.trialEndsAt });
+        expect(after.trial.trialEndsAt).toEqual(new Date(NOW.getTime() + ACCEPTED_TRIAL.days * DAY_MS));
+        // And the profile now reports the channel it speaks on, which is the other half of the question.
+        expect(after.profiles[0]?.connectedChannels).toEqual(["INSTAGRAM"]);
+      }, 120_000);
+
+      it("reports a channel that was disconnected as absent, because that is what decides the next connect", async () => {
+        const { workspace, profile } = await business("disconnected");
+        const account = await connect(profile, "disconnected");
+        await db().channelAccount.update({
+          where: { workspaceId_businessProfileId_id: { workspaceId: profile.workspaceId, businessProfileId: profile.businessProfileId, id: account.id } },
+          data: { status: "DISCONNECTED" },
+        });
+
+        const state = await readWorkspaceOnboarding(db(), workspace, NOW);
+
+        expect(state.profiles[0]?.connectedChannels).toEqual([]);
+        // The trial is untouched by a disconnection: it started, and nothing restarts or revokes it.
+        expect(state.trial).toMatchObject({ subscriptionState: "TRIALING" });
+      }, 120_000);
+
+      it("refuses the second Business Profile a trialling workspace asks for, by the plan's own ceiling", async () => {
+        // Not an edge case: `ACCEPTED_TRIAL.businessProfiles` is 1, so this is what the second profile does
+        // during every trial. The front door renders it as a plan limit rather than as a fault.
+        const { workspace, profile } = await business("ceiling");
+        await connect(profile, "ceiling");
+
+        await expect(createBusinessProfile(db(), workspace, { name: "Second" }, NOW)).rejects.toBeInstanceOf(PlanLimitError);
+        // And the first is still the only one, so the refusal happened before the insert rather than after.
+        expect(await db().businessProfile.count({ where: { workspaceId: workspace.workspaceId } })).toBe(1);
+      }, 120_000);
+
+      it("creates one Business Profile when two submissions race for the plan's last slot", async () => {
+        // The case `policy-store.integration.test.ts` records as unclosed: its concurrent create runs on a
+        // workspace with no ceiling, so `serializeCapacity` could be deleted from `createBusinessProfile`
+        // and nothing would fail. This is the shape where the lock is the only thing standing between a
+        // one-profile plan and two profiles — **zero** existing profiles and a ceiling of one, so both
+        // transactions count nothing and both would insert.
+        //
+        // Not a `pg_locks` observer, which is what that note asks for and what would prove the lock is
+        // *held*; this proves the behaviour the lock exists to produce, which no test asserted before.
+        const owner = await createTestUser(db(), `slot-${String((sequence += 1))}`);
+        const { workspaceId } = await createWorkspaceWithOwner(db(), { name: `Last Slot ${String(sequence)}`, ownerUserId: owner });
+        const workspace = await authorizeWorkspaceAccess(db(), { userId: owner, workspaceId });
+        const starter = published.plans.find((plan) => plan.code === "starter");
+        expect(starter, "the accepted catalogue publishes a one-profile tier").toBeDefined();
+        await setWorkspaceSubscription(db(), workspace, { planVersionId: starter?.planVersionId ?? "", state: "ACTIVE" });
+        expect(await readEntitlement(db(), workspaceId, NOW)).toMatchObject({ limits: { BUSINESS_PROFILES: 1 } });
+
+        const outcomes = await Promise.allSettled([
+          createBusinessProfile(db(), workspace, { name: "Race A" }, NOW),
+          createBusinessProfile(db(), workspace, { name: "Race B" }, NOW),
+        ]);
+
+        expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+        const refused = outcomes.find((outcome) => outcome.status === "rejected");
+        expect(refused?.status === "rejected" ? refused.reason : undefined).toBeInstanceOf(PlanLimitError);
+        // The fact that matters: the plan's ceiling held under concurrency, not merely in sequence.
+        expect(await db().businessProfile.count({ where: { workspaceId } })).toBe(1);
+      }, 120_000);
+
+      it("shows a member only the profiles they were granted, and the channels of those", async () => {
+        const { workspace, profile } = await business("scoped");
+        // The second profile is created **before** the channel is connected, and the order is the whole
+        // fixture: connecting starts the trial, the trial allows one Business Profile, and the case two
+        // above this one asserts that the second is then refused. Written the other way round, this test
+        // failed on `PlanLimitError` — a correct product rule breaking a careless fixture.
+        const second = await createBusinessProfile(db(), workspace, { name: "Other" }, NOW);
+        await connect(profile, "scoped");
+        const agentId = await createTestUser(db(), `scoped-agent-${String(sequence)}`);
+        await addWorkspaceMember(db(), workspace, {
+          userId: agentId,
+          role: "AGENT",
+          businessProfileScope: { selected: [second.businessProfileId] },
+        });
+        const agent = await authorizeWorkspaceAccess(db(), { userId: agentId, workspaceId: workspace.workspaceId });
+
+        const asAgent = await readWorkspaceOnboarding(db(), agent, NOW);
+
+        // The connected profile is not theirs, so neither it nor its channel is visible. Deriving the
+        // channel rows from the workspace instead of from the authorized profiles would have leaked the
+        // existence of a profile this member may not see.
+        expect(asAgent.profiles.map((entry) => entry.name)).toEqual(["Other"]);
+        expect(asAgent.profiles[0]?.connectedChannels).toEqual([]);
+      }, 120_000);
+    });
+
+    /**
+     * Submitting the creation form twice (#115).
+     *
+     * A workspace cannot be deleted, so a duplicate is permanent. The guarantee is an advisory lock taken
+     * inside the same transaction as the insert; a check-then-insert without one loses exactly the race it
+     * is meant to stop, which is why the concurrent case below is run with `Promise.all` rather than in
+     * sequence — a sequential pair passes with no lock at all.
+     */
+    describe("creating a workspace twice", () => {
+      it("creates one workspace and reports the second submission as a replay", async () => {
+        const owner = await createTestUser(db(), `once-${String((sequence += 1))}`);
+        const name = `Double Click ${String(sequence)}`;
+
+        const first = await createWorkspaceOnce(db(), { name, ownerUserId: owner });
+        const second = await createWorkspaceOnce(db(), { name, ownerUserId: owner });
+
+        expect(first.replayed).toBe(false);
+        expect(second.replayed).toBe(true);
+        expect(second.workspace.workspaceId).toBe(first.workspace.workspaceId);
+        expect(await db().workspace.count({ where: { name } })).toBe(1);
+      }, 120_000);
+
+      it("creates one workspace when both submissions arrive at the same moment", async () => {
+        const owner = await createTestUser(db(), `race-${String((sequence += 1))}`);
+        const name = `Simultaneous ${String(sequence)}`;
+
+        const [a, b] = await Promise.all([
+          createWorkspaceOnce(db(), { name, ownerUserId: owner }),
+          createWorkspaceOnce(db(), { name, ownerUserId: owner }),
+        ]);
+
+        // Exactly one insert, whichever order the two transactions were granted the lock in.
+        expect([a.replayed, b.replayed].filter((replayed) => !replayed)).toHaveLength(1);
+        expect(a.workspace.workspaceId).toBe(b.workspace.workspaceId);
+        expect(await db().workspace.count({ where: { name } })).toBe(1);
+      }, 120_000);
+
+      it("normalizes before it compares, so padding cannot slip a duplicate past the check", async () => {
+        const owner = await createTestUser(db(), `padded-${String((sequence += 1))}`);
+        const name = `Padded ${String(sequence)}`;
+
+        await createWorkspaceOnce(db(), { name, ownerUserId: owner });
+        const padded = await createWorkspaceOnce(db(), { name: `   ${name}  `, ownerUserId: owner });
+
+        expect(padded.replayed).toBe(true);
+        expect(await db().workspace.count({ where: { name } })).toBe(1);
+      }, 120_000);
+
+      it("does not treat another owner's workspace of the same name as a replay", async () => {
+        // Two businesses may legitimately both be called "Studio", and a member of somebody else's
+        // "Studio" has not thereby created one.
+        const name = `Studio ${String((sequence += 1))}`;
+        const first = await createTestUser(db(), `studio-a-${String(sequence)}`);
+        const second = await createTestUser(db(), `studio-b-${String(sequence)}`);
+
+        const mine = await createWorkspaceOnce(db(), { name, ownerUserId: first });
+        const theirs = await createWorkspaceOnce(db(), { name, ownerUserId: second });
+
+        expect(theirs.replayed).toBe(false);
+        expect(theirs.workspace.workspaceId).not.toBe(mine.workspace.workspaceId);
+        expect(await db().workspace.count({ where: { name } })).toBe(2);
+      }, 120_000);
+
+      it("refuses a name the store would not have stored", async () => {
+        const owner = await createTestUser(db(), `blank-${String((sequence += 1))}`);
+
+        await expect(createWorkspaceOnce(db(), { name: "   ", ownerUserId: owner })).rejects.toBeInstanceOf(DbInputError);
+        await expect(createWorkspaceOnce(db(), { name: "a".repeat(NAME_MAX_LENGTH + 1), ownerUserId: owner })).rejects.toBeInstanceOf(
+          DbInputError,
+        );
+      }, 120_000);
+    });
   });
 
   describe("what was published", () => {

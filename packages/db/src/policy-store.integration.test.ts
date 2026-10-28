@@ -617,13 +617,19 @@ describe.skipIf(!databaseTestsEnabled())("automation settings", () => {
     // - "every profile exactly one, including profiles created at the same moment" below;
     // - `entitlements.integration.test.ts` — a capacity refusal writes neither row.
     //
-    // One thing is *not* covered, and saying so here is the point of this note: that file's
-    // "holds a capacity lock only for as long as the transaction that took it" case pins a fact about
-    // PostgreSQL — an advisory lock taken under autocommit is gone by the next statement, one taken
-    // inside a transaction survives it — and never calls `createBusinessProfile`. Deleting
-    // `serializeCapacity` from that function therefore fails nothing. The lock is real and the reasoning
-    // for it is sound; what is missing is a test that observes it held while the function's own
-    // count-and-insert runs, which needs a concurrent observer reading `pg_locks`.
+    // One thing was *not* covered, and this note is kept because the reasoning is still worth reading.
+    // `entitlements.integration.test.ts`'s "holds a capacity lock only for as long as the transaction
+    // that took it" case pins a fact about PostgreSQL — an advisory lock taken under autocommit is gone
+    // by the next statement, one taken inside a transaction survives it — and never calls
+    // `createBusinessProfile`. The concurrent case below does call it, but on a workspace with **no
+    // ceiling**, so deleting `serializeCapacity` from that function failed nothing.
+    //
+    // Closed behaviourally on #115: `catalog.integration.test.ts` → "creates one Business Profile when
+    // two submissions race for the plan's last slot" runs two concurrent creates against a one-profile
+    // plan with **zero** existing profiles, which is the only shape where the lock decides the outcome —
+    // without it both transactions count nothing and both insert. What is still missing is an observer
+    // reading `pg_locks` while the count-and-insert runs, which would prove the lock is *held* rather
+    // than that its effect holds.
     
     it("gives every profile exactly one, including profiles created at the same moment", async () => {
       const created = await Promise.all(

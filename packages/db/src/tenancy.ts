@@ -267,9 +267,25 @@ export const WORKSPACE_ADMIN_ROLES: readonly WorkspaceRole[] = ["OWNER", "ADMIN"
  */
 export function requireWorkspaceWideWrite(context: WorkspaceContext, operation: string): void {
   requireRole(context, WORKSPACE_ADMIN_ROLES, operation);
-  if (context.businessProfileScope.kind !== "ALL") {
+  if (!mayWriteWorkspaceWide(context)) {
     throw new WorkspacePermissionError(operation);
   }
+}
+
+/**
+ * The same rule as a question rather than an assertion (#115).
+ *
+ * A screen has to decide whether to *draw* the control, and a thrown `WorkspacePermissionError` is not an
+ * answer it can render. Before this existed the front door would have had to restate "admin or owner, and
+ * `ALL` scope" in the web app — a second copy of an authorization rule, in the layer least able to enforce
+ * it, free to drift from the one above the moment either changes.
+ *
+ * **This authorizes nothing.** `requireWorkspaceWideWrite` is the enforcer and is implemented in terms of
+ * this, so the two cannot disagree; it additionally refuses a context this package did not issue, which a
+ * boolean cannot express and which is why the enforcer is not merely this plus a throw.
+ */
+export function mayWriteWorkspaceWide(context: WorkspaceContext): boolean {
+  return WORKSPACE_ADMIN_ROLES.includes(context.role) && context.businessProfileScope.kind === "ALL";
 }
 
 export function requireRole(

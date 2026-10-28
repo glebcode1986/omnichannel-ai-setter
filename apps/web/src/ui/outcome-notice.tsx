@@ -93,6 +93,16 @@ const OUTCOMES = [
   // cleared box used to be read as "leave it alone" and report a success about something else.
   "TAKEOVER_INCOMPLETE",
   "TAKEOVER_OUT_OF_RANGE",
+  // The front door (#115). A replay is not a creation and not a refusal: the workspace or profile exists,
+  // the person is taken to it, and claiming "created" would be the page agreeing with a write that the
+  // idempotency guard deliberately did not perform.
+  "WORKSPACE_CREATED",
+  "WORKSPACE_REPLAYED",
+  "PROFILE_CREATED",
+  "PROFILE_REPLAYED",
+  "NAME_REQUIRED",
+  "NAME_TOO_LONG",
+  "PROFILE_LIMIT_REACHED",
 ] as const;
 
 /** Outcomes that mean the person did not get what they asked for. */
@@ -134,6 +144,12 @@ const REFUSALS = new Set<string>([
   "TIMING_REVERSED",
   "TAKEOVER_INCOMPLETE",
   "TAKEOVER_OUT_OF_RANGE",
+  // The front door's three refusals (#115). A name the form would not accept, and a plan whose profile
+  // ceiling is reached — in all three the person pressed a button and got nothing, which is what the tone
+  // is for. The two replays are deliberately *not* here: nothing was denied.
+  "NAME_REQUIRED",
+  "NAME_TOO_LONG",
+  "PROFILE_LIMIT_REACHED",
 ]);
 
 export function OutcomeNotice({ t, outcome }: { readonly t: Translator; readonly outcome: string | undefined }) {
