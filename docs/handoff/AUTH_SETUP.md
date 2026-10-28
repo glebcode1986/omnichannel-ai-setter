@@ -29,6 +29,7 @@ are not one client with two redirect URIs.
 | `GOOGLE_CLIENT_SECRET` | Google | Same client. Server-side only; it is never sent to a browser, never logged, and never written to a test snapshot. |
 | `AUTH_EMAIL_SERVER` | email link | An SMTP connection URL, e.g. `smtps://user:password@smtp.example:465`. Any SMTP service the deployment already trusts; the product is coupled to none. |
 | `AUTH_EMAIL_FROM` | email link | The sender identity those links are sent as, e.g. `Omnichannel <no-reply@example.com>`. Must be an address the sending domain below is authorized for. |
+| `AUTH_TRUSTED_CLIENT_IP_HEADER` | per-caller rate limiting | The name of the header **your own reverse proxy sets and sanitizes**, e.g. `x-forwarded-for`. Leave it unset unless a proxy in front of this process overwrites that header on every request. See *Attributing a caller* below: setting it switches per-caller limiting on; leaving it unset leaves per-address limiting in place and nothing else. |
 
 ## Google: what to register
 
@@ -61,6 +62,64 @@ method, and is not signed in. That is Auth.js's cautious default and it is kept,
 on a matching email address is an account-takeover path the moment any provider's verification is weaker
 than it looks. A reviewed, already-authenticated linking flow would be a separate change.
 
+## Attributing a caller, and why it is off by default
+
+Sign-in has two limits. One counts requests **per email address**, and it is always on: an address cannot
+be spoofed, because the address is the thing being protected. The other counts **per caller**, and it is
+off until `AUTH_TRUSTED_CLIENT_IP_HEADER` names a header.
+
+The reason for that default is not caution for its own sake. A client address can only be read from a
+request header, and a header is whatever the caller says it is unless something in front of this process
+overwrites it. A limit keyed on a header this deployment does not control would be worse than no limit at
+all: an attacker changes the value and is never counted, while several ordinary people behind one office
+connection share a bucket and are refused. So the product declines to guess.
+
+**Set it only if all of these are true.** A reverse proxy, load balancer or CDN terminates every request
+before it reaches this process; it *overwrites* — not appends to — the header you are naming; and no route
+to this process bypasses it. `x-forwarded-for` accumulates hops left to right and the product reads the
+leftmost value, which is the one your proxy wrote, so a proxy that appends without stripping what arrived
+hands the product an attacker-chosen value.
+
+**What you get, and what you still do not get.** Configured, a single caller is limited across many
+addresses — the flood the per-address rule cannot see, because every request names a different victim.
+Unconfigured, that flood is unlimited: each address is still protected from repetition, and nothing stops
+one caller asking for links at many addresses. That is a known, stated gap rather than an oversight, and
+this variable is how it closes.
+
+A refused request is answered exactly as an accepted one — the same page, the same status, no distinct
+message — so neither a customer nor an attacker can tell a limit from a success. Do not expect a `429` in
+logs or in a browser; look for the signal below instead.
+
+## When Redis is unavailable
+
+The limiter counts in Redis, because a per-process counter stops being a limit as soon as this app runs
+more than one instance.
+
+**It fails open on purpose.** If Redis cannot be reached, a sign-in attempt is allowed rather than refused.
+Failing closed would lock every customer out of signing in during a Redis blip — including the operator who
+would fix it — so the product chooses availability for the front door and makes the loss of protection
+loud instead of silent.
+
+**The signal to alert on is `signin.rate_limit_unavailable`**, emitted at `warn` on every attempt that
+could not be counted. Treat it as "sign-in rate limiting is currently degraded", not as noise:
+
+- **alert on the first occurrence**, not on a threshold — one of these means the protection is off now;
+- while it is firing, per-caller *and* per-address limiting are both absent, so the sign-in form will send
+  a link for every well-formed request it receives;
+- it clears by itself when Redis is reachable again; there is nothing to restart and no counter to repair,
+  because each window expires on its own.
+
+**No email address appears in either sign-in log line**, by design: a log of refused sign-in attempts would
+otherwise be a list of addresses somebody is interested in. What each one does carry, checked against the
+code rather than described from memory:
+
+| Event | Level | Fields |
+|---|---|---|
+| `signin.rate_limit_unavailable` | `warn` | `key` (a hash, no address), `windowMs`, `reason` (the error's name) |
+| `signin.rate_limited` | `warn` | `endpoint`, `refusedBy` (`IDENTIFIER` or `CALLER`) |
+
+The second is the ordinary one: it means a limit did its job. The first is the one to alert on.
+
 ## Release blockers — none of these is code
 
 Public self-serve registration stays off until all of them are true:
@@ -69,6 +128,9 @@ Public self-serve registration stays off until all of them are true:
 - [ ] Sending domain verified with SPF, DKIM and DMARC; a real delivery test passed.
 - [ ] `AUTH_SECRET` unique to the environment and not the staging value.
 - [ ] `AUTH_URL` is the HTTPS origin customers actually reach.
+- [ ] `AUTH_TRUSTED_CLIENT_IP_HEADER` is set if — and only if — a trusted proxy overwrites that header;
+      the per-caller limit is otherwise absent, which is acceptable but should be a decision.
+- [ ] Alerting is in place on `signin.rate_limit_unavailable`, because sign-in rate limiting fails open.
 - [ ] Terms acceptance and privacy copy approved — the acceptance mechanism exists (Issue #47) and the
       wording is the owner's.
 - [ ] Staging verification of both flows by a person, including an expired link and a cancelled Google
