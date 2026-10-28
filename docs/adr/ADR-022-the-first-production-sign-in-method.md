@@ -1,7 +1,22 @@
 # ADR-022: The first production sign-in method
 
-**Status:** Proposed — awaiting the product owner. Nothing in this ADR is implemented, and no identity
-provider has been chosen, configured or contacted.
+**Status:** **Accepted** by the product owner on 2026-10-28, with a decision that **supersedes this
+ADR's own recommendation**: both methods now rather than Google first and email later. Implemented in the
+follow-up authorized as Issue #117; no identity provider has been *configured* or contacted, because that
+is deployment input and not code — see `docs/handoff/AUTH_SETUP.md`.
+
+**The owner's decision, recorded verbatim in effect:**
+
+1. **Google OAuth/OIDC** for sign-up and sign-in, scopes `openid email profile` only.
+2. **Email one-time link** for passwordless sign-up and sign-in.
+3. Registration is **public self-serve**: both methods are available to new customers.
+4. **No password-based account management is authorized**, and none exists.
+5. No Facebook or other social provider is authorized.
+
+Where this ADR recommended "B, with Google as the single first provider, and A added when a customer
+without a Google account appears", the owner chose both at once. The reasoning below is kept unedited as
+the record of what was proposed and why — the recommendation was not the decision, and rewriting it to
+match the outcome would destroy the only evidence of what the choice was between.
 
 **Context:** Issue #115 asked for the authenticated front door — the path by which a customer creates the
 Workspace and Business Profile the product is built around — and for "a short concrete, security-conscious
@@ -107,4 +122,21 @@ says "Public signup/sign-in is NOT complete while no Auth.js provider is configu
 `docs/handoff/CURRENT_HANDOFF.md` carries the same statement.
 
 This ADR is implemented by exactly one change plus configuration: entries in that `providers: []` array and
-the matching secrets in deployment. Neither is in #115's scope and neither is done here.
+the matching secrets in deployment. Neither is in #115's scope and neither is done there.
+
+## What was built, and what is still configuration (Issue #117)
+
+Both methods are implemented behind validated configuration. The code decides availability from the
+environment and reports it truthfully: a method with nothing configured is `NOT_CONFIGURED`, a method with
+half of it is `PARTIALLY_CONFIGURED`, and **both** are withheld when there is no `AUTH_URL`, because
+the only other source of an absolute URL for a callback or an emailed link is the request's own `Host`
+header.
+
+The two settings this ADR said belong to the decision were both kept: `AUTH_SECRET` is per environment,
+and **account linking stays off** — two methods on one address do not merge, and somebody who registered
+with Google and later asks for an email link is told so rather than signed in.
+
+Still not code, and still blocking public rollout: a provisioned Google OAuth client per environment, a
+sending domain verified with SPF/DKIM/DMARC, a real delivery test, approved terms and privacy copy,
+staging verification by a person, and the owner's release authorization. `docs/handoff/AUTH_SETUP.md` is
+the checklist; nothing in this repository can tick it, and no test asserts that it is ticked.

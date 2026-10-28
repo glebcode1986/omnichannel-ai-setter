@@ -9,6 +9,82 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   DATABASE_URL: z.url({ protocol: /^postgres(?:ql)?$/ }),
   /** Auth.js secret used to sign/encrypt session cookies and tokens (ADR-009). */
   AUTH_SECRET: z.string().min(32),
+
+  /**
+   * The absolute origin this deployment is reached at, for the links sign-in sends (#117, ADR-022).
+   *
+   * Configured, never derived from the incoming request, for the same reason `INSTAGRAM_REDIRECT_URI` is:
+   * `Host` is a header. A one-time sign-in link built from one is a link an attacker can point at their
+   * own page while the token in it is still valid for this deployment — the whole credential, delivered
+   * to them. Optional, because a deployment that offers no sign-in must still boot; absent, **no sign-in
+   * method is offered at all** rather than one that mails links to wherever a request claimed to come
+   * from.
+   *
+   * `http` is permitted so a developer can run the flow locally; `sign-in-methods.ts` refuses a
+   * non-HTTPS origin outside development, where a link and a session cookie would cross the network in
+   * the clear.
+   *
+   * **Named `AUTH_URL` because that is the variable Auth.js itself reads**, and in the installed version
+   * it is the *only* way to detach the origin from the request: `send-token.ts` builds the link from
+   * `options.url.origin`, and `@auth/core`'s own `setEnvDefaults` takes that origin from `AUTH_URL ??
+   * NEXTAUTH_URL`, falling back to `x-forwarded-host` or `host` when neither is set. A second variable of
+   * our own would have been read by nothing — and would have produced a page that claims a method is
+   * available while the library mails links built from a header.
+   *
+   * Setting it also flips Auth.js's `trustHost` to true, which is correct *because* it is set: the origin
+   * then comes from configuration rather than from the request. Absent in production, `trustHost` stays
+   * false and the whole auth endpoint answers with a configuration error — which is why
+   * `availableSignInMethods` withholds both methods without it, so the page says so instead of offering
+   * a button into that error.
+   */
+  AUTH_URL: z.url({ protocol: /^https?$/ }).optional(),
+
+  /**
+   * Google OAuth/OIDC client for sign-in and registration (owner decision 2026-10-28, ADR-022).
+   *
+   * Both or neither: an id without a secret is a method that cannot complete, and
+   * `availableSignInMethods` reports a half-configured client as unavailable rather than rendering a
+   * button that fails at the provider. Identity only — the scopes requested are `openid email profile`
+   * and nothing else, so this client can read who somebody is and never act for them.
+   *
+   * The secret stays in validated environment: `parseEnv` reports a failure by variable name and never
+   * by value, and nothing logs or returns these.
+   */
+  GOOGLE_CLIENT_ID: z.string().min(1).max(256).optional(),
+  GOOGLE_CLIENT_SECRET: z.string().min(1).max(256).optional(),
+
+  /**
+   * SMTP transport for the one-time sign-in link, as a connection URL (#117).
+   *
+   * A URL rather than a vendor's API key, because the accepted decision names "email one-time magic
+   * link" and not a particular sender: any SMTP service a deployment already trusts satisfies it, and
+   * nothing in the product is coupled to one. Optional and paired with the sender identity — absent or
+   * half-present, the email method is **not offered**, which is the fail-closed behaviour the task
+   * requires: a sign-in form that accepts an address and silently cannot deliver is worse than one that
+   * says the method is unavailable.
+   *
+   * Deliverability — a verified sending domain with SPF, DKIM and DMARC — is a deployment property this
+   * cannot check and does not claim. See `docs/handoff/AUTH_SETUP.md`.
+   */
+  AUTH_EMAIL_SERVER: z.string().min(1).max(1_024).optional(),
+  /** The `From` identity those links are sent as, e.g. `Omnichannel <no-reply@example.com>`. */
+  AUTH_EMAIL_FROM: z.string().min(3).max(320).optional(),
+
+  /**
+   * The request header this deployment's own proxy sets to the caller's address, e.g. `x-forwarded-for`
+   * (#117).
+   *
+   * Named by configuration and **not** assumed, because a header is whatever the caller says it is unless
+   * something in front of this process overwrites it. Nothing else in this repository reads a client
+   * address and no reverse-proxy contract is checked in, so there is nothing to appeal to: a limiter keyed
+   * on a header this deployment does not actually control reads as protection and provides none — an
+   * attacker rotates the value and an ordinary person behind the same corporate NAT is refused instead.
+   *
+   * Absent, the per-caller sign-in limit is simply **not applied** — not applied to one shared bucket,
+   * which would be a global sign-in outage after twenty attempts. The per-address limit does not depend on
+   * this and is always enforced.
+   */
+  AUTH_TRUSTED_CLIENT_IP_HEADER: z.string().min(1).max(64).optional(),
   /** Redis for enqueueing BullMQ work from webhook ingestion (ADR-005). */
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
 
