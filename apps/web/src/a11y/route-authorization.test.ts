@@ -38,6 +38,10 @@ const DELIBERATELY_PUBLIC: Readonly<Record<string, string>> = {
   "page.tsx": "the landing page, which is what an unauthenticated visitor is meant to see",
   "workspaces/page.tsx":
     "the workspace chooser and the form that creates the first workspace: it authenticates with requireSessionUserId() and can name no workspace yet, because the thing a WorkspaceContext authorizes does not exist until that form is submitted",
+  "sign-in/page.tsx":
+    "the public sign-in and registration page: it is what somebody with no account reaches, it authorizes nothing and reads no tenant data, and the thing a WorkspaceContext would authorize does not exist for its reader yet",
+  "sign-in/sent/page.tsx":
+    "the page that says a one-time link was sent, reached by the same person before they have any session at all; it renders one sentence and reads nothing",
   "api/health/route.ts": "a liveness probe that deliberately touches no database, queue or external API",
   "api/auth/[...nextauth]/route.ts": "Auth.js's own handler: it is the thing that authenticates",
   "api/webhooks/[channel]/[channelAccountId]/route.ts": "a provider webhook, authenticated by its signature rather than by a session",

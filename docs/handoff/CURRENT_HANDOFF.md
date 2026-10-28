@@ -4944,3 +4944,78 @@ can never return to not having one.
   offering it means a client component loading that SDK. Deferred rather than claimed.
 - Unchanged from before: `reconcileProviderState` has no periodic caller, and `addWorkspaceMember` has no
   production caller.
+
+## Public sign-in — Google and one-time email links — Issue #117 — 2026-10-28
+
+Cut from the accepted PR #116 head `b81ad5b` after the owner accepted ADR-022 and **chose both methods**
+rather than the Google-first sequence the ADR recommended. ADR-022 is now `Accepted` with the decision
+recorded; its original recommendation is left unedited, because rewriting it to match the outcome would
+destroy the only record of what the choice was between.
+
+### What the pinned library actually does, which decided the design
+
+Read out of `node_modules` rather than remembered, and two findings changed the implementation:
+
+- **The magic link's origin is not configurable by any config field.** `send-token.ts` builds it from
+  `options.url.origin`, and the only lever is the environment variable `AUTH_URL`, which `@auth/core`
+  reads itself. A variable of our own would have been read by nothing — so the schema declares `AUTH_URL`,
+  and a first draft that called it `AUTH_BASE_URL` would have produced a page claiming a method works
+  while the library mailed links built from the `Host` header.
+- **`trustHost` defaults from `AUTH_URL`**, so setting that one variable both fixes the origin and makes
+  the host check pass; setting `trustHost: true` by hand would silence the check without changing the
+  origin, which is the dangerous half of the fix. It is deliberately not set.
+
+Also pinned by tests rather than assumed: the core generates and hashes the token (the database stores the
+hash, the mail carries the raw token), the provider only transports, `maxAge` lives on the **provider** and
+defaults to 24 hours — set here to 15 minutes — and **single use is the adapter's guarantee**, one atomic
+`delete` whose `P2025` becomes `null`. Expiry is checked *after* consumption, so an expired click burns the
+link; the page says "ask for a new one" because that is the only true advice.
+
+### Two entry points, one limit
+
+`signIn()` runs `Auth()` **in process** in this version, so a sign-in started by the product's own server
+action never passes through `app/api/auth/[...nextauth]/route.ts`. A limiter on that route alone would have
+guarded every caller except the form we ship. The decision is therefore a plain function called from both,
+and `a11y/sign-in-limit-coverage.test.ts` walks the tree to fail the build if a third path appears —
+with a counter-test, because a scanner nobody has seen reject something has not been shown to work.
+
+The limiter is Redis-backed (`INCR` plus `PEXPIRE` in one Lua script, the `reply-cycle.ts` idiom), because
+`packages/queue` already states that a per-process limit is not a limit once more than one instance runs.
+It **fails open with a loud log** when Redis is unreachable: failing closed would lock every customer out
+of signing in, including the operator who would fix it.
+
+### Three honest limits, stated rather than implied
+
+- **There is no per-IP rule unless a deployment names the header its proxy sets**
+  (`AUTH_TRUSTED_CLIENT_IP_HEADER`). Nothing in this repository reads a client address and no proxy
+  contract is checked in, so the only source is a header any caller can set — and a limiter keyed on that
+  reads as protection while providing none. A first draft counted an unattributed caller in one shared
+  bucket, which would have been a global sign-in outage after twenty attempts; that is now absent instead.
+  The per-address rule is unspoofable and always on. The residual gap is an attacker asking for links at
+  many different addresses from an unattributed caller.
+- **A refused request is answered exactly as a successful one.** No 429 and no distinct message: a
+  different status on the sign-in form is a signal to script against. The enumeration property is
+  structural — the counter is keyed on the address and consults no table, so an address with an account and
+  one without are refused identically, which is asserted directly.
+- **Account linking stays off.** Two methods on one address do not merge;
+  `allowDangerousEmailAccountLinking` is not set, so `OAuthAccountNotLinked` is a real outcome and the
+  sign-in page explains it. That error is a *sign-in* error in this version and lands on the sign-in page
+  rather than the error page, which is why the page reads `?error=`.
+
+### Localized for people who have no stored preference
+
+`requestLocale()` reads the signed-in user's own preference and falls back to English, and its comment says
+that is right for sign-in screens. That rule is untouched. The public surface carries its own **explicit**
+language choice in a cookie, which the page and the emailed message both read through one function — so the
+message arrives in the language of the page that asked for it. `Accept-Language` is deliberately not
+sniffed: choosing a product's language from a header is a product decision nobody has made.
+
+### Still configuration, and still blocking rollout
+
+Nothing here provisions anything. `docs/handoff/AUTH_SETUP.md` is the operator runbook — variable names
+only, no credential anywhere — and its checklist is the release gate: a Google client per environment with
+the exact redirect URI and `openid email profile` scopes, a sending domain with SPF/DKIM/DMARC and a real
+delivery test, `AUTH_SECRET` unique per environment, approved terms and privacy copy, staging verification
+by a person, and the owner's release authorization. **No test asserts that any of it is ticked**, and a
+green build means the flows are implemented and guarded, not that this deployment can send mail.
+
