@@ -2,13 +2,31 @@ import type { BusinessProfileContext, PlatformContext, WorkspaceContext } from "
 
 import { auth } from "../auth";
 import { getDb } from "./db";
-import { resolveBusinessProfileContext, resolvePlatformContext, resolveWorkspaceContext, type WorkspaceContextDependencies } from "./workspace-context";
+import {
+  requireSessionUser,
+  resolveBusinessProfileContext,
+  resolvePlatformContext,
+  resolveWorkspaceContext,
+  type WorkspaceContextDependencies,
+} from "./workspace-context";
 
 function dependencies(): WorkspaceContextDependencies {
   return {
     getSessionUserId: async () => (await auth())?.user?.id,
     db: getDb(),
   };
+}
+
+/**
+ * The authenticated user id for this request, for the two callers that have no Workspace to name yet
+ * (#115): the chooser and the action that creates the first Workspace.
+ *
+ * Authentication only — see `requireSessionUser`. Deliberately *not* one of the resolvers the route
+ * authorization gate accepts, so this cannot become a way to serve a page that reads a tenant's data
+ * without authorizing the tenant.
+ */
+export function requireSessionUserId(): Promise<string> {
+  return requireSessionUser(dependencies());
 }
 
 /** Workspace context for the current request's session and the Workspace the request names explicitly. */

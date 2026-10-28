@@ -23,7 +23,20 @@ export interface WorkspaceContextDependencies {
   readonly db: DbExecutor;
 }
 
-async function requireSessionUser(dependencies: WorkspaceContextDependencies): Promise<string> {
+/**
+ * Who is signed in, and nothing more.
+ *
+ * Exported because two callers legitimately have no Workspace to name yet (#115): the chooser, which is
+ * the page you land on before you have one, and the action that creates the first one. Both need the
+ * authenticated identity and neither can be given a `WorkspaceContext`, because the thing a
+ * `WorkspaceContext` authorizes does not exist at that point.
+ *
+ * **This authorizes nothing.** It is not one of the three resolvers `route-authorization.test.ts`
+ * recognises, and it must not become a fourth: a page that knows who you are has not thereby been told
+ * what you may read. Every read and write below this still names its Workspace and is authorized by
+ * membership.
+ */
+export async function requireSessionUser(dependencies: WorkspaceContextDependencies): Promise<string> {
   const userId = await dependencies.getSessionUserId();
   if (userId === undefined || userId === "") {
     throw new UnauthenticatedError();

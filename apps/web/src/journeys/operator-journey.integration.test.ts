@@ -33,14 +33,19 @@ import {
   createConversationOperationStore,
   createKnowledge,
   createReviewStore,
+  createWorkspaceOnce,
   createWorkspaceWithOwner,
   editKnowledge,
+  listAuthorizedBusinessProfiles,
+  listWorkspacesForUser,
+  mayWriteWorkspaceWide,
   listInbox,
   listPolicyAudits,
   readConversation,
   readGoals,
   readOnboarding,
   readStageHistory,
+  readWorkspaceOnboarding,
   saveStyleProfile,
   readPolicies,
   savePolicy,
@@ -55,7 +60,7 @@ import { NO_CAPABILITIES, type ReasonCode } from "@omnichannel/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "../server/testing/database";
-import { resolveBusinessProfileContext, UnauthenticatedError } from "../server/workspace-context";
+import { requireSessionUser, resolveBusinessProfileContext, resolveWorkspaceContext, UnauthenticatedError } from "../server/workspace-context";
 
 
 const AT = new Date("2026-10-05T10:00:00.000Z");
@@ -694,6 +699,173 @@ describe.skipIf(!databaseTestsEnabled())("the operator journey", () => {
       // A refusal that said only "no" would leave a person reloading and guessing.
       expect(refused.status).toBe("STALE");
       expect(retried.status).toBe("MOVED");
+    }, 240_000);
+  });
+  /**
+   * 9. The journey before every other journey: a customer with nothing (#115).
+   *
+   * Every journey above starts from a workspace and a profile that `beforeAll` created with store calls no
+   * customer could reach. This one is the path a real person takes, and until #115 it did not exist:
+   * `createWorkspaceWithOwner` and `createBusinessProfile` were called by tests and by nothing else, so an
+   * authenticated customer reached the chooser, saw an empty list, and could do nothing about it.
+   *
+   * This suite publishes **no catalogue**, which makes it the only place the unpublished-trial case can be
+   * observed at all: `plan_versions` rows are immutable and undeletable by `ENABLE ALWAYS` triggers, so a
+   * suite that has published the trial plan can never get back to not having one.
+   */
+  describe("9. a customer who has nothing yet", () => {
+    let newcomerId: string;
+    let createdWorkspaceId: string;
+    let createdProfileId: string;
+
+    /** A credential row in the workspace under test. No provider secret: an opaque test value. */
+    const credentialIn = async (workspaceId: string) => {
+      seq += 1;
+      const row = await db().channelCredential.create({
+        data: {
+          workspaceId,
+          purpose: "INSTAGRAM_PAGE_TOKEN",
+          keyId: "newcomer-test-key",
+          algorithm: "aes-256-gcm",
+          ciphertext: Buffer.from(`newcomer-${String(seq)}`),
+          nonce: Buffer.from(`nonce-${String(seq)}`.padEnd(12, "0").slice(0, 12)),
+          authTag: Buffer.from(`tag-${String(seq)}`.padEnd(16, "0").slice(0, 16)),
+        },
+        select: { id: true },
+      });
+      return row.id;
+    };
+
+    beforeAll(async () => {
+      const newcomer = await db().user.create({ data: { name: "Journey Newcomer", email: "journey-newcomer@example.test" } });
+      newcomerId = newcomer.id;
+    }, 240_000);
+
+    it("refuses the front door itself to a request with no session", async () => {
+      // The owner of a new workspace comes from the session and from nowhere else. There is no resolver
+      // to lean on here — the workspace does not exist yet — so this is the check that stands in for one.
+      await expect(requireSessionUser(as(undefined))).rejects.toThrow(UnauthenticatedError);
+      await expect(requireSessionUser(as(""))).rejects.toThrow(UnauthenticatedError);
+    }, 240_000);
+
+    it("shows a newcomer an empty chooser, and then the workspace they create", async () => {
+      expect(await listWorkspacesForUser(db(), newcomerId)).toEqual([]);
+
+      const ownerUserId = await requireSessionUser(as(newcomerId));
+      const created = await createWorkspaceOnce(db(), { name: "Newcomer Studio", ownerUserId });
+      createdWorkspaceId = created.workspace.workspaceId;
+
+      expect(created.replayed).toBe(false);
+      expect(await listWorkspacesForUser(db(), newcomerId)).toEqual([
+        { workspaceId: createdWorkspaceId, name: "Newcomer Studio", role: "OWNER" },
+      ]);
+      // The membership arrived in the same write, so the workspace is reachable through the ordinary
+      // authorization immediately — not after some later "add me to it" step that does not exist.
+      await expect(resolveWorkspaceContext(as(newcomerId), createdWorkspaceId)).resolves.toMatchObject({ role: "OWNER" });
+    }, 240_000);
+
+    it("tells the newcomer the truth about a trial this deployment cannot start", async () => {
+      // No catalogue is published in this suite, so `ensureWorkspaceTrial` would find no trial version and
+      // return silently. The screen is the only place that fact can surface, and the sentence it must not
+      // produce is "connect a channel to start your 14-day trial".
+      const context = await resolveWorkspaceContext(as(newcomerId), createdWorkspaceId);
+
+      expect(await readWorkspaceOnboarding(db(), context, AT)).toMatchObject({
+        trial: { noTrialReason: "TRIAL_PLAN_UNPUBLISHED" },
+        profiles: [],
+      });
+    }, 240_000);
+
+    it("creates the first Business Profile, in setup and with automation off", async () => {
+      const context = await resolveWorkspaceContext(as(newcomerId), createdWorkspaceId);
+
+      const created = await createBusinessProfile(db(), context, { name: "Newcomer Main" }, AT);
+      createdProfileId = created.businessProfileId;
+
+      expect(created).toMatchObject({ name: "Newcomer Main", status: "SETUP" });
+      // Creating a profile does not turn the assistant on. The policy row is written in the same
+      // transaction, so there is no window in which a profile exists without one — and its mode is OFF.
+      const policy = await db().automationPolicy.findFirst({
+        where: { workspaceId: createdWorkspaceId, businessProfileId: createdProfileId, channelAccountId: null },
+        select: { mode: true },
+      });
+      expect(policy?.mode).toBe("OFF");
+    }, 240_000);
+
+    it("hands the newcomer a resumable setup that asks for a channel next", async () => {
+      const profile = await resolveBusinessProfileContext(as(newcomerId), createdWorkspaceId, createdProfileId);
+
+      const onboarding = await readOnboarding(db(), profile);
+
+      // Not AI_BEHAVIOUR: the default policy written above already satisfies that step, so the first
+      // thing actually outstanding is the channel — which is also the act that starts the trial.
+      expect(onboarding.state.nextStep).toBe("CHANNELS");
+      expect(onboarding.state.steps.find((step) => step.step === "AI_BEHAVIOUR")?.state).toBe("COMPLETE");
+      expect(onboarding.state.canActivate).toBe(false);
+    }, 240_000);
+
+    it("starts no trial on a connection when there is no trial to start, and says so rather than inventing one", async () => {
+      const context = await resolveWorkspaceContext(as(newcomerId), createdWorkspaceId);
+      const profile = await resolveBusinessProfileContext(as(newcomerId), createdWorkspaceId, createdProfileId);
+
+      await connectChannelAccount(
+        db(),
+        profile,
+        {
+          channel: "INSTAGRAM",
+          externalAccountId: `newcomer-instagram-${String((seq += 1))}`,
+          displayName: `Newcomer Instagram ${String(seq)}`,
+          capabilities: NO_CAPABILITIES,
+          credentialId: await credentialIn(createdWorkspaceId),
+        },
+        AT,
+      );
+
+      // The connection succeeded — a catalogue nobody published must not fail a customer's connection —
+      // and no subscription exists, which is the pair of facts the front door has to report together.
+      expect(await db().workspaceSubscription.findUnique({ where: { workspaceId: createdWorkspaceId } })).toBeNull();
+      const state = await readWorkspaceOnboarding(db(), context, AT);
+      expect(state.trial).toEqual({ noTrialReason: "TRIAL_PLAN_UNPUBLISHED" });
+      expect(state.profiles[0]?.connectedChannels).toEqual(["INSTAGRAM"]);
+    }, 240_000);
+
+    it("refuses to create anything in a workspace the session is not a member of", async () => {
+      // The authorization probe. A member of another workspace is the harder case than a stranger: they
+      // hold a perfectly good session, and only the membership lookup stops them.
+      await expect(resolveWorkspaceContext(as(outsiderId), createdWorkspaceId)).rejects.toThrow(WorkspaceAccessDeniedError);
+      await expect(resolveBusinessProfileContext(as(agentId), createdWorkspaceId, createdProfileId)).rejects.toThrow(WorkspaceAccessDeniedError);
+      // Nothing was created by either attempt.
+      expect(await db().businessProfile.count({ where: { workspaceId: createdWorkspaceId } })).toBe(1);
+    }, 240_000);
+
+    it("refuses a profile to a member who may not create one, and the screen's own predicate agrees", async () => {
+      const context = await resolveWorkspaceContext(as(newcomerId), createdWorkspaceId);
+      const helperId = (await db().user.create({ data: { name: "Newcomer Agent", email: `newcomer-agent-${String((seq += 1))}@example.test` } })).id;
+      await addWorkspaceMember(db(), context, { userId: helperId, role: "AGENT", businessProfileScope: { selected: [createdProfileId] } });
+      const helper = await resolveWorkspaceContext(as(helperId), createdWorkspaceId);
+
+      await expect(createBusinessProfile(db(), helper, { name: "Not allowed" }, AT)).rejects.toThrow(/does not permit/u);
+      // The boundary refused. The predicate the page draws its control from has to agree with that
+      // refusal, or the product offers a button the server will always reject.
+      expect(mayWriteWorkspaceWide(helper)).toBe(false);
+      expect(mayWriteWorkspaceWide(context)).toBe(true);
+      expect(await db().businessProfile.count({ where: { workspaceId: createdWorkspaceId } })).toBe(1);
+    }, 240_000);
+
+    it("creates one workspace and one profile however many times the forms are submitted", async () => {
+      // The stale-state probe, in the form this journey actually has: a double-click. Neither a workspace
+      // nor a Business Profile can be deleted, so a duplicate of either is permanent.
+      const ownerUserId = await requireSessionUser(as(newcomerId));
+      const again = await createWorkspaceOnce(db(), { name: "Newcomer Studio", ownerUserId });
+
+      expect(again.replayed).toBe(true);
+      expect(again.workspace.workspaceId).toBe(createdWorkspaceId);
+      expect(await db().workspace.count({ where: { name: "Newcomer Studio" } })).toBe(1);
+
+      // The profile's own guard is the action's pre-check, so it is asserted where the action's suite
+      // asserts it; here the fact that matters is that the listing the check reads is the authorized one.
+      const context = await resolveWorkspaceContext(as(newcomerId), createdWorkspaceId);
+      expect((await listAuthorizedBusinessProfiles(db(), context)).map((entry) => entry.name)).toEqual(["Newcomer Main"]);
     }, 240_000);
   });
 });

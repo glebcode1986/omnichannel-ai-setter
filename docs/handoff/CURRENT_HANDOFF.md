@@ -1827,13 +1827,15 @@ Three remain, each waiting on something that is not code:
 
 ### Reported and deliberately not built
 
-- **Nothing in production creates a workspace or a Business Profile.** `createBusinessProfile` and
-  `createWorkspaceWithOwner` are not exported from `@omnichannel/db`, `db.businessProfile.create` appears
-  in exactly one place — inside the former — and nothing in `apps/web` creates either. `addWorkspaceMember`
-  has no production caller either. So §178's funnel (create account → connect first Business Profile →
-  trial → choose a plan) has no front door, and the capacity gates, the trial start and `readEntitlement`
-  are currently reachable only from tests. Read as not-yet-built rather than broken; it is the whole
-  sign-up surface and wants its own issue.
+- **Nothing in production creates a workspace or a Business Profile.** *(Built on #115 — see the entry at
+  the end of this file. Two halves of this paragraph were also wrong and are corrected here, because a
+  stale note is read as a finding.)* `createBusinessProfile` and `createWorkspaceWithOwner` **are**
+  exported — `packages/db/src/index.ts` re-exports the whole module with `export *`, and three `apps/web`
+  test files import them directly. What was true is the other half: no **production** caller existed in
+  `apps/web`, so §178's funnel (create account → connect first Business Profile → trial → choose a plan)
+  had no front door, and the capacity gates, the trial start and `readEntitlement` were reachable only
+  from tests. `addWorkspaceMember` still has no production caller. Read as not-yet-built rather than
+  broken; it is the whole sign-up surface and wants its own issue.
 - **The analytics tier limits are unenforced in both the catalogue and the code.**
   `ANALYTICS_RETENTION_DAYS` (30/183/730) is declared, published per tier, asserted at publication and
   localized for display, and read by nothing — no retention logic exists in `analytics-store.ts` or
@@ -4853,3 +4855,92 @@ locally because CI still has no step for it — that is my own execution, not in
 
 **Still untasked, unchanged by this merge:** nothing in production creates a workspace or a Business
 Profile, and `reconcileProviderState` has no periodic caller.
+
+## The front door — authenticated Workspace and Business Profile creation — Issue #115 — 2026-10-28
+
+Cut from the accepted PR #114 head `7a541e0` after the owner authorized Issue #115. The gap this closes is
+the one this file has carried as "the largest open hole" since Phase 6: `createWorkspaceWithOwner` and
+`createBusinessProfile` existed and **only tests called them**, so an authenticated customer reached the
+chooser at `/workspaces`, saw an empty list, and could do nothing about it.
+
+### What now exists
+
+- **A workspace is created from `/workspaces`** — the page already allowlisted as deliberately
+  session-authorized, because a page that could name no workspace could reach none of the three context
+  resolvers. A `/workspaces/new` route would have had to be exempted from the app's one authorization rule
+  in order to host its most consequential write; this avoids that.
+- **`createWorkspaceOnce`** (`packages/db`) makes the submission idempotent: the duplicate check is taken
+  under the same transaction-scoped advisory lock as the insert, keyed to the owner and the *normalized*
+  name, because a check-then-insert loses exactly the double-submit race it exists to stop. A replay is
+  reported rather than hidden, and the existing workspace is returned. A workspace cannot be deleted, so a
+  duplicate would have been permanent.
+- **A Business Profile is created from `/workspaces/[workspaceId]`**, reusing `createBusinessProfile`
+  untouched — its role rule, its capacity lock, its transactional default policy. The page draws the
+  control from `mayWriteWorkspaceWide`, which is now the single implementation of "admin or owner, and
+  every profile in scope": `requireWorkspaceWideWrite` is implemented on it, and `createBusinessProfile`
+  now calls that function instead of inlining the same two checks — the rule had two bodies, and that
+  function's own comment cited the inlined copy as the rule it was expressing.
+- **`readWorkspaceOnboarding`** answers the two questions a new workspace actually asks — is anything
+  connected, and has the trial started — scoped to the profiles the membership may see, so the channel rows
+  are bounded by the authorized profiles rather than by the workspace.
+
+### The trial is untouched, and one thing about it is now sayable
+
+No trial starts at account, Workspace or Business Profile creation. It starts in `connectChannelAccount`,
+on a verified successful connection, exactly as before; nothing was added to that path.
+
+What changed is honesty about the case where it cannot start. `ensureWorkspaceTrial` returns a bare
+`started: false` for **two unrelated facts** — this workspace already has a subscription, and this
+deployment has published no trial plan version — and it is silent by design in the second case, because a
+catalogue nobody published must not fail a customer's channel connection. So the screen was the only place
+that fact could ever surface, and before #115 the billing screen rendered "connecting your first business
+profile starts the trial" to a workspace that had already connected one. `readWorkspaceOnboarding` now
+distinguishes `AWAITING_FIRST_CONNECTION` from `TRIAL_PLAN_UNPUBLISHED`, and the entry pane renders the
+second as a blocker rather than as a promise. The predicate it reads is `findTrialPlanVersion`, extracted
+from `ensureWorkspaceTrial` and shared with it, so the screen's claim and the writer's behaviour cannot
+drift: notably it does **not** filter on `availability`, because the writer does not either.
+
+### A gate strengthened, because this change would otherwise have weakened it
+
+`requireSessionUserId` is a fourth way into `request-context.ts` — authentication only, no tenant
+authorization — and from the moment it existed, a page could satisfy `route-authorization.test.ts` merely
+by *importing* that module, since the file where the three resolvers are defined names all three. The walk
+now excludes the two definition sites from every chain, exactly as its admin assertion already did.
+Measured both ways: a probe page that only calls `requireSessionUserId` passes all four assertions without
+the change and is caught by the first with it.
+
+### Evidence
+
+Full `pnpm verify` on the no-infrastructure path (`env -i`, the shape CI's first job runs): 156 files /
+2282 tests passed, 75 / 1499 skipped — three new test files and 38 new tests over #114's 153 / 2244. Four
+guards mutation-checked and all four caught: the owner read from the form instead of the session, the name
+left untrimmed, the profile replay pre-check deleted, the length check disabled.
+
+Docker is not available on this machine, so **every `*.integration.test.ts` case added here first executed
+in CI** — the journey in `operator-journey.integration.test.ts` and the front-door cases in
+`catalog.integration.test.ts`. The unpublished-trial case can only live in the journey suite: `plan_versions`
+rows are immutable and undeletable by `ENABLE ALWAYS` triggers, so a suite that has published the trial plan
+can never return to not having one.
+
+### Still not done, and stated rather than implied
+
+- **No customer can sign in.** `apps/web/src/auth.ts` still has `providers: []`. Everything above the
+  provider list works and is exercised with injected session identities; nothing can make a real person
+  authenticated. ADR-022 proposes the options, the operational cost of each and a default, and is
+  deliberately left **Proposed** — the choice is the owner's.
+- **The front door's own acts are unaudited.** There is no `WORKSPACE_CREATED` or
+  `BUSINESS_PROFILE_CREATED` audit kind, and adding one is a schema change: the domain list, the Prisma
+  enum, a migration, the `audit_events_scope_check` allowlist (which enumerates kinds exactly), the
+  severity pairing and two locales. Not smuggled into this PR.
+- **Profile creation's double-submit guard is a pre-check, not a lock.** A plan with a profile ceiling is
+  serialized by the store's own capacity lock; a workspace with *no* subscription has no ceiling to
+  serialize on, so two genuinely simultaneous submissions could both land. The ordinary double-click is
+  caught; the simultaneous case is not, and a duplicate profile is permanent.
+- **Only the name is collected.** `ONBOARDING_UX.md` Step 1 also asks for timezone, primary languages and
+  optional website/brand context; `createWorkspaceWithOwner` accepts `{ name, ownerUserId }` and the schema
+  has nowhere to put the rest. Collecting them is schema work outside #115.
+- **No WhatsApp card was added to the front door.** Embedded Signup has no provider callback — completion
+  is a same-origin POST from Meta's JavaScript SDK, guarded by a `SameSite=Strict` state cookie — so
+  offering it means a client component loading that SDK. Deferred rather than claimed.
+- Unchanged from before: `reconcileProviderState` has no periodic caller, and `addWorkspaceMember` has no
+  production caller.
