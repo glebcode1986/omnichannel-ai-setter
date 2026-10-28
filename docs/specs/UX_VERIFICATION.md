@@ -51,11 +51,99 @@ Two things are deliberately **not** breakpoints, because a viewport width cannot
 | phone | 375px | both narrow blocks |
 | large phone | 430px | both narrow blocks |
 | tablet | 768px | the 900px block only |
+| small tablet | 901px | base rules; the Inbox's two-pane stage begins |
 | small laptop | 1024px | base rules |
 | desktop | 1440px | base rules |
+| wide desktop | 1404px | base rules; the Inbox's three-pane stage begins |
 
 These widths are declared in `breakpoints.test.ts` as `TESTED_WIDTHS`, and a test asserts this document
 lists every one of them. The two cannot drift apart without the build failing.
+
+## The Inbox has two stages, and the container decides which
+
+The reading thread is the product's primary surface and it must not be the narrowest thing on screen. It
+was: at a 901px window the thread's grid track resolved to **zero** — the 26px box a browser reported is
+`box-sizing: border-box` refusing to draw narrower than its own padding and border — and at 1024px it was
+100px against a 320px list. Nothing overflowed the document at any of those widths, which is why a sweep
+for a sideways-scrolling page found nothing (Issue #112).
+
+**Why it happened:** the two outer tracks are capped and the middle one is flexible, and CSS Grid sizes
+them in that order — §12.6 Maximize Tracks grows the definite tracks to their maxima first, and only then
+does §12.7 resolve the `fr` from what is left. The thread was not "the rest of the row"; it was the
+remainder after 320 and 300 had been taken.
+
+**The rule now, which is a rule and not a width somebody liked:**
+
+- the conversation list never takes more than **a third** of the main column, and never more than 320px;
+- all three panes appear only when the column can give the thread **half again** the widest pane beside it
+  — `320 + 300 + 2 x 12 + 480 = 1124px` of main column, which is a 1404px window;
+- below that the context panel keeps its full content in document order **below** the thread at the full
+  width of the column, which is the treatment it already had on a phone;
+- three panes scroll inside themselves; two panes scroll with the page. Neither stage nests a scroller
+  inside a scroller.
+
+**Asked of `.shell-main` through a container query, not of the window.** The window is the wrong question
+inside this layout: `.shell` spends `--shell-nav-width` on navigation down to 721px and `.shell-main`
+spends `--space-5` a side, so a 1024px window leaves 744px. A viewport breakpoint for anything in here is
+the sidebar's width wrong by construction, and wrong again the day that token changes.
+
+### Measured, in a browser, before and after
+
+| Window | Main column | Thread before | Thread after | Panes in the thread's row |
+| --- | --- | --- | --- | --- |
+| 320–900px | 288–688px | full width | full width | 1 |
+| 901px | 621px | **0px of content** | 404px | 2 |
+| 960px | 680px | **36px** | 444px | 2 |
+| 1024px | 744px | **100px** | 486px | 2 |
+| 1180px | 900px | **256px** | 591px | 2 |
+| 1244px | 964px | **320px** | 634px | 2 |
+| 1245px | 965px | 321px | 635px | 2 |
+| 1403px | 1123px | 479px | 791px | 2 |
+| 1404px | 1124px | 480px | 480px | 3 |
+| 1440px | 1160px | 516px | 516px | 3 |
+| 1920px | 1312px | 668px | 668px | 3 |
+
+Document overflow was zero at every width both before and after. The 1403px and 1404px "before" figures
+are computed rather than measured — the browser run on the previous head covered the other nine widths,
+and `thread-width.test.ts` agrees with every measured one to the pixel.
+
+`responsive/thread-width.test.ts` is the deterministic half of this: it resolves the tracks the way the
+specification says, from the declarations the stylesheet really carries, and asserts the width the thread
+is left with at every width above. It recomputes the 1124px threshold from the track caps, so widening a
+pane without moving the threshold fails rather than quietly re-collapsing the thread, and a counter-test
+runs the previous head's single track list through the same arithmetic to reproduce the 0 and the 100.
+
+**Also checked in the browser, and not by any test:** tab order runs list → thread → context in both
+stages, with the phone-only "back" link appearing only where the list is a separate screen; no focusable
+element is zero-sized or clipped; in the two-pane stage no pane declares a scroller of its own, and in the
+three-pane stage each declares exactly one; the context panel keeps its `aria-label` in both.
+
+### What the first attempt at this got wrong
+
+Narrowing the list track and moving the panes' `overflow-y: auto` into the three-pane stage together
+removed a boundary that had been containing something else. `.conversation-name` renders
+`contactName ?? handle` and had no wrap rule of its own, so a long handle was painted outside the list
+pane, under the thread column's opaque background, with **no scroller left to reach it** — 116px of a
+35-character handle lost at a 901px window, 75px at 1024px, 3px still lost at 1244px. An independent review
+proved the same thing from the source.
+
+Two things are worth keeping from it. **A surface whose safety depends on a boundary somewhere else is a
+surface waiting for that boundary to move** — the wrap test's own exemption said as much out loud
+("`white-space: nowrap` surfaces … scroll inside a boundary instead"), and that was the boundary. And the
+harness could not see it, because its list pane rendered `<ul class="conversation-list">`, a class the
+stylesheet never defines and no component renders; the real markup is `.conversation-rows > li >
+a.conversation-row > span.conversation-name`.
+
+The harness now mirrors the route selector for selector and reports, per pane and per width, **content a
+pane cannot show and cannot be scrolled to** — `scrollWidth > clientWidth` with a computed `overflow-x` of
+`visible`. Removing the wrap rule makes it flag every width from 901px to 1403px while document overflow
+stays zero at all of them, which is the whole reason the document-scroll metric was never going to catch
+this.
+
+**What is not covered:** that 480px *reads* well is a judgement, not a measurement. Neither the harness nor
+the arithmetic opens a real route with real data — both render the shell and the stylesheet around
+representative markup — so a component that sets its own width inline would escape both. Nothing does
+today, and a separate test forbids inline colours; there is no equivalent guard for inline widths.
 
 ## The overflow harness, and what it measured
 

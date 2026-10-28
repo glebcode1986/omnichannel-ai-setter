@@ -110,8 +110,13 @@ export const TESTED_WIDTHS = [
   { name: "phone", width: 375 },
   { name: "large phone", width: 430 },
   { name: "tablet", width: 768 },
+  // Just past the width where the shell stops being one screen at a time: the narrowest window that
+  // shows a list beside a thread, and where the thread used to have no content width at all.
+  { name: "small tablet", width: 901 },
   { name: "small laptop", width: 1024 },
   { name: "desktop", width: 1440 },
+  // The first width at which the main column is wide enough for all three panes.
+  { name: "wide desktop", width: 1404 },
 ] as const;
 
 /**
@@ -176,9 +181,28 @@ const baseCss = BREAKPOINTS.reduce((text, breakpoint) => {
 function selectorOwning(text: string, offset: number): string {
   const before = text.slice(0, offset);
   const open = before.lastIndexOf("{");
-  // Past the end of whichever came last, and `*/` is two characters wide — off by one here puts the tail
-  // of a comment at the front of the selector.
-  const previous = Math.max(before.lastIndexOf("}") + 1, before.lastIndexOf("*/") + 2, 0);
+  // An at-rule's own brace, when this rule is nested inside one. Without it a rule inside a `@container`
+  // or `@media` block reports its *prelude* as the selector — `"@container main (min-width: 1124px) {
+  // .inbox"` rather than `".inbox"` — and an assertion asked about that owner is asked about a string
+  // that matches nothing. For a rule that is not nested this lands before the previous `}` and the
+  // `Math.max` below discards it.
+  const enclosing = before.lastIndexOf("{", open - 1);
+  // Past the end of whichever came last *before the rule's own brace*, and `*/` is two characters wide —
+  // off by one here puts the tail of a comment at the front of the selector. The bound matters: these
+  // used to be searched over the whole prefix, so a comment sitting *inside* the rule, after its brace,
+  // moved the start of the selector past its end and the owner came back as the empty string.
+  //
+  // `declarationsFor("")` returns nothing — measured, zero characters, because no `{` in this stylesheet
+  // is preceded by whitespace alone. So an unresolvable owner makes its assertion **fail**, loudly, which
+  // is how this bug was caught: the owners-set assertion printed `[ "", ".inbox", ".shell" ]`. An earlier
+  // version of this comment said such assertions "pass for the wrong reason", which is the opposite of
+  // what happens, and a comment that calls a working check silent teaches the next reader to distrust it.
+  const previous = Math.max(
+    before.lastIndexOf("}", open - 1) + 1,
+    before.lastIndexOf("*/", open - 1) + 2,
+    enclosing + 1,
+    0,
+  );
   const [first = ""] = before.slice(previous, open).trim().split(",");
   return first.trim();
 }
@@ -380,7 +404,14 @@ describe("the supported widths", () => {
       return !columns.includes("repeat(auto-fit") && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
     });
 
-    expect(fixed.length, "the shell and the inbox are the fixed grids this product has").toBe(2);
+    // Asked as a set of owners rather than a count of declarations. A count said 2 and broke the moment
+    // the Inbox declared its three-pane track list a second time inside a container query — which is an
+    // override for a *wide* container, so stripping it the way narrow blocks are stripped would be wrong.
+    // Naming the owners says what the invariant means and cannot be satisfied by a coincidence of
+    // arithmetic.
+    const owners = [...new Set(fixed.map((found) => selectorOwning(baseCss, found.index)))].sort();
+    expect(owners, "the shell and the inbox are the fixed grids this product has").toEqual([".inbox", ".shell"]);
+
     for (const found of fixed) {
       const owner = selectorOwning(baseCss, found.index);
       // The owner's own rule in the narrow blocks, not its name anywhere in them: `toContain(".shell")`
@@ -435,9 +466,15 @@ describe("the supported widths", () => {
     );
     expect(declarationsFor(".inbox-search .field"), "a field is one element").toMatch(/display:\s*grid/u);
 
-    // No breakpoint of any kind may speak for it. That is the claim, and it is the whole claim.
+    // No breakpoint of any kind may speak for it. That is the claim, and it is the whole claim — about
+    // the filter row. It used to be written as `expect(css).not.toContain("@container")`, a ban on the
+    // whole file, which is a different and larger claim than the one above it: a container query is the
+    // right instrument for a surface whose size really is decided by its container, and the Inbox is
+    // one (Issue #112). Asked of the row itself now.
     expect(rulesAt(375), "no viewport rule may decide the filter row").not.toContain(".inbox-search");
-    expect(css, "and no container query either").not.toContain("@container");
+    for (const body of balancedBodies("@container")) {
+      expect(body, "no container query may decide the filter row either").not.toContain(".inbox-search");
+    }
   });
 
   it("knows about every table the product renders, so the list above cannot go stale", () => {
@@ -474,11 +511,16 @@ describe("the supported widths", () => {
     //
     // The list is enumerated rather than spot-checked because it had rotted the other way too: the
     // comment here named three surfaces and the body asserted two, and the unasserted one — the context
-    // panel, the narrowest column the product has — had no rule at all.
+    // panel, the narrowest column the product has — had no rule at all. `.conversation-name` was missing
+    // for a subtler reason: it was covered by a scroll boundary rather than by a rule, so it belonged in
+    // the "scrolls inside a boundary instead" exemption below — until the Inbox's two-pane stage took
+    // that boundary away and a handle went under the next pane unreachably. A surface whose safety
+    // depends on a boundary somewhere else is a surface waiting for that boundary to move.
     const SURFACES_CARRYING_A_PERSON_S_TEXT = [
       { selector: ".message-text", what: "a message is whatever the customer sent" },
       { selector: ".lead-table td", what: "a lead's next action is free text, and where someone pastes a link" },
       { selector: ".lead-table th", what: "the row header is the contact name, falling back to the handle" },
+      { selector: ".conversation-name", what: "a row's identifier, which is a handle when there is no name" },
       { selector: ".inbox-context p", what: "the contact name, the handle, and the draft's intent" },
       { selector: ".reason-codes", what: "a cited source id is one token" },
     ] as const;
@@ -512,7 +554,12 @@ describe("the supported widths", () => {
     // `min-width` is the same promise made directly, and it breaks the same way: the review card leaves
     // 262px and its textarea asked for 18rem, so the form burst out of the card below a 346px viewport.
     // Either a floor is zero — the item may shrink — or it is capped at the container it lives in.
-    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;]+);/gu)].map((found) => (found.groups?.floor ?? "").trim());
+    // `[^;{]` and not `[^;]`: a declaration's value cannot contain a brace, and an at-rule *condition*
+    // cannot contain a semicolon. Without that distinction this scan read `@container main (min-width:
+    // 1124px) {` as a declared minimum width of `1124px) { .inbox { grid-template-columns: …` and
+    // demanded that a container query's threshold be capped at 100% of a container. A query condition is
+    // not a width an element is given.
+    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;{]+);/gu)].map((found) => (found.groups?.floor ?? "").trim());
     expect(widths.length, "the declared minimum widths").toBeGreaterThan(0);
     for (const floor of widths) {
       expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} is a width this element may not fit in`).toBe(

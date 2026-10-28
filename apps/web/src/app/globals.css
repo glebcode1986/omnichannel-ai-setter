@@ -332,6 +332,20 @@ details[open] > summary::before {
      The board and the inbox still get plenty: this caps, it does not narrow. */
   max-width: var(--content-max);
   width: 100%;
+  /*
+   * The width every surface in here actually has, named so a rule can ask for it.
+   *
+   * The window is the wrong question inside this layout and the Inbox is the proof: `.shell` spends
+   * `--shell-nav-width` on its navigation down to 721px and this element spends `--space-5` on each side,
+   * so a 1024px window leaves 744px. A viewport breakpoint for anything in here is the sidebar's width
+   * wrong by construction, and silently wrong again the day somebody changes that token.
+   *
+   * `inline-size` and not `size`: height is still decided by content. It brings `contain: layout style`
+   * with it, which is safe here because the skip link and the sticky navigation are siblings of this
+   * element rather than descendants, and nothing inside is positioned against the viewport.
+   */
+  container-type: inline-size;
+  container-name: main;
 }
 
 .nav-list {
@@ -610,29 +624,85 @@ details[open] > summary::before {
 }
 
 /*
- * Three columns on a desktop, one screen at a time on a phone.
+ * The list and the thread, with the context panel beside them only when there is room for all three.
  *
- * The columns are fixed-width on the sides and flexible in the middle, so the thread takes the space a
- * wide window gives it and the list does not grow into something that has to be scanned sideways.
+ * **Why three panes are what a wide column adds rather than what a narrow one loses.** The sides are
+ * capped and the middle is flexible, and CSS Grid sizes it in that order: Maximize Tracks grows the two
+ * definite tracks to their maxima *first*, and only then is the `fr` resolved from what is left. So the
+ * reading thread is not "the rest" — it is the remainder after 320 and 300 are taken, and it collapses
+ * long before anything overflows. Measured in a browser on the previous head: **26px of thread at a
+ * 901px window, 36px at 960px, 100px at 1024px, 256px at 1180px.** Document-level horizontal scroll was
+ * zero at every one of those widths, because `.inbox > * { overflow-y: auto }` forces a computed
+ * `overflow-x: auto` as well and each pane quietly scrolls inside itself. That is why a sweep for a
+ * sideways-scrolling page found nothing for weeks (Issue #112).
+ *
+ * **The threshold is a rule, not a width somebody liked.** The reading column has to be at least half
+ * again as wide as the widest pane beside it, or the supporting furniture is the main event:
+ *
+ *     320 (list cap) + 300 (context cap) + 2 x 12 (gaps) + 480 (1.5 x 320) = 1124
+ *
+ * and `breakpoints.test.ts` recomputes that from these very declarations, so changing a cap without
+ * moving the threshold fails rather than quietly re-collapsing the thread.
+ *
+ * **Asked of the container, not the window**, because the window is wrong by the sidebar's width in here
+ * — see `.shell-main`. At 1124px of main column the thread gets exactly 480px, whatever the window is.
+ *
+ * Below the threshold the context panel keeps its full content on the same screen, in document order,
+ * below the thread at the full width of the column — the same treatment it already had on a phone, so
+ * this is one layout with two stages rather than a third design. Both stages keep one scrollbar: three
+ * panes scroll inside themselves, two panes scroll with the page, and neither nests a scroller inside a
+ * scroller.
  */
 .inbox {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+  /*
+   * The list never takes more than a third of the column, and never more than 320px.
+   *
+   * The cap alone was not enough: at a 901px window the column is 621px, a 320px list left the thread
+   * 289px, and the reading column was still the narrower of the two. A proportion fixes that by
+   * construction rather than by another threshold — with the list at or below a third, the thread keeps
+   * very nearly twice it at every width, and the 320px cap still stops the list growing into something
+   * that has to be scanned sideways on a wide screen.
+   */
+  grid-template-columns: minmax(0, min(320px, 33%)) minmax(0, 1fr);
   gap: var(--gap);
   align-items: start;
-  /* The panes scroll inside the shell rather than the page scrolling as a whole: the filter bar and the
-     context panel are the things an operator refers back to while reading a long thread. */
-  max-height: calc(100vh - 40px);
 }
 
 .inbox > * {
   min-height: 0;
-  max-height: calc(100vh - 40px);
-  overflow-y: auto;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-raised);
+}
+
+/* Two columns, so the context panel takes a row of its own rather than a 320px sliver. */
+.inbox-context-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  min-height: 0;
+  grid-column: 1 / -1;
+}
+
+@container main (min-width: 1124px) {
+  .inbox {
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(240px, 300px);
+    /* The panes scroll inside the shell rather than the page scrolling as a whole: the filter bar and the
+       context panel are the things an operator refers back to while reading a long thread. Only in this
+       stage — with the context panel stacked below, two scrollers would nest. */
+    max-height: calc(100vh - 40px);
+  }
+
+  .inbox > * {
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+  }
+
+  .inbox-context-column {
+    grid-column: auto;
+  }
 }
 
 .inbox-thread-column {
@@ -764,8 +834,26 @@ details[open] > summary::before {
   background: var(--surface-sunken);
 }
 
+/*
+ * The row's identifier, and the one cell in it that can be a single unbreakable token.
+ *
+ * `contactName ?? handle` — so when a customer has no name on file this is a handle, and a handle has no
+ * break opportunity in it. The preview beside it is nowrap with an ellipsis, which is right for a
+ * disposable line of someone else's prose and wrong here: an identifier with its end cut off is how you
+ * fail to recognise the conversation you were looking for. Wrapping keeps all of it.
+ *
+ * This is the correction of a regression this branch introduced. Narrowing the list track and moving the
+ * panes' `overflow-y: auto` into the three-pane stage together removed the scroll boundary that had been
+ * containing this cell, and a long handle was then painted outside the pane, under the thread column's
+ * opaque background, with no scroller left to reach it: 116px of a 35-character handle hidden at a 901px
+ * window, 75px at 1024px, measured in a browser. `overflow-wrap: anywhere` is the fix rather than
+ * restoring the boundary, because a horizontal scrollbar inside a 203px pane is not a way to read a name,
+ * and because only `anywhere` reduces the cell's min-content contribution — which is what decides whether
+ * the row fits at all.
+ */
 .conversation-name {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .conversation-badges {
@@ -1569,13 +1657,6 @@ details[open] > summary::before {
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-}
-
-.inbox-context-column {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gap);
-  min-height: 0;
 }
 
 /* ---- analytics and audit ------------------------------------------------------------------------ */

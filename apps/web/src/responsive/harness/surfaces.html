@@ -97,22 +97,84 @@
         <section data-surface="inbox-context">
           <h2>Inbox context panel, unbroken handle</h2>
           <div class="inbox" data-pane="thread">
-            <div class="inbox-list"><p>list</p></div>
-            <div class="inbox-thread-column"><p class="message-text">a message</p></div>
-            <aside class="inbox-context" aria-label="Context">
-              <section>
-                <h3>Contact</h3>
-                <p><strong>superlongbusinesshandlewithnobreaksatallhere</strong></p>
-                <p class="muted">superlongbusinesshandlewithnobreaksatallhere</p>
-              </section>
-              <section>
-                <h3>Draft</h3>
-                <p class="muted">Intent: booking_request_with_a_very_long_machine_intent_name</p>
-                <ul class="cited-sources">
-                  <li data-source-id="kd_1"><code>kd_01a17eaa-ced4-7729-be12-0b6f10d9f6e8</code></li>
-                </ul>
-              </section>
-            </aside>
+            <!--
+              Representative focusables in each pane, because tab order across the panes is part of what
+              Issue #112 asks about and a pane with nothing focusable in it answers nothing. The shapes
+              match the routes: a conversation link in the list, the phone-only "back" link and a
+              composer in the thread, a control in the context column.
+            -->
+            <!--
+              The list, selector for selector as `ui/inbox/conversation-list.tsx` renders it:
+              `.conversation-rows > li > a.conversation-row` holding `.conversation-name`,
+              `.conversation-badges`, `.conversation-preview` and a `<time>`.
+
+              The first version of this pane invented `<ul class="conversation-list">` — a class the
+              stylesheet never defines and no component renders — so the one pane the Inbox work changed
+              most was the one pane this harness was not measuring, and it reported the two-pane stage
+              clean while a handle was being truncated by 116px with no way to scroll to it. A harness is
+              only worth its markup: check each selector against the component before trusting a number.
+            -->
+            <div class="inbox-list">
+              <ul class="conversation-rows">
+                <li>
+                  <a class="conversation-row" href="#cv1" data-selected="false">
+                    <span class="conversation-name">beautystudio_moscow_official</span>
+                    <span class="conversation-badges">
+                      <span class="badge" data-tone="muted" data-channel="INSTAGRAM">Instagram</span>
+                      <span class="badge" data-tone="muted" data-lead="NEW">Новый</span>
+                    </span>
+                    <span class="conversation-preview muted">последнее сообщение, довольно длинное</span>
+                    <time class="muted" datetime="2026-10-28T09:02">28.10.26, 09:02</time>
+                  </a>
+                </li>
+                <li>
+                  <a class="conversation-row" href="#cv2" data-selected="true" aria-current="page">
+                    <span class="conversation-name">superlongbusinesshandlewithnobreaks</span>
+                    <span class="conversation-badges">
+                      <span class="badge" data-tone="ok" data-mode="AUTOPILOT">Автопилот</span>
+                    </span>
+                    <time class="muted" datetime="2026-10-28T08:48">28.10.26, 08:48</time>
+                  </a>
+                </li>
+              </ul>
+            </div>
+            <div class="inbox-thread-column">
+              <a class="inbox-back" href="#list" data-inbox-back="true">Back to the list</a>
+              <p class="message-text">a message, and a pasted link https://example.com/booking/calendar/slots?utm_campaign=autumn-promotion-2026-long</p>
+              <form>
+                <label for="reply">Reply</label>
+                <textarea id="reply" rows="3"></textarea>
+                <button class="button" type="submit">Send</button>
+              </form>
+            </div>
+            <!--
+              The `.inbox-context-column` wrapper is the Inbox's third grid child; the `<aside>` lives
+              inside it. The first version of this page made the aside the grid child directly, which is
+              not what the route renders — and it measured a layout the product does not have: the
+              context panel came back 320px wide in the two-pane stage instead of the full column,
+              because the rule that gives it a row of its own names the wrapper. Keep this in step with
+              `inbox/[conversationId]/page.tsx`.
+            -->
+            <div class="inbox-context-column">
+              <aside class="inbox-context" aria-label="Context">
+                <section>
+                  <h3>Contact</h3>
+                  <p><strong>superlongbusinesshandlewithnobreaksatallhere</strong></p>
+                  <p class="muted">superlongbusinesshandlewithnobreaksatallhere</p>
+                </section>
+                <section>
+                  <h3>Draft</h3>
+                  <p class="muted">Intent: booking_request_with_a_very_long_machine_intent_name</p>
+                    <ul class="cited-sources">
+                    <li data-source-id="kd_1"><code>kd_01a17eaa-ced4-7729-be12-0b6f10d9f6e8</code></li>
+                  </ul>
+                  <form>
+                    <label for="stage">Stage</label>
+                    <select id="stage"><option>Новый</option></select>
+                  </form>
+                </section>
+              </aside>
+            </div>
           </div>
         </section>
 
