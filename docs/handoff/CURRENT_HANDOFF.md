@@ -5019,3 +5019,105 @@ delivery test, `AUTH_SECRET` unique per environment, approved terms and privacy 
 by a person, and the owner's release authorization. **No test asserts that any of it is ticked**, and a
 green build means the flows are implemented and guarded, not that this deployment can send mail.
 
+
+## Legal drafts from the FastyAds reference pack — Issue #121 — 2026-10-30
+
+Documentation only. No code changed, nothing is published, and `pnpm verify` is identical to the accepted
+#120 parent: 163 test files passed / 76 skipped, 2369 tests passed / 1507 skipped, exit 0. Nothing in
+`pnpm verify` reads `docs/`, which is why identity is the right proof for a change of this shape rather
+than an improvement in any number.
+
+`docs/legal-drafts/` holds a source inventory, a section-level crosswalk with a risk register, an
+assessment of the adjunct documents, a candidate subprocessor annex, an owner-decision checklist, and
+sixteen drafts — eight documents in English and Russian. The four kinds the schema can hold are full
+drafts; the DPA is a scaffold, because its substance is three decisions nobody has made and prose over
+them would look finished while committing the seller to nothing anybody agreed.
+
+### What the reference pack turned out to be
+
+Four things, each measured rather than assumed, and each one a defect that reuse would have inherited.
+
+**Its English text can no longer be regenerated from its stated source.** The header says to update
+`docs/policies/*.docx` and regenerate. The generator is still on `prod`; `docs/policies/` is a 404, and the
+whole `docs/` tree there holds one unrelated entry. The rendered pack is the only surviving authority.
+
+**The Russian pack is an older generation and claims not to be.** Its header says the structure mirrors the
+English. It does not: the English documents are all dated 14 May 2026 while three of the four Russian ones
+are dated 15 April, the Russian refund policy has 12 sections against 14 and drops *Third-Party Providers
+and AI Processing* and *Account Suspension, Closure, and Deletion* outright, and the paragraph counts are
+34% and 40% lower in the terms and the refund policy. The sharpest single difference: the English privacy
+policy cross-references a Data Processing Agreement four times, including as the instrument governing the
+reader's own processing. The Russian one mentions it zero times.
+
+**Thirty-five cross-references point at documents the pack does not contain** — a Cookie Policy (10), an
+Acceptable Use Policy (10), a DPA (7), an AI Disclaimer (5) and an AI Providers Notice (4). Four documents
+are published; these five exist only as promises inside them. There is an admin-managed `/legal/:slug`
+route where they may live, which the repository cannot confirm either way, so the inventory says exactly
+that.
+
+**The commercial and legal frame is a different product in a different country.** 93 credit references
+against 9 subscription and 1 trial; Ukrainian law and courts throughout; a Ukrainian sole trader as
+controller. The word "voice" appears 11 times and every one is about voice cloning and deepfakes in
+generated media — there is nothing in the source about transcribing a recording a customer sent, which is
+this product's only customer-metered allowance.
+
+### The failure mode the machinery records is the one the source exhibits
+
+`legal_documents` is unique on `(kind, locale, version)` and `version` is monotonic per kind *and* locale,
+so nothing relates the English version 3 of a document to the Russian version 3. `readLegalDocumentOffers`
+negotiates the reader's locale, falls back to English, and records `inViewerLanguage` on the offer;
+`legal_acceptances.locale` stores the language of the *page* precisely so a dispute can ask whether
+somebody was shown terms in a language they read. The product is built to **survive** locale drift, which
+is not the same as preventing it — and the reference pack is a measured instance of the drift having
+happened.
+
+So both languages were authored from one outline in one pass, and the claim is checked rather than
+asserted: identical numbered section sequences in all eight pairs, every placeholder used accounted for in
+the registry, no reference-pack identity string anywhere in the directory, and a banner on all sixteen
+drafts. The checker was mutation-tested in four ways — an unregistered placeholder, a dropped Russian
+section, an identity string, a removed banner — and reports each.
+
+### Two gaps between correct pieces, reported and not touched
+
+**A checkout can take money with no recorded consent, and nothing refuses it.**
+`checkout_contracts_require_acceptance` aggregates over `current_legal_documents(...)`. With no rows in
+`legal_documents` the aggregate over an empty set is NULL, nothing is raised, and the contract commits —
+although the model's own comment says the acceptance row, not the payment, is the evidence of consent.
+
+**Nothing in production publishes a legal document.** `publishLegalDocument` is exported from the
+`@omnichannel/db` barrel and exercised by integration tests; every call site outside the store's own file
+is a test. `pnpm billing:publish-routes` validates and publishes seller profiles and routes and does not
+touch legal documents. So the first gap is not hypothetical: as the system stands there is no supported
+path by which a `legal_documents` row comes into existence in a real deployment.
+
+Both are reported in the risk register and the owner checklist, with candidate follow-up tasks. Issue #121
+forbids code changes and none was made. The chain that resolves them is domain → public pages at an
+`https` URL, which `isReadableDocumentUrl` and `legal_documents_content_ref_check` both require → rows →
+the per-kind `required_for_checkout` decision the migration deliberately left to the owner → first
+payment.
+
+### Placeholders are the design, not hedging
+
+Seller identity is a placeholder in every draft body although the owner has named the entity, because
+`seller_profiles` holds `legal_name`, `display_name`, `jurisdiction` and `support_email` as columns so that
+one document body can serve more than one selling entity — which is what Issue #47 asked for. A draft with
+a company name baked into its prose would need rewriting rather than reconfiguring when a second route
+appears. Each draft resolves its placeholders in a table at the top so a human reviewer reads continuous
+prose.
+
+Owner-stated values are recorded as attestations with their date, and the verification each still needs.
+The earlier claim that the business lacked registered software activity is withdrawn in the checklist: it
+was read from a superseded extract, and the owner has confirmed the classes are registered. Neither the
+company extract nor any personal detail from it is in the repository.
+
+### What is deliberately not answered
+
+Governing law, forum, consumer status and the withdrawal right; refund eligibility, exclusions and
+periods; liability caps; retention periods for the four categories that need them; the hosting region; the
+transfer instrument per subprocessor; whether provider inputs are excluded from model training. Each is a
+placeholder and a numbered decision, and the refund policy's eligibility and exclusion clauses carry a
+warning that an exclusion mandatory law does not permit is a finding against the seller rather than merely
+an unenforceable sentence.
+
+**A reviewer PASS on this is a technical and documentary review. It is not legal approval, and nothing
+here may be published without one.**
