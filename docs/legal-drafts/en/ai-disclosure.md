@@ -199,7 +199,7 @@ Service is built to keep an objection even if everything else about you is delet
 
 12.4. **If you want to know what is held about you, or want it erased, ask the business**, not us. They
 decide; we act on their instructions. If you reach us instead, we will tell you so and pass your request
-to them. The Privacy Policy explains why, in clause 14.4.
+to them. The reason is in the Privacy Policy, clause 14.4.
 
 12.5. If you sent a voice note, it may have been transcribed by a machine, and the transcript may be
 wrong. If something you said was misunderstood, saying so in the conversation corrects it.
