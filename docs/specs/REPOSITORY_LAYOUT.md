@@ -23,6 +23,7 @@ scripts/
 docs/
   adr/
   handoff/
+  legal-drafts/       # unpublished, unapproved legal drafts (#121)
   research/
   specs/
 ```
