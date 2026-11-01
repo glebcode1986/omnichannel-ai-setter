@@ -7,9 +7,14 @@ so the golden-case suite is only ever run by hand. `scripts/release/evidence.ts`
 gate's admitted limitation; this step removes it. The step belongs in the `infrastructure` job because the
 evals need the database.
 
+A previous revision of this file carried a hunk header with no line numbers and therefore could not be
+applied at all: `git apply --check` exited 128 with `No valid patches in input`, directly contradicting
+the instruction above it. This revision applies cleanly against .github/workflows/verify.yml at
+855f7edaa07a916ec05fc5db00e18dee68047efb, verified by `git apply --check` exiting 0.
+
 --- a/.github/workflows/verify.yml
 +++ b/.github/workflows/verify.yml
-@@
+@@ -99,2 +99,7 @@
        - name: Webhook to queue E2E
          run: pnpm test:e2e
 +

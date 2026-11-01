@@ -5121,3 +5121,67 @@ an unenforceable sentence.
 
 **A reviewer PASS on this is a technical and documentary review. It is not legal approval, and nothing
 here may be published without one.**
+
+## Issue #123 — pilot readiness audit (PR #124, docs-only)
+
+The owner changed the launch strategy on 2026-11-01: the first launch is an **invitation-only, free,
+real-business pilot**, not a paid public launch, and commercial launch is deferred to a separate owner
+decision. This audit is the one bounded task authorized from that change. It is an audit, not a release
+approval, and it did not touch code, infrastructure, DNS or any account.
+
+Four documents: `PILOT_SERVER_REQUIREMENTS.md`, `PILOT_HOST_INVENTORY_CHECKLIST.md`,
+`PILOT_READINESS_AUDIT.md`, `PILOT_INTEGRATION_DEPENDENCY_MAP.md`, `PILOT_IMPLEMENTATION_PLAN.md`.
+Host specifications were measured on the one machine where the product is deployed, at the owner's
+explicit instruction, with read-only commands; the collected figures stay outside this repository, and
+the documents here carry environment variable **names only**.
+
+### The two findings that stop the pilot
+
+**An approved draft is never sent.** `review-store.ts:134` and `composer-store.ts:89` write a
+`delivery_jobs` row with `status: "SCHEDULED"` and nothing enqueues a delivery job. The only two
+production enqueues are the AUTOPILOT path and resume-after-reconciliation, and
+`findUnresolvedOperations` selects `HELD_AMBIGUOUS` only — never `SCHEDULED`. The UI reports success. The
+directive mandates starting DRAFT-first, so the mandated mode cannot deliver a single reply. An orphaned
+row also blocks composing another reply in that conversation, because `composer-store.ts:71` reads it as
+"already in flight". `review-delivery.integration.test.ts` passes with the defect present because it
+hand-builds the job literal; a repair test must start from the approval.
+
+**Nobody can operate a fresh deployment.** Every runtime control — the kill switch, `/admin`, both
+release commands — authorizes through a `platform_members` row, and the only production writer
+(`support-access-store.ts:355`) begins with `requirePlatformPermission(context,
+"MANAGE_PLATFORM_MEMBERS", …)`, which only `PLATFORM_ADMIN` holds. The first row cannot be created
+through the product. One hand-written `INSERT` fixes it and nothing documents that.
+
+### Corrections made to this repository's own documentation
+
+- `PILOT_SERVER_REQUIREMENTS.md` §7 had listed `WORKER_CONCURRENCY` and `WEBHOOK_BASE_URL` as
+  environment variables. Neither exists outside a test fixture. Replaced with the true statement that no
+  concurrency knob exists at all — and `packages/queue/src/families.ts:164` claims the opposite, which is
+  recorded as a code-side defect rather than edited here.
+- The same section had said a stored credential row stays readable after key rotation. A probe with a
+  positive control showed the cipher supports retired keys while **no environment variable can supply
+  one**, and all five composition sites build a single-entry key map: rotation makes every stored
+  credential permanently undecryptable. Corrected, with the error stated rather than removed.
+- "PostgreSQL 16 is not sufficient" was stronger than the evidence. All 52 migrations were scanned for
+  version-gated syntax and none appears; 17 is the tested configuration, 16 is untested.
+- `ci-evals-step.patch` instructed `git apply` and could not be applied (`--check` exited 128, `No valid
+  patches in input`). Rewritten with real line numbers; `--check` now exits 0. Applying it still needs the
+  owner, since this author cannot push `.github/workflows`.
+
+Two spec contradictions are recorded and left to an owner decision: `LAUNCH_READINESS.md` §2 lists object
+storage that nothing implements and nothing needs, and `RELEASE_PROCESS.md` says no staging environment
+exists while an undocumented instance is deployed — true of the repository, false of the world.
+
+### Evidence provenance
+
+Three parallel evidence agents produced 50 findings; the audit marks each as verified here, established
+by probe, or agent evidence not independently re-derived. Two agent claims were **refuted** on
+re-derivation and are recorded as refuted: a health endpoint does exist (`/api/health`, though it is
+liveness-only and answers `ok` through a database outage), and a production writer for `platform_members`
+does exist (the deadlock is that only an existing platform admin may use it).
+
+### Standing constraint
+
+Until the delivery defect is confirmed fixed, no real business conversations in the pilot. The delivery
+fix takes priority over inviting any company, and is listed as F1 in the plan — not started from this
+task.
