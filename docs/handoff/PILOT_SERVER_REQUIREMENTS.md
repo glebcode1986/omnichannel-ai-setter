@@ -64,10 +64,24 @@ Consequences for the host:
 | Vector columns | `knowledge_chunks.embedding`, `style_examples.embedding`, both `vector(1024)` |
 | Lexical search | GIN expression indexes on `to_tsvector('simple', …)` |
 
-**PostgreSQL 16 is not sufficient**, and an existing 16 instance on a candidate host cannot be reused
-for this schema. The embedding dimension is fixed in the column type, so changing the embedding model
-to one with a different dimension is a migration, not a configuration change
-(`AI_EMBEDDING_DIMENSIONS` defaults to `1024` and must agree with the column).
+**On the version floor, precisely.** 17 is what `compose.yaml`, CI and the one running deployment pin
+and test, and it is what the `pgvector/pgvector:pg17` image supplies. It is *not* established that the
+schema would fail on 16: all 52 migrations were scanned for version-gated syntax — `NULLS NOT
+DISTINCT`, `uuidv7()`, `MERGE INTO`, `GENERATED ALWAYS` — and none appears. The version-sensitive
+constructs that are used (`gen_random_uuid`, 17 occurrences; `ENABLE ALWAYS` triggers, 39) have been
+available far longer. So treat 17 as **the tested configuration**, and treat running on 16 as untested
+rather than as known-broken.
+
+What *is* established is narrower and sufficient for a host decision: an existing PostgreSQL instance
+belonging to another workload should not be reused for this schema regardless of its version — it needs
+the `vector` extension enabled, 52 migrations applied, and a backup and restore story of its own, and
+sharing a cluster couples two products' availability. Provision a separate instance.
+
+The embedding dimension is fixed in the column type, so changing the embedding model to one with a
+different dimension is a migration, not a configuration change. The two values are checked against each
+other at runtime: `apps/worker/src/embeddings.ts:24-31` compares `AI_EMBEDDING_DIMENSIONS` with the
+dimension the database package exports, logs `worker.embedding_dimensions_mismatch` and falls back to
+lexical-only retrieval rather than returning silently empty results.
 
 **There is no `hnsw` or `ivfflat` index on either vector column** — verified across all 52 migrations,
 with a positive control confirming the same search does find the GIN indexes that do exist. Similarity
@@ -163,11 +177,39 @@ Optional, and each one gates a specific capability rather than boot:
 | `WHATSAPP_APP_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_SIGNUP_CONFIG_ID` | WhatsApp onboarding. All three are optional together, and without them the connect endpoints refuse with `not_configured` instead of starting a flow that cannot be finished. |
 | `WHATSAPP_GRAPH_VERSION` | Graph API version for onboarding calls — a deployment default, not a constant of the code. Embedded Signup v2 and v3 were retired 2026-10-15; this implementation targets v4. |
 | `INSTAGRAM_HUMAN_AGENT_APPROVAL` | Set to `APPROVED` only after Meta has approved the Human Agent feature. **No API reports this**, so it is an operator attestation. |
-| `LOG_LEVEL`, `NODE_ENV`, `WORKER_CONCURRENCY`, `WEBHOOK_BASE_URL` | Operational tuning. |
+| `LOG_LEVEL`, `NODE_ENV` | Operational tuning. These two are the whole list: see the note below. |
+
+There is **no environment variable that bounds worker or queue concurrency.** This is worth stating
+plainly because `packages/queue/src/families.ts:164` claims the opposite in a comment — "every one of
+them is overridable from the environment" — and the composition root passes neither `limits` nor
+`concurrency` when it creates the queue workers (`apps/worker/src/main.ts:281-290`). Searching the
+whole repository for such a name finds it only as a fixture inside
+`packages/env/src/parse-env.test.ts`. So a small host cannot be protected by configuration here, and
+the comment is what needs correcting, not the search. Treat worker throughput as a code change, not a
+deployment knob, until that is fixed.
 
 Secrets to generate per environment, never shared between environments: `AUTH_SECRET` and
-`CHANNEL_CREDENTIAL_KEY` (≥32 bytes each). `CHANNEL_CREDENTIAL_KEY_ID` changes on rotation, and stored
-rows record the key id they were written with, so an old row stays readable after a rotation.
+`CHANNEL_CREDENTIAL_KEY` (≥32 bytes each).
+
+**Do not rotate `CHANNEL_CREDENTIAL_KEY_ID` / `CHANNEL_CREDENTIAL_KEY` on this code.** An earlier
+revision of this document said the opposite — that stored rows record the key id they were written with,
+so an old row stays readable after a rotation. The first half is true and the conclusion is false, which
+is the worst shape a claim can have.
+
+What was measured: the cipher does take a map of keys by id, and supplying a retired key alongside the
+current one decrypts an old row correctly — that is the positive control. But every production
+composition site builds that map as a **single entry keyed by the current id**
+(`apps/web/src/server/credential-cipher.ts:16`, `apps/worker/src/delivery-engine.ts:55`,
+`apps/worker/src/instagram-token-sweeper.ts:133`, `apps/worker/src/media-port.ts:39`,
+`apps/worker/src/presence-port.ts:27`), and **no environment variable exists for a second key** —
+searched for `PREVIOUS_KEY`, `CREDENTIAL_KEYS`, `OLD_KEY`, `RETIRED_KEY` and numbered variants, with a
+positive control on the two names that do exist. Changing either value therefore makes every stored
+provider credential permanently undecryptable, and the failure surfaces as a job error that nothing
+catches, not as a startup refusal.
+
+For the pilot this means: choose these two values once, back them up with the database, and treat
+rotation as blocked work rather than an operational procedure. Restoring a database backup without the
+matching key leaves every connected channel unusable.
 
 ## 8. The free pilot's hard constraint on payments
 
