@@ -47,6 +47,8 @@ export type {
   ConversationSnapshot,
   DebounceScheduler,
   InboundDebouncePayload,
+  DeliveryDispatchPayload,
+  DeliveryDispatchScheduler,
   IngestionOutcome,
   IngestionStore,
   IngestionTransaction,

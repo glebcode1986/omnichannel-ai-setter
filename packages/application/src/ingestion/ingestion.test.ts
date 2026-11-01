@@ -52,6 +52,7 @@ function dependencies(options: { account?: WebhookAccount; adapter?: ChannelAdap
     adapters: { adapterFor: () => options.adapter },
     scheduler: { scheduleInboundDebounce: vi.fn(() => Promise.resolve()) },
     transcription: { scheduleMediaTranscription: vi.fn(() => Promise.resolve()) },
+    delivery: { scheduleDeliveryDispatch: vi.fn(() => Promise.resolve()) },
     log,
     now: () => new Date("2026-09-17T10:00:00.000Z"),
     random: () => 0,

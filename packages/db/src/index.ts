@@ -112,6 +112,18 @@ export {
   scheduleAutomatedDelivery,
   type AutomatedDeliveryInput,
 } from "./delivery-store";
+export {
+  addDeliveryDispatchEntry,
+  deliveryDispatchDedupeKey,
+  DELIVERY_DISPATCH_DEDUPE_PREFIX,
+  type DeliveryDispatchRequest,
+} from "./delivery-dispatch";
+export {
+  recoverStrandedDeliveries,
+  DELIVERY_RECOVERY_GRACE_MS,
+  type DeliveryRecoveryOptions,
+  type DeliveryRecoveryResult,
+} from "./delivery-recovery";
 export { channelCapabilitiesOf } from "./channel-capabilities";
 export {
   readBillingOverview,

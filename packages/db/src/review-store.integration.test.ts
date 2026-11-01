@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAiDraftStore } from "./ai-draft-store";
 import { createDbClient, type DbClient } from "./client";
+import { deliveryDispatchDedupeKey } from "./delivery-dispatch";
 import { addWorkspaceMember } from "./repositories/workspaces";
 import { authorizeBusinessProfileAccess, authorizeWorkspaceAccess, type BusinessProfileContext } from "./tenancy";
 import { createReviewStore, createStyleLearningStore } from "./review-store";
@@ -206,11 +207,70 @@ describe.skipIf(!databaseTestsEnabled())("review store (PostgreSQL)", () => {
     const outcome = await resolveReview(dependencies(database.db), command(draftId, { kind: "APPROVE" }));
 
     expect(outcome.status).toBe("SCHEDULED");
-    const job = await database.db.deliveryJobRecord.findFirstOrThrow({ where: { ...scope(), draftId }, select: { status: true, selectedDelayMs: true } });
+    const job = await database.db.deliveryJobRecord.findFirstOrThrow({
+      where: { ...scope(), draftId },
+      select: { id: true, status: true, selectedDelayMs: true, operationId: true, correlationId: true },
+    });
     // A human has already decided, so there is no human-like delay left to simulate.
     expect(job).toMatchObject({ status: "SCHEDULED", selectedDelayMs: 0 });
     // Nothing was sent: no outbound message exists yet.
     expect(await database.db.message.count({ where: { ...scope(), aiDraftId: draftId } })).toBe(0);
+
+    // This assertion is the one this test was missing, and its absence is what let the defect ship
+    // (Issue #125). Everything above was true while **nothing ever enqueued the send**: the row existed,
+    // no message existed, and the test's own name — "schedules through the delivery coordinator" — was
+    // false. A delivery row with no dispatch entry is a reply that will never leave.
+    const entry = await database.db.queueOutbox.findUniqueOrThrow({
+      where: { dedupeKey: deliveryDispatchDedupeKey({ ...scope(), operationId: job.operationId }) },
+      select: { kind: true, delayMs: true, dispatchedAt: true, correlationId: true, payload: true },
+    });
+    expect(entry).toMatchObject({ kind: "DELIVERY_DISPATCH", delayMs: 0, dispatchedAt: null, correlationId: job.correlationId });
+    // The payload names the work and the work only; every permission is re-read at send time.
+    expect(entry.payload).toMatchObject({
+      schemaVersion: 1,
+      ...scope(),
+      conversationId: profile.conversationId,
+      draftId,
+      deliveryJobId: job.id,
+      operationId: job.operationId,
+      selectedDelayMs: 0,
+    });
+  }, 120_000);
+
+  it("adds exactly one dispatch entry when the same approval arrives twice", async () => {
+    const draftId = await pendingDraft();
+    const approve = command(draftId, { kind: "APPROVE" });
+
+    const first = await resolveReview(dependencies(database.db), approve);
+    const replay = await resolveReview(dependencies(database.db), approve);
+
+    expect(replay).toEqual(first);
+    // Idempotency is the database's, not the caller's: `queue_outbox.dedupe_key` is UNIQUE on the
+    // operation id, so a duplicated click cannot become a second send however many times it arrives.
+    // Counted per operation rather than per Business Profile: this file shares one database across its
+    // tests, so a workspace-wide count measures every earlier approval too — which is how this assertion
+    // first read 9 and said nothing about idempotency at all.
+    const job = await database.db.deliveryJobRecord.findFirstOrThrow({ where: { ...scope(), draftId }, select: { operationId: true } });
+    const entries = await database.db.queueOutbox.count({
+      where: { ...scope(), kind: "DELIVERY_DISPATCH", dedupeKey: deliveryDispatchDedupeKey({ ...scope(), operationId: job.operationId }) },
+    });
+    expect(entries).toBe(1);
+    expect(await database.db.deliveryJobRecord.count({ where: { ...scope(), draftId } })).toBe(1);
+  }, 120_000);
+
+  it("writes the dispatch entry in the same transaction as the delivery row", async () => {
+    const draftId = await pendingDraft();
+    const before = await database.db.queueOutbox.count({ where: { ...scope(), kind: "DELIVERY_DISPATCH" } });
+
+    // A draft that no longer exists makes the whole decision fail after the claim would have been taken.
+    await expect(
+      resolveReview(dependencies(database.db), command(randomUUID(), { kind: "APPROVE" })),
+    ).resolves.toMatchObject({ status: "GONE" });
+
+    // Neither half was written. The point is not that a refusal writes nothing — it is that the row and
+    // the intent to send it are one commit, so no state exists in which one is present without the other.
+    expect(await database.db.queueOutbox.count({ where: { ...scope(), kind: "DELIVERY_DISPATCH" } })).toBe(before);
+    expect(await database.db.deliveryJobRecord.count({ where: { ...scope(), draftId } })).toBe(0);
   }, 120_000);
 
   it("stores the human's wording and learns style from it, never knowledge", async () => {

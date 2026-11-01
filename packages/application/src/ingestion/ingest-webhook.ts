@@ -8,7 +8,7 @@ import {
 } from "@omnichannel/domain";
 
 import { dispatchOutbox } from "./outbox";
-import type { ChannelAdapterProvider, DebounceScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler, WebhookAccount } from "./ports";
+import type { ChannelAdapterProvider, DebounceScheduler, DeliveryDispatchScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler, WebhookAccount } from "./ports";
 import { processEvent } from "./process-event";
 
 export interface IngestionDependencies {
@@ -17,6 +17,15 @@ export interface IngestionDependencies {
   readonly scheduler: DebounceScheduler;
   /** Where a reading job goes (Issue #21). The queue takes it whether or not a transcriber is configured. */
   readonly transcription: MediaTranscriptionScheduler;
+  /**
+   * Where an approved or human-written reply goes (Issue #125).
+   *
+   * Needed here because ingestion dispatches the outbox inline for the entries it just wrote, and that
+   * dispatcher now carries all three kinds. An inbound webhook will not normally find a delivery entry to
+   * send, but the dispatcher is one mechanism and wiring it by halves is how the send path came to be
+   * connected to nothing in the first place.
+   */
+  readonly delivery: DeliveryDispatchScheduler;
   readonly log: LogPort;
   readonly now: () => Date;
   readonly random: () => number;

@@ -17,6 +17,10 @@ export function getIngestionDependencies(): IngestionDependencies {
     scheduler: getQueueProducer(),
     // The same producer: a reading job is just another family on the same queue (Issue #21).
     transcription: getQueueProducer(),
+    // And again for a send (Issue #125). An inbound webhook writes no delivery entry, so this is here to
+    // satisfy one dispatcher rather than two: the mechanism that carries a committed reply to the queue
+    // must be whole wherever it is composed, because half of it is what made an approved reply vanish.
+    delivery: getQueueProducer(),
     log: getLogger(),
     now: () => new Date(),
     random: Math.random,

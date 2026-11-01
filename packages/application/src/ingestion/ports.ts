@@ -107,6 +107,41 @@ export interface MediaTranscriptionScheduler {
   scheduleMediaTranscription(job: MediaTranscriptionPayload, options: { readonly delayMs: number }): Promise<unknown>;
 }
 
+/**
+ * One reply a person approved or wrote, waiting to reach the delivery queue (Issue #125).
+ *
+ * It travels through the outbox for the reason the other two do, and one more: a send is the action this
+ * product must never lose and must never duplicate. The entry commits with the `delivery_jobs` row, so a
+ * crash between the two is impossible; the row's `operationId` is the dedupe key, so a replay adds nothing.
+ *
+ * The payload names the work and nothing else. Every answer that decides whether the send may still happen
+ * — channel eligibility, tenancy, human takeover, the kill switch, policy — is re-read from the database at
+ * send time, because a payload carrying those would be a cache of permissions that a revocation cannot
+ * reach.
+ */
+export interface DeliveryDispatchPayload {
+  readonly schemaVersion: 1;
+  readonly workspaceId: string;
+  readonly businessProfileId: string;
+  readonly correlationId: string;
+  readonly conversationId: string;
+  /** Absent when a person composed the reply themselves (ADR-018 Option B). */
+  readonly draftId?: string;
+  readonly deliveryJobId: string;
+  readonly operationId: string;
+  readonly scheduledFor: string;
+  readonly selectedDelayMs: number;
+}
+
+/**
+ * A third port rather than a method on either existing scheduler, by the same argument as the second: the
+ * only thing these jobs share is the queue they travel through, and a composition root must not be able to
+ * satisfy the type while wiring the send path to nothing.
+ */
+export interface DeliveryDispatchScheduler {
+  scheduleDeliveryDispatch(job: DeliveryDispatchPayload, options: { readonly delayMs: number }): Promise<unknown>;
+}
+
 /** What happened to one verified, normalized event; stored with the source event for audit. */
 export type IngestionOutcome =
   | "INBOUND_STORED"
@@ -163,7 +198,8 @@ interface OutboxEntryBase {
  */
 export type OutboxEntry =
   | (OutboxEntryBase & { readonly kind: "INBOUND_DEBOUNCE"; readonly payload: InboundDebouncePayload })
-  | (OutboxEntryBase & { readonly kind: "MEDIA_TRANSCRIPTION"; readonly payload: MediaTranscriptionPayload });
+  | (OutboxEntryBase & { readonly kind: "MEDIA_TRANSCRIPTION"; readonly payload: MediaTranscriptionPayload })
+  | (OutboxEntryBase & { readonly kind: "DELIVERY_DISPATCH"; readonly payload: DeliveryDispatchPayload });
 
 /** Writes performed for one event; they commit or roll back together. */
 export interface IngestionTransaction {

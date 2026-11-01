@@ -25,6 +25,20 @@ export const AUDIT_EVENT_KINDS = [
   "TAKEOVER_ENDED",
   "TEMPLATE_POLICY_CHANGED",
   "AMBIGUOUS_SEND_RESOLVED",
+  /**
+   * A reply a person approved, or wrote, that was never enqueued and has now been handed to the queue by
+   * the recovery sweep (Issue #125).
+   *
+   * Deliberately not `AMBIGUOUS_SEND_RESOLVED`, which the two kinds would otherwise look alike enough to
+   * share. An ambiguous send is one nobody knows the outcome of, and the rule for it is never to resend.
+   * This is the opposite case: the send is known *not* to have happened, because nothing ever queued it,
+   * so sending is precisely what is owed. One kind for both would put a "we were unsure" sentence in the
+   * audit trail of a reply that definitely never left, and would invite the no-resend rule to be applied
+   * where resending is the repair.
+   *
+   * Not admin-only: the business whose reply went missing is the party entitled to see that it did.
+   */
+  "DELIVERY_DISPATCH_RECOVERED",
   "MEMBER_CHANGED",
   /// Somebody read a customer's data out of the product. The read itself is the event (#57).
   "DATA_EXPORTED",

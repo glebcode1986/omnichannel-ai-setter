@@ -3,25 +3,26 @@ import { createAnthropicReplyModel } from "@omnichannel/ai";
 import { MARK_READ_MAX_AGE_MS, TYPING_INDICATOR_TTL_MS } from "@omnichannel/channel-whatsapp";
 import {
   claimFollowUp,
+  countUnusableGenerations,
   createAiDraftStore,
   createDbClient,
   createDraftContextStore,
   createIngestionStore,
   createKnowledgeRetriever,
+  createPresenceStore,
   createReconciliationStore,
   createStyleProfileStore,
-  createPresenceStore,
-  deleteExpiredChannelConnectStates,
-  expireStaleCheckouts,
-  expireStaleReservations,
   createStyleRetriever,
   createSuspensionStore,
-  countUnusableGenerations,
+  deleteExpiredChannelConnectStates,
   dueFollowUps,
+  expireStaleCheckouts,
+  expireStaleReservations,
   findUnresolvedOperations,
-  recordFollowUpSent,
   readReliabilitySnapshot,
+  recordFollowUpSent,
   recoverStaleSendingDeliveries,
+  recoverStrandedDeliveries,
 } from "@omnichannel/db";
 import { EnvValidationError } from "@omnichannel/env";
 import { resolveStyleProfile } from "@omnichannel/domain";
@@ -60,12 +61,22 @@ import { createShutdownSequence } from "./shutdown";
 import { automatedRouteStillOpen } from "./followup-channel";
 import { startFollowUpSweeper } from "./followup-sweeper";
 import { startOutboxSweeper } from "./outbox-sweeper";
+import { startRecoveryLoop } from "./recovery-loop";
 import { createWorkerRuntime } from "./worker-runtime";
 
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM"] as const;
 /** How often the operational picture is recomputed, and how often each recovery loop runs. */
 const HEALTH_INTERVAL_MS = 30_000;
 const RECONCILIATION_SWEEP_INTERVAL_MS = 60_000;
+/**
+ * How often stranded `SCHEDULED` deliveries are looked for (Issue #125).
+ *
+ * A minute, like the reconciliation sweep, and for the same reason: this repairs rows the write path can
+ * no longer produce, so it is a backstop rather than a hot path. A tighter loop would mean a cross-tenant
+ * scan every few seconds for work that should be empty.
+ */
+const DELIVERY_RECOVERY_SWEEP_INTERVAL_MS = 60_000;
+const DELIVERY_RECOVERY_BATCH = 100;
 const BACKLOG_GUARD_INTERVAL_MS = 30_000;
 /** An unresolved operation is asked about again no more often than this. */
 const RECONCILIATION_RETRY_AFTER_MS = 120_000;
@@ -309,7 +320,16 @@ function main(): void {
       const sweeper = startOutboxSweeper({
         intervalMs: OUTBOX_SWEEP_INTERVAL_MS,
         sweep: () =>
-          dispatchOutbox({ store: createIngestionStore(db), scheduler: producer, transcription: producer, log: logger, now: () => new Date() }),
+          // `delivery` is what makes a human-approved reply actually leave the building (Issue #125): the
+          // sweeper is the only thing that moves a committed `DELIVERY_DISPATCH` entry onto the queue.
+          dispatchOutbox({
+            store: createIngestionStore(db),
+            scheduler: producer,
+            transcription: producer,
+            delivery: producer,
+            log: logger,
+            now: () => new Date(),
+          }),
         logger,
       });
       const suspensions = createSuspensionStore(db);
@@ -323,6 +343,19 @@ function main(): void {
         producer,
         logger,
         now: () => new Date(),
+      });
+      // Replies approved before the web-to-queue bridge existed committed a `SCHEDULED` row and no job,
+      // and nothing recovered them: the reconciliation sweep selects `HELD_AMBIGUOUS` only. This hands
+      // each one to the queue, never resends an ambiguous operation, and is safe to run repeatedly
+      // because the outbox dedupe key is unique on `operationId` (Issue #125).
+      const deliveryRecovery = startRecoveryLoop({
+        name: "delivery_recovery",
+        intervalMs: DELIVERY_RECOVERY_SWEEP_INTERVAL_MS,
+        tick: async () => {
+          const result = await recoverStrandedDeliveries(db, { now: new Date(), limit: DELIVERY_RECOVERY_BATCH });
+          return result.stranded === 0 ? undefined : { stranded: result.stranded, recovered: result.recovered };
+        },
+        logger,
       });
       // Without this, every part of the Instagram token lifecycle is implemented and none of it runs: a
       // 60-day token expires, the account still reads CONNECTED, and every reply fails with a provider
@@ -388,6 +421,7 @@ function main(): void {
         loops: [
           "outbox",
           "reconciliation",
+          "delivery_recovery",
           "retention",
           "usage_reservations",
           "checkout_expiry",
@@ -399,11 +433,12 @@ function main(): void {
         async close() {
           // The loops first: each one holds a database or Redis handle, and closing the connection under
           // a running sweep is how shutdown produces errors that look like an outage.
-          // `allSettled`, not `all`: nine independent closes, and `Promise.all` leaves every rejection
+          // `allSettled`, not `all`: ten independent closes, and `Promise.all` leaves every rejection
           // after the first unobserved — which `process-guards.ts` answers by killing the process.
           const stopped = await Promise.allSettled([
             sweeper.close(),
             reconciliationSweeper.close(),
+            deliveryRecovery.close(),
             retention.close(),
             usage.close(),
             billing.close(),

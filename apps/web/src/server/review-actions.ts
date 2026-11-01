@@ -44,7 +44,16 @@ export interface ConversationTarget {
 
 /** What the next render tells the person. Every value is a state the server actually reached. */
 export type ActionOutcome =
-  | "SENT"
+  /**
+   * Accepted and queued — **not** sent (Issue #125).
+   *
+   * This was `SENT`, and it was false in the one way that matters: approving a draft commits a delivery
+   * row and an outbox entry, and the reply leaves later, from another process, after the send checks run
+   * again. Saying "Sent." on persistence alone told an operator a customer had been answered when the
+   * send could still be refused by the kill switch, by a takeover, or by the channel. The compose path
+   * next to it already said "Queued", so the two halves of the same screen disagreed about the same fact.
+   */
+  | "QUEUED"
   | "DISMISSED"
   | "CLAIMED"
   | "TAKEN_OVER"
@@ -109,7 +118,7 @@ async function decide(target: ConversationTarget, draftId: string, action: Revie
 
   switch (outcome.status) {
     case "SCHEDULED":
-      return "SENT";
+      return "QUEUED";
     case "DISMISSED":
       return "DISMISSED";
     case "CLAIMED":
