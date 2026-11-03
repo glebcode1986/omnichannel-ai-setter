@@ -12,7 +12,7 @@ import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
 
 const OUTCOMES = [
-  "SENT",
+  "QUEUED",
   "DISMISSED",
   "CLAIMED",
   "TAKEN_OVER",

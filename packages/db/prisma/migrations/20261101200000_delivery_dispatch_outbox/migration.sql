@@ -1,0 +1,13 @@
+-- A human-approved or human-composed reply now reaches the delivery queue through the same durable
+-- outbox the ingestion side already uses (Issue #125, PILOT_READINESS_AUDIT.md §3.1).
+--
+-- Before this, `resolveApproval` and `composeHumanReply` committed a `delivery_jobs` row with
+-- `status = 'SCHEDULED'` and nothing ever enqueued the BullMQ job that sends it: production enqueues
+-- existed only on the AUTOPILOT path and on reconciliation resume, and the reconciliation sweep selects
+-- `HELD_AMBIGUOUS` rows only. The reply was never sent and the screen said it was.
+--
+-- The outbox is the right vehicle rather than an enqueue beside the commit: `queue_outbox.dedupe_key` is
+-- unique, so a duplicate click adds nothing, and an entry that is committed but not yet dispatched is
+-- retried from PostgreSQL. A direct enqueue after the transaction would lose the work whenever Redis was
+-- unavailable at exactly that moment, which is the case this product cannot afford on a send path.
+ALTER TYPE "OutboxKind" ADD VALUE 'DELIVERY_DISPATCH';

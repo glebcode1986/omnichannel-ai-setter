@@ -1,0 +1,12 @@
+-- Re-dispatching a reply that was stranded by the missing web-to-queue bridge is an auditable act
+-- (Issue #125).
+--
+-- It needs its own kind rather than reusing `AMBIGUOUS_SEND_RESOLVED`, because the two answer opposite
+-- questions. An ambiguous send is one where nobody knows whether the customer received it, and resolving
+-- it must never resend. A stranded `SCHEDULED` row is the other case entirely: it is known *not* to have
+-- been sent, because nothing ever enqueued it. Folding them together would make the audit trail say
+-- "we were unsure" about a send that definitely never left, and would invite the resend rule for
+-- ambiguity to be applied to rows where sending is exactly what is owed.
+--
+-- Written by the recovery sweep, which runs with no person behind it, so the row is `SYSTEM`-actored.
+ALTER TYPE "AuditEventKind" ADD VALUE 'DELIVERY_DISPATCH_RECOVERED';

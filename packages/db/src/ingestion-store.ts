@@ -5,14 +5,7 @@
  * reject rows that would cross them. Idempotency relies on unique constraints with ON CONFLICT DO NOTHING
  * (`skipDuplicates`), so concurrent deliveries of the same event never abort a transaction.
  */
-import type {
-  InboundDebouncePayload,
-  MediaTranscriptionPayload,
-  IngestionStore,
-  IngestionTransaction,
-  OutboxEntry,
-  WebhookAccount,
-} from "@omnichannel/application";
+import type { DeliveryDispatchPayload, InboundDebouncePayload, IngestionStore, IngestionTransaction, MediaTranscriptionPayload, OutboxEntry, WebhookAccount } from "@omnichannel/application";
 
 import { isMessageDeliveryStatus } from "@omnichannel/domain";
 
@@ -93,14 +86,27 @@ export function createIngestionStore(db: DbClient): IngestionStore {
             createdAt: entry.createdAt,
             attempts: entry.attempts,
           };
-          // The payload is JSON the application wrote and only the application validates. The narrowing
-          // is on `kind`, which is a database enum, so an entry cannot be read as the wrong kind of work
-          // however the payload column drifted.
-          claimed.push(
-            entry.kind === "MEDIA_TRANSCRIPTION"
-              ? { ...base, kind: "MEDIA_TRANSCRIPTION", payload: entry.payload as unknown as MediaTranscriptionPayload }
-              : { ...base, kind: "INBOUND_DEBOUNCE", payload: entry.payload as unknown as InboundDebouncePayload },
-          );
+          // The payload is JSON the application wrote and only the application validates. The narrowing is
+          // on `kind`, a database enum, so an entry cannot be read as the wrong kind of work however the
+          // payload column drifted.
+          //
+          // A `switch` rather than the ternary this was, and the ternary was a live defect rather than a
+          // style: its `else` branch labelled **every** non-transcription kind `INBOUND_DEBOUNCE`, so the
+          // `DELIVERY_DISPATCH` entries added for Issue #125 were claimed, relabelled, handed to the
+          // debounce queue and refused there by its payload schema — forever, on retry. An approved reply
+          // would have been committed, claimed and never sent, which is the same silence this kind exists
+          // to end. `switch-exhaustiveness-check` now refuses a fourth kind that nobody narrowed.
+          switch (entry.kind) {
+            case "MEDIA_TRANSCRIPTION":
+              claimed.push({ ...base, kind: "MEDIA_TRANSCRIPTION", payload: entry.payload as unknown as MediaTranscriptionPayload });
+              break;
+            case "DELIVERY_DISPATCH":
+              claimed.push({ ...base, kind: "DELIVERY_DISPATCH", payload: entry.payload as unknown as DeliveryDispatchPayload });
+              break;
+            case "INBOUND_DEBOUNCE":
+              claimed.push({ ...base, kind: "INBOUND_DEBOUNCE", payload: entry.payload as unknown as InboundDebouncePayload });
+              break;
+          }
         }
       }
       return claimed;

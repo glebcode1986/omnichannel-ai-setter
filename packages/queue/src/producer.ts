@@ -58,6 +58,21 @@ export interface QueueProducer {
   schedulePresence(job: PresenceJob, options: { readonly delayMs: number }): Promise<EnqueuedJob>;
   /** Stage B: durable delayed delivery at `job.scheduledFor`; never sleeps in the caller. */
   scheduleDelivery(job: DeliveryJob, options?: RaiseOptions): Promise<EnqueuedJob>;
+  /**
+   * Satisfies `DeliveryDispatchScheduler`, so the outbox dispatcher can hand a committed send to the
+   * delivery queue (Issue #125).
+   *
+   * A named method rather than letting the dispatcher reach for `scheduleDelivery` itself, for the reason
+   * the application layer keeps three separate scheduler ports: the dispatcher must not know which queue a
+   * kind belongs to, and a composition root must not be able to satisfy the type while leaving the send
+   * path wired to nothing — which is the defect this whole change exists to close.
+   *
+   * The `delayMs` the dispatcher computed is deliberately **ignored**. `scheduleDelivery` derives the delay
+   * from `job.scheduledFor`, which is the intent a person actually approved; honouring an outbox delay too
+   * would delay an already-late send a second time. The outbox's delay governs when the *entry* is
+   * dispatched, never when the reply is sent.
+   */
+  scheduleDeliveryDispatch(job: DeliveryJob, options: { readonly delayMs: number }): Promise<EnqueuedJob>;
   enqueueReconciliation(job: ReconciliationJob, options?: RaiseOptions): Promise<EnqueuedJob>;
   close(): Promise<void>;
 }
@@ -156,6 +171,22 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
     return { queueName: family.queueName, jobId, delayMs };
   }
 
+  /**
+   * Stage B delivery, as a named function because two methods share it (Issue #125).
+   *
+   * `scheduleDeliveryDispatch` is the outbox dispatcher's entry point and must land on exactly this body:
+   * the delay a delivery gets is derived here from `scheduledFor` and nowhere else, so a second caller
+   * computing its own would be a second answer to the same question.
+   */
+  async function scheduleDelivery(input: DeliveryJob, options: RaiseOptions = {}): Promise<EnqueuedJob> {
+    const payload = parsePayload(DELIVERY.schema, DELIVERY.jobName, input);
+    // Throws before `add` is reached, so a refused schedule leaves no job behind and touches nothing.
+    // Ordering matters here: the refusal has to happen before anything is cleared, or a resume with an
+    // impossible schedule would remove the retained job and then create nothing in its place.
+    const delayMs = deliveryDelayFor(payload, now());
+    return add(DELIVERY, payload, delayMs, options);
+  }
+
   return {
     async scheduleInboundDebounce(input, { delayMs }) {
       const payload = parsePayload(INBOUND_DEBOUNCE.schema, INBOUND_DEBOUNCE.jobName, input);
@@ -198,14 +229,10 @@ export function createQueueProducer(options: QueueProducerOptions): QueueProduce
       return add(PRESENCE, parsePayload(PRESENCE.schema, PRESENCE.jobName, input), Math.max(0, delayMs));
     },
 
-    async scheduleDelivery(input, options = {}) {
-      const payload = parsePayload(DELIVERY.schema, DELIVERY.jobName, input);
-      // Throws before `add` is reached, so a refused schedule leaves no job behind and touches nothing.
-      // Ordering matters here: the refusal has to happen before anything is cleared, or a resume with an
-      // impossible schedule would remove the retained job and then create nothing in its place.
-      const delayMs = deliveryDelayFor(payload, now());
-      return add(DELIVERY, payload, delayMs, options);
-    },
+    scheduleDelivery,
+
+    // Straight through to the same function, so exactly one place decides a delivery's delay.
+    scheduleDeliveryDispatch: (input) => scheduleDelivery(input),
 
     async enqueueReconciliation(input, options = {}) {
       return add(RECONCILIATION, parsePayload(RECONCILIATION.schema, RECONCILIATION.jobName, input), 0, options);

@@ -150,6 +150,11 @@ describe.skipIf(!databaseTestsEnabled())("the production Instagram webhook ingre
       store: createIngestionStore(database.db),
       adapters: createChannelAdapters({ env, db: database.db, cipher: CIPHER, logger, ...(http === undefined ? {} : { http }) }),
       transcription: { scheduleMediaTranscription: () => Promise.resolve({ jobId: "job_transcribe", queueName: "media-transcription", deduplicated: false }) },
+      // An inbound webhook writes no delivery entry; this satisfies the dispatcher's third kind and
+      // rejects, so a send appearing on this path would fail the suite rather than pass unnoticed.
+      delivery: {
+        scheduleDeliveryDispatch: () => Promise.reject(new Error("no delivery dispatch expected on an inbound webhook")),
+      },
       scheduler: {
         scheduleInboundDebounce: (job) => {
           enqueued.push(job);

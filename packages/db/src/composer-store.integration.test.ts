@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { composeHumanReply, pendingHumanReply } from "./composer-store";
+import { deliveryDispatchDedupeKey } from "./delivery-dispatch";
 import { createMigratedTestDatabase, databaseTestsEnabled, type TestDatabase } from "./testing/database";
 import { seedWorkspace, type SeededProfile, type SeededWorkspace } from "./testing/fixtures";
 
@@ -201,6 +202,35 @@ describe.skipIf(!databaseTestsEnabled())("a human-composed reply", () => {
 
       // The whole point of Option B: a person's words never become a generation.
       expect(await db().aiDraft.count({ where: scope() })).toBe(before);
+    }, 180_000);
+
+    it("queues the reply for delivery in the same transaction as the row", async () => {
+      await clearPending();
+
+      const outcome = await composeHumanReply(db(), profile.context, {
+        conversationId: profile.conversationId,
+        text: "We are open until six today.",
+        reviewMode: "NORMAL",
+        at: AT,
+      });
+
+      expect(outcome).toMatchObject({ status: "SCHEDULED" });
+      // The assertion this file had no form of, and its absence is why the compose half of Issue #125
+      // survived a mutation run with the bridge deleted: nineteen tests passed while a reply a person
+      // wrote reached no queue at all. Everything else here was true of a row that would never be sent.
+      const job = await db().deliveryJobRecord.findFirstOrThrow({
+        where: { ...scope(), humanText: { not: null }, status: "SCHEDULED" },
+        select: { id: true, operationId: true, correlationId: true },
+      });
+      const entry = await db().queueOutbox.findUniqueOrThrow({
+        where: { dedupeKey: deliveryDispatchDedupeKey({ ...scope(), operationId: job.operationId }) },
+        select: { kind: true, delayMs: true, dispatchedAt: true, correlationId: true, payload: true },
+      });
+      expect(entry).toMatchObject({ kind: "DELIVERY_DISPATCH", delayMs: 0, dispatchedAt: null, correlationId: job.correlationId });
+      // No `draftId`: a person's own words have no generation behind them (ADR-018 Option B), and the
+      // conversation is therefore named directly rather than reached through a draft.
+      expect(entry.payload).toMatchObject({ ...scope(), conversationId: profile.conversationId, deliveryJobId: job.id, operationId: job.operationId });
+      expect(entry.payload).not.toHaveProperty("draftId");
     }, 180_000);
 
     it("answers a double submit with the send it already made", async () => {

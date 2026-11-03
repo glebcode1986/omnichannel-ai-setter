@@ -1103,6 +1103,9 @@ enum AuditEventKind {
   TAKEOVER_ENDED
   TEMPLATE_POLICY_CHANGED
   AMBIGUOUS_SEND_RESOLVED
+  /// A reply a person approved that was never enqueued, handed to the queue by the recovery sweep
+  /// (Issue #125). Distinct from `AMBIGUOUS_SEND_RESOLVED`: this one is known not to have been sent.
+  DELIVERY_DISPATCH_RECOVERED
   MEMBER_CHANGED
   /// Somebody read a customer's data out of the product; the read itself is the event (#57).
   DATA_EXPORTED
@@ -1229,6 +1232,10 @@ enum OutboxKind {
   INBOUND_DEBOUNCE
   /// A voice note to read, enqueued in the same transaction as the message it belongs to (Issue #21).
   MEDIA_TRANSCRIPTION
+  /// A reply a person approved or wrote, enqueued in the same transaction as the delivery row it sends
+  /// (Issue #125). Durable rather than enqueued beside the commit, because a send that is committed and
+  /// never queued is the defect this kind exists to close.
+  DELIVERY_DISPATCH
 }
 
 /// How a reading of a customer's recording ended (Issue #21).

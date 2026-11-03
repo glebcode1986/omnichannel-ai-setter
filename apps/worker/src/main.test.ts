@@ -182,6 +182,10 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(startedFields(result.stdout).loops).toEqual([
       "outbox",
       "reconciliation",
+      // `delivery_recovery` joins it with Issue #125, and this assertion is why: the loop is the only
+      // thing that repairs a reply approved before the web-to-queue bridge existed, and a recovery loop
+      // wired to nothing would be indistinguishable from a database with nothing to repair.
+      "delivery_recovery",
       "retention",
       "usage_reservations",
       "checkout_expiry",

@@ -1,4 +1,4 @@
-import type { DebounceScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler } from "./ports";
+import type { DebounceScheduler, DeliveryDispatchScheduler, IngestionStore, LogPort, MediaTranscriptionScheduler } from "./ports";
 import { outboxRetryDelayMs } from "./rules";
 
 export interface OutboxDispatchDependencies {
@@ -12,6 +12,14 @@ export interface OutboxDispatchDependencies {
    * instead leave the entry undispatchable, retrying until its lease expires, forever.
    */
   readonly transcription: MediaTranscriptionScheduler;
+  /**
+   * Where an approved or human-written reply goes (Issue #125).
+   *
+   * Required, like `transcription` and for a sharper reason: a deployment that left this out would accept
+   * every approval, commit every delivery row, and never send one — which is precisely the defect this
+   * dependency was added to make impossible to reintroduce by omission.
+   */
+  readonly delivery: DeliveryDispatchScheduler;
   readonly log: LogPort;
   readonly now: () => Date;
 }
@@ -33,7 +41,7 @@ export async function dispatchOutbox(
   dependencies: OutboxDispatchDependencies,
   options: { readonly ids?: readonly string[]; readonly limit?: number } = {},
 ): Promise<OutboxDispatchResult> {
-  const { store, scheduler, transcription, log, now } = dependencies;
+  const { store, scheduler, transcription, delivery, log, now } = dependencies;
   const claimedAt = now();
   const entries = await store.claimOutboxEntries({
     now: claimedAt,
@@ -56,10 +64,20 @@ export async function dispatchOutbox(
     const delayMs = Math.max(0, entry.createdAt.getTime() + entry.delayMs - current.getTime());
     try {
       // Dispatched by kind, which the union makes exhaustive: a payload cannot reach the wrong queue.
-      if (entry.kind === "MEDIA_TRANSCRIPTION") {
-        await transcription.scheduleMediaTranscription(entry.payload, { delayMs });
-      } else {
-        await scheduler.scheduleInboundDebounce(entry.payload, { delayMs });
+      // A `switch` rather than the `if/else` this was, because the third kind (Issue #125) is a *send*.
+      // With two kinds the `else` was merely terse; with three it would route an approved reply into the
+      // debounce queue, where nothing would ever send it — the same shape of silence this kind exists to
+      // end. `switch-exhaustiveness-check` now also refuses a fourth kind that nobody routed.
+      switch (entry.kind) {
+        case "MEDIA_TRANSCRIPTION":
+          await transcription.scheduleMediaTranscription(entry.payload, { delayMs });
+          break;
+        case "DELIVERY_DISPATCH":
+          await delivery.scheduleDeliveryDispatch(entry.payload, { delayMs });
+          break;
+        case "INBOUND_DEBOUNCE":
+          await scheduler.scheduleInboundDebounce(entry.payload, { delayMs });
+          break;
       }
     } catch (error) {
       failed += 1;

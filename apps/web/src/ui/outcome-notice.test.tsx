@@ -24,7 +24,7 @@ afterEach(cleanup);
 
 describe("the outcome notice", () => {
   it.each([
-    ["SENT", "outcome.SENT"],
+    ["QUEUED", "outcome.QUEUED"],
     ["SEND_CANCELLED", "outcome.SEND_CANCELLED"],
     ["TOO_LATE", "outcome.TOO_LATE"],
     ["STALE", "outcome.STALE"],
@@ -39,8 +39,8 @@ describe("the outcome notice", () => {
     const { rerender } = render(<OutcomeNotice t={t} outcome="TOO_LATE" />);
     expect(document.querySelector('[data-outcome="TOO_LATE"]')?.getAttribute("data-tone")).toBe("stop");
 
-    rerender(<OutcomeNotice t={t} outcome="SENT" />);
-    expect(document.querySelector('[data-outcome="SENT"]')?.getAttribute("data-tone")).toBeNull();
+    rerender(<OutcomeNotice t={t} outcome="QUEUED" />);
+    expect(document.querySelector('[data-outcome="QUEUED"]')?.getAttribute("data-tone")).toBeNull();
   });
 
   it("renders nothing when no action just happened", () => {
@@ -58,9 +58,9 @@ describe("the outcome notice", () => {
   });
 
   it("is announced rather than only shown", () => {
-    render(<OutcomeNotice t={t} outcome="SENT" />);
+    render(<OutcomeNotice t={t} outcome="QUEUED" />);
 
-    expect(screen.getByRole("status").textContent).toBe(text("outcome.SENT"));
+    expect(screen.getByRole("status").textContent).toBe(text("outcome.QUEUED"));
   });
 
   it("distinguishes a send that was stopped from one that was too late to stop", () => {

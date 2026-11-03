@@ -20,6 +20,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
+import { addDeliveryDispatchEntry } from "./delivery-dispatch";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 
 export type ComposeOutcome =
@@ -88,7 +89,7 @@ export async function composeHumanReply(db: DbClient, context: BusinessProfileCo
     }
 
     const operationId = randomUUID();
-    await tx.deliveryJobRecord.create({
+    const delivery = await tx.deliveryJobRecord.create({
       data: {
         ...scope,
         // No draft: the origin is the person's own wording, which the CHECK pairs with their name.
@@ -108,6 +109,20 @@ export async function composeHumanReply(db: DbClient, context: BusinessProfileCo
         approvedReviewMode: input.reviewMode,
         decisionKey,
       },
+      select: { id: true },
+    });
+    // Same transaction as the row, for the same reason as the approval path (Issue #125). A reply a person
+    // wrote themselves was the worse half of that defect: besides never being sent, the abandoned
+    // `SCHEDULED` row satisfied the `activeScheduled` check above, so the conversation could not be
+    // answered again — the operator was told a reply was already in flight, forever.
+    await addDeliveryDispatchEntry(tx, {
+      ...scope,
+      conversationId: input.conversationId,
+      deliveryJobId: delivery.id,
+      operationId,
+      correlationId: operationId,
+      scheduledFor: at,
+      selectedDelayMs: 0,
     });
     // What a person writes themselves is how this business actually sounds, so it is offered to the
     // Style library — as a *suggestion*, because nobody has yet said "sound like that", and one hurried

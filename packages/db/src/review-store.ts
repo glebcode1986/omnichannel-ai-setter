@@ -30,6 +30,7 @@ import type { Actor, SendAuthority } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
+import { addDeliveryDispatchEntry } from "./delivery-dispatch";
 import { profileScopeOf, type BusinessProfileContext } from "./tenancy";
 import { DbInputError } from "./errors";
 import { suggestStyleExample } from "./style-store";
@@ -132,7 +133,7 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
         }
 
         const operationId = randomUUID();
-        await tx.deliveryJobRecord.create({
+        const delivery = await tx.deliveryJobRecord.create({
           data: {
             ...scope,
             draftId,
@@ -144,6 +145,21 @@ export function createReviewStore(db: DbClient, context: BusinessProfileContext)
             selectedDelayMs: 0,
             ...authorityFieldsFor(authority, decisionKey),
           },
+          select: { id: true },
+        });
+        // The delivery row and the intent to send it commit together (Issue #125). Without this entry the
+        // row sat `SCHEDULED` and no worker ever claimed it: the only production enqueues are the AUTOPILOT
+        // path and reconciliation resume, and the reconciliation sweep selects `HELD_AMBIGUOUS` alone. The
+        // screen said the reply was sent and nothing had been.
+        await addDeliveryDispatchEntry(tx, {
+          ...scope,
+          conversationId,
+          draftId,
+          deliveryJobId: delivery.id,
+          operationId,
+          correlationId: operationId,
+          scheduledFor: at,
+          selectedDelayMs: 0,
         });
         await tx.aiDraft.update({ where: draftKey(draftId), data: { status: "SCHEDULED" } });
         // Approving a reply is taking the conversation: the person who just spoke for the business owns it.

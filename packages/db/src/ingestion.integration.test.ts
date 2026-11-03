@@ -6,6 +6,7 @@ import {
   type IngestionDependencies,
   type IngestionStore,
   type LogPort,
+  type DeliveryDispatchPayload,
   type MediaTranscriptionPayload,
   type WebhookIngestionResult,
 } from "@omnichannel/application";
@@ -37,6 +38,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
   let logs: LogLine[];
   let scheduled: { job: InboundDebouncePayload; delayMs: number }[];
   let transcribed: { job: MediaTranscriptionPayload; delayMs: number }[];
+  let dispatchedDeliveries: { job: DeliveryDispatchPayload; delayMs: number }[];
   let schedulerFailure: Error | undefined;
   let normalizeCalls: number;
   let sequence = 0;
@@ -56,6 +58,7 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
     logs = [];
     scheduled = [];
     transcribed = [];
+    dispatchedDeliveries = [];
     schedulerFailure = undefined;
     normalizeCalls = 0;
   });
@@ -92,6 +95,17 @@ describe.skipIf(!databaseTestsEnabled())("webhook ingestion (PostgreSQL)", () =>
             return Promise.reject(schedulerFailure);
           }
           transcribed.push({ job, delayMs });
+          return Promise.resolve();
+        },
+      },
+      // Ingestion writes no delivery entry, so this records rather than asserts: if a dispatch ever
+      // appears on an inbound path it belongs in a test that says so, not in a silent stub (Issue #125).
+      delivery: {
+        scheduleDeliveryDispatch: (job, { delayMs }) => {
+          if (schedulerFailure !== undefined) {
+            return Promise.reject(schedulerFailure);
+          }
+          dispatchedDeliveries.push({ job, delayMs });
           return Promise.resolve();
         },
       },
