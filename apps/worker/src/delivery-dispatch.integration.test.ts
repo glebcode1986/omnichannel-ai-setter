@@ -256,7 +256,11 @@ describe.skipIf(!endToEndTestsEnabled())("delivery dispatch through the outbox (
     expect(job).toBeDefined();
     expect(job?.data).toMatchObject({ operationId: send.operationId, deliveryJobId: send.deliveryJobId, conversationId });
     // And the entry is marked done, so the next sweep does not raise it again.
-    expect(await entryFor(send.operationId)).toMatchObject({ dispatchedAt: expect.any(Date) });
+    // `dispatchedAt` read directly rather than through `expect.any(Date)`, which returns `any` and trips
+    // `no-unsafe-assignment`. Reading the field is also the stronger assertion: it is a date, not merely
+    // something shaped like one.
+    const done = await entryFor(send.operationId);
+    expect(done?.dispatchedAt).toBeInstanceOf(Date);
   }, 180_000);
 
   it("keeps the send when the queue is unavailable, and sends it on the next sweep", async () => {
@@ -298,7 +302,11 @@ describe.skipIf(!endToEndTestsEnabled())("delivery dispatch through the outbox (
     const counts = await deliveryQueue.getJobCounts("waiting", "delayed", "active", "completed");
     const total = Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0);
     expect(total).toBe(1);
-    expect(await entryFor(send.operationId)).toMatchObject({ dispatchedAt: expect.any(Date) });
+    // `dispatchedAt` read directly rather than through `expect.any(Date)`, which returns `any` and trips
+    // `no-unsafe-assignment`. Reading the field is also the stronger assertion: it is a date, not merely
+    // something shaped like one.
+    const done = await entryFor(send.operationId);
+    expect(done?.dispatchedAt).toBeInstanceOf(Date);
   }, 180_000);
 
   it("dispatches a reply the recovery sweep rescued, end to end", async () => {
