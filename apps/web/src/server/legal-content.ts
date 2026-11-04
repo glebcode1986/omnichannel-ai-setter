@@ -116,17 +116,17 @@ export function resolveDocument(blocks: readonly LegalBlock[], env: WebEnv): Res
     if (block.kind === "break") {
       return block;
     }
+    // Spread the block and override only what resolution touches. Listing the fields instead is how a
+    // field added later is dropped in silence: the paragraph's `sub` flag was lost exactly that way, and
+    // every lettered sub-clause rendered flush with the clause above it.
     if (block.kind === "table") {
       return {
-        kind: "table",
+        ...block,
         head: block.head.map((cell) => fillAll(cell, env, missing)),
         rows: block.rows.map((row) => row.map((cell) => fillAll(cell, env, missing))),
       };
     }
-    if (block.kind === "heading") {
-      return { kind: "heading", level: block.level, content: fillAll(block.content, env, missing) };
-    }
-    return { kind: block.kind, content: fillAll(block.content, env, missing) };
+    return { ...block, content: fillAll(block.content, env, missing) };
   });
   return {
     blocks: resolved,

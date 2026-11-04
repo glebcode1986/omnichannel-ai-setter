@@ -42,7 +42,12 @@ export type Inline = InlineText | InlineLink | InlineGap;
 
 export type LegalBlock =
   | { readonly kind: "heading"; readonly level: 1 | 2; readonly content: readonly Inline[] }
-  | { readonly kind: "paragraph"; readonly content: readonly Inline[] }
+  | {
+      readonly kind: "paragraph";
+      readonly content: readonly Inline[];
+      /** A lettered sub-clause — `(a)`, `(б)` — which is its own paragraph and is indented as one. */
+      readonly sub?: boolean;
+    }
   | { readonly kind: "quote"; readonly content: readonly Inline[] }
   | { readonly kind: "break" }
   | { readonly kind: "table"; readonly head: readonly (readonly Inline[])[]; readonly rows: readonly (readonly (readonly Inline[])[])[] };
@@ -56,6 +61,15 @@ export class UnknownMarkdownError extends Error {
 }
 
 const HEADING = /^(?<hashes>#{1,2}) +(?<text>\S.*)$/u;
+/**
+ * A lettered sub-clause opener: indented, then `(a)` or `(б)`.
+ *
+ * It needs its own rule because these documents separate sub-clauses by indentation alone, with no blank
+ * line between them — so joining lines until a blank one ran `(a)` and `(b)` together into a single
+ * paragraph, and the two halves of a definition read as one sentence. Both alphabets, because the
+ * Russian translation uses `(а)` `(б)` `(в)` `(г)`, which look like Latin letters and are not.
+ */
+const SUB_CLAUSE = /^\s+\([\p{Letter}\p{Number}]{1,4}\)\s/u;
 const TABLE_DIVIDER = /^\|(?: *:?-{2,}:? *\|)+$/u;
 /** `**bold**`, `` `code` ``, `[text](href)` — longest-first so a link inside bold is not split wrongly. */
 const INLINE = /\*\*(?<bold>[^*]+)\*\*|`(?<code>[^`]+)`|\[(?<text>[^\]]+)\]\((?<href>[^)]+)\)/gu;
@@ -99,10 +113,17 @@ export function parseLegalMarkdown(source: string): readonly LegalBlock[] {
   const blocks: LegalBlock[] = [];
   let paragraph: string[] = [];
 
+  let paragraphIsSub = false;
+
   const flush = (): void => {
     if (paragraph.length > 0) {
-      blocks.push({ kind: "paragraph", content: parseInline(paragraph.join(" ")) });
+      blocks.push({
+        kind: "paragraph",
+        content: parseInline(paragraph.join(" ")),
+        ...(paragraphIsSub ? { sub: true } : {}),
+      });
       paragraph = [];
+      paragraphIsSub = false;
     }
   };
 
@@ -114,6 +135,12 @@ export function parseLegalMarkdown(source: string): readonly LegalBlock[] {
     if (line.trim() === "") {
       flush();
       continue;
+    }
+
+    // A sub-clause starts its own paragraph even though no blank line precedes it.
+    if (SUB_CLAUSE.test(line)) {
+      flush();
+      paragraphIsSub = true;
     }
 
     const heading = HEADING.exec(line.trim());

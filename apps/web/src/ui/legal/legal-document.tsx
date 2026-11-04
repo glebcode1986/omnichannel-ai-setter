@@ -101,7 +101,7 @@ export function LegalDocument({ blocks, t }: { readonly blocks: readonly LegalBl
           );
         }
         return (
-          <p key={key}>
+          <p key={key} className={block.sub === true ? "legal-sub" : undefined}>
             <Runs content={block.content} t={t} />
           </p>
         );

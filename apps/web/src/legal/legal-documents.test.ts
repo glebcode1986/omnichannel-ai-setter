@@ -175,6 +175,44 @@ describe("the published legal documents", () => {
     expect(published("terms-of-service", "en")).toContain("{{PRODUCT_NAME}}");
   });
 
+  it("gives every lettered sub-clause its own paragraph", () => {
+    // These documents separate `(a)` from `(b)` by indentation alone, with no blank line, so a parser
+    // that joins lines until a blank one ran the two halves of a definition together into one
+    // sentence — which is how it first reached the live page.
+    let subs = 0;
+    for (const { locale, name } of everyDocument) {
+      const blocks = parseLegalMarkdown(published(name, locale));
+      const paragraphs = blocks.filter((block) => block.kind === "paragraph");
+      for (const block of paragraphs) {
+        if (block.kind !== "paragraph") {
+          continue;
+        }
+        const text = block.content.map((run) => run.value).join("");
+        // Both alphabets: the Russian translation uses (а)(б)(в)(г), which look Latin and are not.
+        const openers = [...text.matchAll(/\((?<marker>[\p{Letter}])\)\s/gu)];
+        expect(openers.length, `a paragraph in ${locale}/${name} merged sub-clauses: ${text.slice(0, 90)}`)
+          .toBeLessThan(2);
+        if (block.sub === true) {
+          subs += 1;
+          expect(text.trimStart(), `${locale}/${name}`).toMatch(/^\([\p{Letter}\p{Number}]{1,4}\)\s/u);
+        }
+      }
+    }
+    // The vacuity guard, measured: 18 markers across the four documents, so every one became its own
+    // paragraph. A parser that stopped marking them would report zero and pass the loop above.
+    expect(subs).toBe(18);
+  });
+
+  it("keeps the sub-clause flag through placeholder resolution", () => {
+    // The flag is set by the parser and the resolver rebuilds every block. A resolver that listed the
+    // fields it copies would drop this one in silence, and the page would look exactly as it did before
+    // the parser was fixed.
+    const env = loadWebEnv(baseEnv);
+    const resolved = resolveDocument(parseLegalMarkdown(published("privacy-policy", "en")), env);
+    const subs = resolved.blocks.filter((block) => block.kind === "paragraph" && block.sub === true);
+    expect(subs.length).toBeGreaterThan(0);
+  });
+
   it("refuses a syntax it does not carry rather than dropping the line", () => {
     // The reason the parser throws at all. A renderer that ignored this line would publish a document
     // with a clause missing and nothing on the page to say so.
