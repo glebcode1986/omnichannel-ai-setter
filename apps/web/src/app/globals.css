@@ -1838,3 +1838,96 @@ details[open] > summary::before {
     flex: 1 1 10rem;
   }
 }
+
+/* ── Публичная главная ──────────────────────────────────────────────────────────────────────
+   Своих цветов и размеров здесь нет: только токены, иначе первый экран начнёт расходиться
+   с продуктом, в который он ведёт. Ширина текста ограничена отдельно от `--content-max`:
+   строка в 1360px читается плохо, а карточки при этом должны занимать всю доступную ширину. */
+.landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6, 32px);
+}
+
+.landing-hero h1 {
+  font-size: var(--text-xl);
+  margin: 0 0 var(--space-3, 8px);
+}
+
+.landing-lead {
+  /* ~65 символов в строке. `ch` привязан к шрифту, поэтому не разъезжается при смене размера. */
+  max-width: 62ch;
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-4, 16px);
+}
+
+.landing-actions {
+  margin: 0 0 var(--space-3, 8px);
+}
+
+.landing-section > h2 {
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-3, 8px);
+}
+
+.landing-section > p.muted {
+  max-width: 62ch;
+  margin: 0 0 var(--space-4, 16px);
+}
+
+.landing-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.landing-list h3,
+.landing-steps h3 {
+  font-size: var(--text-m);
+  margin: 0 0 var(--space-2, 4px);
+}
+
+.landing-list p,
+.landing-steps p {
+  margin: 0;
+}
+
+/* Нумерация своя, а не маркерами списка: цифра должна стоять в колонке и не прыгать от длины
+   заголовка. `ol` остаётся `ol` — порядок шагов это смысл, а не оформление. */
+.landing-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--gap);
+  counter-reset: landing-step;
+}
+
+.landing-steps > li {
+  counter-increment: landing-step;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-3, 12px);
+  align-items: start;
+  max-width: 72ch;
+}
+
+.landing-steps > li::before {
+  content: counter(landing-step);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  font-variant-numeric: tabular-nums;
+}
+
+.landing-closing {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-5, 24px);
+}
