@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { createTranslator } from "@/i18n/translate";
 import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
+import { CancelWindow } from "@/ui/landing/cancel-window";
 
 /**
  * The product's front door, for somebody who has never heard of it.
@@ -99,23 +100,25 @@ export default async function HomePage() {
             <p className="landing-note">{t.t("landing.status")}</p>
           </div>
 
-          <div className="landing-figure" aria-hidden="true">
-            <div className="landing-bubble" data-who="customer">
-              <span className="landing-bubble-label">{t.t("landing.figureCustomerLabel")}</span>
-              {t.t("landing.figureCustomerText")}
-            </div>
-            <div className="landing-bubble" data-who="draft">
-              <span className="landing-bubble-label">{t.t("landing.figureDraftLabel")}</span>
-              {t.t("landing.figureDraftText")}
-            </div>
-            <div className="landing-figure-actions">
-              <span className="landing-pill" data-variant="go">
-                {t.t("landing.figureApprove")}
-              </span>
-              <span className="landing-pill">{t.t("landing.figureEdit")}</span>
-            </div>
-            <p className="landing-note">{t.t("landing.figureWhy")}</p>
-          </div>
+          <CancelWindow
+            copy={{
+              customerLabel: t.t("landing.figureCustomerLabel"),
+              customerText: t.t("landing.figureCustomerText"),
+              draftLabel: t.t("landing.figureDraftLabel"),
+              draftText: t.t("landing.figureDraftText"),
+              why: t.t("landing.figureWhy"),
+              typing: t.t("landing.demoTyping"),
+              // One sentence per second the countdown can show, interpolated here because the component
+              // cannot be handed a translator: functions do not cross the server/client boundary.
+              waiting: Array.from({ length: 11 }, (_unused, seconds) => t.t("landing.demoWaiting", { seconds })),
+              cancel: t.t("landing.demoCancel"),
+              sent: t.t("landing.demoSent"),
+              cancelled: t.t("landing.demoCancelled"),
+              replay: t.t("landing.demoReplay"),
+              hint: t.t("landing.demoHint"),
+              region: t.t("landing.demoRegion"),
+            }}
+          />
         </div>
       </section>
 
