@@ -1,3 +1,13 @@
+/* Tailwind, without its reset.
+   `preflight.css` is deliberately not imported: it would restyle every screen in the product, and six
+   gate tests read this file as text to measure what those screens do. Theme and utilities only, so the
+   landing can use utility classes while nothing already shipped moves.
+   Layer order declared first so utilities win over the hand-written rules below, which is the whole
+   point of using them on one page. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 /*
  * The product shell's own stylesheet.
  *
@@ -46,6 +56,14 @@
   --shadow-1: 0 1px 2px rgb(16 20 26 / 6%);
   --shadow-2: 0 2px 8px rgb(16 20 26 / 8%);
   --field-height: 38px;
+
+  /* The product had no font-family at all and rendered in whatever the browser defaults to. One
+     typeface, loaded from our own origin by `next/font`; the stack behind it is what shows while the
+     file is still arriving. Inter and Helvetica are deliberately absent. */
+  /* `--font-geist` is set by `next/font` on <html>. Referencing it rather than naming the family here
+     keeps one source of truth: next/font generates its own family name and a hard-coded "Geist" would
+     silently differ from it. The stack behind it is what shows while the file is still arriving. */
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
 
   /* Публичная главная. Отдельные поверхности, потому что первый экран живёт по другим правилам,
      чем рабочий интерфейс: ему нужен контраст между полосами, а не ровный фон под таблицы.
@@ -2224,4 +2242,10 @@ details[open] > summary::before {
     opacity: 1;
     transform: none;
   }
+}
+
+/* The one place the typeface is applied. Declared at the end so it lands after every block above that
+   might otherwise set a family, and inherited by everything rather than repeated per component. */
+body {
+  font-family: var(--font-sans);
 }
