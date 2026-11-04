@@ -46,6 +46,13 @@
   --shadow-1: 0 1px 2px rgb(16 20 26 / 6%);
   --shadow-2: 0 2px 8px rgb(16 20 26 / 8%);
   --field-height: 38px;
+
+  /* Публичная главная. Отдельные поверхности, потому что первый экран живёт по другим правилам,
+     чем рабочий интерфейс: ему нужен контраст между полосами, а не ровный фон под таблицы.
+     Объявлены здесь, а не в блоке лендинга, чтобы `a11y/contrast.test.ts` их увидел и проверил
+     пары text/hero и text-muted/hero — он читает только `:root`. */
+  --landing-hero: #f2f5fb;
+  --landing-band: #eef1f6;
   --content-max: 1360px;
 }
 
@@ -59,6 +66,8 @@
     --text: #eef1f5;
     --text-muted: #a6b0bd;
     --accent: #7aa2ff;
+    --landing-hero: #10141b;
+    --landing-band: #11151b;
     --accent-contrast: #0e1013;
     --ok: #62d29a;
     --warn: #e0b054;
@@ -1840,94 +1849,379 @@ details[open] > summary::before {
 }
 
 /* ── Публичная главная ──────────────────────────────────────────────────────────────────────
-   Своих цветов и размеров здесь нет: только токены, иначе первый экран начнёт расходиться
-   с продуктом, в который он ведёт. Ширина текста ограничена отдельно от `--content-max`:
-   строка в 1360px читается плохо, а карточки при этом должны занимать всю доступную ширину. */
+   Первый экран живёт по другим правилам, чем рабочий интерфейс. Внутри продукта шрифт мелкий и
+   плотный, потому что его читают весь день; здесь человек читает один раз и решает, стоит ли
+   заходить. Поэтому своя шкала кегля и свой ритм — но ни одного своего цвета: все поверхности
+   это токены, объявленные в `:root`, чтобы контрастный шлюз мог их посчитать.
+
+   Весь декор помечен aria-hidden и лежит под контентом: ни одна буква не стоит на градиенте,
+   потому что контраст над градиентом шлюз проверить не может, а значит и полагаться на него
+   нельзя. */
+
 .landing {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6, 32px);
+  /* Шире продуктового `--content-max`: полосы должны доходить до краёв. */
+  max-width: none;
+  padding: 0;
+  display: block;
 }
 
-.landing-hero h1 {
-  font-size: var(--text-xl);
-  margin: 0 0 var(--space-3, 8px);
+.landing-band {
+  padding: clamp(40px, 7vw, 88px) var(--space-5);
+}
+
+.landing-band > * {
+  max-width: 1100px;
+  margin-inline: auto;
+}
+
+.landing-band[data-tone="hero"] {
+  background: var(--landing-hero);
+  position: relative;
+  overflow: hidden;
+}
+
+.landing-band[data-tone="alt"] {
+  background: var(--landing-band);
+}
+
+/* Мягкое свечение за героем. Чисто декоративное: текст стоит на сплошном `--landing-hero`,
+   а это пятно лежит ниже и по краям. */
+.landing-glow {
+  position: absolute;
+  inset: -40% -10% auto -10%;
+  height: 90%;
+  background: radial-gradient(60% 60% at 30% 40%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.landing-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: clamp(32px, 5vw, 64px);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+@media (min-width: 1000px) {
+  .landing-hero-inner {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  }
+}
+
+.landing-wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-m);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-4);
+}
+
+.landing-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  font-weight: 400;
+  margin: 0;
+}
+
+.landing-eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.landing h1 {
+  /* Своя шкала: продуктовый --text-xl в 26px для первого экрана слишком мелок. */
+  font-size: clamp(34px, 5.2vw, 60px);
+  line-height: 1.06;
+  letter-spacing: -0.025em;
+  margin: 0 0 var(--space-4);
+  max-width: 16ch;
 }
 
 .landing-lead {
-  /* ~65 символов в строке. `ch` привязан к шрифту, поэтому не разъезжается при смене размера. */
-  max-width: 62ch;
-  font-size: var(--text-l);
-  margin: 0 0 var(--space-4, 16px);
+  font-size: clamp(17px, 1.6vw, 21px);
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 52ch;
+  margin: 0 0 var(--space-5);
 }
 
 .landing-actions {
-  margin: 0 0 var(--space-3, 8px);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin: 0 0 var(--space-4);
 }
 
-.landing-section > h2 {
-  font-size: var(--text-l);
-  margin: 0 0 var(--space-3, 8px);
-}
-
-.landing-section > p.muted {
-  max-width: 62ch;
-  margin: 0 0 var(--space-4, 16px);
-}
-
-.landing-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.landing-list h3,
-.landing-steps h3 {
+.landing-actions .button {
+  min-height: 46px;
+  padding: 0 var(--space-5);
   font-size: var(--text-m);
-  margin: 0 0 var(--space-2, 4px);
 }
 
-.landing-list p,
-.landing-steps p {
+.landing-note {
+  font-size: var(--text-s);
+  color: var(--text-muted);
   margin: 0;
 }
 
-/* Нумерация своя, а не маркерами списка: цифра должна стоять в колонке и не прыгать от длины
-   заголовка. `ol` остаётся `ol` — порядок шагов это смысл, а не оформление. */
-.landing-steps {
+/* ── Иллюстрация потока ─────────────────────────────────────────────────────────────────────
+   Не скриншот и не подделка под него: это та же дизайн-система, собранная в три карточки,
+   которые показывают путь одного ответа. Помечена aria-hidden — для читателя с экранным
+   диктором тот же смысл несут нумерованные шаги ниже, и дублировать его нечем. */
+.landing-figure {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: calc(var(--radius) * 1.6);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+}
+
+.landing-bubble {
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-s);
+  line-height: 1.5;
+  border: 1px solid var(--border);
+}
+
+.landing-bubble[data-who="customer"] {
+  background: var(--surface-sunken);
+  justify-self: start;
+  max-width: 82%;
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.landing-bubble[data-who="draft"] {
+  background: var(--surface);
+  justify-self: end;
+  max-width: 88%;
+  border-bottom-right-radius: var(--radius-sm);
+  border-color: var(--accent);
+}
+
+.landing-bubble-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.landing-figure-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-s);
+  color: var(--text-muted);
+}
+
+.landing-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.landing-pill[data-variant="go"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+/* ── Секции ────────────────────────────────────────────────────────────────────────────────── */
+
+.landing-band h2 {
+  font-size: clamp(23px, 2.6vw, 32px);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 var(--space-3);
+}
+
+.landing-band > p.landing-sub {
+  max-width: 58ch;
+  color: var(--text-muted);
+  font-size: var(--text-m);
+  margin: 0 0 var(--space-5);
+}
+
+.landing-grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--gap);
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.landing-grid > li {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+}
+
+.landing-grid h3 {
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-2);
+  letter-spacing: -0.01em;
+}
+
+.landing-grid p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.landing-grid > li[data-featured="true"] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+
+/* ── Шаги: вертикальная линия, а не маркеры ──────────────────────────────────────────────────
+   Три grid-элемента на две колонки — `::before`, `h3` и `p`. Без явной колонки у двух последних
+   абзац уезжает в колонку с цифрой: именно так это и выглядело на живом стенде, при валидной
+   разметке и зелёных тестах. Видно только в браузере. */
+.landing-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   counter-reset: landing-step;
+  display: grid;
+  gap: 0;
+  max-width: 68ch;
 }
 
 .landing-steps > li {
   counter-increment: landing-step;
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--space-3, 12px);
-  align-items: start;
-  max-width: 72ch;
+  /* `auto`, not a width. The circle is 34px and sizes its own column, so the result is identical — but a
+     track carrying a length is a track that cannot shrink on a phone, which `responsive/breakpoints.test.ts`
+     refuses outright for anything that is not the shell or the Inbox. It caught this one. */
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-4);
+  padding-bottom: var(--space-5);
+  position: relative;
+}
+
+.landing-steps > li:last-child {
+  padding-bottom: 0;
 }
 
 .landing-steps > li::before {
   content: counter(landing-step);
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
   border-radius: 999px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
   font-size: var(--text-s);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  z-index: 1;
 }
 
+/* Линия, соединяющая кружки. Не у последнего. */
+.landing-steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 34px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.landing-steps h3 {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-2);
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  letter-spacing: -0.01em;
+}
+
+.landing-steps p {
+  grid-column: 2;
+  grid-row: 2;
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* ── Финал ─────────────────────────────────────────────────────────────────────────────────── */
+
 .landing-closing {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-5, 24px);
+  text-align: center;
+}
+
+.landing-closing .landing-sub {
+  margin-inline: auto;
+}
+
+.landing-closing .landing-actions {
+  justify-content: center;
+}
+
+/* ── Появление ──────────────────────────────────────────────────────────────────────────────
+   Только при `no-preference`: требование сквозное по продукту. Без JS — чистая анимация при
+   загрузке, поэтому содержимое видно и когда скрипты не исполнились. */
+@media (prefers-reduced-motion: no-preference) {
+  .landing-band > * {
+    animation: landing-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .landing-band[data-tone="hero"] .landing-lead {
+    animation-delay: 60ms;
+  }
+
+  .landing-band[data-tone="hero"] .landing-actions {
+    animation-delay: 120ms;
+  }
+
+  .landing-figure {
+    animation: landing-rise 640ms cubic-bezier(0.22, 1, 0.36, 1) 160ms both;
+  }
+}
+
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }

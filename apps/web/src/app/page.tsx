@@ -1,30 +1,42 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 
-import { requestTranslator } from "@/i18n/request-locale";
+import { createTranslator } from "@/i18n/translate";
+import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
 
 /**
  * The product's front door, for somebody who has never heard of it.
  *
- * It used to be a title, one sentence and a button — a Phase 1 scaffold that said the product's name and
- * nothing a reader could decide anything from. The two screens a visitor could actually reach were this
- * one and a sign-in page reporting that no sign-in method is configured, so the only thing the product
- * said about itself in public was its own name.
+ * It used to be a title, one sentence and a button — a Phase 1 scaffold. The only other page a visitor
+ * could reach reports that no sign-in method is configured, so in public the product said its own name
+ * and stopped, while twenty-five screens of it sat behind a door nobody was told about.
  *
- * **Every claim here is one the code makes good on**, which is the whole constraint this page is written
- * under. Debouncing several messages into one thought, two separate libraries for facts and for tone,
- * the three modes, takeover cancelling a scheduled reply, the kill switch holding rather than discarding,
- * supersession withdrawing a reply the customer has overtaken, the randomized delay and the one-send
- * guarantee, the audit trail — each is a behaviour with a test, not a promise. Nothing is listed here
- * that a reader could sign up for and not find, and the beta's limits are stated rather than buried:
- * invitation-only, free, payments off.
+ * **Every claim here is a behaviour with a test behind it**, which is the constraint the page is written
+ * under: several messages waited out and read as one thought, two separate libraries for facts and for
+ * tone, the three modes, takeover cancelling a reply already scheduled, the kill switch holding work
+ * rather than discarding it, a reply withdrawn when the customer overtakes it, the uneven delay and the
+ * one-send guarantee, and the audit of drafts, decisions and sends. Nothing is listed that a reader could
+ * sign up for and not find, and the beta's limits are stated at the top rather than buried at the bottom.
  *
- * Built from the product's own design primitives — `shell-main`, `card-grid`, `card`, `button` — rather
- * than a separate marketing stylesheet, so the first screen a person sees already looks like the thing
- * they are about to use. Localized like every other surface; this is the most visible possible place to
- * leave untranslated English.
+ * Its own type scale and bands, unlike every other screen. The product's shell is deliberately dense
+ * because it is read all day; a first screen is read once, by somebody deciding whether to bother. What
+ * it does *not* get is its own colours: both bands are tokens on `:root`, so `a11y/contrast.test.ts` can
+ * compute them in each theme — a band written inline here would be invisible to that gate. Nothing is set
+ * over the hero's glow for the same reason: contrast over a gradient is the one thing the gate admits it
+ * cannot judge, so no text relies on it.
+ *
+ * The flow illustration is `aria-hidden` and carries no information of its own: it stages the same four
+ * steps the ordered list below states in words, so a reader using a screen reader loses nothing, and it
+ * is built from the product's real primitives rather than being a screenshot or a mock-up of one.
  */
 export default async function HomePage() {
-  const t = await requestTranslator();
+  // The public surface's own language choice, the same one `sign-in/page.tsx` reads, and for the reason
+  // its comment gives: `requestTranslator()` resolves a *signed-in* user's stored preference and falls
+  // back to English, which is right for a page behind the door and wrong for the one in front of it.
+  // Using it here meant a reader who had already picked Russian on sign-in came back to an English
+  // landing page — the two most public screens in the product disagreeing about their own language.
+  const store = await cookies();
+  const t = createTranslator(publicLocaleOf(store.get(PUBLIC_LOCALE_COOKIE)?.value));
 
   const channels = [
     { key: "instagram", title: t.t("landing.channelInstagram"), body: t.t("landing.channelInstagramBody") },
@@ -39,9 +51,10 @@ export default async function HomePage() {
   ];
 
   const modes = [
-    { key: "OFF", title: t.t("aiMode.OFF"), body: t.t("landing.modeOffBody") },
-    { key: "DRAFT", title: t.t("aiMode.DRAFT"), body: t.t("landing.modeDraftBody") },
-    { key: "AUTOPILOT", title: t.t("aiMode.AUTOPILOT"), body: t.t("landing.modeAutopilotBody") },
+    { key: "OFF", title: t.t("aiMode.OFF"), body: t.t("landing.modeOffBody"), featured: false },
+    // Highlighted because it is where a pilot starts, which the body text says in words as well.
+    { key: "DRAFT", title: t.t("aiMode.DRAFT"), body: t.t("landing.modeDraftBody"), featured: true },
+    { key: "AUTOPILOT", title: t.t("aiMode.AUTOPILOT"), body: t.t("landing.modeAutopilotBody"), featured: false },
   ];
 
   const controls = [
@@ -63,81 +76,112 @@ export default async function HomePage() {
 
   return (
     <main className="shell-main landing">
-      <header className="landing-hero">
-        <h1>{t.t("landing.title")}</h1>
-        <p className="landing-lead">{t.t("landing.lead")}</p>
-        <p className="landing-actions">
-          <Link className="button" data-variant="primary" href="/sign-in">
-            {t.t("landing.signIn")}
-          </Link>
-        </p>
-        <p className="muted">{t.t("landing.status")}</p>
-      </header>
+      <section className="landing-band" data-tone="hero">
+        <div className="landing-glow" aria-hidden="true" />
+        <div className="landing-hero-inner">
+          <div>
+            <p className="landing-wordmark">
+              {t.t("landing.title")}
+              <span className="landing-eyebrow">{t.t("landing.badge")}</span>
+            </p>
+            {/* The headline is the promise, not the brand: a name alone tells a stranger nothing, and the
+                wordmark above already says what this is called. */}
+            <h1>{t.t("landing.lead")}</h1>
+            <p className="landing-lead">{t.t("landing.heroSupport")}</p>
+            <p className="landing-actions">
+              <Link className="button" data-variant="primary" href="/sign-in">
+                {t.t("landing.signIn")}
+              </Link>
+              <Link className="button" href="#how">
+                {t.t("landing.howItWorks")}
+              </Link>
+            </p>
+            <p className="landing-note">{t.t("landing.status")}</p>
+          </div>
 
-      <section className="landing-section" aria-labelledby="landing-channels">
+          <div className="landing-figure" aria-hidden="true">
+            <div className="landing-bubble" data-who="customer">
+              <span className="landing-bubble-label">{t.t("landing.figureCustomerLabel")}</span>
+              {t.t("landing.figureCustomerText")}
+            </div>
+            <div className="landing-bubble" data-who="draft">
+              <span className="landing-bubble-label">{t.t("landing.figureDraftLabel")}</span>
+              {t.t("landing.figureDraftText")}
+            </div>
+            <div className="landing-figure-actions">
+              <span className="landing-pill" data-variant="go">
+                {t.t("landing.figureApprove")}
+              </span>
+              <span className="landing-pill">{t.t("landing.figureEdit")}</span>
+            </div>
+            <p className="landing-note">{t.t("landing.figureWhy")}</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-band" aria-labelledby="landing-channels">
         <h2 id="landing-channels">{t.t("landing.channelsTitle")}</h2>
-        <p className="muted">{t.t("landing.channelsLead")}</p>
-        <ul className="card-grid landing-list">
+        <ul className="landing-grid">
           {channels.map((channel) => (
-            <li className="card" key={channel.key}>
+            <li key={channel.key}>
               <h3>{channel.title}</h3>
-              <p className="muted">{channel.body}</p>
+              <p>{channel.body}</p>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="landing-section" aria-labelledby="landing-how">
+      <section className="landing-band" data-tone="alt" id="how" aria-labelledby="landing-how">
         <h2 id="landing-how">{t.t("landing.howTitle")}</h2>
         <ol className="landing-steps">
           {steps.map((step) => (
             <li key={step.key}>
               <h3>{step.title}</h3>
-              <p className="muted">{step.body}</p>
+              <p>{step.body}</p>
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="landing-section" aria-labelledby="landing-modes">
+      <section className="landing-band" aria-labelledby="landing-modes">
         <h2 id="landing-modes">{t.t("landing.modesTitle")}</h2>
-        <ul className="card-grid landing-list">
+        <ul className="landing-grid">
           {modes.map((mode) => (
-            <li className="card" key={mode.key}>
+            <li key={mode.key} data-featured={mode.featured ? "true" : undefined}>
               <h3>{mode.title}</h3>
-              <p className="muted">{mode.body}</p>
+              <p>{mode.body}</p>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="landing-section" aria-labelledby="landing-control">
+      <section className="landing-band" data-tone="alt" aria-labelledby="landing-control">
         <h2 id="landing-control">{t.t("landing.controlTitle")}</h2>
-        <ul className="card-grid landing-list">
+        <ul className="landing-grid">
           {controls.map((control) => (
-            <li className="card" key={control.key}>
+            <li key={control.key}>
               <h3>{control.title}</h3>
-              <p className="muted">{control.body}</p>
+              <p>{control.body}</p>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="landing-section" aria-labelledby="landing-inside">
+      <section className="landing-band" aria-labelledby="landing-inside">
         <h2 id="landing-inside">{t.t("landing.insideTitle")}</h2>
-        <ul className="card-grid landing-list">
+        <ul className="landing-grid">
           {inside.map((area) => (
-            <li className="card" key={area.key}>
+            <li key={area.key}>
               <h3>{area.title}</h3>
-              <p className="muted">{area.body}</p>
+              <p>{area.body}</p>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="landing-section landing-closing" aria-labelledby="landing-closing">
+      <section className="landing-band landing-closing" data-tone="alt" aria-labelledby="landing-closing">
         <h2 id="landing-closing">{t.t("landing.closingTitle")}</h2>
-        <p className="muted">{t.t("landing.closingBody")}</p>
+        <p className="landing-sub">{t.t("landing.closingBody")}</p>
         <p className="landing-actions">
           <Link className="button" data-variant="primary" href="/sign-in">
             {t.t("landing.signIn")}
