@@ -613,6 +613,9 @@ const en = {
 
   "workspaces.title": "Choose a workspace",
   "workspaces.empty": "You are not a member of any workspace yet.",
+  "notFound.title": "This page is not here",
+  "notFound.body": "Either it does not exist, or it belongs to a workspace you are not a member of. We do not say which.",
+  "notFound.back": "Back to your workspaces",
   "workspaces.profilesTitle": "Choose a business profile",
   "workspaces.profilesEmpty": "This workspace has no business profiles yet.",
   "workspaces.role": "Your role: {role}",
@@ -1640,6 +1643,9 @@ const ru: Catalogue = {
 
   "workspaces.title": "Выберите рабочее пространство",
   "workspaces.empty": "Вы пока не участник ни одного рабочего пространства.",
+  "notFound.title": "Такой страницы здесь нет",
+  "notFound.body": "Либо её не существует, либо она принадлежит рабочему пространству, участником которого вы не являетесь. Мы не уточняем, что именно.",
+  "notFound.back": "К вашим рабочим пространствам",
   "workspaces.profilesTitle": "Выберите бизнес-профиль",
   "workspaces.profilesEmpty": "В этом рабочем пространстве пока нет бизнес-профилей.",
   "workspaces.role": "Ваша роль: {role}",
