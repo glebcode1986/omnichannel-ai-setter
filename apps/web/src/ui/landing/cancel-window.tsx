@@ -16,11 +16,11 @@
  * Its words arrive as plain strings rather than a translator, because a translator carries functions and
  * functions do not cross the server/client boundary — the same reason `navigation.tsx` gives.
  *
- * Under `prefers-reduced-motion` nothing moves: the draft is there at once, the tilt is off, and the
- * countdown is a number rather than a sweeping ring. The demonstration still works, which is the test of
- * whether reduced motion was respected or merely declared.
+ * Under `prefers-reduced-motion` nothing moves: the draft is there at once and the countdown is a number
+ * rather than a sweeping ring. The demonstration still works, which is the test of whether reduced motion
+ * was respected or merely declared.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Keeper } from "./keeper";
 
@@ -63,7 +63,6 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
     typeof window === "undefined" ? false : window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const [run, setRun] = useState(0);
-  const scene = useRef<HTMLDivElement>(null);
 
   // Only the *changes* need an effect; the initial value came from the initialiser above.
   useEffect(() => {
@@ -127,38 +126,17 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
     setRun((count) => count + 1);
   }, []);
 
-  // Pointer parallax, written to custom properties so the transform itself stays in the stylesheet.
-  const onPointer = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (reduced || scene.current === null) {
-        return;
-      }
-      const box = scene.current.getBoundingClientRect();
-      const x = (event.clientX - box.left) / box.width - 0.5;
-      const y = (event.clientY - box.top) / box.height - 0.5;
-      scene.current.style.setProperty("--tilt-y", `${(x * 9).toFixed(2)}deg`);
-      scene.current.style.setProperty("--tilt-x", `${(-y * 7).toFixed(2)}deg`);
-    },
-    [reduced],
-  );
-
-  const onLeave = useCallback(() => {
-    scene.current?.style.setProperty("--tilt-y", "0deg");
-    scene.current?.style.setProperty("--tilt-x", "0deg");
-  }, []);
+  // Нет слежения за курсором, и это сознательно. Сцена кренилась вслед за мышью, и текст внутри
+  // плыл вместе с ней — читать было неуютно, хотя эффект задумывался как «объём». Объём остался,
+  // но статический: слои по-прежнему разнесены по translateZ внутри perspective, просто ничего
+  // больше не двигается под курсором.
 
   const visible = copy.draftText.slice(0, typed);
   const progress = phase === "waiting" ? left / COUNTDOWN_SECONDS : phase === "drafting" ? 1 : 0;
 
   return (
     <div className="demo" role="group" aria-label={copy.region}>
-      <div
-        className="demo-scene"
-        data-phase={phase}
-        ref={scene}
-        onPointerMove={onPointer}
-        onPointerLeave={onLeave}
-      >
+      <div className="demo-scene" data-phase={phase}>
         {/* The character reads the same phase the demonstration is in. It owns no state of its own —
             every expression is a stylesheet rule keyed off `data-phase` — so there is one clock here,
             not two that can disagree. */}
