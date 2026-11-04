@@ -21,19 +21,29 @@
 import Link from "next/link";
 
 import { requestTranslator } from "@/i18n/request-locale";
+import { Mark } from "@/ui/landing/mark";
 
 export default async function NotFound() {
   const t = await requestTranslator();
 
   return (
-    <main className="shell-main">
-      <div className="page-header">
-        <h1>{t.t("notFound.title")}</h1>
+    // The public surface's frame, not the shell's content column: this file renders under the root
+    // layout, which has no navigation and no sidebar, so `.shell-main` left it flush against the left
+    // edge of the window — the same thing that made the sign-in page look unfinished.
+    <main className="auth">
+      <div className="auth-column">
+        <Link className="auth-brand" href="/">
+          <Mark title={t.t("landing.title")} className="auth-mark" />
+          <span>{t.t("landing.title")}</span>
+        </Link>
+        <div className="auth-card">
+          <h1>{t.t("notFound.title")}</h1>
+          <p className="auth-lede">{t.t("notFound.body")}</p>
+          <p className="auth-back">
+            <Link href="/workspaces">{t.t("notFound.back")}</Link>
+          </p>
+        </div>
       </div>
-      <p className="muted">{t.t("notFound.body")}</p>
-      <p>
-        <Link href="/workspaces">{t.t("notFound.back")}</Link>
-      </p>
     </main>
   );
 }

@@ -235,6 +235,44 @@ export const webEnvSchema = runtimeEnvSchema.extend({
     .min(1)
     .max(2_000)
     .default("You are the business's own assistant. Be warm, brief and concrete, and never invent facts."),
+
+  /**
+   * The values the published Terms and Privacy Policy need and the repository must not hold (#121).
+   *
+   * Configuration rather than text in `src/legal/`, for two reasons that both matter. The seller's
+   * registered identity is the owner's own material and the standing direction is that it stays out of
+   * public source; and several of these are not drafting choices at all but decisions the owner has not
+   * made, some of which need a lawyer — governing law, the forum, the liability cap, the withdrawal
+   * right, the retention periods. A value nobody has decided must not have a plausible default, because
+   * a plausible default in a published legal document is a term somebody is held to. Every one of these
+   * is therefore optional with no default, and `legal-content.ts` renders an unset value as a visible
+   * gap rather than filling it in.
+   */
+  LEGAL_SELLER_NAME: z.string().min(1).max(200).optional(),
+  LEGAL_SELLER_DISPLAY_NAME: z.string().min(1).max(200).optional(),
+  LEGAL_SELLER_REGISTRATION: z.string().min(1).max(300).optional(),
+  LEGAL_SELLER_ADDRESS: z.string().min(1).max(400).optional(),
+  LEGAL_SELLER_JURISDICTION: z.string().min(1).max(100).optional(),
+  LEGAL_SELLER_VAT: z.string().min(1).max(100).optional(),
+  LEGAL_SUPPORT_EMAIL: z.email().optional(),
+  LEGAL_PRIVACY_EMAIL: z.email().optional(),
+  LEGAL_CONTACT_EMAIL: z.email().optional(),
+  LEGAL_GOVERNING_LAW: z.string().min(1).max(300).optional(),
+  LEGAL_FORUM: z.string().min(1).max(300).optional(),
+  LEGAL_SUPERVISORY_AUTHORITY: z.string().min(1).max(300).optional(),
+  LEGAL_LIABILITY_CAP: z.string().min(1).max(500).optional(),
+  LEGAL_WITHDRAWAL: z.string().min(1).max(800).optional(),
+  LEGAL_MINIMUM_AGE: z.string().min(1).max(40).optional(),
+  LEGAL_RETENTION_ACCOUNT: z.string().min(1).max(300).optional(),
+  LEGAL_RETENTION_BILLING: z.string().min(1).max(300).optional(),
+  LEGAL_RETENTION_RECORDS: z.string().min(1).max(300).optional(),
+  LEGAL_RETENTION_CONVERSATION: z.string().min(1).max(300).optional(),
+  LEGAL_HOSTING_REGION: z.string().min(1).max(200).optional(),
+  LEGAL_DPO: z.string().min(1).max(300).optional(),
+  /** ISO `YYYY-MM-DD`. The date the published version takes effect. */
+  LEGAL_EFFECTIVE_DATE: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
+  /** The integer in `legal_documents.version`. */
+  LEGAL_VERSION: z.coerce.number().int().positive().optional(),
 });
 
 export type WebEnv = ReturnType<typeof loadWebEnv>;

@@ -195,6 +195,17 @@ export default async function HomePage() {
           </Link>
         </p>
       </section>
+
+      {/* The legal documents, at the bottom where a reader looks for them. A `nav` rather than a bare row
+          of links: it is a named group, and somebody using a screen reader's landmark list should find it
+          there instead of hunting through the closing section. */}
+      <footer className="landing-footer">
+        <nav aria-label={t.t("legal.footerLabel")}>
+          <Link href="/privacy">{t.t("legal.privacyTitle")}</Link>
+          <Link href="/terms">{t.t("legal.termsTitle")}</Link>
+        </nav>
+        <p>{t.t("landing.status")}</p>
+      </footer>
     </main>
   );
 }

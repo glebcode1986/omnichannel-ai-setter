@@ -5,9 +5,11 @@
  * `route-authorization.test.ts`'s allowlist with that reason. It authorizes nothing and reads no tenant
  * data: the only thing it knows is which sign-in methods this deployment can complete.
  *
- * Its own `<main className="shell-main">`, because there is no layout above a public page: the product
- * shell, its navigation and its skip link all live under the profile layout, and `.shell-main` works
- * standalone — which is what the landing page already relies on.
+ * Its own `<main className="auth">`, because there is no layout above a public page: the product shell,
+ * its navigation and its skip link all live under the profile layout. It used to borrow `.shell-main`,
+ * which is the *content column* of that shell and holds nothing on its own — so the page rendered flush
+ * against the left edge of the window with a full-width rule under the heading. `.auth` is the public
+ * surface's own frame and centres what it holds.
  */
 import { cookies } from "next/headers";
 
@@ -31,7 +33,7 @@ export default async function SignInPage({ searchParams }: { readonly searchPara
   const callbackUrl = one(query["callbackUrl"]);
 
   return (
-    <main className="shell-main">
+    <main className="auth">
       <SignInPanel
         t={t}
         locale={locale}

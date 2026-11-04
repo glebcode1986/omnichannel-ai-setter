@@ -2828,3 +2828,363 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 .landing-logo .mark-eyes {
   fill: var(--accent-contrast);
 }
+
+/* ── Публичные страницы входа ───────────────────────────────────────────────────────────────
+   Раньше вход носил классы внутреннего интерфейса — `shell-main`, `page-header`,
+   `knowledge-editor`. Они рассчитаны на экран ВНУТРИ продукта, где слева боковая колонка, а
+   содержимое уже во что-то вложено. Без этой обвязки страницу ничто не держало: заголовок у
+   левого края окна, линейка во всю ширину, выбор языка выглядит разделом страницы, а не мелким
+   выбором внизу. Сюда приходят, не видев продукта, поэтому вход — это второй экран лендинга и
+   выглядеть должен так же.
+
+   Отдельное семейство классов, а не правка общих: те же правила обслуживают подписанные экраны,
+   и подгонять их под публичную страницу значило бы чинить одно, ломая другое. */
+
+.auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-5);
+  background: var(--landing-hero);
+}
+
+.auth-column {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+/* Знак и имя — ссылка на лендинг: пришедший по ссылке должен иметь возможность сначала прочитать,
+   куда он попал, не правя адрес вручную. */
+.auth-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-decoration: none;
+  color: var(--text);
+  font-size: var(--text-l);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.auth-mark {
+  width: 30px;
+  height: auto;
+  flex: none;
+}
+
+.auth-brand .mark-body {
+  fill: var(--accent);
+}
+
+.auth-brand .mark-eyes {
+  fill: var(--accent-contrast);
+}
+
+.auth-card {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 6px);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.auth-lede {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-m);
+  line-height: 1.5;
+}
+
+.auth-card form {
+  margin: 0;
+}
+
+/* Во всю ширину карточки: кнопка входа здесь одна и это единственное, зачем сюда пришли. */
+.auth-submit {
+  width: 100%;
+}
+
+/* Разделитель «или» — черта по обе стороны от слова. Без него два способа читаются как шаги. */
+.auth-or {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-s);
+}
+
+.auth-or::before,
+.auth-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.auth-form label {
+  font-size: var(--text-s);
+  font-weight: 560;
+}
+
+.auth-form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--field-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.auth-hint,
+.auth-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.auth-hint {
+  text-align: left;
+}
+
+/* Мелкий выбор внизу, а не раздел страницы: заголовок остаётся — он называет выбор тому, кто не
+   видит, что эти кнопки про одно, — но весит он как подпись. */
+.auth-languages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.auth-languages h2 {
+  margin: 0;
+  font-size: var(--text-s);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.auth-languages form {
+  margin: 0;
+}
+
+.auth-language {
+  min-height: 30px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-s);
+  font-weight: 500;
+  box-shadow: none;
+  background: transparent;
+}
+
+@media (max-width: 720px) {
+  .auth {
+    align-items: flex-start;
+    padding: var(--space-5) var(--space-4);
+  }
+
+  .auth-card {
+    padding: var(--space-5);
+  }
+}
+
+.auth-back {
+  margin: 0;
+  font-size: var(--text-m);
+}
+
+/* ── Подвал лендинга ────────────────────────────────────────────────────────────────────────
+   Документы внизу, где их и ищут. */
+.landing-footer {
+  border-top: 1px solid var(--border);
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.landing-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-5);
+}
+
+.landing-footer a {
+  color: var(--text-muted);
+  font-size: var(--text-s);
+}
+
+.landing-footer p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-s);
+}
+
+/* ── Опубликованные юридические документы ───────────────────────────────────────────────────
+   Страница для чтения, а не экран продукта: одна колонка в меру ширины строки, и статус
+   документа ДО самого документа — читатель, который узнаёт о незаполненном значении в пункте
+   15, уже четырнадцать пунктов считал страницу законченной. */
+
+.legal {
+  min-height: 100vh;
+  background: var(--landing-hero);
+  padding: var(--space-6) var(--space-5) calc(var(--space-6) * 2);
+}
+
+.legal-column {
+  max-width: 760px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.legal-dateline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-s);
+}
+
+.legal-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.legal-notice p {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+
+.legal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.legal-body h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.legal-body h2 {
+  margin: var(--space-5) 0 0;
+  font-size: var(--text-l);
+  line-height: 1.3;
+}
+
+.legal-body p {
+  margin: 0;
+  line-height: 1.65;
+  /* Мера строки: длинная строка в сплошном тексте читается хуже всего остального на странице. */
+  max-width: 68ch;
+}
+
+.legal-body blockquote {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-sunken);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  line-height: 1.6;
+}
+
+.legal-body hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-3) 0;
+}
+
+.legal-body code {
+  font-size: 0.92em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+}
+
+/* Таблица в узкой колонке обязана уметь прокручиваться, иначе она растягивает страницу. */
+.legal-table {
+  overflow-x: auto;
+}
+
+.legal-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--text-s);
+}
+
+.legal-table th,
+.legal-table td {
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.legal-table th {
+  background: var(--surface-sunken);
+  font-weight: 600;
+}
+
+/* Незаполненное значение обязано ВЫГЛЯДЕТЬ незаполненным. Ровный текст здесь читался бы как
+   утверждение документа, а это ровно та ошибка, ради которой пропуск и сделан отдельным узлом. */
+.legal-gap {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+.legal-back {
+  margin: var(--space-5) 0 0;
+}
+
+@media (max-width: 720px) {
+  .legal {
+    padding: var(--space-5) var(--space-4) var(--space-6);
+  }
+}

@@ -1,9 +1,19 @@
-# Legal drafts — NOT PUBLISHED, NOT APPROVED
+# Legal drafts
 
-> **Status: DRAFT. Not legal advice. Not approved by a lawyer. Not published anywhere.**
-> Nothing in this directory is in force, offered to anybody, or referenced by running code. No file here
-> is wired to `legal_documents.content_ref`, and nothing here may be published without explicit owner and
-> legal-professional approval. Issue #121 authorizes the drafting and forbids the publication.
+> **Status: not legal advice, and not approved by a lawyer.**
+>
+> **Two of these are now published.** On the owner's explicit instruction, the Privacy Policy and the
+> Terms of Service are served at `/privacy` and `/terms` — see
+> [`../handoff/LEGAL_PAGES.md`](../handoff/LEGAL_PAGES.md) for how, and for the values the deployment
+> still has to supply. The published text is derived from the drafts here by code, and a test holds the
+> two copies together. The published pages carry a notice saying that they are the current revision,
+> that unsettled values are marked rather than filled in, and that a lawyer has not reviewed them.
+>
+> **The other six are not published**, are not in force, and are not referenced by running code. None is
+> wired to `legal_documents.content_ref`.
+>
+> Issue #121 authorized the drafting and forbade publication; that prohibition was the owner's own and
+> the owner has since lifted it for these two documents. It still stands for the rest.
 
 Prepared 30 October 2026 under Issue #121, from the owner's own FastyAds legal pack as a reference
 baseline. The owner's standing direction on that baseline (Issue #47, comment 6085523397) is that it is a

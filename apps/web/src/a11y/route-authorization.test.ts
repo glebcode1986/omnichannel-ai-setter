@@ -67,6 +67,10 @@ const DELIBERATELY_PUBLIC: Readonly<Record<string, string>> = {
     "the public sign-in and registration page: it is what somebody with no account reaches, it authorizes nothing and reads no tenant data, and the thing a WorkspaceContext would authorize does not exist for its reader yet",
   "sign-in/sent/page.tsx":
     "the page that says a one-time link was sent, reached by the same person before they have any session at all; it renders one sentence and reads nothing",
+  "privacy/page.tsx":
+    "the published Privacy Policy: a legal document is written for the people who have no account, it is linked from the landing page's footer, and it reads a committed text file rather than any tenant data",
+  "terms/page.tsx":
+    "the published Terms of Service, public for the same reason as the Privacy Policy and reading the same kind of committed text file",
   "api/health/route.ts": "a liveness probe that deliberately touches no database, queue or external API",
   "api/auth/[...nextauth]/route.ts": "Auth.js's own handler: it is the thing that authenticates",
   "api/webhooks/[channel]/[channelAccountId]/route.ts": "a provider webhook, authenticated by its signature rather than by a session",
