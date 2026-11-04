@@ -22,6 +22,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Keeper } from "./keeper";
+
 export interface CancelWindowCopy {
   readonly customerLabel: string;
   readonly customerText: string;
@@ -157,6 +159,11 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
         onPointerMove={onPointer}
         onPointerLeave={onLeave}
       >
+        {/* The character reads the same phase the demonstration is in. It owns no state of its own —
+            every expression is a stylesheet rule keyed off `data-phase` — so there is one clock here,
+            not two that can disagree. */}
+        <Keeper phase={phase} />
+
         <div className="demo-layer" data-depth="back">
           <p className="demo-label">{copy.customerLabel}</p>
           <p className="demo-text">{copy.customerText}</p>

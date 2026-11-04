@@ -1963,18 +1963,22 @@ details[open] > summary::before {
 
 .landing h1 {
   /* Своя шкала: продуктовый --text-xl в 26px для первого экрана слишком мелок. */
-  font-size: clamp(34px, 5.2vw, 60px);
-  line-height: 1.06;
-  letter-spacing: -0.025em;
+  font-size: clamp(32px, 4.4vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
   margin: 0 0 var(--space-4);
-  max-width: 16ch;
+  /* 680px, а не 16ch. `ch` привязан к ширине нуля, и у длинной русской фразы 16ch дали восемь
+     строк вместо двух. Ограничение по пикселям ведёт себя одинаково в обоих языках. */
+  max-width: 680px;
+  text-wrap: balance;
 }
 
 .landing-lead {
-  font-size: clamp(17px, 1.6vw, 21px);
+  font-size: clamp(17px, 1.6vw, 20px);
   line-height: 1.55;
   color: var(--text-muted);
-  max-width: 52ch;
+  max-width: 680px;
+  text-wrap: pretty;
   margin: 0 0 var(--space-5);
 }
 
@@ -2130,6 +2134,22 @@ details[open] > summary::before {
   display: grid;
   gap: 0;
   max-width: 68ch;
+}
+
+/* На широком экране шаги шли одной колонкой в 721px внутри полосы в 1100 — правая половина
+   пустовала, и секция выглядела незаконченной. Две колонки убирают пустоту, не трогая порядок:
+   `ol` остаётся `ol`, нумерация идёт сверху вниз по колонкам чтения. */
+@media (min-width: 900px) {
+  .landing-steps {
+    max-width: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--space-6);
+  }
+
+  /* Соединительная линия имеет смысл только в одной колонке. */
+  .landing-steps > li:not(:last-child)::after {
+    display: none;
+  }
 }
 
 .landing-steps > li {
@@ -2449,5 +2469,145 @@ body {
 @keyframes demo-blink {
   to {
     opacity: 0;
+  }
+}
+
+/* ── Персонаж: тот, кто ждёт разрешения ─────────────────────────────────────────────────────
+   Выглядывает из-за карточки переписки и отыгрывает ту же машину состояний, что и демонстрация:
+   думает, пока пишется черновик; подаётся вперёд, пока идёт отсчёт; открывает рот ровно один раз,
+   если отправка состоялась; и садится обратно с закрытым ртом, если вы отменили.
+
+   Ни одного состояния он не придумывает сам — всё приходит из `[data-phase]`, который ставит
+   демонстрация. Поэтому у компонента нет ни состояния, ни таймеров, а выключается весь спектакль
+   одним медиазапросом.
+
+   Анимируются только `transform` и `opacity`. */
+
+.keeper {
+  position: absolute;
+  right: 24px;
+  bottom: 100%;
+  width: 104px;
+  height: auto;
+  /* Выглядывает: нижняя треть головы уходит за карточку. */
+  margin-bottom: -26px;
+  z-index: 0;
+  pointer-events: none;
+  transform-origin: 50% 100%;
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.keeper-head {
+  fill: var(--surface-raised);
+  stroke: var(--border);
+  stroke-width: 2;
+}
+
+.keeper-stalk {
+  stroke: var(--border-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.keeper-lamp {
+  fill: var(--border-strong);
+  transition: fill 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.keeper-eye {
+  fill: var(--text-muted);
+  transform-origin: center;
+  transition:
+    transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    fill 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.keeper-mouth {
+  fill: var(--text-muted);
+  transform-origin: center;
+  transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Пишет черновик: лампа горит акцентом и пульсирует, глаза чуть прищурены — сосредоточен. */
+.keeper[data-phase="drafting"] .keeper-lamp {
+  fill: var(--accent);
+}
+
+.keeper[data-phase="drafting"] .keeper-eye {
+  transform: scaleY(0.72);
+}
+
+/* Держит слова: подался вперёд и вверх, глаза раскрыты, смотрит на вас. Рот закрыт — он не может
+   сказать, пока вы не разрешили, и в этом вся мысль. */
+.keeper[data-phase="waiting"] {
+  transform: translateY(-6px) rotate(-2deg);
+}
+
+.keeper[data-phase="waiting"] .keeper-lamp {
+  fill: var(--accent);
+}
+
+.keeper[data-phase="waiting"] .keeper-eye {
+  transform: scaleY(1.12);
+  fill: var(--text);
+}
+
+/* Разрешили: рот открывается ровно один раз. */
+.keeper[data-phase="sent"] .keeper-mouth {
+  transform: scaleY(3.2);
+}
+
+.keeper[data-phase="sent"] .keeper-lamp {
+  fill: var(--ok);
+}
+
+/* Отменили: садится обратно, рот закрыт, взгляд опущен. Не обиженно — спокойно. */
+.keeper[data-phase="cancelled"] {
+  transform: translateY(4px);
+}
+
+.keeper[data-phase="cancelled"] .keeper-eye {
+  transform: scaleY(0.4);
+}
+
+.keeper[data-phase="cancelled"] .keeper-lamp {
+  fill: var(--border-strong);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .keeper[data-phase="drafting"] .keeper-lamp {
+    animation: keeper-think 1.1s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+
+  /* Пока держит слова — еле заметно дышит. Движение в полпикселя: оживляет, не отвлекает. */
+  .keeper[data-phase="waiting"] {
+    animation: keeper-hold 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+}
+
+@keyframes keeper-think {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes keeper-hold {
+  50% {
+    transform: translateY(-9px) rotate(-2deg);
+  }
+}
+
+/* Сцена становится системой координат для персонажа. */
+.demo-scene {
+  position: relative;
+}
+
+/* На узком экране он занял бы место, которого там нет. 720, а не 719: шлюз breakpoints.test.ts
+   держит список известных границ, и лишняя граница в один пиксель — это новая точка перелома,
+   про которую никто не знает. Он её и поймал. */
+@media (max-width: 720px) {
+  .keeper {
+    width: 76px;
+    right: 12px;
   }
 }

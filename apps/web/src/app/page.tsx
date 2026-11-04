@@ -81,14 +81,12 @@ export default async function HomePage() {
         <div className="landing-glow" aria-hidden="true" />
         <div className="landing-hero-inner">
           <div>
-            <p className="landing-wordmark">
-              {t.t("landing.title")}
-              <span className="landing-eyebrow">{t.t("landing.badge")}</span>
-            </p>
-            {/* The headline is the promise, not the brand: a name alone tells a stranger nothing, and the
-                wordmark above already says what this is called. */}
-            <h1>{t.t("landing.lead")}</h1>
-            <p className="landing-lead">{t.t("landing.heroSupport")}</p>
+            <p className="landing-wordmark">{t.t("landing.title")}</p>
+            {/* A headline, not a paragraph. The first version put the full promise in the `h1` and it set
+                eight lines of 60px type — 509 pixels of heading before a reader reached anything else.
+                The promise is still here; it moved one element down, where a sentence belongs. */}
+            <h1>{t.t("landing.headline")}</h1>
+            <p className="landing-lead">{t.t("landing.lead")}</p>
             <p className="landing-actions">
               <Link className="button" data-variant="primary" href="/sign-in">
                 {t.t("landing.signIn")}
