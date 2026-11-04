@@ -59,9 +59,11 @@ position to answer them.
 | `LEGAL_LIABILITY_CAP` | the liability cap and its basis |
 | `LEGAL_WITHDRAWAL` | whether and how a consumer withdrawal right is addressed |
 
-`PRODUCT_DOMAIN` is not a variable: it is taken from `AUTH_URL`, so a deployment cannot name a domain it
-is not served from. `PRODUCT_NAME` is a constant in `legal-content.ts`, since the brand is decided and
-carries nothing private.
+`PRODUCT_NAME` is a constant in `legal-content.ts`, since the brand is decided and carries nothing
+private. There is no domain placeholder: the only one the drafts had appeared inside the Terms' preamble
+table, which `derive.ts` removes — it was a note to the owner listing the values settled so far, and the
+first published build put it on the live page carrying the retired brand and the seller's registry
+identifiers. A test now refuses any published file that contains either.
 
 ## What the pages say about themselves
 

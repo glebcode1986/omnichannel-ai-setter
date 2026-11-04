@@ -78,7 +78,13 @@ describe("the published legal documents", () => {
     const { text, removed } = derive(draft);
     // The removals are asserted as well as the result: a derivation that stopped removing the draft
     // banner would still match a published file regenerated from it, and the banner would be on the site.
-    expect(removed).toEqual({ titleSuffix: true, banner: true, metadata: true });
+    // The preamble table is per-document — the Terms draft opens with one and the Privacy Policy does not.
+    expect(removed).toEqual({
+      titleSuffix: true,
+      banner: true,
+      metadata: true,
+      preambleTable: name === "terms-of-service",
+    });
     expect(published(name, locale)).toBe(text);
     expect(text.length).toBeGreaterThan(5_000);
   });
@@ -141,6 +147,32 @@ describe("the published legal documents", () => {
     expect(resolved.unresolved).not.toContain("SELLER_LEGAL_NAME");
     expect(runs.some((run) => run.kind !== "gap" && run.value.includes("Example Seller S.R.L."))).toBe(true);
     expect(runs.some((run) => run.kind === "gap" && run.value === "SELLER_LEGAL_NAME")).toBe(false);
+  });
+
+  it("publishes no drafting note, no retired brand and no registry identifier", () => {
+    // This is the test that was missing, and the first published build is why it exists. The Terms draft
+    // opens with a table of the values settled so far — a note written for the owner, not a term — and it
+    // went onto the live page carrying the retired brand, a domain the product no longer uses, and the
+    // seller's registry identifiers in public. Structure alone would not have caught it: the table parsed
+    // perfectly and rendered beautifully. Only its content was wrong.
+    //
+    // Named strings rather than a pattern, because what must not be published is specific: a retired
+    // brand reads as a current one, and a registry identifier belongs in configuration under the owner's
+    // standing direction, not in a public repository.
+    const forbidden = ["Mixamart", "mixamart.com", "SOTCO", "CUI 5051", "ONRC J"];
+    let scanned = 0;
+    for (const { locale, name } of everyDocument) {
+      const text = published(name, locale);
+      scanned += text.length;
+      for (const needle of forbidden) {
+        expect(text, `${locale}/${name} must not publish ${needle}`).not.toContain(needle);
+      }
+    }
+    // The control: a test that read nothing would also find nothing.
+    expect(scanned).toBeGreaterThan(50_000);
+    // And proof the scan read the real document rather than an empty string: the brand is a placeholder
+    // in the file, resolved when the page renders, so the file must still carry the placeholder itself.
+    expect(published("terms-of-service", "en")).toContain("{{PRODUCT_NAME}}");
   });
 
   it("refuses a syntax it does not carry rather than dropping the line", () => {

@@ -1,14 +1,5 @@
 # Terms of Service
 
-| Parameter | Value for the first launch route |
-| --- | --- |
-| `{{PRODUCT_NAME}}` | Mixamart |
-| `{{PRODUCT_DOMAIN}}` | `mixamart.com` *(stated by the owner; not yet acquired or verified)* |
-| `{{SELLER_LEGAL_NAME}}` | SOTCO GROUP S.R.L. *(owner attestation, 30 October 2026)* |
-| `{{SELLER_JURISDICTION}}` | `RO` |
-| `{{SELLER_REGISTRATION}}` | CUI 50512210 · ONRC J2024020487003 |
-| everything else | unresolved — see the registry |
-
 ---
 
 ## 1. Acceptance of these Terms

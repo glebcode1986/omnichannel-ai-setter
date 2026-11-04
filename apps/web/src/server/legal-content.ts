@@ -30,11 +30,12 @@ export const PRODUCT_NAME = "KeepSayBot";
  *
  * A test asserts this covers the documents exactly — nothing here that the text never uses, and nothing
  * in the text that is missing here. That is what stops a clause added to a draft from reaching the page
- * as a literal `{{...}}`.
+ * as a literal `{{...}}`, and it is also what noticed that `PRODUCT_DOMAIN` had no reader left once the
+ * Terms' drafting table stopped being published: configuration nothing reads is a claim about the page
+ * that is not true.
  */
 export const PLACEHOLDER_SOURCES = {
   PRODUCT_NAME: () => PRODUCT_NAME,
-  PRODUCT_DOMAIN: (env: WebEnv) => hostOf(env.AUTH_URL),
   SELLER_LEGAL_NAME: (env: WebEnv) => env.LEGAL_SELLER_NAME,
   SELLER_REGISTRATION: (env: WebEnv) => env.LEGAL_SELLER_REGISTRATION,
   SELLER_ADDRESS: (env: WebEnv) => env.LEGAL_SELLER_ADDRESS,
@@ -57,17 +58,6 @@ export const PLACEHOLDER_SOURCES = {
 } as const satisfies Record<string, (env: WebEnv) => string | undefined>;
 
 export type PlaceholderName = keyof typeof PLACEHOLDER_SOURCES;
-
-function hostOf(url: string | undefined): string | undefined {
-  if (url === undefined) {
-    return undefined;
-  }
-  try {
-    return new URL(url).host;
-  } catch {
-    return undefined;
-  }
-}
 
 export interface ResolvedDocument {
   readonly blocks: readonly LegalBlock[];
