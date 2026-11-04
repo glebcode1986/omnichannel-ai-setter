@@ -18,7 +18,7 @@ import { LocaleSwitch } from "@/ui/locale-switch";
 import { requestLocale } from "@/i18n/request-locale";
 import { createTranslator } from "@/i18n/translate";
 import { setUiLocaleAction } from "@/server/locale-actions";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 
 export default async function ProfileShellLayout({
@@ -31,7 +31,7 @@ export default async function ProfileShellLayout({
   const { workspaceId, businessProfileId } = await params;
   // Throws when the viewer is not a member, or the profile is not theirs to see. The shell renders
   // nothing at all in that case, rather than a frame around an authorization error.
-  await requireBusinessProfileContext(workspaceId, businessProfileId);
+  await pageBusinessProfileContext(workspaceId, businessProfileId);
 
   const locale = await requestLocale();
   const t = createTranslator(locale);

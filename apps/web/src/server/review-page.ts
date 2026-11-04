@@ -16,7 +16,7 @@ import type { Translator } from "@/i18n/translate";
 import { getDb } from "@/server/db";
 import type { RawSearchParams } from "@/server/inbox-view";
 import { decodeReviewCursor, parseReviewView, reviewFilterOf, reviewNextHref, type ReviewView } from "@/server/review-view";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 
 export interface ReviewScreenData {
   readonly t: Translator;
@@ -26,7 +26,7 @@ export interface ReviewScreenData {
   readonly reviewPath: string;
   /** Where the rest of the queue is, or `undefined` when this is all of it. */
   readonly nextHref?: string;
-  readonly context: Awaited<ReturnType<typeof requireBusinessProfileContext>>;
+  readonly context: Awaited<ReturnType<typeof pageBusinessProfileContext>>;
 }
 
 export async function loadReviewScreen(
@@ -35,7 +35,7 @@ export async function loadReviewScreen(
   searchParams: RawSearchParams,
 ): Promise<ReviewScreenData> {
   // Authorization first, and before any customer-facing draft is read.
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   // Parsed and validated in one place, tested there, so a reason nobody defined cannot reach a query.
   const view = parseReviewView(searchParams);

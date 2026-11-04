@@ -15,7 +15,7 @@ import { SetupChecklist } from "@/ui/setup-checklist";
 import { requestTranslator } from "@/i18n/request-locale";
 import { activateAction, restoreStepAction, skipStepAction } from "@/server/setup-actions";
 import { getDb } from "@/server/db";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 
 export default async function SetupPage({
   params,
@@ -23,7 +23,7 @@ export default async function SetupPage({
   readonly params: Promise<{ readonly workspaceId: string; readonly businessProfileId: string }>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const { facts, state } = await readOnboarding(getDb(), context);
   const t = await requestTranslator();
 

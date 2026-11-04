@@ -25,8 +25,33 @@ import { describe, expect, it } from "vitest";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../app");
 
-/** The three ways a request becomes an authorized caller. Nothing else counts. */
-const RESOLVERS = ["requireWorkspaceContext", "requireBusinessProfileContext", "requirePlatformContext"];
+/**
+ * The ways a request becomes an authorized caller. Nothing else counts.
+ *
+ * Six names, three authorizations: each `page*` entry is the page-render flavour of the `require*` above
+ * it, differing only in that an unauthenticated visitor is redirected to sign-in instead of reaching a
+ * throw that became an HTTP 500. `page-context.ts delegates` below asserts that equivalence by AST, so
+ * these three are not an enlargement of the rule — remove the delegation and that test fails.
+ *
+ * `requireSessionUserId` and its `pageSessionUserId` flavour are deliberately absent, for the reason
+ * `requireSessionUser`'s own header gives: knowing who you are is not being told what you may read.
+ */
+const RESOLVERS = [
+  "requireWorkspaceContext",
+  "requireBusinessProfileContext",
+  "requirePlatformContext",
+  "pageWorkspaceContext",
+  "pageBusinessProfileContext",
+  "pagePlatformContext",
+];
+
+/** The three authorizing page wrappers, each paired with the resolver it must delegate to. */
+const PAGE_DELEGATIONS: Readonly<Record<string, string>> = {
+  pageWorkspaceContext: "requireWorkspaceContext",
+  pageBusinessProfileContext: "requireBusinessProfileContext",
+  pagePlatformContext: "requirePlatformContext",
+  pageSessionUserId: "requireSessionUserId",
+};
 
 /**
  * Routes that are deliberately unauthenticated, each for a stated reason.
@@ -137,7 +162,13 @@ function importedModules(file: string): string[] {
  * covers route → dependencies → `request-context` and page → loader.
  */
 /**
- * The two modules that *define* the resolvers, which therefore name all three by necessity.
+ * The three modules that *define* the resolvers, which therefore name all of them by necessity.
+ *
+ * `page-context.ts` joins the two originals for exactly their reason. It names every `require*` because
+ * it wraps every one of them, so a page that imported only `pageSessionUserId` — authentication, which
+ * authorizes nothing — would otherwise satisfy the walk by *reaching the file where the resolvers are
+ * named*. That is the same hole `requireSessionUserId` opened in `request-context.ts`, reopened one
+ * module along, and it is closed the same way.
  *
  * Excluded from every chain, because merely importing one proves nothing (#115). `request-context.ts`
  * gained `requireSessionUserId` — an authentication-only helper the workspace chooser and the
@@ -150,7 +181,7 @@ function importedModules(file: string): string[] {
  * source — the import declaration alone puts the identifier in that file's AST — and a page that defers
  * to a loader names it in the loader, which is a different file either way.
  */
-const DEFINITION_SITES = ["request-context.ts", "workspace-context.ts"];
+const DEFINITION_SITES = ["request-context.ts", "workspace-context.ts", "page-context.ts"];
 
 function authorizingFiles(relative: string): string[] {
   const own = path.join(appRoot, relative);
@@ -220,24 +251,28 @@ describe("every route in this app", () => {
     const offenders: string[] = [];
     for (const relative of adminRoutes) {
       const files = authorizingFiles(relative);
+      // Either flavour of the platform resolver: the page wrapper authorizes identically and differs only
+      // in where it sends somebody who is not signed in.
       const platform = files.some((candidate) => {
         try {
-          return readFileSync(candidate, "utf8").includes("requirePlatformContext");
+          const source = readFileSync(candidate, "utf8");
+          return source.includes("requirePlatformContext") || source.includes("pagePlatformContext");
         } catch {
           return false;
         }
       });
       if (!platform) {
-        offenders.push(`${relative} does not reach requirePlatformContext`);
+        offenders.push(`${relative} does not reach the platform resolver`);
       }
-      // `request-context.ts` and `workspace-context.ts` *define* all three resolvers, so they name the
-      // customer ones by necessity. What must not happen is an admin loader *calling* one, which is what
-      // the remaining files in the chain would show.
-      const definitionSites = ["request-context.ts", "workspace-context.ts"];
-      for (const candidate of files.filter((file) => file.includes("/server/") && !definitionSites.includes(path.basename(file)))) {
+      // The definition sites *name* every resolver, so they name the customer ones by necessity. What must
+      // not happen is an admin loader *calling* one, which is what the remaining files in the chain would
+      // show. Both flavours are forbidden here for the same reason: an operator holding a customer context
+      // holds customer OWNER authority however they were redirected on the way in.
+      for (const candidate of files.filter((file) => file.includes("/server/") && !DEFINITION_SITES.includes(path.basename(file)))) {
         try {
           const source = readFileSync(candidate, "utf8");
-          if (source.includes("requireWorkspaceContext") || source.includes("requireBusinessProfileContext")) {
+          const customer = ["requireWorkspaceContext", "requireBusinessProfileContext", "pageWorkspaceContext", "pageBusinessProfileContext"];
+          if (customer.some((name) => source.includes(name))) {
             offenders.push(`${relative} reaches a customer resolver through ${path.basename(candidate)}`);
           }
         } catch {
@@ -266,5 +301,33 @@ describe("every route in this app", () => {
     expect(calls).toBe(0);
     // And the real walk found a non-trivial number of routes, so an empty list is not why it passed.
     expect(routes.length).toBeGreaterThan(20);
+  });
+
+  /**
+   * The page wrappers are in `RESOLVERS` only because they delegate. This is what makes that true by
+   * construction rather than by the name looking similar: each one must name its counterpart inside its
+   * own body, so a wrapper rewritten to resolve the context itself — or to return a context without
+   * authorizing anybody — stops satisfying the rule it was admitted under.
+   */
+  it("page-context.ts delegates every wrapper to the resolver of the same meaning", () => {
+    const file = path.resolve(webSrc, "server/page-context.ts");
+    const ast = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+    const bodies = new Map<string, string>();
+    const visit = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name !== undefined && node.body !== undefined) {
+        bodies.set(node.name.text, node.body.getText(ast));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+
+    const missing = Object.entries(PAGE_DELEGATIONS)
+      .filter(([wrapper, resolver]) => !(bodies.get(wrapper) ?? "").includes(resolver))
+      .map(([wrapper, resolver]) => `${wrapper} does not call ${resolver}`);
+
+    expect(missing, "a page wrapper that does not delegate is a second authorization rule").toEqual([]);
+    // The matcher found the functions at all — otherwise an empty map would pass the check above vacuously.
+    expect([...bodies.keys()]).toEqual(expect.arrayContaining(Object.keys(PAGE_DELEGATIONS)));
   });
 });

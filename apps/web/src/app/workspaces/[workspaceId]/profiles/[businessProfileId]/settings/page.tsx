@@ -24,7 +24,7 @@ import { CONFIDENCE_PRESETS, MAX_PRESENCE_TYPING_LEAD_MS, POLICY_IMPACTS, PRESEN
 
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 import { saveSettingsAction } from "@/server/settings-actions";
 import {
@@ -68,7 +68,7 @@ export default async function SettingsPage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const query = await searchParams;
   const target = { workspaceId, businessProfileId };

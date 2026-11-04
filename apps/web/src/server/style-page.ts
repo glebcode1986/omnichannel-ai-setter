@@ -9,14 +9,14 @@ import { requestTranslator } from "@/i18n/request-locale";
 import type { Translator } from "@/i18n/translate";
 import { getDb } from "@/server/db";
 import type { RawSearchParams } from "@/server/inbox-view";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { assembleStyleScreen, type StyleScreenLists } from "@/server/style-screen";
 import { runStyleTest } from "@/server/style-test";
 import { one } from "@/server/style-view";
 
 export interface StyleScreenData extends StyleScreenLists {
   readonly t: Translator;
-  readonly context: Awaited<ReturnType<typeof requireBusinessProfileContext>>;
+  readonly context: Awaited<ReturnType<typeof pageBusinessProfileContext>>;
 }
 
 export async function loadStyleScreen(
@@ -25,7 +25,7 @@ export async function loadStyleScreen(
   searchParams: RawSearchParams,
 ): Promise<StyleScreenData> {
   // Authorization first, and before any of the business's wording is read.
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}/style`;
   const ask = one(searchParams["ask"]);

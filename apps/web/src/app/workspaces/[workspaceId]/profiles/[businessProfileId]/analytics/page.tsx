@@ -15,7 +15,7 @@ import { listAssignableMembers, listChannelAccounts, readOperationalSnapshot, re
 import { FilterBar } from "@/ui/analytics/filter-bar";
 import { MetricsView } from "@/ui/analytics/metrics-view";
 import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext, requireWorkspaceContext } from "@/server/request-context";
+import { pageBusinessProfileContext, pageWorkspaceContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 import { analyticsQueryString, isFilteredView, metricFilterOf, parseAnalyticsView, windowOf, type RawSearchParams } from "@/server/analytics-view";
 
@@ -29,8 +29,8 @@ export default async function AnalyticsPage({
   const { workspaceId, businessProfileId } = await params;
   // Both: the profile check is what makes this URL this member's to open at all, and the workspace
   // context is what the metric queries are scoped by.
-  const profileContext = await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const workspaceContext = await requireWorkspaceContext(workspaceId);
+  const profileContext = await pageBusinessProfileContext(workspaceId, businessProfileId);
+  const workspaceContext = await pageWorkspaceContext(workspaceId);
   const t = await requestTranslator();
   const view = parseAnalyticsView(await searchParams);
   const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}`;

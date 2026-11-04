@@ -17,15 +17,15 @@ import type { Translator } from "@/i18n/translate";
 import { assembleCheckoutScreen, type CheckoutScreenData } from "@/server/checkout-screen";
 import { getDb } from "@/server/db";
 import type { RawSearchParams } from "@/server/inbox-view";
-import { requireBusinessProfileContext, requireWorkspaceContext } from "@/server/request-context";
+import { pageBusinessProfileContext, pageWorkspaceContext } from "@/server/page-context";
 
 export interface CheckoutPageData extends CheckoutScreenData {
   readonly t: Translator;
 }
 
 export async function loadCheckoutPage(workspaceId: string, businessProfileId: string, searchParams: RawSearchParams): Promise<CheckoutPageData> {
-  await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const context = await requireWorkspaceContext(workspaceId);
+  await pageBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageWorkspaceContext(workspaceId);
   const [t, locale] = await Promise.all([requestTranslator(), requestLocale()]);
 
   return {

@@ -13,7 +13,7 @@ import { ChannelCards } from "@/ui/channel-cards";
 import { requestTranslator } from "@/i18n/request-locale";
 import type { MessageKey } from "@/i18n/catalogue";
 import { getDb } from "@/server/db";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 
 /**
  * What the callback can report. Each has its own message, because "it failed" is not actionable.
@@ -46,7 +46,7 @@ export default async function ChannelsPage({
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const { facts } = await readOnboarding(getDb(), context);
   const t = await requestTranslator();
   const outcome = (await searchParams).instagram;

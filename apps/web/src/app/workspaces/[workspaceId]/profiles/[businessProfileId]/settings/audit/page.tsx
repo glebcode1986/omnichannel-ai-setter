@@ -14,7 +14,7 @@ import { readableAuditKinds, searchAuditEvents } from "@omnichannel/db";
 import { AuditTable } from "@/ui/analytics/audit-table";
 import { FilterBar } from "@/ui/analytics/filter-bar";
 import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext, requireWorkspaceContext } from "@/server/request-context";
+import { pageBusinessProfileContext, pageWorkspaceContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 import { listAssignableMembers, listChannelAccounts, readStageDisplays } from "@omnichannel/db";
 import { analyticsQueryString, isFilteredView, parseAnalyticsView, windowOf, type AnalyticsView, type RawSearchParams } from "@/server/analytics-view";
@@ -27,8 +27,8 @@ export default async function AuditPage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const profileContext = await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const workspaceContext = await requireWorkspaceContext(workspaceId);
+  const profileContext = await pageBusinessProfileContext(workspaceId, businessProfileId);
+  const workspaceContext = await pageWorkspaceContext(workspaceId);
   const t = await requestTranslator();
   const query = await searchParams;
   const view = parseAnalyticsView(query);

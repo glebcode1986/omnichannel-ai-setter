@@ -18,14 +18,14 @@ import { listWorkspacesForUser } from "@omnichannel/db";
 import { requestTranslator } from "@/i18n/request-locale";
 import { getDb } from "@/server/db";
 import { createWorkspaceAction } from "@/server/onboarding-actions";
-import { requireSessionUserId } from "@/server/request-context";
+import { pageSessionUserId } from "@/server/page-context";
 import { one } from "@/server/knowledge-view";
 import type { RawSearchParams } from "@/server/inbox-view";
 import { CreateWorkspaceForm } from "@/ui/onboarding/create-workspace-form";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 
 export default async function WorkspacesPage({ searchParams }: { readonly searchParams: Promise<RawSearchParams> }) {
-  const userId = await requireSessionUserId();
+  const userId = await pageSessionUserId();
   const query = await searchParams;
   const workspaces = await listWorkspacesForUser(getDb(), userId);
   const t = await requestTranslator();

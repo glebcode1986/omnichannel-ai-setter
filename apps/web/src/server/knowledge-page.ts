@@ -17,7 +17,7 @@ import type { Translator } from "@/i18n/translate";
 import { getDb } from "@/server/db";
 import type { RawSearchParams } from "@/server/inbox-view";
 import { decodeKnowledgeCursor, knowledgeFilterOf, knowledgeNextHref, one } from "@/server/knowledge-view";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 
 export interface KnowledgeScreenData {
   readonly t: Translator;
@@ -26,7 +26,7 @@ export interface KnowledgeScreenData {
   readonly basePath: string;
   /** Where the rest of the library is, or `undefined` when this is all of it. */
   readonly nextHref?: string;
-  readonly context: Awaited<ReturnType<typeof requireBusinessProfileContext>>;
+  readonly context: Awaited<ReturnType<typeof pageBusinessProfileContext>>;
 }
 
 export async function loadKnowledgeScreen(
@@ -35,7 +35,7 @@ export async function loadKnowledgeScreen(
   searchParams: RawSearchParams,
 ): Promise<KnowledgeScreenData> {
   // Authorization first, and before any of the business's facts are read.
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const filter = knowledgeFilterOf(searchParams);
   const basePath = `/workspaces/${workspaceId}/profiles/${businessProfileId}/knowledge`;

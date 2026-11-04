@@ -13,7 +13,7 @@ import { KnowledgeEditor } from "@/ui/knowledge/knowledge-editor";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
 import type { Translator } from "@/i18n/translate";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 import { archiveKnowledgeAction, editKnowledgeAction, publishKnowledgeAction, restoreKnowledgeAction } from "@/server/knowledge-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -27,7 +27,7 @@ export default async function KnowledgeDocumentPage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId, documentId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const document = await readKnowledge(getDb(), context, documentId);
   if (document === undefined) {
