@@ -5,9 +5,14 @@ import type { ReactNode } from "react";
 
 import { requestLocale } from "@/i18n/request-locale";
 
+/**
+ * The product's public name, confirmed by the owner on 2026-11-04 as a brand decision separate from the
+ * hostname. It lives here and in `landing.title`; the repository's own documents still carry the working
+ * name, which is a rename of its own and not this file's business.
+ */
 export const metadata: Metadata = {
-  title: "Omnichannel AI Setter",
-  description: "Instagram and WhatsApp AI setter workspace",
+  title: "KeepSayBot",
+  description: "Answer Instagram and WhatsApp customers with drafts in your own words, approved by you or sent on autopilot.",
 };
 
 /**

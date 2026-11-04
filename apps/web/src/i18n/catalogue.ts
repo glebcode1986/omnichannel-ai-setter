@@ -607,7 +607,7 @@ const en = {
   "aiMode.DRAFT": "Drafts only",
   "aiMode.AUTOPILOT": "Autopilot",
 
-  "landing.title": "Omnichannel AI Setter",
+  "landing.title": "KeepSayBot",
   "landing.lead": "Instagram and WhatsApp customers get answered in your words, at your pace, and nothing goes out that you did not allow.",
   "landing.signIn": "Sign in",
   "landing.heroSupport": "Drafts written from your own facts and your own tone, held for your approval or sent on autopilot once they clear every check — across Instagram and WhatsApp, in one place.",
@@ -1687,7 +1687,7 @@ const ru: Catalogue = {
   "aiMode.DRAFT": "Только черновики",
   "aiMode.AUTOPILOT": "Автопилот",
 
-  "landing.title": "Omnichannel AI Setter",
+  "landing.title": "KeepSayBot",
   "landing.lead": "Клиенты в Instagram и WhatsApp получают ответ вашими словами и в вашем темпе, а без вашего разрешения не уйдёт ничего.",
   "landing.signIn": "Войти",
   "landing.heroSupport": "Черновики по вашим же фактам и вашим тоном: ждут вашего одобрения или уходят сами, когда прошли все проверки — Instagram и WhatsApp в одном месте.",
