@@ -1,35 +1,30 @@
 /**
- * The character: a face that wants to speak and waits to be allowed.
+ * The character beside the demonstration — which is the brand mark itself, not a separate drawing.
  *
- * The product's whole argument is restraint — it drafts, it holds, it goes out only when a person says
- * so, and a takeover cancels it mid-flight. Said in a sentence that is abstract. Given a face it is
- * immediate: this one peeks over the conversation, thinks while the draft is composed, leans in holding
- * the words while the delay runs down, opens its mouth exactly once if the send completes, and settles
- * back with its mouth shut if you cancel. It never speaks on its own, because the product does not.
+ * It began as a robot built from a rounded rectangle and two bars, and it looked like what it was. The
+ * mark already says the whole idea in one shape: a reply with eyes and no mouth. So the character is the
+ * mark, and the only thing that changes is what its eyes are doing.
  *
- * Pure inline SVG driven by `[data-phase]` on an ancestor, so every expression is a stylesheet rule and
- * the component itself has no state, no effects and no timers — the demo it reacts to already owns all
- * three. That also means one media query silences the whole performance under `prefers-reduced-motion`.
+ * Phases come from the demonstration's own `data-phase`; this component owns no state and no timers, so
+ * there is one clock rather than two that can disagree. Everything else — the lean, the blink, the
+ * breath while it holds a reply — is a stylesheet rule, which is why `prefers-reduced-motion` silences
+ * all of it in one place.
  *
- * `aria-hidden`, and deliberately so: it carries no information that the demonstration beside it and the
- * numbered steps below it do not already state in words. A reader using a screen reader loses a joke,
- * not a fact.
+ * The eye swap is the owner's: sly while it is drafting or holding something back, level and calm once
+ * the run is reset and nothing is pending.
  */
+import { Mark } from "./mark";
+
 export function Keeper({ phase }: { readonly phase: string }) {
+  // Sly in exactly one phase: while it is holding a reply it is not allowed to say. Everywhere else —
+  // writing, released, cancelled — it has nothing withheld, so it looks plainly at you. That is also
+  // what makes the change visible on every run: press "again" and the eyes go level, then narrow the
+  // moment there is something being kept back.
+  const eyes = phase === "waiting" ? "sly" : "plain";
+
   return (
-    <svg className="keeper" data-phase={phase} viewBox="0 0 120 108" aria-hidden="true" focusable="false">
-      {/* Antenna. Its light is the only part that moves while the reply is being written. */}
-      <line className="keeper-stalk" x1="60" y1="10" x2="60" y2="22" />
-      <circle className="keeper-lamp" cx="60" cy="7" r="5" />
-
-      <rect className="keeper-head" x="14" y="22" width="92" height="76" rx="26" />
-
-      {/* Eyes. Rounded bars rather than dots, so a blink is a scale rather than a disappearance. */}
-      <rect className="keeper-eye" data-side="left" x="36" y="48" width="12" height="16" rx="6" />
-      <rect className="keeper-eye" data-side="right" x="72" y="48" width="12" height="16" rx="6" />
-
-      {/* The mouth. Shut is the resting state, which is the point of the whole character. */}
-      <rect className="keeper-mouth" x="48" y="76" width="24" height="4" rx="2" />
-    </svg>
+    <span className="keeper" data-phase={phase} aria-hidden="true">
+      <Mark eyes={eyes} className="keeper-mark" />
+    </span>
   );
 }

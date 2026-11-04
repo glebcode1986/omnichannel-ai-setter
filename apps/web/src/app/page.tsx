@@ -4,6 +4,7 @@ import Link from "next/link";
 import { createTranslator } from "@/i18n/translate";
 import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
 import { CancelWindow } from "@/ui/landing/cancel-window";
+import { Mark } from "@/ui/landing/mark";
 
 /**
  * The product's front door, for somebody who has never heard of it.
@@ -81,7 +82,12 @@ export default async function HomePage() {
         <div className="landing-glow" aria-hidden="true" />
         <div className="landing-hero-inner">
           <div>
-            <p className="landing-wordmark">{t.t("landing.title")}</p>
+            {/* The mark and the word together. The mark carries the label, so the name is announced
+                once rather than twice to a screen reader. */}
+            <p className="landing-wordmark">
+              <Mark title={t.t("landing.title")} className="landing-logo" />
+              <span>{t.t("landing.title")}</span>
+            </p>
             {/* A headline, not a paragraph. The first version put the full promise in the `h1` and it set
                 eight lines of 60px type — 509 pixels of heading before a reader reached anything else.
                 The promise is still here; it moved one element down, where a sentence belongs. */}
