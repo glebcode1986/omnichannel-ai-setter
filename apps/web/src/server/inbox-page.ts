@@ -9,7 +9,7 @@
 import { listChannelAccounts, listInbox, type InboxPage } from "@omnichannel/db";
 
 import { getDb } from "@/server/db";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { decodeInboxCursor, encodeInboxCursor, inboxFilterOf, parseInboxView, type RawSearchParams } from "@/server/inbox-view";
 import { requestTranslator } from "@/i18n/request-locale";
 import type { InboxView } from "@/ui/inbox/view";
@@ -26,7 +26,7 @@ export interface InboxScreenData {
   readonly accounts: readonly ChannelAccountOption[];
   /** When this page was rendered. The list says so, because a snapshot should not look live. */
   readonly loadedAt: Date;
-  readonly context: Awaited<ReturnType<typeof requireBusinessProfileContext>>;
+  readonly context: Awaited<ReturnType<typeof pageBusinessProfileContext>>;
 }
 
 export async function loadInboxScreen(
@@ -36,7 +36,7 @@ export async function loadInboxScreen(
 ): Promise<InboxScreenData> {
   // Authorization first, and before any customer data is read. A list that loaded and then checked would
   // be one thrown render away from leaking a row count.
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const view = parseInboxView(searchParams);
 

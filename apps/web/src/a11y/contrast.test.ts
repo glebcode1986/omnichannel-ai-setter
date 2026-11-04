@@ -83,6 +83,13 @@ const PAIRS: readonly { readonly foreground: string; readonly background: string
   // only against `--surface` would pass a button whose actual background is lighter.
   { foreground: "border-strong", background: "surface-raised", minimum: 3, why: "a button's edge, on the surface a button actually has" },
   { foreground: "accent", background: "surface-sunken", minimum: 3, why: "the focus ring against the page" },
+  // The public landing's two bands. They are the only surfaces outside the product shell, and the first
+  // thing anybody sees, so they are checked here rather than trusted — which is also why they are tokens
+  // on `:root` at all: a band colour written inline in the landing block would be invisible to this file.
+  { foreground: "text", background: "landing-hero", minimum: 4.5, why: "the headline on the hero band" },
+  { foreground: "text-muted", background: "landing-hero", minimum: 4.5, why: "the lead paragraph, which is prose" },
+  { foreground: "text", background: "landing-band", minimum: 4.5, why: "a section heading on the alternating band" },
+  { foreground: "text-muted", background: "landing-band", minimum: 4.5, why: "section prose on the alternating band" },
 ];
 
 describe("colour contrast", () => {

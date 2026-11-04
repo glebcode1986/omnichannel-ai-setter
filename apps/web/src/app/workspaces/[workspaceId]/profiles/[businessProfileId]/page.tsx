@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 
 /**
@@ -16,7 +16,7 @@ export default async function ProfileHomePage({
   readonly params: Promise<{ readonly workspaceId: string; readonly businessProfileId: string }>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  await requireBusinessProfileContext(workspaceId, businessProfileId);
+  await pageBusinessProfileContext(workspaceId, businessProfileId);
   const profile = await getDb().businessProfile.findUniqueOrThrow({
     where: { workspaceId_id: { workspaceId, id: businessProfileId } },
     select: { status: true },

@@ -14,7 +14,7 @@ import { StageConfig } from "@/ui/leads/stage-config";
 import { stageName } from "@/ui/leads/stage-name";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
-import { requireBusinessProfileContext } from "@/server/request-context";
+import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
 import { editLeadAction, moveLeadAction, recordAnswerAction, saveStagesAction } from "@/server/lead-actions";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -32,7 +32,7 @@ export default async function LeadsPage({
   readonly searchParams: Promise<RawSearchParams>;
 }) {
   const { workspaceId, businessProfileId } = await params;
-  const context = await requireBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageBusinessProfileContext(workspaceId, businessProfileId);
   const t = await requestTranslator();
   const query = await searchParams;
   const target = { workspaceId, businessProfileId };

@@ -1,3 +1,13 @@
+/* Tailwind, without its reset.
+   `preflight.css` is deliberately not imported: it would restyle every screen in the product, and six
+   gate tests read this file as text to measure what those screens do. Theme and utilities only, so the
+   landing can use utility classes while nothing already shipped moves.
+   Layer order declared first so utilities win over the hand-written rules below, which is the whole
+   point of using them on one page. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 /*
  * The product shell's own stylesheet.
  *
@@ -46,6 +56,21 @@
   --shadow-1: 0 1px 2px rgb(16 20 26 / 6%);
   --shadow-2: 0 2px 8px rgb(16 20 26 / 8%);
   --field-height: 38px;
+
+  /* The product had no font-family at all and rendered in whatever the browser defaults to. One
+     typeface, loaded from our own origin by `next/font`; the stack behind it is what shows while the
+     file is still arriving. Inter and Helvetica are deliberately absent. */
+  /* `--font-geist` is set by `next/font` on <html>. Referencing it rather than naming the family here
+     keeps one source of truth: next/font generates its own family name and a hard-coded "Geist" would
+     silently differ from it. The stack behind it is what shows while the file is still arriving. */
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+
+  /* Публичная главная. Отдельные поверхности, потому что первый экран живёт по другим правилам,
+     чем рабочий интерфейс: ему нужен контраст между полосами, а не ровный фон под таблицы.
+     Объявлены здесь, а не в блоке лендинга, чтобы `a11y/contrast.test.ts` их увидел и проверил
+     пары text/hero и text-muted/hero — он читает только `:root`. */
+  --landing-hero: #f2f5fb;
+  --landing-band: #eef1f6;
   --content-max: 1360px;
 }
 
@@ -59,6 +84,8 @@
     --text: #eef1f5;
     --text-muted: #a6b0bd;
     --accent: #7aa2ff;
+    --landing-hero: #10141b;
+    --landing-band: #11151b;
     --accent-contrast: #0e1013;
     --ok: #62d29a;
     --warn: #e0b054;
@@ -1837,4 +1864,718 @@ details[open] > summary::before {
   .filter-bar label {
     flex: 1 1 10rem;
   }
+}
+
+/* ── Публичная главная ──────────────────────────────────────────────────────────────────────
+   Первый экран живёт по другим правилам, чем рабочий интерфейс. Внутри продукта шрифт мелкий и
+   плотный, потому что его читают весь день; здесь человек читает один раз и решает, стоит ли
+   заходить. Поэтому своя шкала кегля и свой ритм — но ни одного своего цвета: все поверхности
+   это токены, объявленные в `:root`, чтобы контрастный шлюз мог их посчитать.
+
+   Весь декор помечен aria-hidden и лежит под контентом: ни одна буква не стоит на градиенте,
+   потому что контраст над градиентом шлюз проверить не может, а значит и полагаться на него
+   нельзя. */
+
+.landing {
+  /* Шире продуктового `--content-max`: полосы должны доходить до краёв. */
+  max-width: none;
+  padding: 0;
+  display: block;
+}
+
+.landing-band {
+  padding: clamp(40px, 7vw, 88px) var(--space-5);
+}
+
+.landing-band > * {
+  max-width: 1100px;
+  margin-inline: auto;
+}
+
+.landing-band[data-tone="hero"] {
+  background: var(--landing-hero);
+  position: relative;
+  overflow: hidden;
+}
+
+.landing-band[data-tone="alt"] {
+  background: var(--landing-band);
+}
+
+/* Мягкое свечение за героем. Чисто декоративное: текст стоит на сплошном `--landing-hero`,
+   а это пятно лежит ниже и по краям. */
+.landing-glow {
+  position: absolute;
+  inset: -40% -10% auto -10%;
+  height: 90%;
+  background: radial-gradient(60% 60% at 30% 40%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.landing-hero-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: clamp(32px, 5vw, 64px);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+@media (min-width: 1000px) {
+  .landing-hero-inner {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  }
+}
+
+.landing-wordmark {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-m);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-4);
+}
+
+.landing-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  font-weight: 400;
+  margin: 0;
+}
+
+.landing-eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.landing h1 {
+  /* Своя шкала: продуктовый --text-xl в 26px для первого экрана слишком мелок. */
+  font-size: clamp(32px, 4.4vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-4);
+  /* 680px, а не 16ch. `ch` привязан к ширине нуля, и у длинной русской фразы 16ch дали восемь
+     строк вместо двух. Ограничение по пикселям ведёт себя одинаково в обоих языках. */
+  max-width: 680px;
+  text-wrap: balance;
+}
+
+.landing-lead {
+  font-size: clamp(17px, 1.6vw, 20px);
+  line-height: 1.55;
+  color: var(--text-muted);
+  max-width: 680px;
+  text-wrap: pretty;
+  margin: 0 0 var(--space-5);
+}
+
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin: 0 0 var(--space-4);
+}
+
+.landing-actions .button {
+  min-height: 46px;
+  padding: 0 var(--space-5);
+  font-size: var(--text-m);
+}
+
+.landing-note {
+  font-size: var(--text-s);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Иллюстрация потока ─────────────────────────────────────────────────────────────────────
+   Не скриншот и не подделка под него: это та же дизайн-система, собранная в три карточки,
+   которые показывают путь одного ответа. Помечена aria-hidden — для читателя с экранным
+   диктором тот же смысл несут нумерованные шаги ниже, и дублировать его нечем. */
+.landing-figure {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: calc(var(--radius) * 1.6);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+}
+
+.landing-bubble {
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-s);
+  line-height: 1.5;
+  border: 1px solid var(--border);
+}
+
+.landing-bubble[data-who="customer"] {
+  background: var(--surface-sunken);
+  justify-self: start;
+  max-width: 82%;
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.landing-bubble[data-who="draft"] {
+  background: var(--surface);
+  justify-self: end;
+  max-width: 88%;
+  border-bottom-right-radius: var(--radius-sm);
+  border-color: var(--accent);
+}
+
+.landing-bubble-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.landing-figure-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-s);
+  color: var(--text-muted);
+}
+
+.landing-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.landing-pill[data-variant="go"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+/* ── Секции ────────────────────────────────────────────────────────────────────────────────── */
+
+.landing-band h2 {
+  font-size: clamp(23px, 2.6vw, 32px);
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 var(--space-3);
+}
+
+.landing-band > p.landing-sub {
+  max-width: 58ch;
+  color: var(--text-muted);
+  font-size: var(--text-m);
+  margin: 0 0 var(--space-5);
+}
+
+.landing-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+
+.landing-grid > li {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+}
+
+.landing-grid h3 {
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-2);
+  letter-spacing: -0.01em;
+}
+
+.landing-grid p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.landing-grid > li[data-featured="true"] {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+
+/* ── Шаги: вертикальная линия, а не маркеры ──────────────────────────────────────────────────
+   Три grid-элемента на две колонки — `::before`, `h3` и `p`. Без явной колонки у двух последних
+   абзац уезжает в колонку с цифрой: именно так это и выглядело на живом стенде, при валидной
+   разметке и зелёных тестах. Видно только в браузере. */
+.landing-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: landing-step;
+  display: grid;
+  gap: 0;
+  max-width: 68ch;
+}
+
+/* На широком экране шаги шли одной колонкой в 721px внутри полосы в 1100 — правая половина
+   пустовала, и секция выглядела незаконченной. Две колонки убирают пустоту, не трогая порядок:
+   `ol` остаётся `ol`, нумерация идёт сверху вниз по колонкам чтения. */
+@media (min-width: 900px) {
+  .landing-steps {
+    max-width: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--space-6);
+  }
+
+  /* Соединительная линия имеет смысл только в одной колонке. */
+  .landing-steps > li:not(:last-child)::after {
+    display: none;
+  }
+}
+
+.landing-steps > li {
+  counter-increment: landing-step;
+  display: grid;
+  /* `auto`, not a width. The circle is 34px and sizes its own column, so the result is identical — but a
+     track carrying a length is a track that cannot shrink on a phone, which `responsive/breakpoints.test.ts`
+     refuses outright for anything that is not the shell or the Inbox. It caught this one. */
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-4);
+  padding-bottom: var(--space-5);
+  position: relative;
+}
+
+.landing-steps > li:last-child {
+  padding-bottom: 0;
+}
+
+.landing-steps > li::before {
+  content: counter(landing-step);
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: var(--text-s);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  z-index: 1;
+}
+
+/* Линия, соединяющая кружки. Не у последнего. */
+.landing-steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 34px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.landing-steps h3 {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: var(--text-l);
+  margin: 0 0 var(--space-2);
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  letter-spacing: -0.01em;
+}
+
+.landing-steps p {
+  grid-column: 2;
+  grid-row: 2;
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* ── Финал ─────────────────────────────────────────────────────────────────────────────────── */
+
+.landing-closing {
+  text-align: center;
+}
+
+.landing-closing .landing-sub {
+  margin-inline: auto;
+}
+
+.landing-closing .landing-actions {
+  justify-content: center;
+}
+
+/* ── Появление ──────────────────────────────────────────────────────────────────────────────
+   Только при `no-preference`: требование сквозное по продукту. Без JS — чистая анимация при
+   загрузке, поэтому содержимое видно и когда скрипты не исполнились. */
+@media (prefers-reduced-motion: no-preference) {
+  .landing-band > * {
+    animation: landing-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .landing-band[data-tone="hero"] .landing-lead {
+    animation-delay: 60ms;
+  }
+
+  .landing-band[data-tone="hero"] .landing-actions {
+    animation-delay: 120ms;
+  }
+
+  .landing-figure {
+    animation: landing-rise 640ms cubic-bezier(0.22, 1, 0.36, 1) 160ms both;
+  }
+}
+
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The one place the typeface is applied. Declared at the end so it lands after every block above that
+   might otherwise set a family, and inherited by everything rather than repeated per component. */
+body {
+  font-family: var(--font-sans);
+}
+
+/* ── Демонстрация в герое: окно отмены ──────────────────────────────────────────────────────
+   Объём честный, на `perspective`, без WebGL: три слоя на разной глубине и наклон за курсором.
+   Трансформации живут здесь, а компонент пишет только две переменные — иначе анимация
+   растеклась бы по JSX и её нельзя было бы выключить одним медиазапросом.
+
+   Анимируются только `transform` и `opacity`. Ни `width`, ни `top`, ни `height`. */
+
+.demo {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.demo-scene {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: calc(var(--radius) * 1.8);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  /* Объём статический: слои разнесены по translateZ внутри perspective, но сама сцена не
+     двигается. Наклон за курсором отсюда убран — от него текст плыл под мышью, и всё читалось
+     «жидким». Глубина осталась, качка ушла. */
+  transform-style: preserve-3d;
+  perspective: 1100px;
+}
+
+.demo-layer {
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.demo-layer[data-depth="back"] {
+  background: var(--surface-sunken);
+  justify-self: start;
+  max-width: 86%;
+  transform: translateZ(12px);
+}
+
+.demo-layer[data-depth="front"] {
+  background: var(--surface);
+  justify-self: end;
+  max-width: 94%;
+  min-height: 92px;
+  border-color: var(--accent);
+  transform: translateZ(38px);
+}
+
+.demo-bar {
+  display: flex;
+  align-items: center;
+  /* Вправо, под черновик: он прижат к правому краю, и управление им должно стоять там же,
+     а не разъезжаться по разным сторонам карточки. */
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  transform: translateZ(52px);
+}
+
+.demo-label {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-s);
+  color: var(--text-muted);
+}
+
+.demo-text {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: 1.55;
+}
+
+.demo-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+}
+
+.demo-why {
+  margin: 0;
+  text-align: right;
+  font-size: var(--text-s);
+  color: var(--text-muted);
+  transform: translateZ(20px);
+}
+
+/* Кольцо обратного отсчёта. `conic-gradient` по переменной, которую пишет компонент: ни один
+   размер не анимируется, меняется только заливка. */
+.demo-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: conic-gradient(var(--accent) calc(var(--progress, 1) * 360deg), var(--border) 0);
+  flex: none;
+}
+
+.demo-ring::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+
+.demo-ring-value {
+  position: relative;
+  z-index: 1;
+  font-size: var(--text-s);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.demo-cancel,
+.demo-replay {
+  font: inherit;
+  font-size: var(--text-s);
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.demo-cancel:hover,
+.demo-replay:hover {
+  background: var(--surface-sunken);
+}
+
+.demo-cancel:active,
+.demo-replay:active {
+  transform: scale(0.98);
+}
+
+.demo-state {
+  font-size: var(--text-s);
+  color: var(--text-muted);
+}
+
+.demo-state[data-outcome="sent"] {
+  color: var(--ok);
+}
+
+.demo-state[data-outcome="cancelled"] {
+  color: var(--accent);
+}
+
+.demo-hint {
+  margin: 0;
+  font-size: var(--text-s);
+  color: var(--text-muted);
+}
+
+/* Объявление исхода для экранного диктора. Видимо скрыто, но не `display: none` — иначе
+   `aria-live` молчит. */
+.demo-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Наклон и каретка — движение. Под `reduce` исчезают оба, демонстрация работает дальше. */
+@media (prefers-reduced-motion: reduce) {
+  .demo-scene,
+  .demo-layer {
+    transform: none;
+    transition: none;
+  }
+
+  .demo-caret {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .demo-caret {
+    animation: demo-blink 1s steps(2, end) infinite;
+  }
+}
+
+@keyframes demo-blink {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ── Персонаж: он же знак ───────────────────────────────────────────────────────────────────
+   Раньше здесь был робот из прямоугольника и двух палок, и выглядел он ровно так. Знак говорит
+   ту же мысль одной формой — реплика с глазами и без рта, — поэтому персонаж это и есть знак, а
+   меняются у него только глаза.
+
+   Все состояния приходят из `[data-phase]`, который ставит демонстрация: своих часов у персонажа
+   нет. Анимируются только `transform` и `opacity`. */
+
+.keeper {
+  position: absolute;
+  right: 22px;
+  bottom: 100%;
+  width: 96px;
+  margin-bottom: -22px;
+  z-index: 0;
+  pointer-events: none;
+  display: block;
+  transform-origin: 50% 100%;
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.keeper-mark {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.keeper .mark-body {
+  fill: var(--accent);
+  transition: fill 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.keeper .mark-eyes {
+  fill: var(--accent-contrast);
+}
+
+/* Держит слова: подался вперёд и чуть повернулся. Прищур при этом даёт сам знак — в этой фазе
+   `keeper.tsx` отдаёт хитрые глаза, в остальных спокойные. */
+.keeper[data-phase="waiting"] {
+  transform: translateY(-7px) rotate(-3deg);
+}
+
+/* Разрешили — выпрямился, цвет сменился на «состоялось». */
+.keeper[data-phase="sent"] .mark-body {
+  fill: var(--ok);
+}
+
+/* Отменили — сел обратно. */
+.keeper[data-phase="cancelled"] {
+  transform: translateY(5px) scale(0.97);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Пока пишет — еле заметно покачивается. */
+  .keeper[data-phase="drafting"] {
+    animation: keeper-think 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+
+  /* Пока держит — дышит. Движение в пару пикселей: оживляет, не отвлекает. */
+  .keeper[data-phase="waiting"] {
+    animation: keeper-hold 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+}
+
+@keyframes keeper-think {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes keeper-hold {
+  50% {
+    transform: translateY(-11px) rotate(-3deg);
+  }
+}
+
+/* Сцена — система координат для персонажа. */
+.demo-scene {
+  position: relative;
+}
+
+/* На узком экране он занял бы место, которого там нет. 720, а не 719: шлюз breakpoints.test.ts
+   держит список известных границ, и лишняя граница в один пиксель — это новая точка перелома. */
+@media (max-width: 720px) {
+  .keeper {
+    width: 68px;
+    right: 10px;
+  }
+}
+
+/* Знак рядом со словом на первом экране. */
+.landing-logo {
+  width: 30px;
+  height: auto;
+  flex: none;
+}
+
+.landing-logo .mark-body {
+  fill: var(--accent);
+}
+
+.landing-logo .mark-eyes {
+  fill: var(--accent-contrast);
 }

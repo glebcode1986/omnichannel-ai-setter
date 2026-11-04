@@ -15,7 +15,7 @@ import type { Translator } from "@/i18n/translate";
 import { assembleBillingScreen, type BillingScreenData } from "@/server/billing-screen";
 import { getDb } from "@/server/db";
 import type { RawSearchParams } from "@/server/inbox-view";
-import { requireBusinessProfileContext, requireWorkspaceContext } from "@/server/request-context";
+import { pageBusinessProfileContext, pageWorkspaceContext } from "@/server/page-context";
 
 export interface BillingPageData extends BillingScreenData {
   readonly t: Translator;
@@ -29,8 +29,8 @@ export async function loadBillingPage(
   // The profile the shell is drawn around, and the workspace the money belongs to. Both are authorized
   // before any commercial state is read: the readers below take a workspace id and would happily answer
   // for one the viewer has nothing to do with.
-  await requireBusinessProfileContext(workspaceId, businessProfileId);
-  const context = await requireWorkspaceContext(workspaceId);
+  await pageBusinessProfileContext(workspaceId, businessProfileId);
+  const context = await pageWorkspaceContext(workspaceId);
   const t = await requestTranslator();
 
   return {

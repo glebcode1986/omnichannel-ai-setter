@@ -88,6 +88,12 @@ describe("the catalogues", () => {
         "channel.WHATSAPP",
         "feature.INSTAGRAM",
         "feature.WHATSAPP",
+        // The landing page names the two platforms a third time, in the words their owners use for the
+        // product a business connects — "Instagram Direct" and "WhatsApp Business". Proper nouns, and the
+        // same category as `channel.*` and `feature.*` above; not shared with them for the same reason
+        // those two are not shared with each other.
+        "landing.channelInstagram",
+        "landing.channelWhatsApp",
         "landing.title",
         "leads.stageColumn",
       ].toSorted(),

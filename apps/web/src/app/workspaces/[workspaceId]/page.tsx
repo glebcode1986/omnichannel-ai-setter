@@ -18,7 +18,7 @@ import { mayWriteWorkspaceWide, readWorkspaceOnboarding } from "@omnichannel/db"
 import { requestTranslator } from "@/i18n/request-locale";
 import { getDb } from "@/server/db";
 import { createBusinessProfileAction } from "@/server/onboarding-actions";
-import { requireWorkspaceContext } from "@/server/request-context";
+import { pageWorkspaceContext } from "@/server/page-context";
 import { one } from "@/server/knowledge-view";
 import type { RawSearchParams } from "@/server/inbox-view";
 import { CreateProfileForm } from "@/ui/onboarding/create-profile-form";
@@ -34,7 +34,7 @@ export default async function WorkspacePage({
 }) {
   const { workspaceId } = await params;
   const query = await searchParams;
-  const context = await requireWorkspaceContext(workspaceId);
+  const context = await pageWorkspaceContext(workspaceId);
   const state = await readWorkspaceOnboarding(getDb(), context);
   const t = await requestTranslator();
 
