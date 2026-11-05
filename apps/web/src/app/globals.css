@@ -81,6 +81,18 @@
      `size − sink` above the panel's top edge — which is the clearance the header must leave, and the
      reason these are tokens: the header and the character were two places holding the same fact, and
      when the controls moved into the corner they disagreed and overlapped by 41px. */
+  /*
+   * The brand lockup, once.
+   *
+   * It was drawn twice and the two disagreed: 15px type on the landing page, 19px on sign-in, and the
+   * same 30px mark beside both. Against 15px type that mark stands 2.8 times the height of the capital
+   * letters next to it, so the icon read as the brand and the name read as a caption — which is what
+   * "the brand looks small" was describing. 34px beside 26px type is 1.8, inside the band a lockup
+   * normally sits in, and `brand-lockup.test.ts` holds the ratio so bumping one of the two cannot
+   * quietly reopen the gap.
+   */
+  --brand-text: var(--text-xl);
+  --brand-mark: 34px;
   --keeper-size: 96px;
   --keeper-sink: 22px;
 }
@@ -2015,9 +2027,9 @@ details[open] > summary::before {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
-  font-size: var(--text-m);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: var(--brand-text);
+  font-weight: 650;
+  letter-spacing: -0.015em;
   margin: 0 0 var(--space-4);
 }
 
@@ -2522,6 +2534,62 @@ body {
   color: var(--accent);
 }
 
+/*
+ * The chooser, **under** the demonstration rather than above it.
+ *
+ * Above it are two things that cannot move: the character, which overhangs the panel's top edge by
+ * design, and the alignment with the headline the owner asked for. Tabs there would collide with the
+ * first and break the second. ARIA ties a panel to its tabs by `aria-controls` and `aria-labelledby`
+ * rather than by which comes first in the document, so the relationship survives the order; what a
+ * reader gets is a demonstration, then a row of trades to try it on, which is the order they think in.
+ */
+.demo-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.demo-tab {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: 550;
+  line-height: 1;
+  /* Above the 24px floor WCAG 2.2 sets for a target. */
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.demo-tab:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.demo-tab[aria-selected="true"] {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* Which platform this conversation came in on. Top-left: the character occupies the other corner. */
+.demo-channel {
+  margin: 0;
+  justify-self: start;
+  font-size: var(--text-s);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .demo-hint {
   margin: 0;
   font-size: var(--text-s);
@@ -2902,7 +2970,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 
 /* Знак рядом со словом на первом экране. */
 .landing-logo {
-  width: 30px;
+  width: var(--brand-mark);
   height: auto;
   flex: none;
 }
@@ -2955,13 +3023,13 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   gap: var(--space-3);
   text-decoration: none;
   color: var(--text);
-  font-size: var(--text-l);
+  font-size: var(--brand-text);
   font-weight: 650;
   letter-spacing: -0.015em;
 }
 
 .auth-mark {
-  width: 30px;
+  width: var(--brand-mark);
   height: auto;
   flex: none;
 }

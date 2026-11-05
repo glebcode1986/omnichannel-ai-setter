@@ -621,12 +621,24 @@ const en = {
   "landing.demoRegion": "A demonstration of one reply waiting out its delay",
   "landing.howItWorks": "How it works",
   "landing.figureCustomerLabel": "Customer",
-  "landing.figureCustomerText": "Hi! How much is delivery to Bucharest, and do you have it in black?",
   "landing.figureDraftLabel": "Drafted reply",
-  "landing.figureDraftText": "Hello! Delivery to Bucharest is 25 lei and takes two days. Black is in stock — shall I reserve one for you?",
-  "landing.figureWhy": "Facts: Delivery, Stock · Tone: 12 verified replies of yours",
-  "landing.figureApprove": "Approve and send",
-  "landing.figureEdit": "Edit first",
+
+  // Three trades whose replies have nothing in common except the mechanism underneath — which is the
+  // claim the hero is making. Each names the facts it drew on, and the delivery one arrives over
+  // WhatsApp rather than merely being described as doing so.
+  "landing.demoScenarios": "Example conversations",
+  "landing.demoDentalTab": "Dental clinic",
+  "landing.demoDentalCustomer": "Hello! Do you place implants, and what does a first consultation cost?",
+  "landing.demoDentalDraft": "Hello! Yes, implants are one of our main procedures. A first consultation with a scan is 300 lei, and it comes off the treatment if you go ahead. Would Tuesday morning or Thursday evening suit you better?",
+  "landing.demoDentalWhy": "Facts: Procedures, Prices, Opening hours · Tone: 18 verified replies of yours",
+  "landing.demoTravelTab": "Travel agency",
+  "landing.demoTravelCustomer": "Hi! Is the Antalya trip on the 14th still open, and are transfers included?",
+  "landing.demoTravelDraft": "Hello! Two rooms are left for the 14th. The price covers the flight, transfers both ways and breakfast; excursions are paid separately. Shall I hold one for 24 hours?",
+  "landing.demoTravelWhy": "Facts: Availability, What is included · Tone: 23 verified replies of yours",
+  "landing.demoOrderTab": "Food delivery",
+  "landing.demoOrderCustomer": "Two large pepperoni and a Greek salad, please — Garden Street 12, flat 40. Card to the courier.",
+  "landing.demoOrderDraft": "Got it: two large pepperoni and a Greek salad to Garden Street 12, flat 40, card to the courier. That is 310 lei, about 40 minutes. Confirm and it goes to the kitchen.",
+  "landing.demoOrderWhy": "Facts: Menu, Prices, Delivery area · Tone: 31 verified replies of yours",
   "landing.status": "Free while the send path is being proved. No card.",
 
   // The two choices a reader can make before they have an account. Named for the surface rather than for
@@ -1729,12 +1741,22 @@ const ru: Catalogue = {
   "landing.demoRegion": "Демонстрация: один ответ выжидает свою задержку",
   "landing.howItWorks": "Как это работает",
   "landing.figureCustomerLabel": "Клиент",
-  "landing.figureCustomerText": "Здравствуйте! Сколько стоит доставка в Бухарест и есть ли в чёрном?",
   "landing.figureDraftLabel": "Черновик ответа",
-  "landing.figureDraftText": "Здравствуйте! Доставка в Бухарест — 25 леев, два дня. Чёрный есть в наличии — отложить для вас?",
-  "landing.figureWhy": "Факты: Доставка, Наличие · Тон: 12 ваших проверенных ответов",
-  "landing.figureApprove": "Одобрить и отправить",
-  "landing.figureEdit": "Сначала поправить",
+
+  // Числительные согласованы по падежу и не опечатка: 18 — «ответов», 23 — «ответа», 31 — «ответ».
+  "landing.demoScenarios": "Примеры переписок",
+  "landing.demoDentalTab": "Стоматология",
+  "landing.demoDentalCustomer": "Здравствуйте! Вы ставите импланты и сколько стоит первая консультация?",
+  "landing.demoDentalDraft": "Здравствуйте! Да, импланты — одно из основных направлений. Первая консультация со снимком — 300 леев, и она вычитается из стоимости лечения. Вам удобнее во вторник утром или в четверг вечером?",
+  "landing.demoDentalWhy": "Факты: Услуги, Цены, Часы работы · Тон: 18 ваших проверенных ответов",
+  "landing.demoTravelTab": "Турагентство",
+  "landing.demoTravelCustomer": "Здравствуйте! Тур в Анталию на 14-е ещё открыт, трансферы входят?",
+  "landing.demoTravelDraft": "Здравствуйте! На 14-е осталось два номера. В цену входят перелёт, трансферы в обе стороны и завтраки; экскурсии оплачиваются отдельно. Забронировать номер на сутки?",
+  "landing.demoTravelWhy": "Факты: Наличие мест, Что входит · Тон: 23 ваших проверенных ответа",
+  "landing.demoOrderTab": "Доставка еды",
+  "landing.demoOrderCustomer": "Две большие пепперони и греческий салат, пожалуйста — Садовая 12, кв. 40. Картой курьеру.",
+  "landing.demoOrderDraft": "Принято: две большие пепперони и греческий салат на Садовую 12, кв. 40, оплата картой курьеру. Итого 310 леев, примерно 40 минут. Подтверждаете — и заказ уходит на кухню.",
+  "landing.demoOrderWhy": "Факты: Меню, Цены, Зона доставки · Тон: 31 ваш проверенный ответ",
   "landing.status": "Бесплатно, пока проверяется путь отправки. Карта не нужна.",
 
   "publicSurface.theme": "Оформление",

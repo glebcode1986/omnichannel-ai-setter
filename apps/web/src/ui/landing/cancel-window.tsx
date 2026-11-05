@@ -13,6 +13,13 @@
  * person has taken over; `CANCELLED_HUMAN_TAKEOVER` is a settlement with tests behind it. The seconds
  * here are shortened for a landing page, which is the only liberty taken.
  *
+ * **Three conversations rather than one.** A single shop enquiry answered one question — "what does a
+ * reply look like" — and left the one a visitor actually arrives with: *would it work for my business*.
+ * A dentist, a travel agency and a food order are three trades whose replies have nothing in common
+ * except the shape of the thing underneath, which is the point being made. Each names the facts it drew
+ * on and the channel it arrived through, so the WhatsApp one is visibly WhatsApp rather than asserted to
+ * be. Nothing about the mechanism changes between them: the same draft, the same delay, the same button.
+ *
  * Its words arrive as plain strings rather than a translator, because a translator carries functions and
  * functions do not cross the server/client boundary — the same reason `navigation.tsx` gives.
  *
@@ -24,12 +31,24 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Keeper } from "./keeper";
 
-export interface CancelWindowCopy {
-  readonly customerLabel: string;
+export interface DemoScenario {
+  /** Stable, and used in the DOM: the tab's id, the panel's label, and what a test selects on. */
+  readonly id: string;
+  /** The trade, as a reader would name it — this is the word they scan for. */
+  readonly tab: string;
+  /** Which platform this conversation arrived through. */
+  readonly channel: string;
   readonly customerText: string;
-  readonly draftLabel: string;
   readonly draftText: string;
+  /** Which facts the draft drew on, and how much of the owner's own writing shaped its tone. */
   readonly why: string;
+}
+
+export interface CancelWindowCopy {
+  readonly scenariosLabel: string;
+  readonly scenarios: readonly DemoScenario[];
+  readonly customerLabel: string;
+  readonly draftLabel: string;
   readonly typing: string;
   /**
    * One sentence per second the countdown can show, interpolated on the server and indexed by seconds
@@ -51,8 +70,23 @@ type Phase = "drafting" | "waiting" | "sent" | "cancelled";
 /** Shortened for a landing page; the product's own delay is minutes, not seconds. */
 const COUNTDOWN_SECONDS = 6;
 const TYPING_MS = 1400;
+const PANEL_ID = "demo-panel";
+
+const tabId = (scenario: DemoScenario): string => `demo-tab-${scenario.id}`;
+
+/**
+ * Move focus to a tab, outside React.
+ *
+ * A module function rather than a closure in the component body: this reaches into the document, which
+ * is exactly what a render must not do, and keeping it out here says plainly that it only runs from a
+ * key press.
+ */
+function focusTab(id: string): void {
+  document.getElementById(id)?.focus();
+}
 
 export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
+  const [active, setActive] = useState(0);
   const [phase, setPhase] = useState<Phase>("drafting");
   const [typed, setTyped] = useState(0);
   const [left, setLeft] = useState(COUNTDOWN_SECONDS);
@@ -64,6 +98,9 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
   );
   const [run, setRun] = useState(0);
 
+  const scenario = copy.scenarios[active] ?? copy.scenarios[0];
+  const draftText = scenario?.draftText ?? "";
+
   // Only the *changes* need an effect; the initial value came from the initialiser above.
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -74,7 +111,7 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
 
   // The draft composes itself. With reduced motion it is simply there.
   useEffect(() => {
-    if (phase !== "drafting") {
+    if (phase !== "drafting" || draftText === "") {
       return;
     }
     if (reduced) {
@@ -82,15 +119,15 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
       // re-renders before the first render has settled, which is a cascade the lint rule refuses — and
       // it is right to: the same two updates one tick later are indistinguishable to a reader.
       const immediate = window.setTimeout(() => {
-        setTyped(copy.draftText.length);
+        setTyped(draftText.length);
         setPhase("waiting");
       }, 0);
       return () => window.clearTimeout(immediate);
     }
-    const step = TYPING_MS / copy.draftText.length;
+    const step = TYPING_MS / draftText.length;
     const id = window.setInterval(() => {
       setTyped((count) => {
-        if (count >= copy.draftText.length) {
+        if (count >= draftText.length) {
           window.clearInterval(id);
           setPhase("waiting");
           return count;
@@ -99,7 +136,7 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
       });
     }, step);
     return () => window.clearInterval(id);
-  }, [phase, reduced, copy.draftText, run]);
+  }, [phase, reduced, draftText, run]);
 
   // The delay runs down. Nothing here sends anything; the point is that it *could*.
   useEffect(() => {
@@ -119,32 +156,113 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
     return () => window.clearInterval(id);
   }, [phase, run]);
 
-  const replay = useCallback(() => {
+  const restart = useCallback(() => {
     setTyped(0);
     setLeft(COUNTDOWN_SECONDS);
     setPhase("drafting");
     setRun((count) => count + 1);
   }, []);
 
+  /**
+   * Switching trade starts that conversation from the beginning.
+   *
+   * Leaving the phase alone would show the new draft already sent, or — worse — part-typed to the length
+   * the *previous* text had reached. The demonstration's whole claim is that you watch it happen, so
+   * every scenario gets watched.
+   */
+  const choose = useCallback(
+    (index: number) => {
+      setActive(index);
+      restart();
+    },
+    [restart],
+  );
+
   // Нет слежения за курсором, и это сознательно. Сцена кренилась вслед за мышью, и текст внутри
   // плыл вместе с ней — читать было неуютно, хотя эффект задумывался как «объём». Объём остался,
   // но статический: слои по-прежнему разнесены по translateZ внутри perspective, просто ничего
   // больше не двигается под курсором.
 
-  const visible = copy.draftText.slice(0, typed);
+  const visible = draftText.slice(0, typed);
   const progress = phase === "waiting" ? left / COUNTDOWN_SECONDS : phase === "drafting" ? 1 : 0;
+
+  if (scenario === undefined) {
+    return null;
+  }
 
   return (
     <div className="demo" role="group" aria-label={copy.region}>
-      <div className="demo-scene" data-phase={phase}>
+      {/*
+        A real tablist, with arrow keys and one tab stop. Selection follows focus, which is the pattern
+        for panels that cost nothing to render — arrowing along the trades shows each one rather than
+        requiring a second key to confirm a choice already made.
+      */}
+      <div className="demo-tabs" role="tablist" aria-label={copy.scenariosLabel}>
+        {copy.scenarios.map((option, index) => (
+          <button
+            className="demo-tab"
+            key={option.id}
+            id={tabId(option)}
+            type="button"
+            role="tab"
+            aria-selected={index === active}
+            aria-controls={PANEL_ID}
+            tabIndex={index === active ? 0 : -1}
+            data-demo-tab={option.id}
+            onClick={() => {
+              choose(index);
+            }}
+            onKeyDown={(event) => {
+              const last = copy.scenarios.length - 1;
+              const next =
+                event.key === "ArrowRight"
+                  ? (index === last ? 0 : index + 1)
+                  : event.key === "ArrowLeft"
+                    ? (index === 0 ? last : index - 1)
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? last
+                        : null;
+              if (next === null) {
+                return;
+              }
+              event.preventDefault();
+              choose(next);
+              const target = copy.scenarios[next];
+              if (target !== undefined) {
+                focusTab(tabId(target));
+              }
+            }}
+          >
+            {option.tab}
+          </button>
+        ))}
+      </div>
+
+      <div
+        className="demo-scene"
+        id={PANEL_ID}
+        role="tabpanel"
+        aria-labelledby={tabId(scenario)}
+        // Focusable because during `drafting` the panel holds nothing focusable at all, and a tab panel a
+        // keyboard cannot reach is a panel a keyboard user is told about and then cannot read.
+        tabIndex={0}
+        data-phase={phase}
+        data-scenario={scenario.id}
+      >
         {/* The character reads the same phase the demonstration is in. It owns no state of its own —
             every expression is a stylesheet rule keyed off `data-phase` — so there is one clock here,
             not two that can disagree. */}
         <Keeper phase={phase} />
 
+        <p className="demo-channel" data-demo-channel={scenario.id}>
+          {scenario.channel}
+        </p>
+
         <div className="demo-layer" data-depth="back">
           <p className="demo-label">{copy.customerLabel}</p>
-          <p className="demo-text">{copy.customerText}</p>
+          <p className="demo-text">{scenario.customerText}</p>
         </div>
 
         <div className="demo-layer" data-depth="front" data-kind="draft">
@@ -184,14 +302,14 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
               <span className="demo-state" data-outcome={phase}>
                 {phase === "sent" ? copy.sent : copy.cancelled}
               </span>
-              <button type="button" className="demo-replay" onClick={replay}>
+              <button type="button" className="demo-replay" onClick={restart}>
                 {copy.replay}
               </button>
             </>
           ) : null}
         </div>
 
-        <p className="demo-why">{copy.why}</p>
+        <p className="demo-why">{scenario.why}</p>
       </div>
 
       {/* The outcome, announced once rather than on every tick: a countdown read aloud every second is

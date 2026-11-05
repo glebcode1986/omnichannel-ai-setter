@@ -117,11 +117,37 @@ export default async function HomePage() {
 
           <CancelWindow
             copy={{
+              scenariosLabel: t.t("landing.demoScenarios"),
+              // Three trades, and the channel is part of the claim rather than decoration: the order
+              // arrives over WhatsApp, which is the platform the page says it answers on.
+              scenarios: [
+                {
+                  id: "dental",
+                  tab: t.t("landing.demoDentalTab"),
+                  channel: t.t("landing.channelInstagram"),
+                  customerText: t.t("landing.demoDentalCustomer"),
+                  draftText: t.t("landing.demoDentalDraft"),
+                  why: t.t("landing.demoDentalWhy"),
+                },
+                {
+                  id: "travel",
+                  tab: t.t("landing.demoTravelTab"),
+                  channel: t.t("landing.channelInstagram"),
+                  customerText: t.t("landing.demoTravelCustomer"),
+                  draftText: t.t("landing.demoTravelDraft"),
+                  why: t.t("landing.demoTravelWhy"),
+                },
+                {
+                  id: "order",
+                  tab: t.t("landing.demoOrderTab"),
+                  channel: t.t("landing.channelWhatsApp"),
+                  customerText: t.t("landing.demoOrderCustomer"),
+                  draftText: t.t("landing.demoOrderDraft"),
+                  why: t.t("landing.demoOrderWhy"),
+                },
+              ],
               customerLabel: t.t("landing.figureCustomerLabel"),
-              customerText: t.t("landing.figureCustomerText"),
               draftLabel: t.t("landing.figureDraftLabel"),
-              draftText: t.t("landing.figureDraftText"),
-              why: t.t("landing.figureWhy"),
               typing: t.t("landing.demoTyping"),
               // One sentence per second the countdown can show, interpolated here because the component
               // cannot be handed a translator: functions do not cross the server/client boundary.
