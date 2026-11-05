@@ -132,6 +132,41 @@ describe("the appearance control", () => {
     expect(light, "and must not mark the other one").toContain('aria-pressed="false"');
   });
 
+  it("marks neither option on the server when nobody has chosen, and says the system is deciding", () => {
+    // The server cannot read `prefers-color-scheme`, so any value it puts here is a guess that is wrong
+    // for half its readers — visibly, in the first frame, until the script corrects it. It marks neither
+    // and flags that the machine is deciding; `theme-palette.test.ts` holds the stylesheet to showing
+    // the right half from that flag alone.
+    const html = renderToStaticMarkup(
+      <ThemeSwitch
+        groupLabel={t.t("publicSurface.theme")}
+        stored={undefined}
+        options={options}
+        cookieName="public_theme"
+        cookieMaxAge={60}
+      />,
+    );
+
+    expect(html).toContain('data-following-system="true"');
+    expect(html, "a guess here is wrong for every reader on a dark machine").not.toContain('aria-pressed="true"');
+  });
+
+  it("does not claim the system is deciding once a choice exists", () => {
+    const html = renderToStaticMarkup(
+      <ThemeSwitch
+        groupLabel={t.t("publicSurface.theme")}
+        stored="light"
+        options={options}
+        cookieName="public_theme"
+        cookieMaxAge={60}
+      />,
+    );
+
+    // Otherwise the stylesheet would keep following the machine over the reader's own choice.
+    expect(html).not.toContain("data-following-system");
+    expect(html).toContain('aria-pressed="true"');
+  });
+
   it("submits a form for each option, so it works before the script does", () => {
     // Every option is a real form bound to a server action. With scripting off, or in the window before
     // hydration, clicking still sets the cookie — which is the only reason this is not a plain button.

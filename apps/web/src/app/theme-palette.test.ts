@@ -64,6 +64,20 @@ describe("the dark palette", () => {
     expect(css).toContain('@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {');
   });
 
+  it("shows which half of the appearance control is live before any script runs", () => {
+    // The server marks neither option when nobody has chosen, because it cannot read the machine's
+    // preference — so the stylesheet has to answer, or the control arrives blank and fills in late.
+    // Light is live by default; the query hands that over to dark on a machine that prefers dark.
+    expect(css).toContain('.switch[data-following-system] .switch-option[data-public-theme="light"] {');
+    expect(css).toContain('.switch[data-following-system] .switch-option[data-public-theme="dark"] {');
+
+    const query = css.indexOf('.switch[data-following-system] .switch-option[data-public-theme="dark"]');
+    const governing = css.lastIndexOf("@media (prefers-color-scheme: dark)", query);
+    expect(governing, "the dark half must be inside a colour-scheme query, not unconditional").toBeGreaterThan(-1);
+    // And inside that query the light half must be handed back, or both would look live at once.
+    expect(css.slice(governing, query)).toContain('data-public-theme="light"');
+  });
+
   it("declares the chosen palette after the query, where it can win", () => {
     // Source order decides between two equal-specificity rules, and `contrast.test.ts` reads everything
     // before the query as the light theme — so this block being above it would both lose and pollute.

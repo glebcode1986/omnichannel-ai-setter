@@ -36,14 +36,17 @@ function readSystemTheme(): PublicTheme {
 }
 
 /**
- * What the server has to guess.
+ * What the server knows about the system's preference: nothing, and it says so.
  *
- * It guesses light, and it only matters for a reader who has never chosen — anyone who has is rendered
- * from their cookie, correctly, on the server. React re-reads the real value after hydration, so the
- * worst case is the unchosen control settling once on first load, not a wrong page.
+ * It is tempting to guess light here. The guess is wrong for every reader on a dark machine, and it is
+ * wrong *visibly* — the control arrives with the wrong half marked and corrects itself once the script
+ * runs, which is the flicker this component exists to avoid. Returning `undefined` marks neither, and
+ * the stylesheet fills the gap: `[data-following-system]` plus a `prefers-color-scheme` query shows the
+ * right half from the very first paint, with no script at all. React re-reads the real value after
+ * hydration and the accessible state catches up with what was already on screen.
  */
-function readSystemThemeOnServer(): PublicTheme {
-  return "light";
+function readSystemThemeOnServer(): undefined {
+  return undefined;
 }
 
 /**
@@ -81,11 +84,17 @@ export interface ThemeSwitchProps {
 export function ThemeSwitch({ groupLabel, stored, options, cookieName, cookieMaxAge }: ThemeSwitchProps) {
   const [chosen, setChosen] = useState<PublicTheme | undefined>(stored);
   const system = useSyncExternalStore(subscribeToSystemTheme, readSystemTheme, readSystemThemeOnServer);
-  // A choice wins over the system; with no choice, the system *is* the answer.
+  // A choice wins over the system; with no choice, the system *is* the answer — and on the server, where
+  // the system cannot be read, the answer is "neither", which the stylesheet renders rather than guesses.
   const active = chosen ?? system;
 
   return (
-    <div className="switch" role="group" aria-label={groupLabel}>
+    <div
+      className="switch"
+      role="group"
+      aria-label={groupLabel}
+      {...(chosen === undefined ? { "data-following-system": "true" } : {})}
+    >
       {options.map((option) => (
         <form action={option.action} key={option.value}>
           <button

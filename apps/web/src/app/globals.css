@@ -3112,10 +3112,36 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   color: var(--text);
 }
 
-.switch-option[aria-pressed="true"] {
+/*
+ * The live option.
+ *
+ * Two selectors, because there are two ways to be live and only one of them reaches the server. A
+ * chosen option is `aria-pressed`. An *unchosen* control follows the machine, and the machine's
+ * preference is something only the browser knows — so the server marks neither and this query decides
+ * at first paint, without a script. Guessing on the server instead would put the wrong half in the
+ * first frame of every visit from a dark machine and correct it a moment later, in full view.
+ */
+.switch-option[aria-pressed="true"],
+.switch[data-following-system] .switch-option[data-public-theme="light"] {
   background: var(--surface-raised);
   color: var(--text);
   box-shadow: var(--shadow-1);
+}
+
+@media (prefers-color-scheme: dark) {
+  /* `data-following-system` is only present while nothing is stored, so there is no explicit light
+     choice to override here — this is the machine answering for itself. */
+  .switch[data-following-system] .switch-option[data-public-theme="light"] {
+    background: transparent;
+    color: var(--text-muted);
+    box-shadow: none;
+  }
+
+  .switch[data-following-system] .switch-option[data-public-theme="dark"] {
+    background: var(--surface-raised);
+    color: var(--text);
+    box-shadow: var(--shadow-1);
+  }
 }
 
 /* The hero's top line: the controls, right-aligned on the band's own rail. Positioned for the same
