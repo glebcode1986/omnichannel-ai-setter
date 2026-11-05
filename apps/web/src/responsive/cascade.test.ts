@@ -131,6 +131,69 @@ describe("the cascade, as a browser resolves it", () => {
   });
 });
 
+describe("a figure that is not a figure", () => {
+  beforeEach(() => {
+    // Two tiles of the analytics dashboard: one that has a number, and one that does not. `Measured`
+    // renders the absent case as `.muted` inside the same paragraph as the number.
+    mount(`
+      <div class="metric-tiles">
+        <section class="metric-tile" data-panel="takeover">
+          <h2 id="label">Human takeover</h2>
+          <p class="metric-figure" id="figure">25%</p>
+          <p class="muted" id="caption">2 of 8 conversations</p>
+        </section>
+        <section class="metric-tile" data-panel="missing-facts">
+          <p class="metric-figure" id="absent"><span class="muted" id="words">Not measured</span></p>
+        </section>
+      </div>
+    `);
+  });
+
+  it("sets a measurement at the display step", () => {
+    const figure = getComputedStyle(document.getElementById("figure") as HTMLElement);
+    expect({ size: figure.fontSize, weight: figure.fontWeight }).toEqual({
+      size: "var(--text-xl)",
+      weight: "var(--weight-semibold)",
+    });
+    expect(token("--text-xl")).toBe("24px");
+  });
+
+  it("does not set the words that stand in for one that way", () => {
+    // The defect: "Not measured" arrived at 24px and semibold, inside a paragraph styled for a number.
+    // On a quiet week the page's four largest, heaviest lines were four announcements of having nothing
+    // to say — on a dashboard whose whole claim is that it never overstates what it knows.
+    const words = getComputedStyle(document.getElementById("words") as HTMLElement);
+    expect({ size: words.fontSize, weight: words.fontWeight }).toEqual({
+      size: "var(--text-m)",
+      weight: "var(--weight-regular)",
+    });
+  });
+
+  it("would notice either half being lost, since both depend on source order", () => {
+    // `.metric-figure .muted` (0,2,0) beats `.metric-figure` (0,1,0) by specificity, so this pair cannot
+    // break the way the lead card's did. It can still be deleted, and then the assertion above would be
+    // passing on jsdom's default rather than on a rule — so the control re-plants the defect.
+    document.head.innerHTML = "";
+    const style = document.createElement("style");
+    style.textContent = `${css}\n.metric-figure .muted { font-size: var(--text-xl); font-weight: var(--weight-semibold); }`;
+    document.head.appendChild(style);
+
+    const words = getComputedStyle(document.getElementById("words") as HTMLElement);
+    expect({ size: words.fontSize, weight: words.fontWeight }).toEqual({
+      size: "var(--text-xl)",
+      weight: "var(--weight-semibold)",
+    });
+  });
+
+  it("gives a tile's label the smallest step, so the number is the thing read first", () => {
+    const label = getComputedStyle(document.getElementById("label") as HTMLElement);
+    expect({ size: label.fontSize, weight: label.fontWeight }).toEqual({
+      size: "var(--text-s)",
+      weight: "var(--weight-medium)",
+    });
+  });
+});
+
 describe("no rule is shadowed by a twin", () => {
   /**
    * Every top-level block's selector, with the properties it declares and the line it starts on.

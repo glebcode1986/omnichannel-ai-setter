@@ -272,34 +272,66 @@ function visibleControls(text: string): number {
   return [...text.matchAll(/<(?:input|select|textarea)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"')).length;
 }
 
-/** The bodies of the `field` wrappers in one form, read to their matching closing tag. */
-function balancedDivs(form: string): string[] {
+/**
+ * The filter rows this product renders, each with the selectors that have to make it wrap.
+ *
+ * Two of them, and for a while this file knew about one. Everything below spoke of "every filter bar it
+ * appears in" while matching `className="inbox-search"` alone — so the analytics and audit row, which is
+ * the widest one in the product at eight controls, was never read by any of it. It was a flexed card
+ * with a 900px media query propping it up, which is the shape of the three defects the comments here
+ * describe, and nothing could say so.
+ */
+const FILTER_ROWS = [
+  { row: "inbox-search", field: ".inbox-search .field", what: "the Inbox, review, leads, knowledge, style and settings rows" },
+  { row: "filter-bar", field: ".filter-bar label", what: "the analytics and audit filters" },
+] as const;
+
+/**
+ * The field wrappers in one form, each read to its matching closing tag and including its own tags.
+ *
+ * Two shapes count, because they are one claim. `.inbox-search` wraps a `<label htmlFor>` and its
+ * control in a `div.field`; the analytics row uses a wrapping `<label>`, which already holds both. Either
+ * way the pairing is in the markup, which is the whole invariant — CSS pairs no siblings, and a grid that
+ * flowed a label and a control down two rows is precisely the layout that could not wrap.
+ *
+ * A `<label>` holding no control is the first half of a `div.field` pair rather than a field of its own,
+ * so it is dropped here instead of being counted and then failed below.
+ */
+function balancedFields(form: string): string[] {
   const found: string[] = [];
-  const opener = /<div className="field">/gu;
-  let at = opener.exec(form);
-  while (at !== null) {
-    let depth = 0;
-    let i = at.index;
-    for (; i < form.length; i += 1) {
-      if (form.startsWith("<div", i)) {
-        depth += 1;
-      } else if (form.startsWith("</div>", i)) {
-        depth -= 1;
-        if (depth === 0) {
-          break;
+  for (const [tag, opener] of [
+    ["div", /<div className="field">/gu],
+    ["label", /<label(?=[\s>])/gu],
+  ] as const) {
+    const close = `</${tag}>`;
+    let at = opener.exec(form);
+    while (at !== null) {
+      let depth = 0;
+      let i = at.index;
+      for (; i < form.length; i += 1) {
+        if (form.startsWith(`<${tag}`, i)) {
+          depth += 1;
+        } else if (form.startsWith(close, i)) {
+          depth -= 1;
+          if (depth === 0) {
+            break;
+          }
         }
       }
+      found.push(form.slice(at.index, i + close.length));
+      opener.lastIndex = i + 1;
+      at = opener.exec(form);
     }
-    found.push(form.slice(at.index, i + "</div>".length));
-    opener.lastIndex = i + 1;
-    at = opener.exec(form);
   }
-  return found;
+  return found.filter((field) => visibleControls(field) > 0);
 }
 
 /** Every filter bar in the product, taken out of the component sources. */
 function filterForms(): string[] {
-  return [...componentSources().matchAll(/<form[^>]*className="inbox-search"[\s\S]*?<\/form>/gu)].map((found) => found[0]);
+  const sources = componentSources();
+  return FILTER_ROWS.flatMap(({ row }) => [
+    ...sources.matchAll(new RegExp(`<form[^>]*className="${row}"[\\s\\S]*?</form>`, "gu")),
+  ]).map((found) => found[0]);
 }
 
 function componentSources(): string {
@@ -456,24 +488,29 @@ describe("the supported widths", () => {
     }
   });
 
-  it("lets the filter row wrap by itself, with no width to get wrong", () => {
+  it("lets every filter row wrap by itself, with no width to get wrong", () => {
     // Three hand-picked widths were wrong in turn. A 720px viewport rule left the row broken at 768 and
     // at 900, where the sidebar still takes 232px of the window. A container query at 820px fixed those
     // and left the settings page — seven fields, needing 1320px — broken at 1280 and at 1440. A row that
     // wraps has no width to pick, and nothing to get wrong when someone adds an eighth field.
-    expect(declarationsFor(".inbox-search"), "the row must wrap on its own").toMatch(
-      /grid-template-columns:\s*repeat\(auto-fit/u,
-    );
-    expect(declarationsFor(".inbox-search .field"), "a field is one element").toMatch(/display:\s*grid/u);
+    //
+    // The analytics row then proved the point by being the eighth field: it was a flexed card whose
+    // labels were given `flex: 1 1 10rem` inside a 900px block, and no assertion here could see it.
+    for (const { row, field, what } of FILTER_ROWS) {
+      expect(declarationsFor(`.${row}`), `${what}: the row must wrap on its own`).toMatch(
+        /grid-template-columns:\s*repeat\(auto-fit/u,
+      );
+      expect(declarationsFor(field), `${what}: a field is one element`).toMatch(/display:\s*grid/u);
 
-    // No breakpoint of any kind may speak for it. That is the claim, and it is the whole claim — about
-    // the filter row. It used to be written as `expect(css).not.toContain("@container")`, a ban on the
-    // whole file, which is a different and larger claim than the one above it: a container query is the
-    // right instrument for a surface whose size really is decided by its container, and the Inbox is
-    // one (Issue #112). Asked of the row itself now.
-    expect(rulesAt(375), "no viewport rule may decide the filter row").not.toContain(".inbox-search");
-    for (const body of balancedBodies("@container")) {
-      expect(body, "no container query may decide the filter row either").not.toContain(".inbox-search");
+      // No breakpoint of any kind may speak for it. That is the claim, and it is the whole claim — about
+      // the filter row. It used to be written as `expect(css).not.toContain("@container")`, a ban on the
+      // whole file, which is a different and larger claim than the one above it: a container query is the
+      // right instrument for a surface whose size really is decided by its container, and the Inbox is
+      // one (Issue #112). Asked of the row itself now.
+      expect(rulesAt(375), `${what}: no viewport rule may decide the filter row`).not.toContain(`.${row}`);
+      for (const body of balancedBodies("@container")) {
+        expect(body, `${what}: no container query may decide it either`).not.toContain(`.${row}`);
+      }
     }
   });
 
@@ -591,10 +628,18 @@ describe("the supported widths", () => {
     // one stray control outside a field is a column of its own again, in every filter bar it appears in.
     const forms = filterForms();
     expect(forms.length, "the filter bars this product renders").toBeGreaterThan(0);
+    expect(
+      FILTER_ROWS.every(({ row }) => forms.some((form) => form.includes(`className="${row}"`))),
+      "each named row must actually be found, or this loop asserts nothing about it",
+    ).toBe(true);
 
     for (const form of forms) {
-      const fields = balancedDivs(form);
-      const labels = [...form.matchAll(/<label htmlFor=/gu)].length;
+      const fields = balancedFields(form);
+      // Every `<label>` in a filter row belongs to exactly one field, whichever shape the field takes:
+      // in a `div.field` the label is the field's first child, and in the analytics row the label *is*
+      // the field. So the two counts are equal in both, and a control that escaped its wrapper shows up
+      // as a field short.
+      const labels = [...form.matchAll(/<label(?=[\s>])/gu)].length;
       expect(fields.length, `a filter bar with ${String(labels)} labels needs ${String(labels)} fields`).toBe(labels);
 
       // Counting the two is not enough: move a control out of its wrapper and the counts do not change

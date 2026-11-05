@@ -1233,19 +1233,15 @@ details[open] > summary::before {
   white-space: nowrap;
 }
 
-.inbox-search label {
-  font-size: var(--text-s);
-  line-height: var(--leading-s);
-  color: var(--text-muted);
-}
-
-.inbox-search input {
+/*
+ * The same, and for the same reason. There was a second `.inbox-search label` rule here setting a size
+ * and a colour on an element the rule above takes out of sight — left behind when the labels were
+ * hidden — and an `.inbox-search input` rule restating the base field's border, radius, padding and
+ * background with its own numbers.
+ */
+.inbox-search input,
+.inbox-search select {
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
 }
 
 .filter-row {
@@ -2283,68 +2279,131 @@ details[open] > summary::before {
  * widening the page.
  */
 
+/*
+ * Six controls that narrow a report, not a panel of their own.
+ *
+ * It was a bordered card with its own background, sitting between the page's title and its numbers —
+ * which gave the thing you use to ask the question more visual weight than the answer. The Inbox's
+ * toolbar settled this already: controls on the page, no chrome, and the page's own surface behind them.
+ *
+ * An `auto-fit` grid rather than `flex-wrap`, for the reason `.inbox-search` is one. Wrapping flexed
+ * labels needed `flex: 1 1 10rem` inside a 900px media query to look right, and a hand-picked width is
+ * what this stylesheet has been wrong about three times: the row has no breakpoint now and nothing to
+ * get wrong when somebody adds a seventh filter.
+ */
 .filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--gap);
-  margin-bottom: var(--gap);
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-5);
 }
 
 /*
- * Pre-existing, found while measuring this branch: a flex item's automatic minimum size is its content,
- * and a `<select>`'s content is its longest option. Rename a lead stage to a sentence and the analytics
- * and audit filter bars take the page sideways with it, at any width the option outgrows. `min-width: 0`
- * lets the item shrink; the select then truncates its own text, which is what a select is for.
+ * A label and its control are one element, which is what lets the row wrap: CSS pairs no siblings, and
+ * a grid that flowed the two down separate rows could only ever be a fixed number of columns wide.
+ *
+ * `min-width: 0` is pre-existing and load-bearing. A grid item's automatic minimum size is its content,
+ * and a `<select>`'s content is its longest option; rename a lead stage to a sentence and this row takes
+ * the page sideways with it. Zero lets the item shrink and the select truncate its own text, which is
+ * what a select is for.
  */
 .filter-bar label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  gap: var(--space-1);
   min-width: 0;
-  font-size: 0.875rem;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   color: var(--text-muted);
 }
 
+/*
+ * Only what the grid needs. The border, the radius, the height and the padding come from the base
+ * `input, select, textarea` rule, and this used to restate all four with different values — a slightly
+ * shorter field with slightly tighter padding on one surface, which is exactly the drift that base rule
+ * exists to end.
+ *
+ * `min-width: 0` is not in the base rule and cannot be: a grid item's automatic minimum size is its
+ * content, and a select's content is its longest option.
+ */
 .filter-bar select,
 .filter-bar input {
   min-width: 0;
-  max-width: 100%;
 }
 
-.filter-bar select,
-.filter-bar input {
-  padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
+/* Its own cell, sized to its words. Stretched across a 1fr track it was a 176px button saying one. */
+.filter-bar button {
+  justify-self: start;
+  align-self: end;
 }
 
+/*
+ * Two tiers, not eleven equal panels: the figures, then the detail.
+ *
+ * `.metrics` is the stack of the two and nothing else, so each tier can carry the track size that suits
+ * what is in it — a tile holds a word and a number, a panel holds a six-column table, and one grid
+ * cannot size both.
+ */
 .metrics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.metric-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+.metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
-  gap: var(--gap);
+  gap: var(--space-3);
   align-items: start;
 }
 
-.metric-panel {
-  padding: 12px;
+.metric-panel,
+.metric-tile {
+  padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  /* A panel is the scroll boundary. Without this the widest table decides the page's width. */
+  box-shadow: var(--shadow-1);
+  /* A grid item's automatic minimum size is its content, and the content here is a table or a caption
+     that may not break. Zero lets the card shrink to its track instead of widening the page. */
   min-width: 0;
+}
+
+/* A panel is the scroll boundary, and only a panel needs to be: without this the widest table decides
+   the width of the page. A tile holds a label and a number and has nothing to scroll. */
+.metric-panel {
   overflow-x: auto;
 }
 
+/*
+ * A tile's heading is a label, so it is set like one: the smallest step, muted, above the number rather
+ * than competing with it. A panel's heading names a table and is set like a heading.
+ */
+.metric-tile h2 {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.metric-tile .muted {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
 .metric-panel h2 {
-  margin: 0 0 8px;
-  font-size: 1rem;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
 }
 
 .metric-panel table {
@@ -2355,15 +2414,23 @@ details[open] > summary::before {
 .metric-panel th,
 .metric-panel td {
   text-align: left;
-  padding: 4px 6px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+}
+
+/* A column heading is a caption for the numbers under it, not a second heading on the panel. */
+.metric-panel thead th {
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
 }
 
 .metric-panel dl {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 2px 12px;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
 }
 
@@ -2378,9 +2445,26 @@ details[open] > summary::before {
 }
 
 .metric-figure {
-  margin: 0;
-  font-size: 1.75rem;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xl);
+  line-height: var(--leading-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * "Not measured" is not a measurement, so it is not set like one.
+ *
+ * `Measured` renders the absent case as `.muted` inside this paragraph, which meant the words arrived at
+ * 28px and semibold — the largest, heaviest thing on a page whose whole claim is that it does not
+ * overstate what it knows. A quiet week showed four display-sized announcements of having nothing to say.
+ */
+.metric-figure .muted {
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-regular);
+  letter-spacing: normal;
 }
 
 /* The provider's own numbers are a separate claim from ours, and the boundary is visible. */
@@ -2441,18 +2525,6 @@ details[open] > summary::before {
 .audit-older {
   display: inline-block;
   margin-top: var(--gap);
-}
-
-@media (max-width: 900px) {
-  /* One panel at a time. `auto-fit` would already give a single column at this width, but saying so
-     explicitly keeps the narrow layout from depending on a minmax value somebody tunes for looks. */
-  .metrics {
-    grid-template-columns: 1fr;
-  }
-
-  .filter-bar label {
-    flex: 1 1 10rem;
-  }
 }
 
 /* ── Публичная главная ──────────────────────────────────────────────────────────────────────

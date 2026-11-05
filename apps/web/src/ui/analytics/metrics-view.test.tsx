@@ -98,6 +98,45 @@ describe("the analytics dashboard", () => {
     expect(screen.queryByText("0%")).toBeNull();
   });
 
+  it("says a whole sentence under a figure it could not measure, rather than putting the words in the number's slot", () => {
+    render(
+      <MetricsView
+        t={t}
+        snapshot={snapshot({
+          drafts: { generated: 0, autoSent: 0, humanApprovedSent: 0, awaitingReview: 0, heldAmbiguous: 0, dismissed: 0, superseded: 0, failed: 0 },
+          reviewReasons: [],
+          missingFacts: { drafts: 0, share: null },
+        })}
+        stageLabels={labels}
+      />,
+    );
+
+    // The defect this replaces: the caption interpolated the share, and with no share to interpolate it
+    // put "Not measured" where the number goes — "Not measured of drafts were missing a fact", a
+    // sentence with its subject swapped out. A reader saw it on every quiet week.
+    const tile = document.querySelector('[data-panel="missing-facts"]') as HTMLElement;
+    const caption = tile.querySelector("p.muted") as HTMLElement;
+    expect(caption.textContent).toBe("0 of 0 drafts");
+    expect(caption.textContent).not.toContain(text("analytics.notMeasured"));
+
+    // And the figure itself still says it. Both halves matter: a caption that reads properly above a
+    // figure claiming 0% would be the worse of the two defects.
+    expect(within(tile).getByText(text("analytics.notMeasured"))).toBeTruthy();
+  });
+
+  it("gives every tile a caption, so no percentage is published without its denominator", () => {
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    const tiles = [...document.querySelectorAll(".metric-tile")];
+    expect(tiles.length, "the four figures this page leads with").toBe(4);
+    for (const tile of tiles) {
+      expect(tile.querySelector("h2")?.textContent, `${tile.getAttribute("data-panel") ?? "?"} needs a label`).toBeTruthy();
+      expect(tile.querySelector(".metric-figure")?.textContent, "and a figure").toBeTruthy();
+      // "20%" of what? A share with no counts under it cannot be checked against anything.
+      expect(tile.querySelector("p.muted")?.textContent, "and the counts it came from").toBeTruthy();
+    }
+  });
+
   it("renders a measured value when there is one", () => {
     render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
 

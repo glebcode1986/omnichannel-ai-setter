@@ -118,7 +118,11 @@ export function FilterBar({ t, view, action, accounts, members, stages, kinds, s
           <input type="search" name="q" defaultValue={view.term ?? ""} />
         </label>
       ) : undefined}
-      <button type="submit">{t.t("analytics.apply")}</button>
+      {/* `.button`, like every other submit in the product. Unclassed, it was drawn by the browser:
+          a native grey control at the end of a row of designed fields. */}
+      <button className="button" data-variant="primary" type="submit">
+        {t.t("analytics.apply")}
+      </button>
     </form>
   );
 }
