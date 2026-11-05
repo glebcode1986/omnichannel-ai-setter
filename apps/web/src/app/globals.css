@@ -2293,7 +2293,13 @@ details[open] > summary::before {
  */
 .filter-bar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  /*
+   * 10rem, and the number is measured rather than chosen. Two columns cost twice the floor plus the gap,
+   * so an 11rem floor needs 364px and a 375px phone leaves 343 — one field per row, and a filter block
+   * 482px tall above the numbers it narrows. At 10rem the same phone packs two columns, which is what
+   * the `flex: 1 1 10rem` this rule replaced was doing inside a media query.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
   gap: var(--space-3);
   align-items: end;
   margin-bottom: var(--space-5);
@@ -2352,7 +2358,10 @@ details[open] > summary::before {
 
 .metric-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  /* The same arithmetic: at 13rem a phone stacks all four and the first number is 440px down the page.
+     At 10rem it gets two rows of two, and a tile is a label, a number and a caption — it does not need
+     a wide box to be legible. */
+  grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
   gap: var(--space-3);
 }
 
