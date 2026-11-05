@@ -18,8 +18,10 @@ import { loadWebEnv } from "@/env";
 import { one } from "@/server/knowledge-view";
 import type { RawSearchParams } from "@/server/inbox-view";
 import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
-import { chooseSignInLanguageAction, requestSignInLinkAction, signInWithGoogleAction } from "@/server/sign-in-actions";
+import { publicThemeOf, PUBLIC_THEME_COOKIE } from "@/server/public-theme";
+import { requestSignInLinkAction, signInWithGoogleAction } from "@/server/sign-in-actions";
 import { availableSignInMethods } from "@/server/sign-in-methods";
+import { SurfaceControls } from "@/ui/public/surface-controls";
 import { SignInPanel } from "@/ui/sign-in/sign-in-panel";
 
 export default async function SignInPage({ searchParams }: { readonly searchParams: Promise<RawSearchParams> }) {
@@ -36,12 +38,13 @@ export default async function SignInPage({ searchParams }: { readonly searchPara
     <main className="auth">
       <SignInPanel
         t={t}
-        locale={locale}
         available={methods.available}
         error={one(query["error"])}
         googleAction={signInWithGoogleAction.bind(null, callbackUrl)}
         emailAction={requestSignInLinkAction.bind(null, callbackUrl)}
-        languageAction={chooseSignInLanguageAction}
+        controls={
+          <SurfaceControls t={t} locale={locale} theme={publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value)} path="/sign-in" />
+        }
       />
     </main>
   );

@@ -72,10 +72,14 @@
   --landing-hero: #f2f5fb;
   --landing-band: #eef1f6;
   --content-max: 1360px;
+  /* The landing page's own rail. A literal in two places is a literal that disagrees with itself:
+     the steps list reset its own `max-width` at 900px and nothing put the rail back, so on a 1920
+     screen the heading sat 316px inside the list it heads. */
+  --landing-rail: 1240px;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --surface: #14171b;
     --surface-sunken: #0e1013;
     --surface-raised: #1c2026;
@@ -96,8 +100,53 @@
   }
 }
 
+/*
+ * The same palette, chosen rather than inherited.
+ *
+ * Two blocks and not one because the two questions are different: the query above answers "what does
+ * this machine prefer", and this answers "what did this reader pick". A reader who picks light on a
+ * machine set to dark has to win, which is what `:not([data-theme="light"])` above concedes.
+ *
+ * The declarations are a copy, and a copy is a thing that drifts — so `theme-palette.test.ts` asserts
+ * the two blocks are identical character for character and fails the build on the day one gains a
+ * token the other has not.
+ */
+:root[data-theme="dark"] {
+    --surface: #14171b;
+    --surface-sunken: #0e1013;
+    --surface-raised: #1c2026;
+    --border: #2c333c;
+    --border-strong: #666f80;
+    --text: #eef1f5;
+    --text-muted: #a6b0bd;
+    --accent: #7aa2ff;
+    --landing-hero: #10141b;
+    --landing-band: #11151b;
+    --accent-contrast: #0e1013;
+    --ok: #62d29a;
+    --warn: #e0b054;
+    --stop: #ff8f9a;
+    /* A shadow over a dark surface has to be darker than the surface, not lighter. */
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-2: 0 2px 10px rgb(0 0 0 / 45%);
+}
+
+
 * {
   box-sizing: border-box;
+}
+
+/*
+ * Jumping to `#how` used to teleport. A scroll the eye can follow is what tells a reader the target
+ * was *below* them rather than a new page — and `scroll-margin-top` keeps the heading off the very
+ * top edge when it arrives. Honoured per-element, so it also applies to a focus jump.
+ */
+html {
+  scroll-behavior: smooth;
+}
+
+[id] {
+  scroll-margin-top: var(--space-5);
 }
 
 body {
@@ -311,6 +360,12 @@ details[open] > summary::before {
   * {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* Not covered by the rule above: `scroll-behavior` is neither an animation nor a transition, and a
+     smooth scroll is exactly the motion this query is asked to stop. */
+  html {
+    scroll-behavior: auto;
   }
 }
 
@@ -1885,6 +1940,10 @@ details[open] > summary::before {
 
 .landing-band {
   padding: clamp(40px, 7vw, 88px) var(--space-5);
+  /* Stated rather than inherited from `body`. The value is the one that was already showing through,
+     so nothing changes on screen — but a band whose colour depends on what is behind it is a band
+     that changes colour the day the page is nested in anything. */
+  background: var(--surface-sunken);
 }
 
 /* Центровка живёт ЗДЕСЬ, но сокращения `margin: 0 …` ниже её сбрасывали: короткая запись
@@ -1892,7 +1951,7 @@ details[open] > summary::before {
    остальные полосы — прижатыми к левому краю, с разницей в 386 пикселей. Поэтому ниже у каждой
    из них `auto` проставлен явно. */
 .landing-band > * {
-  max-width: 1240px;
+  max-width: var(--landing-rail);
   margin-inline: auto;
 }
 
@@ -1910,9 +1969,16 @@ details[open] > summary::before {
    а это пятно лежит ниже и по краям. */
 .landing-glow {
   position: absolute;
-  inset: -40% -10% auto -10%;
-  height: 90%;
-  background: radial-gradient(60% 60% at 30% 40%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+  /* Inside the band, not 10% past it. The band clips (`overflow: hidden`), so anything still bright
+     at the band's edge is cut with a hard vertical line — which is what a soft glow centred at 30%
+     of a box that starts off-screen does on a narrow window: measured #192131 against a #10141b
+     band at x=0 on a 1000px screen, a luminous wedge sliced off square in the corner.
+     Centred and smaller, the arithmetic puts the last visible ring at 50% ± (52% × 0.72) — 13.6%
+     to 86.4% of the width — so it cannot reach either edge at any viewport. `glow-reach.test.ts`
+     recomputes that from this declaration rather than trusting the comment. */
+  inset: -30% 0 auto 0;
+  height: 110%;
+  background: radial-gradient(52% 52% at 50% 38%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
   pointer-events: none;
   z-index: 0;
 }
@@ -2146,7 +2212,10 @@ details[open] > summary::before {
    `ol` остаётся `ol`, нумерация идёт сверху вниз по колонкам чтения. */
 @media (min-width: 900px) {
   .landing-steps {
-    max-width: none;
+    /* Two columns *inside* the rail, not instead of it. `none` here was the whole bug: below 1288px
+       the rail is not binding and nothing showed, and above it the list grew while its own heading
+       stayed put. Keeping the rail also keeps the measure — each column is about 56 characters. */
+    max-width: var(--landing-rail);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--space-6);
   }
@@ -2235,6 +2304,11 @@ details[open] > summary::before {
 
 .landing-closing .landing-actions {
   justify-content: center;
+  /* `justify-content` centres the button inside the box; this centres the box. Without it the box
+     is pinned left — `.landing-actions` sets `margin: 0 0 …`, and the shorthand silently resets the
+     `margin-inline: auto` that `.landing-band > *` grants every band child. The comment above that
+     rule warns about exactly this and two of the three places were fixed. */
+  margin-inline: auto;
 }
 
 /* ── Появление ──────────────────────────────────────────────────────────────────────────────
@@ -2860,7 +2934,10 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 
 /* Знак и имя — ссылка на лендинг: пришедший по ссылке должен иметь возможность сначала прочитать,
    куда он попал, не правя адрес вручную. */
+/* Sized to the word, not to the column: as a full-width block a click on the empty space beside the
+   name left the page — 760px of it on the legal pages. */
 .auth-brand {
+  width: fit-content;
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
@@ -2977,32 +3054,92 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 
 /* Мелкий выбор внизу, а не раздел страницы: заголовок остаётся — он называет выбор тому, кто не
    видит, что эти кнопки про одно, — но весит он как подпись. */
-.auth-languages {
+/* ---- the public surface's own controls ---------------------------------------------------------- */
+
+/*
+ * Appearance and language, on all four public pages.
+ *
+ * A segmented control rather than a single toggle, for a reason that is not decoration: a toggle shows
+ * one state and makes the reader work out whether it is the state they are in or the state they would
+ * move to. Two options with the live one marked answers that without being read.
+ *
+ * Each option is its own `<form>` — the control works with scripting off — so the forms are laid out as
+ * flex items rather than `display: contents`, which keeps every browser's accessibility tree ordinary.
+ */
+.surface-controls {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
   gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
-.auth-languages h2 {
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.switch form {
+  display: flex;
   margin: 0;
-  font-size: var(--text-s);
-  font-weight: 500;
-  color: var(--text-muted);
 }
 
-.auth-languages form {
-  margin: 0;
-}
-
-.auth-language {
-  min-height: 30px;
-  padding: 0 var(--space-3);
-  font-size: var(--text-s);
-  font-weight: 500;
-  box-shadow: none;
+.switch-option {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
   background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: 550;
+  line-height: 1;
+  /* Above the 24px floor WCAG 2.2 sets for a target, and short enough to sit in a corner without
+     shouting. The pill around it comes out at 44. */
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.switch-option:hover {
+  color: var(--text);
+}
+
+.switch-option[aria-pressed="true"] {
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* The hero's top line: the controls, right-aligned on the band's own rail. Positioned for the same
+   reason `.landing-hero-inner` is — the glow is absolute and would otherwise paint over them. */
+.landing-topbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: var(--space-5);
+}
+
+/* The document's top line: the brand on the left, the controls on the right. */
+.legal-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* On the sign-in column everything is centred, including this. */
+.auth-column .surface-controls {
+  justify-content: center;
 }
 
 @media (max-width: 720px) {

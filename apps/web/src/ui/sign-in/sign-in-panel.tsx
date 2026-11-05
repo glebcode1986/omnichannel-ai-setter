@@ -22,9 +22,8 @@
  * having seen the product; this is the second screen of the landing page and now looks like it.
  */
 import Link from "next/link";
+import type { ReactNode } from "react";
 
-import type { UiLocale } from "@/i18n/locales";
-import { localeNames, UI_LOCALES } from "@/i18n/locales";
 import type { Translator } from "@/i18n/translate";
 import type { SignInMethod } from "@/server/sign-in-methods";
 import { signInNotice, signInNoticeKey } from "@/server/sign-in-view";
@@ -32,16 +31,23 @@ import { Mark } from "@/ui/landing/mark";
 
 export interface SignInPanelProps {
   readonly t: Translator;
-  readonly locale: UiLocale;
   readonly available: readonly SignInMethod[];
   /** The raw `?error=` value, mapped here rather than by the route. */
   readonly error?: string | undefined;
   readonly googleAction: () => Promise<void>;
   readonly emailAction: (formData: FormData) => Promise<void>;
-  readonly languageAction: (locale: string) => Promise<void>;
+  /**
+   * The public surface's language and appearance controls, passed in rather than built here.
+   *
+   * This panel used to own a language switch of its own, which offered only the language the reader was
+   * *not* reading in. That is a reasonable control on its own and the wrong one to have twice: the same
+   * choice now sits on all four public pages, shows both options and marks the live one, so a reader
+   * meets one control and not two dialects of it.
+   */
+  readonly controls: ReactNode;
 }
 
-export function SignInPanel({ t, locale, available, error, googleAction, emailAction, languageAction }: SignInPanelProps) {
+export function SignInPanel({ t, available, error, googleAction, emailAction, controls }: SignInPanelProps) {
   const notice = signInNotice(error);
   const nothingOnOffer = available.length === 0;
 
@@ -103,20 +109,7 @@ export function SignInPanel({ t, locale, available, error, googleAction, emailAc
 
       {nothingOnOffer ? undefined : <p className="auth-status">{t.t("landing.status")}</p>}
 
-      {/* The language of a surface read by people who have no stored preference yet. Each name is written
-          in its own language, because somebody looking for Russian is looking for "Русский". A heading
-          rather than a bare row: it names the choice for a reader who cannot see that these two buttons
-          belong together. */}
-      <section className="auth-languages">
-        <h2>{t.t("signIn.languageLabel")}</h2>
-        {UI_LOCALES.filter((option) => option !== locale).map((option) => (
-          <form action={languageAction.bind(null, option)} key={option} data-sign-in-language={option}>
-            <button className="button auth-language" type="submit">
-              {localeNames[option]}
-            </button>
-          </form>
-        ))}
-      </section>
+      {controls}
     </div>
   );
 }

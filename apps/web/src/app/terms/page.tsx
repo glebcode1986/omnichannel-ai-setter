@@ -10,7 +10,9 @@ import { cookies } from "next/headers";
 
 import { createTranslator } from "@/i18n/translate";
 import { PUBLIC_LOCALE_COOKIE, publicLocaleOf } from "@/server/public-locale";
+import { publicThemeOf, PUBLIC_THEME_COOKIE } from "@/server/public-theme";
 import { loadLegalDocument } from "@/server/legal-view";
+import { SurfaceControls } from "@/ui/public/surface-controls";
 import { LegalPage } from "@/ui/legal/legal-page";
 
 async function publicTranslator() {
@@ -26,5 +28,14 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function Page() {
   const store = await cookies();
   const locale = publicLocaleOf(store.get(PUBLIC_LOCALE_COOKIE)?.value);
-  return <LegalPage document={loadLegalDocument("terms-of-service", locale)} t={createTranslator(locale)} />;
+  const t = createTranslator(locale);
+  return (
+    <LegalPage
+      document={loadLegalDocument("terms-of-service", locale)}
+      t={t}
+      controls={
+        <SurfaceControls t={t} locale={locale} theme={publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value)} path="/terms" />
+      }
+    />
+  );
 }

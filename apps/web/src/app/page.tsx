@@ -3,8 +3,10 @@ import Link from "next/link";
 
 import { createTranslator } from "@/i18n/translate";
 import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
+import { publicThemeOf, PUBLIC_THEME_COOKIE } from "@/server/public-theme";
 import { CancelWindow } from "@/ui/landing/cancel-window";
 import { Mark } from "@/ui/landing/mark";
+import { SurfaceControls } from "@/ui/public/surface-controls";
 
 /**
  * The product's front door, for somebody who has never heard of it.
@@ -38,7 +40,9 @@ export default async function HomePage() {
   // Using it here meant a reader who had already picked Russian on sign-in came back to an English
   // landing page — the two most public screens in the product disagreeing about their own language.
   const store = await cookies();
-  const t = createTranslator(publicLocaleOf(store.get(PUBLIC_LOCALE_COOKIE)?.value));
+  const locale = publicLocaleOf(store.get(PUBLIC_LOCALE_COOKIE)?.value);
+  const theme = publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value);
+  const t = createTranslator(locale);
 
   const channels = [
     { key: "instagram", title: t.t("landing.channelInstagram"), body: t.t("landing.channelInstagramBody") },
@@ -80,6 +84,12 @@ export default async function HomePage() {
     <main className="shell-main landing">
       <section className="landing-band" data-tone="hero">
         <div className="landing-glow" aria-hidden="true" />
+        {/* Above the hero rather than in it: the controls belong to the whole surface, not to the
+            headline, and a direct child of the band inherits the band's rail so they line up with
+            everything below them. */}
+        <div className="landing-topbar">
+          <SurfaceControls t={t} locale={locale} theme={theme} path="/" />
+        </div>
         <div className="landing-hero-inner">
           <div>
             {/* The mark and the word together. The mark carries the label, so the name is announced

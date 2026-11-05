@@ -628,6 +628,14 @@ const en = {
   "landing.figureApprove": "Approve and send",
   "landing.figureEdit": "Edit first",
   "landing.status": "Free while the send path is being proved. No card.",
+
+  // The two choices a reader can make before they have an account. Named for the surface rather than for
+  // the landing page, because the same control is on all four public pages.
+  "publicSurface.theme": "Appearance",
+  "publicSurface.themeLight": "Light",
+  "publicSurface.themeDark": "Dark",
+  "publicSurface.language": "Language",
+
   "landing.channelsTitle": "Where it answers",
   "landing.channelsLead": "Through the platforms’ own business APIs — no automation of a personal account, nothing that risks the account you built.",
   "landing.channelInstagram": "Instagram Direct",
@@ -692,7 +700,6 @@ const en = {
   "signIn.errorNotLinked": "That address is already registered with a different sign-in method. Use the method you registered with.",
   "signIn.errorAccessDenied": "The sign-in was cancelled, so nothing happened.",
   "signIn.errorEmailRequired": "Enter the email address you want the link sent to.",
-  "signIn.languageLabel": "Language",
   "legal.privacyTitle": "Privacy Policy",
   "legal.termsTitle": "Terms of Service",
   "legal.gap": "to be confirmed",
@@ -1727,6 +1734,12 @@ const ru: Catalogue = {
   "landing.figureApprove": "Одобрить и отправить",
   "landing.figureEdit": "Сначала поправить",
   "landing.status": "Бесплатно, пока проверяется путь отправки. Карта не нужна.",
+
+  "publicSurface.theme": "Оформление",
+  "publicSurface.themeLight": "Светлая",
+  "publicSurface.themeDark": "Тёмная",
+  "publicSurface.language": "Язык",
+
   "landing.channelsTitle": "Где отвечает",
   "landing.channelsLead": "Через собственные бизнес-API площадок — никакой автоматизации личного аккаунта и ничего, что ставит под удар ваш аккаунт.",
   "landing.channelInstagram": "Instagram Direct",
@@ -1791,7 +1804,6 @@ const ru: Catalogue = {
   "signIn.errorNotLinked": "Этот адрес уже зарегистрирован другим способом входа. Воспользуйтесь тем способом, которым регистрировались.",
   "signIn.errorAccessDenied": "Вход отменён, ничего не произошло.",
   "signIn.errorEmailRequired": "Укажите адрес почты, на который прислать ссылку.",
-  "signIn.languageLabel": "Язык",
   "legal.privacyTitle": "Политика конфиденциальности",
   "legal.termsTitle": "Условия использования",
   "legal.gap": "уточняется",

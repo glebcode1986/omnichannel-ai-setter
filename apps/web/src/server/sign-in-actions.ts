@@ -14,7 +14,7 @@
  * error and leave the person on a page that reported nothing.
  */
 import { AuthError } from "next-auth";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { signIn } from "../auth";
@@ -22,8 +22,6 @@ import { loadWebEnv } from "../env";
 import { field } from "./form-fields";
 import { EMAIL_PROVIDER_ID, LINK_SENT_PATH, signInAttemptAllowed } from "./sign-in-guard";
 import { availableSignInMethods, safeRedirectTarget } from "./sign-in-methods";
-import { PUBLIC_LOCALE_COOKIE } from "./public-locale";
-import { isUiLocale } from "@/i18n/locales";
 
 const SIGN_IN_PATH = "/sign-in";
 
@@ -91,30 +89,4 @@ export async function requestSignInLinkAction(callbackUrl: string | undefined, f
     }
     throw error;
   }
-}
-
-/**
- * The language this public surface is read in.
- *
- * A cookie rather than a query parameter, because the choice has to survive into the *email*: the request
- * that asks for a link carries no locale of its own, and `sendVerificationRequest` is handed the request's
- * headers. One source, so the page and the message cannot disagree.
- *
- * Not `httpOnly`: there is nothing secret in a language choice, and a later client-side control should be
- * able to read it. Validated on the way in and again on the way out, so the worst a hostile value can do
- * is pick between two catalogues.
- */
-export async function chooseSignInLanguageAction(locale: string): Promise<void> {
-  if (!isUiLocale(locale)) {
-    redirect(SIGN_IN_PATH);
-  }
-  const store = await cookies();
-  store.set(PUBLIC_LOCALE_COOKIE, locale, {
-    path: "/",
-    sameSite: "lax",
-    httpOnly: false,
-    secure: loadWebEnv().NODE_ENV === "production",
-    maxAge: 365 * 24 * 60 * 60,
-  });
-  redirect(SIGN_IN_PATH);
 }

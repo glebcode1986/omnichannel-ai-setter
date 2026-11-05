@@ -9,20 +9,36 @@
  * that a value is still being settled has already read fourteen clauses believing the page was finished.
  */
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import type { Translator } from "@/i18n/translate";
 import type { ResolvedDocument } from "@/server/legal-content";
 import { LegalDocument } from "@/ui/legal/legal-document";
 import { Mark } from "@/ui/landing/mark";
 
-export function LegalPage({ document, t }: { readonly document: ResolvedDocument; readonly t: Translator }) {
+export function LegalPage({
+  document,
+  t,
+  controls,
+}: {
+  readonly document: ResolvedDocument;
+  readonly t: Translator;
+  /** The public surface's language and appearance controls — the same ones the landing page carries. */
+  readonly controls: ReactNode;
+}) {
   return (
     <main className="legal">
       <div className="legal-column">
-        <Link className="auth-brand" href="/">
-          <Mark title={t.t("landing.title")} className="auth-mark" />
-          <span>{t.t("landing.title")}</span>
-        </Link>
+        {/* The brand and the controls on one line. The brand link is sized to its own content: as a
+            block it spanned the whole column, so a click on empty space to the right of the word left
+            the document. */}
+        <div className="legal-topbar">
+          <Link className="auth-brand" href="/">
+            <Mark title={t.t("landing.title")} className="auth-mark" />
+            <span>{t.t("landing.title")}</span>
+          </Link>
+          {controls}
+        </div>
 
         <p className="legal-dateline">
           <span>

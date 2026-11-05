@@ -2,9 +2,12 @@ import "./globals.css";
 
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
-import { requestLocale } from "@/i18n/request-locale";
+import { signedInLocale } from "@/i18n/request-locale";
+import { publicLocaleOf, PUBLIC_LOCALE_COOKIE } from "@/server/public-locale";
+import { publicThemeOf, PUBLIC_THEME_COOKIE } from "@/server/public-theme";
 
 /**
  * One typeface for the whole product.
@@ -40,12 +43,32 @@ export const metadata: Metadata = {
  * a Russian interface inside `lang="en"` is announced in an English voice. It is also the only place a
  * client component can read the locale from: an error boundary is rendered by React with props we do not
  * control, so it cannot be handed a translator.
+ *
+ * Two sources, in order, because there are two kinds of reader. A signed-in one has a stored preference
+ * and it wins. Anyone else may have chosen a language on the public surface, and that choice is what the
+ * public pages render in — so it has to be what `lang` says. This used to be `requestLocale()` alone,
+ * which falls back to English for anybody with no session: the landing page rendered Russian prose and
+ * announced it as English. The *cookie* is read here rather than the page's resolved locale because a
+ * layout cannot see what its children resolved, and both read the same cookie through the same function.
+ *
+ * The colour scheme is resolved here for one reason: it has to be in the first byte. `data-theme` is
+ * absent when the reader has not chosen, and the stylesheet's `prefers-color-scheme` query decides —
+ * which is why the attribute is left off rather than filled in with a guess. `color-scheme` follows it so
+ * that form controls, scrollbars and the canvas behind the page agree with the palette; `light dark`
+ * means "whatever the system says", which is exactly the no-choice case.
  */
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  const locale = await requestLocale();
+  const store = await cookies();
+  const locale = (await signedInLocale()) ?? publicLocaleOf(store.get(PUBLIC_LOCALE_COOKIE)?.value);
+  const theme = publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value);
 
   return (
-    <html lang={locale} className={geist.variable}>
+    <html
+      lang={locale}
+      className={geist.variable}
+      {...(theme === undefined ? {} : { "data-theme": theme })}
+      style={{ colorScheme: theme ?? "light dark" }}
+    >
       <body>{children}</body>
     </html>
   );
