@@ -388,3 +388,66 @@ describe("the same list in Russian", () => {
     expect(screen.getAllByText("Is Saturday free?").length).toBeGreaterThan(0);
   });
 });
+
+describe("how old a conversation is", () => {
+  const t = createTranslator("en");
+  // Local components, not a UTC string. "Same day" means the reader's day, so a fixture written in UTC
+  // silently tests a different question on a machine whose clock is offset: 20:17Z and 23:40Z are one
+  // day apart in UTC+3, and the case meant to prove "today" was proving "yesterday".
+  const at = new Date(2026, 9, 22, 20, 17);
+
+  /** The rendered timestamp for one row, against a given render instant. */
+  function shown(now: Date): string {
+    cleanup();
+    render(
+      <ConversationList
+        t={t}
+        rows={[row({ lastMessageAt: at })]}
+        view={{}}
+        basePath={BASE}
+        loadedAt={now}
+      />,
+    );
+    return document.querySelector(".conversation-time")?.textContent ?? "";
+  }
+
+  it("says only the time for something that arrived today", () => {
+    // The question a timestamp answers in a list is "which of these is recent", and sixteen identical
+    // characters per row answered it worst while taking the most width.
+    const sameDay = shown(new Date(2026, 9, 22, 23, 40));
+
+    expect(sameDay).not.toContain("2026");
+    expect(sameDay).not.toMatch(/10|Oct/u);
+    expect(sameDay.length).toBeLessThan(9);
+  });
+
+  it("drops the year inside the same year, and keeps it outside", () => {
+    const thisYear = shown(new Date(2026, 11, 1, 9, 0));
+    const nextYear = shown(new Date(2027, 0, 5, 9, 0));
+
+    expect(thisYear).not.toContain("2026");
+    expect(thisYear, "a day and a month, so two rows a month apart can be told apart").toMatch(/22/u);
+    expect(nextYear, "across a year boundary the year is the whole point").toMatch(/26|2026/u);
+  });
+
+  it("measures every row against one instant rather than each against the clock", () => {
+    // Two rows rendered in the same pass must not disagree about what "today" is, which is what reading
+    // the clock per row would eventually produce at midnight.
+    cleanup();
+    render(
+      <ConversationList
+        t={t}
+        rows={[
+          row({ id: "a", lastMessageAt: at }),
+          row({ id: "b", lastMessageAt: at }),
+        ]}
+        view={{}}
+        basePath={BASE}
+        loadedAt={new Date(2026, 9, 22, 23, 59, 59)}
+      />,
+    );
+
+    const times = [...document.querySelectorAll(".conversation-time")].map((node) => node.textContent);
+    expect(new Set(times).size).toBe(1);
+  });
+});

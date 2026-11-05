@@ -1185,24 +1185,41 @@ details[open] > summary::before {
  * column-first grid that this rule replaced. They were left behind by iterating in place and they
  * contradicted both each other and the rule below them.)
  */
+/*
+ * A toolbar, not a card.
+ *
+ * It was a raised, bordered, shadowed block with four stacked rows inside it, and in a 360px column
+ * that came to about a third of the screen before the first conversation. A list's filters are part of
+ * the list; drawing them as a separate object says they are a separate thing to read.
+ *
+ * The labels are still here and still point at their controls — they are hidden from sight, not from a
+ * screen reader — because each control already says what it filters in its own first option: "Every
+ * channel", "Every stage". A label above a select that repeats the select is a line of height bought
+ * for nothing.
+ */
 .inbox-search {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
-  gap: var(--space-1) var(--space-3);
-  align-items: end;
-  margin-bottom: var(--space-4);
-  padding: var(--space-4);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-1);
+  grid-template-columns: repeat(auto-fit, minmax(min(8rem, 100%), 1fr));
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+.inbox-search label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* A field is its label and its control together. That pairing is what lets the row wrap. */
 .inbox-search .field {
   display: grid;
-  gap: var(--space-1);
-  align-content: end;
   min-width: 0;
 }
 
@@ -1471,11 +1488,56 @@ details[open] > summary::before {
   margin-top: 4px;
 }
 
-.inbox-thread-empty {
+/*
+ * Nothing chosen yet.
+ *
+ * A sentence floating in the middle of a 60%-wide box is what the product said for this, which reads
+ * as a page that failed to load rather than one waiting for you. A mark, a line of explanation, and
+ * the height of the column it is holding open.
+ */
+.inbox-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 200px;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 18rem;
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+/* The section's own glyph, enlarged. Not the brand: a logo in an empty state says "the product",
+   and what this space needs to say is "the inbox is waiting". */
+.inbox-empty-mark {
+  display: inline-flex;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.inbox-empty-mark svg {
+  width: 32px;
+  height: 32px;
+}
+
+.inbox-empty-title {
+  margin: 0;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.inbox-empty-body {
+  margin: 0;
+  max-width: 22rem;
+  color: var(--text-muted);
+}
+
+.inbox-thread-empty {
+  display: flex;
+  align-items: stretch;
+  min-height: 18rem;
 }
 
 .inbox-context section {

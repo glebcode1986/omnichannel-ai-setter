@@ -51,7 +51,34 @@ const FILTERS = [
 
 const LEAD_STAGES = ["NEW", "ENGAGED", "QUALIFYING", "QUALIFIED", "BOOKED", "WON", "LOST"] as const;
 
+
+/**
+ * How old a conversation is, in as few characters as say it.
+ *
+ * Every row showed `22.10.2026, 20:17`. Sixteen characters, identical down the whole list, in a column
+ * where the one thing a reader wants from a timestamp is *which of these is recent* — and it took the
+ * widest part of the row to answer that worst.
+ *
+ * Three forms, chosen against the moment the page was rendered: today is a time, this year is a day and
+ * a month, anything older carries the year. Resolved on the server, from `loadedAt`, so the list a
+ * reader is handed and the list the server rendered say the same thing — reading the clock in the
+ * browser instead would disagree with the markup on the very first paint.
+ */
+function listTime(t: Translator, at: Date, now: Date): string {
+  const sameDay =
+    at.getFullYear() === now.getFullYear() && at.getMonth() === now.getMonth() && at.getDate() === now.getDate();
+  if (sameDay) {
+    return t.date(at, { timeStyle: "short" });
+  }
+  if (at.getFullYear() === now.getFullYear()) {
+    return t.date(at, { day: "numeric", month: "short" });
+  }
+  return t.date(at, { dateStyle: "short" });
+}
+
 export function ConversationList({ t, rows, view, basePath, selectedId, nextCursor, accounts = [], loadedAt }: ConversationListProps) {
+  // The page's own instant, so every row in one render is measured against the same moment.
+  const now = loadedAt ?? new Date();
   const href = (changes: Partial<InboxView>) => `${basePath}${inboxQueryString({ ...view, ...changes })}`;
 
   return (
@@ -160,7 +187,7 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
                 <span className="conversation-row-top">
                   <span className="conversation-name">{row.contactName ?? row.handle}</span>
                   <time className="conversation-time" dateTime={row.lastMessageAt.toISOString()}>
-                    {t.date(row.lastMessageAt, { dateStyle: "short", timeStyle: "short" })}
+                    {listTime(t, row.lastMessageAt, now)}
                   </time>
                 </span>
 

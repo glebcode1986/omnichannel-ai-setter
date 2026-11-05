@@ -652,6 +652,7 @@ const en = {
   "nav.documentation": "Documentation",
   // Captions over the groups in the sidebar. Sentence case: a caption is there to be glanced past.
   "shell.closeNavigation": "Close the menu",
+  "inbox.chooseConversationBody": "Pick one on the left and the whole exchange opens here, with what the assistant drafted and why.",
   "navGroup.work": "Work",
   "navGroup.assistant": "Assistant",
   "navGroup.account": "Account",
@@ -1774,6 +1775,7 @@ const ru: Catalogue = {
   "shell.externalLink": "откроется в новой вкладке",
   "nav.documentation": "Документация",
   "shell.closeNavigation": "Закрыть меню",
+  "inbox.chooseConversationBody": "Выберите диалог слева — здесь откроется вся переписка, черновик ответа и то, на чём он основан.",
   "navGroup.work": "Работа",
   "navGroup.assistant": "Ассистент",
   "navGroup.account": "Аккаунт",

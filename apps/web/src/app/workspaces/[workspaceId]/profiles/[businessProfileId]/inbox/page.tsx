@@ -10,6 +10,7 @@
  * layout hides the pane the route is not about instead of maintaining a second, mobile-only state
  * machine.
  */
+import { SectionIcon } from "@/ui/section-icons";
 import { ConversationList } from "@/ui/inbox/conversation-list";
 import { loadInboxScreen } from "@/server/inbox-page";
 import type { RawSearchParams } from "@/server/inbox-view";
@@ -37,7 +38,13 @@ export default async function InboxPage({
       />
       {/* Holds the middle column open on a desktop so choosing a conversation does not shift the list. */}
       <section className="inbox-thread inbox-thread-empty" aria-live="polite">
-        <p className="muted">{screen.t.t("inbox.chooseConversation")}</p>
+        <div className="inbox-empty">
+          <span className="inbox-empty-mark">
+            <SectionIcon section="inbox" />
+          </span>
+          <p className="inbox-empty-title">{screen.t.t("inbox.chooseConversation")}</p>
+          <p className="inbox-empty-body">{screen.t.t("inbox.chooseConversationBody")}</p>
+        </div>
       </section>
     </div>
   );

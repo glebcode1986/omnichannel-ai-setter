@@ -79,11 +79,18 @@ const Analytics = () => (
   </Frame>
 );
 
-/** A dial, which is what a settings screen is a wall of. */
+/**
+ * Sliders, not a cog.
+ *
+ * The cog was a circle with eight rays, which at 18px is a sun — sitting six pixels from the sun that
+ * means light mode. Two tracks with handles cannot be mistaken for anything else, and a settings
+ * screen is in fact a wall of controls rather than a machine.
+ */
 const Settings = () => (
   <Frame>
-    <circle cx="12" cy="12" r="3" />
-    <path d="M12 2.8v2.4M12 18.8v2.4M21.2 12h-2.4M5.2 12H2.8M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7M18.5 18.5l-1.7-1.7M7.2 7.2 5.5 5.5" />
+    <path d="M4 8.5h10M18 8.5h2M4 15.5h4M12 15.5h8" />
+    <circle cx="16" cy="8.5" r="2.2" />
+    <circle cx="10" cy="15.5" r="2.2" />
   </Frame>
 );
 
