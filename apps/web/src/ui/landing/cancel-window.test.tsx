@@ -42,7 +42,7 @@ const SCENARIOS = [
     tab: "Food delivery",
     channel: "WhatsApp Business",
     customerText: "Two large pepperoni, please.",
-    draftText: "Got it, 310 lei.",
+    draftText: "Got it, 1,890 ₽.",
     why: "Facts: Menu",
   },
 ] as const;
@@ -150,7 +150,7 @@ describe("the hero's example conversations", () => {
     // Back to drafting the moment the trade changes, before any timer runs.
     expect(document.querySelector(".demo-scene")?.getAttribute("data-phase")).toBe("drafting");
     settle();
-    expect(panelText()).toContain("Got it, 310 lei.");
+    expect(panelText()).toContain("Got it, 1,890 ₽.");
     expect(panelText(), "and not a word of the trade before it").not.toContain("implants");
   });
 
@@ -223,6 +223,22 @@ describe("the hero's example conversations", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(selected()).toEqual(["dental"]);
+  });
+
+  it("puts the chooser under the demonstration, where it does not push it down", () => {
+    // Not a cosmetic preference. Above the panel are the character, which overhangs its top edge, and
+    // the alignment with the headline that the owner asked for; a row written first pushed the panel
+    // 46px down and broke it. The stylesheet already said "under the demonstration" in a comment while
+    // the markup put it over the top — the comment is not enforcement, so this is.
+    render(<CancelWindow copy={copy} />);
+    const panel = document.querySelector('[role="tabpanel"]');
+    const tabs = document.querySelector('[role="tablist"]');
+    expect(panel).not.toBeNull();
+    expect(tabs).not.toBeNull();
+
+    // `compareDocumentPosition` returns a bit field; FOLLOWING set means the tablist comes after.
+    const order = panel?.compareDocumentPosition(tabs as Node) ?? 0;
+    expect(Boolean(order & Node.DOCUMENT_POSITION_FOLLOWING), "the tablist must follow the panel").toBe(true);
   });
 
   it("ties the panel to the live tab both ways", () => {

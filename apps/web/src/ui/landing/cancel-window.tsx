@@ -192,54 +192,6 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
 
   return (
     <div className="demo" role="group" aria-label={copy.region}>
-      {/*
-        A real tablist, with arrow keys and one tab stop. Selection follows focus, which is the pattern
-        for panels that cost nothing to render — arrowing along the trades shows each one rather than
-        requiring a second key to confirm a choice already made.
-      */}
-      <div className="demo-tabs" role="tablist" aria-label={copy.scenariosLabel}>
-        {copy.scenarios.map((option, index) => (
-          <button
-            className="demo-tab"
-            key={option.id}
-            id={tabId(option)}
-            type="button"
-            role="tab"
-            aria-selected={index === active}
-            aria-controls={PANEL_ID}
-            tabIndex={index === active ? 0 : -1}
-            data-demo-tab={option.id}
-            onClick={() => {
-              choose(index);
-            }}
-            onKeyDown={(event) => {
-              const last = copy.scenarios.length - 1;
-              const next =
-                event.key === "ArrowRight"
-                  ? (index === last ? 0 : index + 1)
-                  : event.key === "ArrowLeft"
-                    ? (index === 0 ? last : index - 1)
-                    : event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? last
-                        : null;
-              if (next === null) {
-                return;
-              }
-              event.preventDefault();
-              choose(next);
-              const target = copy.scenarios[next];
-              if (target !== undefined) {
-                focusTab(tabId(target));
-              }
-            }}
-          >
-            {option.tab}
-          </button>
-        ))}
-      </div>
-
       <div
         className="demo-scene"
         id={PANEL_ID}
@@ -310,6 +262,61 @@ export function CancelWindow({ copy }: { readonly copy: CancelWindowCopy }) {
         </div>
 
         <p className="demo-why">{scenario.why}</p>
+      </div>
+
+      {/*
+        A real tablist, with arrow keys and one tab stop. Selection follows focus, which is the pattern
+        for panels that cost nothing to render — arrowing along the trades shows each one rather than
+        requiring a second key to confirm a choice already made.
+
+        **After the panel, not before it.** Above the panel are two things that cannot move: the
+        character, which overhangs its top edge, and the alignment with the headline. Written first,
+        this row pushed the panel 46px down and broke that alignment — the stylesheet's comment said
+        "under the demonstration" while the markup put it over the top, and the markup won. ARIA ties a
+        panel to its tabs by `aria-controls` and `aria-labelledby` rather than by document order, so the
+        relationship survives the arrangement; `cancel-window.test.tsx` holds the order itself.
+      */}
+      <div className="demo-tabs" role="tablist" aria-label={copy.scenariosLabel}>
+        {copy.scenarios.map((option, index) => (
+          <button
+            className="demo-tab"
+            key={option.id}
+            id={tabId(option)}
+            type="button"
+            role="tab"
+            aria-selected={index === active}
+            aria-controls={PANEL_ID}
+            tabIndex={index === active ? 0 : -1}
+            data-demo-tab={option.id}
+            onClick={() => {
+              choose(index);
+            }}
+            onKeyDown={(event) => {
+              const last = copy.scenarios.length - 1;
+              const next =
+                event.key === "ArrowRight"
+                  ? (index === last ? 0 : index + 1)
+                  : event.key === "ArrowLeft"
+                    ? (index === 0 ? last : index - 1)
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? last
+                        : null;
+              if (next === null) {
+                return;
+              }
+              event.preventDefault();
+              choose(next);
+              const target = copy.scenarios[next];
+              if (target !== undefined) {
+                focusTab(tabId(target));
+              }
+            }}
+          >
+            {option.tab}
+          </button>
+        ))}
       </div>
 
       {/* The outcome, announced once rather than on every tick: a countdown read aloud every second is
