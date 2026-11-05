@@ -76,6 +76,13 @@
      the steps list reset its own `max-width` at 900px and nothing put the rail back, so on a 1920
      screen the heading sat 316px inside the list it heads. */
   --landing-rail: 1240px;
+  /* The character above the hero's demonstration, as two numbers rather than one drawing. It stands
+     `--keeper-size` tall with `--keeper-sink` of itself tucked behind the panel, so it rises
+     `size − sink` above the panel's top edge — which is the clearance the header must leave, and the
+     reason these are tokens: the header and the character were two places holding the same fact, and
+     when the controls moved into the corner they disagreed and overlapped by 41px. */
+  --keeper-size: 96px;
+  --keeper-sink: 22px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2001,6 +2008,18 @@ details[open] > summary::before {
   .landing-hero-inner {
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   }
+
+  /*
+   * Room for the character, which rises above the demonstration it stands on.
+   *
+   * Only here: below 1000px the hero is one column and the demonstration sits *under* the text, so the
+   * character rises into the middle of the page where there is nothing to hit. Computed from the
+   * character's own tokens rather than measured once in a browser, so resizing it moves the header with
+   * it instead of silently putting it back under the controls.
+   */
+  .landing-topbar {
+    padding-bottom: calc(var(--keeper-size) - var(--keeper-sink) + var(--space-3));
+  }
 }
 
 .landing-wordmark {
@@ -2640,8 +2659,8 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   position: absolute;
   right: 22px;
   bottom: 100%;
-  width: 96px;
-  margin-bottom: -22px;
+  width: var(--keeper-size);
+  margin-bottom: calc(-1 * var(--keeper-sink));
   z-index: 0;
   pointer-events: none;
   display: block;
