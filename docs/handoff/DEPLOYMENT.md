@@ -20,9 +20,37 @@ environment.
 ## The loop
 
 1. Work on a branch, run `pnpm verify` locally.
-2. Deploy to dev and look at it.
+2. `scripts/deploy-dev.sh` — then look at it.
 3. `keepsay-promote` on the host.
 4. `keepsay-diff` whenever you want to be sure they still match.
+
+## Step 2, and why it is a script
+
+The development host holds files the repository does not, at paths the repository *also* uses. The worst
+of them is `compose.yaml`: the repository's is two services, Postgres and Redis, for running the app on
+your own machine; the host's is five, and it is the one that runs the stack. Syncing the tree with a
+hand-written exclude list overwrote it and deleted the `Dockerfile` beside it. Nothing went down — a
+running container does not read its compose file — but the stack could not be rebuilt until both were
+restored.
+
+So the exclude list is not written down twice. `scripts/deploy-dev.sh` reads it from the host's artefact
+directory, which is the record of what belongs to the host:
+
+```
+/root/staging-artifacts/   Dockerfile  compose.yaml  edge.conf  edge.conf.template
+                           seed-demo.ts  staging.htpasswd  .env
+```
+
+**Put a copy of every host-only file there.** A file that is not in that directory is not protected, and
+will be deleted by the next deploy. The script then does a dry run and refuses to transfer anything if
+the plan touches a protected path, so the check runs before the damage rather than after it.
+
+It takes its host and key from the environment — `KEEPSAY_DEV_HOST`, `KEEPSAY_DEV_KEY`, and optionally
+`KEEPSAY_DEV_DIR` and `KEEPSAY_DEV_ARTEFACTS`. No address and no credential is in this repository.
+
+It also refuses an empty artefact listing rather than treating it as "nothing to protect", and reports
+the build's own exit code from a file on the host: a dropped ssh connection exits 255, and 255 read as a
+build failure is how a successful deploy gets reported as broken.
 
 `keepsay-promote` does six things and stops at the first that fails:
 
