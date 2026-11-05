@@ -54,6 +54,33 @@ are not one client with two redirect URIs.
 The product cannot check any of this, and does not claim to. It validates that the variables are present
 and well-shaped; everything above is a property of the deployment.
 
+### Check the port before you check anything else
+
+**Most cloud hosts block outbound 25, 465 and 587**, which are the three ports an SMTP URL is usually
+written with. It is an anti-spam policy and it is silent: the connection is dropped rather than refused,
+so there is no error to read — the send simply does not finish.
+
+This is worth naming because of how it presents. The verification token is written to the database
+*before* the message is handed to the transport, so the database says a link was issued; the page stays
+on the form; and nothing is logged, because the product deliberately logs nothing on this path and
+nothing has failed yet. Every signal available says the deployment is configured correctly.
+
+Before concluding anything about credentials or DNS, open a socket from **inside the container that
+sends**, not from a laptop:
+
+```
+docker compose exec web node -e 'const s=require("node:net").createConnection({host:"smtp.example",port:465},()=>{console.log("open");s.end()});s.setTimeout(7000,()=>{console.log("blocked");s.destroy()})'
+```
+
+If it prints `blocked`, ask the provider for an alternate port rather than changing anything else. Most
+offer one above 2000 — `2465` for implicit TLS and `2587` for STARTTLS are the usual pair, and they are
+not covered by the block. Prefer the implicit-TLS port and the `smtps:` scheme: there is then no
+cleartext window at all, where STARTTLS has one before the upgrade.
+
+The transport gives up after twenty seconds in the worst case regardless (`sign-in-mailer.ts`), so a
+blocked port now produces a refusal the page can show instead of a request that hangs. That is a
+backstop, not a fix: a refusal every time is still a sign-in nobody can complete.
+
 ## Account linking, deliberately off
 
 Two methods and one email address do **not** link automatically. Somebody who registered with Google and
