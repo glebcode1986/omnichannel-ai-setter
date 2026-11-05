@@ -109,7 +109,9 @@ describe("the cascade, as a browser resolves it", () => {
     // literal decided the size. One rule now, on the token.
     expect({ margin: heading.margin, size: heading.fontSize }).toEqual({ margin: "0px", size: "var(--text-s)" });
     expect(line.fontSize).toBe("var(--text-s)");
-    expect(token("--text-s")).toBe("13px");
+    // 12px, not 13: the scale was snapped onto the grid our own `landing-page-design` requires, where
+    // the step below 13 is 12. The screen had been rendering six sizes, none of them a scale step.
+    expect(token("--text-s")).toBe("12px");
   });
 
   it("gives the list the gap its rule declares", () => {

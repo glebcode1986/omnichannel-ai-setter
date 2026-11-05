@@ -33,7 +33,8 @@
   --ok: #176b3f;
   --warn: #8a5300;
   --stop: #a01b28;
-  --radius: 10px;
+  /* 8, not 10: the radius scale has no 10. */
+  --radius: 8px;
   --radius-sm: 6px;
   --gap: 12px;
   --shell-nav-width: 232px;
@@ -46,11 +47,32 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* One type scale. `--text-s` is the label/meta size, `--text-m` the body the browser already sets. */
-  --text-s: 13px;
-  --text-m: 15px;
-  --text-l: 19px;
-  --text-xl: 26px;
+  /*
+   * One type scale, and it is the grid rather than four numbers that felt right.
+   *
+   * Measured on the Inbox at 1600px: six distinct sizes rendered on one screen — 13, 14, 15, 16, 19 and
+   * a 13.333 that is a browser control default nobody chose — across five weights. None of the sizes
+   * carried a line height of its own, so every one of them inherited `1.5` and landed on a fraction:
+   * 19.5px, 22.5px, 28.5px. Text set on half pixels is the reason a dense screen looks soft.
+   *
+   * These are the scale steps our own `landing-page-design` requires, each snapped to the closest step
+   * below its old value, and each paired with the line height that belongs to it. A size without its
+   * leading is half a decision.
+   */
+  --text-s: 12px;
+  --leading-s: 16px;
+  --text-m: 14px;
+  --leading-m: 20px;
+  --text-l: 18px;
+  --leading-l: 28px;
+  --text-xl: 24px;
+  --leading-xl: 32px;
+
+  /* Three weights, named. The stylesheet had been using 400, 550, 560, 600, 620, 650 and 700 — seven,
+     four of which are not on any scale and none of which a reader can tell apart from its neighbour. */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
 
   /* Depth is a hairline and a very soft shadow, never a thick border: the product is read all day. */
   --shadow-1: 0 1px 2px rgb(16 20 26 / 6%);
@@ -184,22 +206,25 @@ a {
 h1 {
   margin: 0;
   font-size: var(--text-xl);
-  font-weight: 650;
+  /* The scale's own leading, replacing a `1.2` multiplier that landed on 31.2px. */
+  line-height: var(--leading-xl);
+  font-weight: var(--weight-semibold);
   letter-spacing: -0.015em;
-  line-height: 1.2;
 }
 
 h2 {
   margin: 0;
   font-size: var(--text-l);
-  font-weight: 620;
+  line-height: var(--leading-l);
+  font-weight: var(--weight-semibold);
   letter-spacing: -0.01em;
 }
 
 h3 {
   margin: 0;
   font-size: var(--text-m);
-  font-weight: 620;
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
 }
 
 /* ---- form controls ----------------------------------------------------------------------------- */
@@ -211,6 +236,9 @@ h3 {
  * a styled text field next to a raw native dropdown. Styling the elements themselves means a control is
  * never accidentally un-designed; the component rules below still win where they say something more.
  */
+/* `button` belongs in this list: without it a control the stylesheet has not reached by class renders
+   at the browser's own 13.333px, which is where the seventh size on the Inbox was coming from. */
+button,
 input,
 select,
 textarea {
@@ -286,7 +314,7 @@ textarea:disabled {
 label {
   display: block;
   font-size: var(--text-s);
-  font-weight: 560;
+  font-weight: var(--weight-medium);
   color: var(--text-muted);
   letter-spacing: 0.01em;
 }
@@ -329,7 +357,7 @@ details[open] {
 summary {
   cursor: pointer;
   padding: var(--space-3) 0;
-  font-weight: 560;
+  font-weight: var(--weight-medium);
   list-style: none;
 }
 
@@ -406,10 +434,20 @@ details[open] > summary::before {
 
 /* ---- shell ------------------------------------------------------------------------------------- */
 
+/*
+ * The product's own reading size.
+ *
+ * `body` is 16/24, which is right for a page somebody reads once and wrong for a tool somebody reads
+ * all day — and because nothing restated it in here, twenty elements on the Inbox were simply
+ * inheriting it and landing a size above everything around them. 14/20 is the product's base; the
+ * landing, the sign-in page and the legal documents are not inside this element and keep 16.
+ */
 .shell {
   display: grid;
   grid-template-columns: var(--shell-nav-width) 1fr;
   min-height: 100vh;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .shell-nav {
@@ -421,8 +459,11 @@ details[open] > summary::before {
   gap: var(--space-4);
   position: sticky;
   top: 0;
-  align-self: start;
-  max-height: 100vh;
+  /* `start` sized this column to its own content, so on a 913px window the navigation stopped at 587
+     and left 326px of bare white under it with a border running down beside nothing. It is a column;
+     it should occupy one. */
+  align-self: stretch;
+  height: 100vh;
   overflow-y: auto;
 }
 
@@ -465,16 +506,27 @@ details[open] > summary::before {
   color: var(--text);
   text-decoration: none;
   font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-medium);
 }
 
 .nav-link:hover {
   background: var(--surface-sunken);
 }
 
+/*
+ * The page you are on.
+ *
+ * It was a saturated accent fill across the full width of the column, which is the shape of a primary
+ * button and of a focus ring — so the one item that is not a call to action was the loudest thing on
+ * the screen. A quiet surface, a heavier label and a rail against the leading edge say the same thing
+ * without shouting, and say it a second way for a reader who cannot separate the two colours.
+ */
 .nav-link[aria-current="page"] {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 600;
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
 .nav-toggle {
@@ -485,11 +537,13 @@ details[open] > summary::before {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .workspace-switch strong {
-  font-size: 15px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .muted {
@@ -576,13 +630,20 @@ details[open] > summary::before {
   margin: 0 0 4px;
 }
 
+/*
+ * A badge marks an exception, so it is drawn like one: a tinted surface rather than a ring in the text
+ * colour. `1px solid currentColor` put a full-strength outline around every one of them, which is why
+ * four quiet facts on a row read as four warnings.
+ */
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border-radius: 999px;
-  border: 1px solid currentColor;
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
 }
 
 .badge[data-tone="ok"] {
@@ -642,7 +703,7 @@ details[open] > summary::before {
   background: var(--surface-raised);
   color: var(--text);
   font: inherit;
-  font-weight: 560;
+  font-weight: var(--weight-medium);
   text-decoration: none;
   cursor: pointer;
   box-shadow: var(--shadow-1);
@@ -770,12 +831,48 @@ details[open] > summary::before {
   align-items: start;
 }
 
+/*
+ * What the three panes share is almost nothing, and they used to share everything.
+ *
+ * One rule gave the list, the thread and the context panel the same padding, the same hairline, the
+ * same radius and the same raised surface — three identical cards side by side, which says they are
+ * three equal things. They are not: the list is a rail you scan, the thread is the one place reading
+ * happens, and the context panel is support. Elevation is how a layout says which is which, so each
+ * now takes a surface of its own.
+ *
+ * The role rules are written below this one AND are more specific than it. Either would be enough;
+ * both, because a rule placed above its equally specific twin is inert and this stylesheet has lost
+ * that argument twice in one day.
+ */
 .inbox > * {
   min-height: 0;
-  padding: 12px;
+}
+
+/* The list is a rail: flat, quiet, and the thing you run your eye down. */
+.inbox > .inbox-list {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* The thread is where reading happens, so it is the one surface that lifts off the page. */
+.inbox > .inbox-thread,
+.inbox > .inbox-thread-column {
+  padding: var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+
+/* Support: recessed, so it reads as beside the conversation rather than as another conversation. */
+.inbox > .inbox-context,
+.inbox > .inbox-context-column {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
 }
 
 /* Two columns, so the context panel takes a row of its own rather than a 320px sliver. */
@@ -867,7 +964,8 @@ details[open] > summary::before {
 }
 
 .inbox-search label {
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   color: var(--text-muted);
 }
 
@@ -884,26 +982,44 @@ details[open] > summary::before {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-2);
   margin: 0 0 var(--gap);
   padding: 0;
 }
 
 .chip {
-  display: inline-block;
-  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  /* 24px tall at this size and padding; the row of them reads as one control rather than five buttons. */
+  min-height: 28px;
+  padding: 0 var(--space-3);
   border-radius: 999px;
   border: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
   text-decoration: none;
-  color: var(--text);
+  color: var(--text-muted);
 }
 
+.chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/*
+ * The filter in force.
+ *
+ * A saturated accent pill, five of them in a row, made the filter bar the brightest object on a screen
+ * whose job is reading messages — and `--accent` is also the focus ring, so the chosen chip and the
+ * focused chip were the same colour. A recessed surface with a stronger edge and a heavier label says
+ * the same thing, three ways, none of which is hue alone.
+ */
 .chip[data-active="true"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 600;
+  border-color: var(--border-strong);
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
 }
 
 .conversation-rows {
@@ -915,14 +1031,73 @@ details[open] > summary::before {
   gap: 4px;
 }
 
+/*
+ * A row, not a card.
+ *
+ * Measured before this: about 200px each, because the name, up to five pills wrapping onto two lines,
+ * the preview and a full `22.10.2026, 20:17` timestamp each took a line of their own. Four
+ * conversations filled a 913px window, and the pills were identical on every row — Instagram, awaiting,
+ * new, off — so two of those lines carried no information at all. A list is for scanning; this was four
+ * stacked cards.
+ *
+ * Three lines now: who and when, what they said, and what is true of this one in particular. The pills
+ * that survive are the ones that differ between rows.
+ */
 .conversation-row {
   display: grid;
-  gap: 4px;
-  padding: 8px;
-  border-radius: var(--radius);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   text-decoration: none;
   color: var(--text);
+}
+
+.conversation-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.conversation-time {
+  flex: none;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One line, and it stays one line: a meta row that wraps costs a row its shape. */
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.conversation-meta > .badge {
+  flex: none;
+}
+
+.conversation-channel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The separator between two pieces of metadata, drawn rather than typed so it needs no translation. */
+.conversation-meta-dot {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.6;
 }
 
 .conversation-row:hover {
@@ -953,8 +1128,13 @@ details[open] > summary::before {
  * the row fits at all.
  */
 .conversation-name {
-  font-weight: 600;
-  overflow-wrap: anywhere;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-badges {
@@ -968,7 +1148,8 @@ details[open] > summary::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .thread-header {
@@ -978,12 +1159,14 @@ details[open] > summary::before {
 
 .thread-header h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--text-l);
+  line-height: var(--leading-l);
 }
 
 .thread-header p {
   margin: 2px 0 0;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .thread-messages {
@@ -1015,7 +1198,8 @@ details[open] > summary::before {
   flex-wrap: wrap;
   gap: 8px;
   align-items: baseline;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   margin-bottom: 4px;
 }
 
@@ -1029,7 +1213,8 @@ details[open] > summary::before {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   margin-top: 4px;
 }
 
@@ -1052,7 +1237,8 @@ details[open] > summary::before {
 
 .inbox-context h3 {
   margin: 0 0 6px;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1060,7 +1246,8 @@ details[open] > summary::before {
 
 .inbox-context h4 {
   margin: 10px 0 4px;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
 }
 
 /*
@@ -1080,7 +1267,8 @@ details[open] > summary::before {
 
 .context-times {
   margin: 8px 0 0;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
 }
 
 .context-times dt {
@@ -1099,7 +1287,8 @@ details[open] > summary::before {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   overflow-wrap: anywhere;
 }
 
@@ -1147,7 +1336,8 @@ details[open] > summary::before {
 .inbox-loaded-at {
   display: flex;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   margin: var(--gap) 0 0;
 }
 
@@ -1189,7 +1379,8 @@ details[open] > summary::before {
 .review-why h4,
 .review-draft h4 {
   margin: 0 0 4px;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1216,7 +1407,8 @@ details[open] > summary::before {
 .review-edit label,
 .review-dismiss label,
 .control-pause label {
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   color: var(--text-muted);
 }
 
@@ -1261,7 +1453,8 @@ details[open] > summary::before {
 
 .conversation-controls h3 {
   margin: 0 0 6px;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1333,7 +1526,8 @@ details[open] > summary::before {
 }
 
 .knowledge-editor label {
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   color: var(--text-muted);
 }
 
@@ -1395,7 +1589,8 @@ details[open] > summary::before {
 
 .voice-layers h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1425,7 +1620,8 @@ details[open] > summary::before {
 
 .style-examples .muted {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
 }
 
 .style-examples .message-text {
@@ -1458,7 +1654,7 @@ details[open] > summary::before {
 /* The column's own heading: a quiet label with its count, not another line of body text. */
 .lead-column > h3 {
   font-size: var(--text-s);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -1548,7 +1744,8 @@ details[open] > summary::before {
 .lead-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .lead-table caption {
@@ -1684,7 +1881,8 @@ details[open] > summary::before {
 
 .lead-panel h4 {
   margin: var(--gap) 0 4px;
-  font-size: 13px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
@@ -1732,7 +1930,8 @@ details[open] > summary::before {
   width: 100%;
   border-collapse: collapse;
   margin: 8px 0;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 /*
@@ -1895,7 +2094,8 @@ details[open] > summary::before {
 .admin-audit {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
 }
 
 .admin-audit th,
@@ -2028,7 +2228,7 @@ details[open] > summary::before {
   gap: var(--space-3);
   flex-wrap: wrap;
   font-size: var(--brand-text);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   letter-spacing: -0.015em;
   margin: 0 0 var(--space-4);
 }
@@ -2135,7 +2335,8 @@ details[open] > summary::before {
 
 .landing-bubble-label {
   display: block;
-  font-size: 11px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -2155,7 +2356,8 @@ details[open] > summary::before {
 .landing-pill {
   padding: 4px 10px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   border: 1px solid var(--border);
   background: var(--surface-sunken);
 }
@@ -2557,7 +2759,7 @@ body {
   color: var(--text-muted);
   font: inherit;
   font-size: var(--text-s);
-  font-weight: 550;
+  font-weight: var(--weight-medium);
   line-height: 1;
   /* Above the 24px floor WCAG 2.2 sets for a target. */
   min-height: 34px;
@@ -3024,7 +3226,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   text-decoration: none;
   color: var(--text);
   font-size: var(--brand-text);
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   letter-spacing: -0.015em;
 }
 
@@ -3104,7 +3306,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 
 .auth-form label {
   font-size: var(--text-s);
-  font-weight: 560;
+  font-weight: var(--weight-medium);
 }
 
 .auth-form input {
@@ -3176,7 +3378,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   color: var(--text-muted);
   font: inherit;
   font-size: var(--text-s);
-  font-weight: 550;
+  font-weight: var(--weight-medium);
   line-height: 1;
   /* Above the 24px floor WCAG 2.2 sets for a target, and short enough to sit in a corner without
      shouting. The pill around it comes out at 44. */
@@ -3263,7 +3465,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   color: var(--text);
   font: inherit;
   font-size: var(--text-s);
-  font-weight: 550;
+  font-weight: var(--weight-medium);
   min-height: 36px;
   height: 36px;
   padding: 0 var(--space-2) 0 var(--space-3);

@@ -525,8 +525,25 @@ describe("the supported widths", () => {
       { selector: ".reason-codes", what: "a cited source id is one token" },
     ] as const;
 
+    // Two remedies satisfy the rule above, and the rule is about the *outcome*: the surface contains
+    // the token itself rather than leaning on a boundary somewhere else. Wrapping mid-word is one.
+    // Truncating is the other, and it is the only one open to a surface that must stay one line — a
+    // conversation row with a fixed height cannot let a 40-character handle wrap onto a second.
+    //
+    // Truncation only counts when it is complete. `text-overflow` does nothing without `overflow:
+    // hidden`, and neither does anything for a grid or flex child without `min-width: 0`, which is the
+    // way this is usually got wrong: the ellipsis is declared, the item refuses to shrink, and the text
+    // runs under the next pane exactly as before.
+    const TRUNCATES = [/overflow:\s*hidden/u, /text-overflow:\s*ellipsis/u, /white-space:\s*nowrap/u, /min-width:\s*0/u];
+
     for (const { selector, what } of SURFACES_CARRYING_A_PERSON_S_TEXT) {
-      expect(declarationsFor(selector, baseCss), `${selector}: ${what}`).toMatch(/overflow-wrap:\s*anywhere/u);
+      const declarations = declarationsFor(selector, baseCss);
+      const wraps = /overflow-wrap:\s*anywhere/u.test(declarations);
+      const truncates = TRUNCATES.every((property) => property.test(declarations));
+      expect(
+        wraps || truncates,
+        `${selector}: ${what} — it must either wrap mid-word or truncate completely (overflow, text-overflow, white-space and min-width together)`,
+      ).toBe(true);
     }
 
     // And the property is inherited, so a wrapper declaring it covers the `<strong>` and the `<span>`

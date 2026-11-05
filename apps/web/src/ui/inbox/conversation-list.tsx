@@ -142,11 +142,31 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
                 data-selected={String(row.id === selectedId)}
                 {...(row.id === selectedId ? { "aria-current": "page" as const } : {})}
               >
-                <span className="conversation-name">{row.contactName ?? row.handle}</span>
-                <span className="conversation-badges">
-                  <span className="badge" data-tone="muted" data-channel={row.channel}>
-                    {t.t(`channel.${row.channel}` as MessageKey)}
-                  </span>
+                {/*
+                  Who and when on one line, what they said on the next, and what is true of this
+                  conversation in particular on the third.
+
+                  It used to be five pills between the name and the preview, wrapping onto two lines and
+                  carrying almost nothing: channel, awaiting, lead stage and mode were drawn for every
+                  row, and on a real inbox most rows hold the same four values. A row ran about 200px and
+                  four conversations filled the window.
+
+                  What differs between rows is the *state*, so the state keeps a badge and the context —
+                  which channel, which stage — becomes quiet text. The badges are written first for a
+                  reason that is not visual: the meta line truncates rather than wraps, and the things
+                  that must never be the part that disappears are the ones saying a customer is waiting,
+                  a person has taken over, or this conversation can send unattended.
+                */}
+                <span className="conversation-row-top">
+                  <span className="conversation-name">{row.contactName ?? row.handle}</span>
+                  <time className="conversation-time" dateTime={row.lastMessageAt.toISOString()}>
+                    {t.date(row.lastMessageAt, { dateStyle: "short", timeStyle: "short" })}
+                  </time>
+                </span>
+
+                {row.preview === null ? undefined : <span className="conversation-preview muted">{row.preview}</span>}
+
+                <span className="conversation-meta">
                   {row.awaitingReply ? (
                     <span className="badge" data-tone="warn" data-awaiting="true">
                       {t.t("inbox.awaitingReplyBadge")}
@@ -162,20 +182,25 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
                       {t.t("inbox.filterHumanActive")}
                     </span>
                   ) : undefined}
-                  <span className="badge" data-tone="muted" data-lead={row.leadStage}>
-                    {t.t(`leadStage.${row.leadStage}` as MessageKey)}
-                  </span>
                   {/* The mode in force, not the conversation's override: a row that showed the override
                       would read as "off" for every conversation that simply inherits its channel's
-                      policy. `AUTOPILOT` is called out because it is the one that sends unattended. */}
-                  <span className="badge" data-tone={row.effectiveMode === "AUTOPILOT" ? "ok" : "muted"} data-mode={row.effectiveMode}>
-                    {t.t(`aiMode.${row.effectiveMode}` as MessageKey)}
+                      policy. Only `AUTOPILOT` keeps a badge — it is the one that sends unattended, and
+                      the other two are the quiet default this list is full of. */}
+                  {row.effectiveMode === "AUTOPILOT" ? (
+                    <span className="badge" data-tone="ok" data-mode={row.effectiveMode}>
+                      {t.t(`aiMode.${row.effectiveMode}` as MessageKey)}
+                    </span>
+                  ) : (
+                    <span className="visually-hidden" data-mode={row.effectiveMode}>
+                      {t.t(`aiMode.${row.effectiveMode}` as MessageKey)}
+                    </span>
+                  )}
+                  <span className="conversation-channel" data-channel={row.channel}>
+                    {t.t(`channel.${row.channel}` as MessageKey)}
                   </span>
+                  <span className="conversation-meta-dot" aria-hidden="true" />
+                  <span data-lead={row.leadStage}>{t.t(`leadStage.${row.leadStage}` as MessageKey)}</span>
                 </span>
-                {row.preview === null ? undefined : <span className="conversation-preview muted">{row.preview}</span>}
-                <time className="muted" dateTime={row.lastMessageAt.toISOString()}>
-                  {t.date(row.lastMessageAt, { dateStyle: "short", timeStyle: "short" })}
-                </time>
               </Link>
             </li>
           ))}
