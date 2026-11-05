@@ -1989,7 +1989,12 @@ details[open] > summary::before {
   display: grid;
   gap: clamp(32px, 5vw, 64px);
   grid-template-columns: minmax(0, 1fr);
-  align-items: center;
+  /* Top-aligned, so the demonstration's first edge meets the headline's first line. Centred, it floated
+     above the headline and below the name, anchored to nothing — and it could not be fixed by nudging,
+     because what it centred against was a column whose height changes with the translation. Moving the
+     name out into the header made both columns start at the same place, which is what `start` then
+     aligns. On one column this does nothing: there is nothing to align against. */
+  align-items: start;
 }
 
 @media (min-width: 1000px) {
@@ -3113,6 +3118,25 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 }
 
 /*
+ * A sun and a moon instead of two words.
+ *
+ * Square, because an icon has no reading direction to pad for, and the result is a control that fits a
+ * corner rather than claiming a line. It keeps its accessible name from the button's `aria-label`: the
+ * icon is `aria-hidden`, so nothing is lost by it being a picture.
+ */
+.switch-icon {
+  width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.switch-icon svg {
+  display: block;
+}
+
+/*
  * The live option.
  *
  * Two selectors, because there are two ways to be live and only one of them reaches the server. A
@@ -3144,14 +3168,68 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   }
 }
 
-/* The hero's top line: the controls, right-aligned on the band's own rail. Positioned for the same
-   reason `.landing-hero-inner` is — the glow is absolute and would otherwise paint over them. */
+/*
+ * The language select, wearing the same pill as the control beside it.
+ *
+ * The border and background belong to the `.switch` wrapper, so the select itself is stripped: the
+ * product's base `select` styling gives it a border and a surface of its own, which inside a bordered
+ * pill reads as a box in a box. The arrow is the platform's, deliberately — it is the affordance every
+ * reader already knows, and the one that keeps working when the list grows past what a corner can show.
+ */
+.switch-field {
+  padding: 2px;
+}
+
+.switch-select {
+  appearance: auto;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: 550;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.switch-select:hover {
+  background: var(--surface-raised);
+}
+
+/* The sign-in and legal pages have no header of their own, so the controls take the corner. Absolute
+   rather than a row, so adding them does not shift the card that is centred in the viewport. */
+.auth {
+  position: relative;
+}
+
+.auth-topbar {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-5);
+  z-index: 1;
+}
+
+/* The hero's top line: the brand on the left, the controls on the right, on the band's own rail.
+   Positioned for the same reason `.landing-hero-inner` is — the glow is absolute and would otherwise
+   paint over them. */
 .landing-topbar {
   position: relative;
   z-index: 1;
   display: flex;
-  justify-content: flex-end;
-  padding-bottom: var(--space-5);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-6);
+}
+
+/* In the header the name is the header's own left end, so it carries no bottom margin of its own. */
+.landing-topbar .landing-wordmark {
+  margin: 0;
 }
 
 /* The document's top line: the brand on the left, the controls on the right. */
@@ -3163,10 +3241,6 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   flex-wrap: wrap;
 }
 
-/* On the sign-in column everything is centred, including this. */
-.auth-column .surface-controls {
-  justify-content: center;
-}
 
 @media (max-width: 720px) {
   .auth {

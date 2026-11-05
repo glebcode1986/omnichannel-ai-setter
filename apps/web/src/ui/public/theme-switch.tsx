@@ -17,6 +17,7 @@
  * system for as long as no explicit choice exists. A reader who has not chosen and switches their laptop
  * to dark at dusk sees this control follow them.
  */
+import type { ReactNode } from "react";
 import { useState, useSyncExternalStore } from "react";
 
 import type { PublicTheme } from "@/server/public-theme";
@@ -68,7 +69,10 @@ function applyTheme(value: PublicTheme, cookieName: string, cookieMaxAge: number
 
 export interface ThemeOption {
   readonly value: PublicTheme;
+  /** The accessible name — a word from the catalogue, because the icon is not readable aloud. */
   readonly label: string;
+  /** A sun or a moon. Decorative and `aria-hidden`; `label` is what is announced. */
+  readonly icon: ReactNode;
   /** `choosePublicThemeAction` bound to this option and the page's own path. */
   readonly action: () => Promise<void>;
 }
@@ -98,9 +102,10 @@ export function ThemeSwitch({ groupLabel, stored, options, cookieName, cookieMax
       {options.map((option) => (
         <form action={option.action} key={option.value}>
           <button
-            className="switch-option"
+            className="switch-option switch-icon"
             type="submit"
             aria-pressed={active === option.value}
+            aria-label={option.label}
             data-public-theme={option.value}
             onClick={(event) => {
               event.preventDefault();
@@ -108,7 +113,7 @@ export function ThemeSwitch({ groupLabel, stored, options, cookieName, cookieMax
               setChosen(option.value);
             }}
           >
-            {option.label}
+            {option.icon}
           </button>
         </form>
       ))}

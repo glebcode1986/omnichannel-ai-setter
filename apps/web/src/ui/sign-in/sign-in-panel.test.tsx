@@ -21,20 +21,11 @@ const ru = createTranslator("ru");
 const text = (key: MessageKey) => catalogues.en[key];
 const noop = () => Promise.resolve();
 const noopWithForm = (_formData: FormData) => Promise.resolve();
-/** The slot the panel renders the public surface's controls into; its own behaviour is tested there. */
-const controls = <div data-test-controls="yes" />;
 
 afterEach(cleanup);
 
 const panel = (available: readonly SignInMethod[], error?: string) => (
-  <SignInPanel
-    t={t}
-    available={available}
-    error={error}
-    googleAction={noop}
-    emailAction={noopWithForm}
-    controls={controls}
-  />
+  <SignInPanel t={t} available={available} error={error} googleAction={noop} emailAction={noopWithForm} />
 );
 
 describe("what the sign-in page offers", () => {
@@ -98,25 +89,19 @@ describe("what the sign-in page offers", () => {
     expect(screen.getByRole("status").textContent).toBe(text("signIn.errorLinkExpired"));
   });
 
-  it("renders the surface controls it is handed, rather than a language switch of its own", () => {
-    // The panel used to build its own, offering only the language the reader was *not* reading in. The
-    // same choice now sits on all four public pages and shows both options; this panel's job is to give
-    // it a place to stand. A reader meeting two different language controls met the old bug.
+  it("has no language switch of its own", () => {
+    // It used to build one, offering only the language the reader was *not* reading in. Appearance and
+    // language now sit in the page's top-right corner on all four public surfaces, from one component.
+    // A reader meeting two different language controls on one page met the old bug.
     render(panel(["email"]));
 
-    expect(document.querySelector("[data-test-controls]")).not.toBeNull();
-    expect(document.querySelector("[data-sign-in-language]"), "the panel's own switch is gone").toBeNull();
+    expect(document.querySelector("[data-sign-in-language]")).toBeNull();
+    expect(document.querySelector("[data-public-locale-select]"), "the shared control lives on the page").toBeNull();
   });
 
   it("renders the whole surface in Russian for a Russian reader", () => {
     render(
-      <SignInPanel
-        t={ru}
-        available={["google", "email"]}
-        googleAction={noop}
-        emailAction={noopWithForm}
-        controls={controls}
-      />,
+      <SignInPanel t={ru} available={["google", "email"]} googleAction={noop} emailAction={noopWithForm} />,
     );
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(catalogues.ru["signIn.title"]);

@@ -36,15 +36,18 @@ export default async function SignInPage({ searchParams }: { readonly searchPara
 
   return (
     <main className="auth">
+      {/* In the corner, not under the card. Absolutely positioned so that adding it does not move the
+          card, which is centred in the viewport — and in the same corner as on the landing page, so a
+          reader who found it once finds it again. */}
+      <div className="auth-topbar">
+        <SurfaceControls t={t} locale={locale} theme={publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value)} path="/sign-in" />
+      </div>
       <SignInPanel
         t={t}
         available={methods.available}
         error={one(query["error"])}
         googleAction={signInWithGoogleAction.bind(null, callbackUrl)}
         emailAction={requestSignInLinkAction.bind(null, callbackUrl)}
-        controls={
-          <SurfaceControls t={t} locale={locale} theme={publicThemeOf(store.get(PUBLIC_THEME_COOKIE)?.value)} path="/sign-in" />
-        }
       />
     </main>
   );

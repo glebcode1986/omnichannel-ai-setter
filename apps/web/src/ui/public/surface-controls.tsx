@@ -5,21 +5,26 @@
  * control that exists on three of them is a control a reader learns not to look for. Each page passes
  * its own path so the form returns the reader to the page they were reading rather than to a constant.
  *
- * A server component that hands a *bound* server action to the one client component underneath it. The
- * language half needs no client code at all: changing the language changes server-rendered text, so the
- * round trip is the work rather than an overhead. The theme half gets the client handler because the
- * palette is already in the browser and a reload to apply it would be a reload for nothing.
+ * Two different shapes, because the two choices are different. Appearance is a closed pair that will
+ * never gain a third option, so it is a segmented control with a sun and a moon — recognised without
+ * being read, and small enough to live in a corner. Language is an open list that is meant to grow, so
+ * it is a select: the same size at twenty languages as at two, with the platform's own keyboard
+ * handling and its own overlay on a phone.
  *
- * The labels are the product's own words from the catalogue; the two-letter language badges are not
- * words and come from `localeShortNames`, with the language's own name as the accessible label so a
- * screen reader says "Русский" rather than spelling out two letters.
+ * A server component that hands *bound* server actions to the two client components underneath it.
+ * Language needs no client code to work at all — changing it changes server-rendered text, so the round
+ * trip is the work rather than an overhead — and the client half only saves the reader a second click.
+ * Appearance gets a client handler because the palette is already in the browser and reloading to apply
+ * it would be a reload for nothing.
  */
-import { localeNames, localeShortNames, UI_LOCALES, type UiLocale } from "@/i18n/locales";
+import { localeNames, UI_LOCALES, type UiLocale } from "@/i18n/locales";
 import type { Translator } from "@/i18n/translate";
 import type { PublicPath } from "@/server/public-paths";
 import { choosePublicLocaleAction, choosePublicThemeAction } from "@/server/public-surface-actions";
 import { PUBLIC_PREFERENCE_MAX_AGE, PUBLIC_THEME_COOKIE, type PublicTheme } from "@/server/public-theme";
-import { ThemeSwitch } from "@/ui/public/theme-switch";
+import { MoonIcon, SunIcon } from "@/ui/public/icons";
+import { LanguageSelect } from "@/ui/public/language-select";
+import { ThemeSwitch, type ThemeOption } from "@/ui/public/theme-switch";
 
 export interface SurfaceControlsProps {
   readonly t: Translator;
@@ -32,9 +37,19 @@ export interface SurfaceControlsProps {
 }
 
 export function SurfaceControls({ t, locale, theme, path }: SurfaceControlsProps) {
-  const themeOptions: readonly { value: PublicTheme; label: string; action: () => Promise<void> }[] = [
-    { value: "light", label: t.t("publicSurface.themeLight"), action: choosePublicThemeAction.bind(null, "light", path) },
-    { value: "dark", label: t.t("publicSurface.themeDark"), action: choosePublicThemeAction.bind(null, "dark", path) },
+  const themeOptions: readonly ThemeOption[] = [
+    {
+      value: "light",
+      label: t.t("publicSurface.themeLight"),
+      icon: <SunIcon />,
+      action: choosePublicThemeAction.bind(null, "light", path),
+    },
+    {
+      value: "dark",
+      label: t.t("publicSurface.themeDark"),
+      icon: <MoonIcon />,
+      action: choosePublicThemeAction.bind(null, "dark", path),
+    },
   ];
 
   return (
@@ -47,21 +62,13 @@ export function SurfaceControls({ t, locale, theme, path }: SurfaceControlsProps
         cookieMaxAge={PUBLIC_PREFERENCE_MAX_AGE}
       />
 
-      <div className="switch" role="group" aria-label={t.t("publicSurface.language")}>
-        {UI_LOCALES.map((option) => (
-          <form action={choosePublicLocaleAction.bind(null, option, path)} key={option}>
-            <button
-              className="switch-option"
-              type="submit"
-              aria-pressed={option === locale}
-              aria-label={localeNames[option]}
-              data-public-locale={option}
-            >
-              {localeShortNames[option]}
-            </button>
-          </form>
-        ))}
-      </div>
+      <LanguageSelect
+        label={t.t("publicSurface.language")}
+        applyLabel={t.t("publicSurface.languageApply")}
+        locale={locale}
+        options={UI_LOCALES.map((option) => ({ value: option, label: localeNames[option] }))}
+        action={choosePublicLocaleAction.bind(null, path)}
+      />
     </div>
   );
 }

@@ -58,9 +58,21 @@ export async function choosePublicThemeAction(theme: string, path: string): Prom
   redirect(publicPathOf(path));
 }
 
-/** Choose the language this public surface is read in. An unrecognised locale changes nothing. */
-export async function choosePublicLocaleAction(locale: string, path: string): Promise<void> {
-  if (isUiLocale(locale)) {
+/**
+ * Choose the language this public surface is read in. An unrecognised locale changes nothing.
+ *
+ * Takes the whole form rather than a bound value, because the control is a `<select>`: the product has
+ * two languages today and the list is meant to grow, and a row of buttons stops being a control and
+ * starts being a paragraph somewhere around the fifth. A select also carries its own keyboard handling,
+ * its own overflow behaviour on a narrow screen, and the platform's own search-by-typing — none of
+ * which a hand-built menu gets for free.
+ *
+ * `path` is bound; `locale` arrives in the form, from a field the reader could have edited, so it is
+ * validated here exactly as a cookie value would be.
+ */
+export async function choosePublicLocaleAction(path: string, formData: FormData): Promise<void> {
+  const locale = formData.get("locale");
+  if (typeof locale === "string" && isUiLocale(locale)) {
     const store = await cookies();
     store.set(PUBLIC_LOCALE_COOKIE, locale, preferenceCookie());
   }

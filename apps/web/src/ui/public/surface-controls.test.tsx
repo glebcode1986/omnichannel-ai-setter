@@ -36,8 +36,8 @@ function systemPrefersDark(dark: boolean): void {
 }
 
 const options = [
-  { value: "light" as const, label: t.t("publicSurface.themeLight"), action: noop },
-  { value: "dark" as const, label: t.t("publicSurface.themeDark"), action: noop },
+  { value: "light" as const, label: t.t("publicSurface.themeLight"), icon: <span data-icon="sun" />, action: noop },
+  { value: "dark" as const, label: t.t("publicSurface.themeDark"), icon: <span data-icon="moon" />, action: noop },
 ];
 
 const pressed = () =>

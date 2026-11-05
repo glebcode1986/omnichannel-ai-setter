@@ -88,16 +88,17 @@ export default async function HomePage() {
             headline, and a direct child of the band inherits the band's rail so they line up with
             everything below them. */}
         <div className="landing-topbar">
+          {/* The mark and the word together. The mark carries the label, so the name is announced
+              once rather than twice to a screen reader. It sits in the header rather than above the
+              headline so that the headline and the demonstration beside it start on the same line. */}
+          <p className="landing-wordmark">
+            <Mark title={t.t("landing.title")} className="landing-logo" />
+            <span>{t.t("landing.title")}</span>
+          </p>
           <SurfaceControls t={t} locale={locale} theme={theme} path="/" />
         </div>
         <div className="landing-hero-inner">
           <div>
-            {/* The mark and the word together. The mark carries the label, so the name is announced
-                once rather than twice to a screen reader. */}
-            <p className="landing-wordmark">
-              <Mark title={t.t("landing.title")} className="landing-logo" />
-              <span>{t.t("landing.title")}</span>
-            </p>
             {/* A headline, not a paragraph. The first version put the full promise in the `h1` and it set
                 eight lines of 60px type — 509 pixels of heading before a reader reached anything else.
                 The promise is still here; it moved one element down, where a sentence belongs. */}

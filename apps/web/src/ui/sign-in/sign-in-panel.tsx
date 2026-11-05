@@ -20,9 +20,13 @@
  * against the left edge of a 1920px window, a rule running the full width, and the language switch
  * reading as a section of the page rather than a small choice at the bottom of it. Nobody arrives here
  * having seen the product; this is the second screen of the landing page and now looks like it.
+ *
+ * The language switch is no longer here at all. It offered only the language the reader was *not*
+ * reading, which is a reasonable control and the wrong one to have in two dialects: appearance and
+ * language now sit in the page's top-right corner on all four public surfaces, from one component, in
+ * the same corner each time.
  */
 import Link from "next/link";
-import type { ReactNode } from "react";
 
 import type { Translator } from "@/i18n/translate";
 import type { SignInMethod } from "@/server/sign-in-methods";
@@ -36,18 +40,9 @@ export interface SignInPanelProps {
   readonly error?: string | undefined;
   readonly googleAction: () => Promise<void>;
   readonly emailAction: (formData: FormData) => Promise<void>;
-  /**
-   * The public surface's language and appearance controls, passed in rather than built here.
-   *
-   * This panel used to own a language switch of its own, which offered only the language the reader was
-   * *not* reading in. That is a reasonable control on its own and the wrong one to have twice: the same
-   * choice now sits on all four public pages, shows both options and marks the live one, so a reader
-   * meets one control and not two dialects of it.
-   */
-  readonly controls: ReactNode;
 }
 
-export function SignInPanel({ t, available, error, googleAction, emailAction, controls }: SignInPanelProps) {
+export function SignInPanel({ t, available, error, googleAction, emailAction }: SignInPanelProps) {
   const notice = signInNotice(error);
   const nothingOnOffer = available.length === 0;
 
@@ -108,8 +103,6 @@ export function SignInPanel({ t, available, error, googleAction, emailAction, co
       </div>
 
       {nothingOnOffer ? undefined : <p className="auth-status">{t.t("landing.status")}</p>}
-
-      {controls}
     </div>
   );
 }

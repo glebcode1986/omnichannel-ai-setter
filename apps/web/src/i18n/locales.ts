@@ -22,21 +22,6 @@ export const localeNames: Readonly<Record<UiLocale, string>> = {
   ru: "Русский",
 };
 
-/**
- * The two-letter badge a compact control shows.
- *
- * Here rather than in the catalogue because it is not a translation: `EN` is `EN` in both catalogues, and
- * a key whose two values are identical has to be argued for in `translate.test.ts`'s allowlist. A
- * language's own code is an identifier, like the platform names already listed there — so it is declared
- * as data next to the names it abbreviates, where the two cannot disagree about which locales exist.
- *
- * Never the accessible name on its own: `RU` read aloud is two letters, so the control labels itself with
- * `localeNames` and shows this.
- */
-export const localeShortNames: Readonly<Record<UiLocale, string>> = {
-  en: "EN",
-  ru: "RU",
-};
 
 /**
  * The stored preference, resolved to a locale this product actually has.

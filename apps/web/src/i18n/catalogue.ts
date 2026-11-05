@@ -635,6 +635,8 @@ const en = {
   "publicSurface.themeLight": "Light",
   "publicSurface.themeDark": "Dark",
   "publicSurface.language": "Language",
+  // Only ever rendered inside <noscript>: the language select applies on change when scripting works.
+  "publicSurface.languageApply": "Apply",
 
   "landing.channelsTitle": "Where it answers",
   "landing.channelsLead": "Through the platforms’ own business APIs — no automation of a personal account, nothing that risks the account you built.",
@@ -1739,6 +1741,7 @@ const ru: Catalogue = {
   "publicSurface.themeLight": "Светлая",
   "publicSurface.themeDark": "Тёмная",
   "publicSurface.language": "Язык",
+  "publicSurface.languageApply": "Применить",
 
   "landing.channelsTitle": "Где отвечает",
   "landing.channelsLead": "Через собственные бизнес-API площадок — никакой автоматизации личного аккаунта и ничего, что ставит под удар ваш аккаунт.",
