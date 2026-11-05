@@ -2008,18 +2008,6 @@ details[open] > summary::before {
   .landing-hero-inner {
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   }
-
-  /*
-   * Room for the character, which rises above the demonstration it stands on.
-   *
-   * Only here: below 1000px the hero is one column and the demonstration sits *under* the text, so the
-   * character rises into the middle of the page where there is nothing to hit. Computed from the
-   * character's own tokens rather than measured once in a browser, so resizing it moves the header with
-   * it instead of silently putting it back under the controls.
-   */
-  .landing-topbar {
-    padding-bottom: calc(var(--keeper-size) - var(--keeper-sink) + var(--space-3));
-  }
 }
 
 .landing-wordmark {
@@ -3249,6 +3237,24 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 /* In the header the name is the header's own left end, so it carries no bottom margin of its own. */
 .landing-topbar .landing-wordmark {
   margin: 0;
+}
+
+/*
+ * Room for the character, which rises above the demonstration it stands on.
+ *
+ * **Below the base rule, not beside the breakpoint it belongs to.** Written up with the hero's other
+ * 1000px rules it lost to `.landing-topbar`'s own `padding-bottom`: same specificity, and the base rule
+ * comes later in the file, so source order decided and nothing moved. The build was green and the page
+ * was unchanged — the test asserted the declaration existed, which it did.
+ *
+ * Only above 1000px: below that the hero is one column, the demonstration sits under the text, and the
+ * character rises into open page. Computed from the character's own tokens rather than measured once in
+ * a browser, so resizing it moves the header instead of quietly putting it back underneath.
+ */
+@media (min-width: 1000px) {
+  .landing-topbar {
+    padding-bottom: calc(var(--keeper-size) - var(--keeper-sink) + var(--space-3));
+  }
 }
 
 /* The document's top line: the brand on the left, the controls on the right. */
