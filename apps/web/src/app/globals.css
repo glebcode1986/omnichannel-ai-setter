@@ -529,8 +529,43 @@ details[open] > summary::before {
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
+/*
+ * The shell's bar: the menu button at one end, appearance and language at the other.
+ *
+ * On a wide screen the button is hidden and this is simply the row the two controls sit in, above the
+ * sections. On a phone it is the whole header — the one thing that stays on screen when the sections
+ * are closed, which is why the controls live here rather than inside the list: a reader looking for the
+ * language should not have to open a menu called "Sections" to find something that is not one.
+ */
+.nav-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nav-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+  min-width: 0;
+}
+
 .nav-toggle {
   display: none;
+}
+
+/* A link that leaves the product carries the mark that says so; the words say it again, for a reader
+   who cannot see the mark. */
+.nav-link[data-nav-external] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.nav-link-external {
+  flex: none;
+  opacity: 0.55;
 }
 
 .workspace-switch {
@@ -564,16 +599,31 @@ details[open] > summary::before {
     border-bottom: 1px solid var(--border);
   }
 
+  /*
+   * The menu, as a menu.
+   *
+   * It was a full-width button with a hairline border, a white fill and centred text — 358px wide on a
+   * 390px screen, which is the drawing of an empty text input. The owner read it as a field and never
+   * pressed it. Sized to its content, carrying three lines, and tall enough to hit.
+   */
   .nav-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--border-strong);
+    gap: var(--space-2);
+    min-height: 40px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface-raised);
     color: var(--text);
     font: inherit;
+    font-weight: var(--weight-medium);
+    cursor: pointer;
+  }
+
+  .nav-toggle[aria-expanded="true"] {
+    background: var(--surface-sunken);
+    border-color: var(--border-strong);
   }
 
   .nav-list[data-collapsed="true"] {
@@ -584,11 +634,20 @@ details[open] > summary::before {
     padding: var(--space-4);
   }
 
+  /*
+   * Sticky rather than static. The navigation is the only way out of a screen on a phone, and a header
+   * that scrolls away takes it with it — on the Inbox, which is a long list, it is gone after one flick.
+   */
   .shell-nav {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 20;
     max-height: none;
+    height: auto;
     padding: var(--space-3) var(--space-4);
     gap: var(--space-3);
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
   }
 
   /*
@@ -598,7 +657,8 @@ details[open] > summary::before {
    * they sit beside: open "Разделы" and they are all there, closed and the phone opens on the page.
    */
   .shell-nav:has(.nav-list[data-collapsed="true"]) > a,
-  .shell-nav:has(.nav-list[data-collapsed="true"]) > form {
+  .shell-nav:has(.nav-list[data-collapsed="true"]) > form,
+  .shell-nav:has(.nav-list[data-collapsed="true"]) > .workspace-switch {
     display: none;
   }
 
@@ -607,6 +667,23 @@ details[open] > summary::before {
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
+  }
+
+  /* In the bar the language control is a select and nothing else: its heading and its submit button
+     would not fit beside a menu button, and the select applies on change in any case. */
+  .nav-bar-controls .workspace-switch > label,
+  .nav-bar-controls .workspace-switch > button {
+    display: none;
+  }
+
+  .nav-bar-controls .workspace-switch {
+    flex-direction: row;
+    min-width: 0;
+  }
+
+  .nav-bar-controls select {
+    min-width: 0;
+    width: auto;
   }
 }
 

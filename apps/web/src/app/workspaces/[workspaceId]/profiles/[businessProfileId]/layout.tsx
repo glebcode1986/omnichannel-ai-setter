@@ -9,6 +9,7 @@
  * The locale is resolved once here and the navigation receives finished strings, because a translator
  * carries functions and functions do not cross into a client component.
  */
+import { cookies } from "next/headers";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -17,6 +18,11 @@ import { NavigationBar } from "@/ui/navigation-bar";
 import { LocaleSwitch } from "@/ui/locale-switch";
 import { requestLocale } from "@/i18n/request-locale";
 import { createTranslator } from "@/i18n/translate";
+import { loadWebEnv } from "@/env";
+import { chooseThemeInPlaceAction } from "@/server/public-surface-actions";
+import { PUBLIC_PREFERENCE_MAX_AGE, PUBLIC_THEME_COOKIE, publicThemeOf } from "@/server/public-theme";
+import { MoonIcon, SunIcon } from "@/ui/public/icons";
+import { ThemeSwitch, type ThemeOption } from "@/ui/public/theme-switch";
 import { setUiLocaleAction } from "@/server/locale-actions";
 import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
@@ -35,6 +41,12 @@ export default async function ProfileShellLayout({
 
   const locale = await requestLocale();
   const t = createTranslator(locale);
+  const cookieStore = await cookies();
+  const theme = publicThemeOf(cookieStore.get(PUBLIC_THEME_COOKIE)?.value);
+  const themeOptions: readonly ThemeOption[] = [
+    { value: "light", label: t.t("publicSurface.themeLight"), icon: <SunIcon />, action: chooseThemeInPlaceAction.bind(null, "light") },
+    { value: "dark", label: t.t("publicSurface.themeDark"), icon: <MoonIcon />, action: chooseThemeInPlaceAction.bind(null, "dark") },
+  ];
   const [workspace, profile] = await Promise.all([
     getDb().workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { name: true } }),
     getDb().businessProfile.findUniqueOrThrow({
@@ -63,9 +75,23 @@ export default async function ProfileShellLayout({
           labels={navLabels}
           toggleLabel={t.t("shell.openNavigation")}
           navigationLabel={t.t("shell.navigationLabel")}
+          docsUrl={loadWebEnv().WEB_DOCS_URL}
+          docsLabel={t.t("nav.documentation")}
+          externalHint={t.t("shell.externalLink")}
+          controls={
+            <>
+              <ThemeSwitch
+                groupLabel={t.t("publicSurface.theme")}
+                stored={theme}
+                options={themeOptions}
+                cookieName={PUBLIC_THEME_COOKIE}
+                cookieMaxAge={PUBLIC_PREFERENCE_MAX_AGE}
+              />
+              <LocaleSwitch t={t} current={locale} action={setUiLocaleAction} />
+            </>
+          }
         />
         {profile.status === "SETUP" ? <Link href={`${basePath}/setup`}>{t.t("shell.setupLink")}</Link> : undefined}
-        <LocaleSwitch t={t} current={locale} action={setUiLocaleAction} />
       </nav>
       <main className="shell-main" id="shell-content">
         {children}

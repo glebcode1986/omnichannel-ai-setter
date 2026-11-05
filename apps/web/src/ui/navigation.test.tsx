@@ -24,6 +24,91 @@ const BASE = "/workspaces/ws_1/profiles/bp_1";
 
 afterEach(cleanup);
 
+describe("the documentation link", () => {
+  const docsLabel = catalogues.en["nav.documentation"];
+
+  it("is absent until a deployment says where the documentation is", () => {
+    // `doc.keepsaybot.online` already resolves to the deployment host and serves nothing: no site and
+    // no certificate covering the name, so a link added before the site exists takes a reader to a
+    // connection failure. Keeping the item behind the address keeps "there is a link" and "there is a
+    // site" the same fact.
+    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} docsLabel={docsLabel} />);
+
+    expect(screen.queryByRole("link", { name: new RegExp(docsLabel, "u") })).toBeNull();
+    expect(document.querySelector("[data-nav-external]")).toBeNull();
+  });
+
+  it("appears once the address is configured, and says it leaves the product", () => {
+    render(
+      <Navigation
+        basePath={BASE}
+        currentPath={`${BASE}/inbox`}
+        {...navProps}
+        docsUrl="https://doc.keepsaybot.online"
+        docsLabel={docsLabel}
+        externalHint={catalogues.en["shell.externalLink"]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: new RegExp(docsLabel, "u") });
+    expect(link.getAttribute("href")).toBe("https://doc.keepsaybot.online");
+    expect(link.getAttribute("target")).toBe("_blank");
+    // `noopener` alone would still hand the new tab a referrer it has no need for.
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+    expect(link.textContent).toContain(catalogues.en["shell.externalLink"]);
+  });
+
+  it("is not marked as the current page by a section route", () => {
+    // It is not a section, and exactly one link may carry `aria-current`.
+    render(
+      <Navigation
+        basePath={BASE}
+        currentPath={`${BASE}/inbox`}
+        {...navProps}
+        docsUrl="https://doc.keepsaybot.online"
+        docsLabel={docsLabel}
+      />,
+    );
+
+    expect(document.querySelectorAll('[aria-current="page"]').length).toBe(1);
+    expect(document.querySelector("[data-nav-external]")?.getAttribute("aria-current")).toBeNull();
+  });
+});
+
+describe("the shell bar", () => {
+  it("keeps appearance and language out of the collapsing list", () => {
+    // They used to collapse with the sections, so changing the language on a phone meant opening a menu
+    // named "Sections" to find something that is not a section.
+    render(
+      <Navigation
+        basePath={BASE}
+        currentPath={`${BASE}/inbox`}
+        {...navProps}
+        controls={<button type="button" data-test-control="yes">control</button>}
+      />,
+    );
+
+    const control = document.querySelector("[data-test-control]");
+    expect(control).not.toBeNull();
+    expect(control?.closest(".nav-bar"), "the controls belong to the bar").not.toBeNull();
+    expect(control?.closest(".nav-list"), "and never to the list that collapses").toBeNull();
+  });
+
+  it("draws the menu button as a menu, and changes the mark when it opens", async () => {
+    const user = userEvent.setup();
+    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+
+    const toggle = screen.getByRole("button", { name: new RegExp(catalogues.en["shell.openNavigation"], "u") });
+    const closedMark = toggle.querySelector("svg")?.innerHTML ?? "";
+    expect(closedMark, "a button with no mark is the field it used to look like").not.toBe("");
+
+    await user.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.querySelector("svg")?.innerHTML, "the mark must change with the state").not.toBe(closedMark);
+  });
+});
+
 describe("workspace navigation", () => {
   it("offers every section the product architecture names", () => {
     render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);

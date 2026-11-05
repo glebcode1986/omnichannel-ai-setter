@@ -85,6 +85,16 @@ export const webEnvSchema = runtimeEnvSchema.extend({
    * this and is always enforced.
    */
   AUTH_TRUSTED_CLIENT_IP_HEADER: z.string().min(1).max(64).optional(),
+
+  /**
+   * Where the published documentation lives.
+   *
+   * Optional, and the navigation item exists only when it is set. `doc.keepsaybot.online` resolves to
+   * the deployment host already but serves nothing and has no certificate covering it, so a link added
+   * today would take a reader to a connection failure. Configuring the address is what turns the item
+   * on, which keeps "there is a link" and "there is a site" the same fact.
+   */
+  WEB_DOCS_URL: z.url({ protocol: /^https$/ }).max(512).optional(),
   /** Redis for enqueueing BullMQ work from webhook ingestion (ADR-005). */
   REDIS_URL: z.url({ protocol: /^rediss?$/ }),
 

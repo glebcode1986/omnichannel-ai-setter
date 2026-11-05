@@ -647,6 +647,9 @@ const en = {
   "publicSurface.themeLight": "Light",
   "publicSurface.themeDark": "Dark",
   "publicSurface.language": "Language",
+  // Said after a link's own label, for a reader who cannot see that it leaves the product.
+  "shell.externalLink": "opens in a new tab",
+  "nav.documentation": "Documentation",
   // Only ever rendered inside <noscript>: the language select applies on change when scripting works.
   "publicSurface.languageApply": "Apply",
 
@@ -1763,6 +1766,8 @@ const ru: Catalogue = {
   "publicSurface.themeLight": "Светлая",
   "publicSurface.themeDark": "Тёмная",
   "publicSurface.language": "Язык",
+  "shell.externalLink": "откроется в новой вкладке",
+  "nav.documentation": "Документация",
   "publicSurface.languageApply": "Применить",
 
   "landing.channelsTitle": "Где отвечает",

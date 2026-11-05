@@ -59,6 +59,24 @@ export async function choosePublicThemeAction(theme: string, path: string): Prom
 }
 
 /**
+ * Choose the colour scheme from inside the product, without going anywhere.
+ *
+ * `choosePublicThemeAction` ends in a redirect to one of the four public paths, which is right for the
+ * landing and wrong in here: a reader changing the theme on their Inbox would be returned to the
+ * marketing page. There is no redirect to make safe instead — a form action re-renders the route it was
+ * submitted from — so this one simply sets the preference and stops. The control also applies the
+ * attribute in the browser, so nothing visible waits for the round trip either way.
+ */
+export async function chooseThemeInPlaceAction(theme: string): Promise<void> {
+  const store = await cookies();
+  if (isPublicTheme(theme)) {
+    store.set(PUBLIC_THEME_COOKIE, theme, preferenceCookie());
+  } else {
+    store.delete(PUBLIC_THEME_COOKIE);
+  }
+}
+
+/**
  * Choose the language this public surface is read in. An unrecognised locale changes nothing.
  *
  * Takes the whole form rather than a bound value, because the control is a `<select>`: the product has

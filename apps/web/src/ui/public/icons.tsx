@@ -50,3 +50,69 @@ export function MoonIcon({ className }: { readonly className?: string }) {
     </svg>
   );
 }
+
+/**
+ * The menu, and the same control once it is open.
+ *
+ * Three lines rather than a word in a box. The product's phone header used a 358px-wide button with a
+ * hairline border, a white fill and centred text, which is the exact drawing of a text input — the
+ * owner read it as an empty field and never pressed it, which is the only review that matters.
+ */
+export function MenuIcon({ className }: { readonly className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ className }: { readonly className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+/** An external destination, so a link that leaves the product says so before it is followed. */
+export function ExternalIcon({ className }: { readonly className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
