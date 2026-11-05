@@ -650,6 +650,11 @@ const en = {
   // Said after a link's own label, for a reader who cannot see that it leaves the product.
   "shell.externalLink": "opens in a new tab",
   "nav.documentation": "Documentation",
+  // Captions over the groups in the sidebar. Sentence case: a caption is there to be glanced past.
+  "shell.closeNavigation": "Close the menu",
+  "navGroup.work": "Work",
+  "navGroup.assistant": "Assistant",
+  "navGroup.account": "Account",
   // Only ever rendered inside <noscript>: the language select applies on change when scripting works.
   "publicSurface.languageApply": "Apply",
 
@@ -1768,6 +1773,10 @@ const ru: Catalogue = {
   "publicSurface.language": "Язык",
   "shell.externalLink": "откроется в новой вкладке",
   "nav.documentation": "Документация",
+  "shell.closeNavigation": "Закрыть меню",
+  "navGroup.work": "Работа",
+  "navGroup.assistant": "Ассистент",
+  "navGroup.account": "Аккаунт",
   "publicSurface.languageApply": "Применить",
 
   "landing.channelsTitle": "Где отвечает",

@@ -368,7 +368,7 @@ describe("the supported widths", () => {
     // pattern like /\.shell\b[\s\S]*grid-template-columns/ matches `.shell-nav` followed by any later
     // rule's track list, so deleting the one override it exists to protect left it green.
     expect(declarationsFor(".shell", rules), "the shell must drop to one column on a phone").toMatch(
-      /grid-template-columns:\s*1fr/u,
+      /grid-template-columns:\s*(1fr|minmax\(0,\s*1fr\))/u,
     );
     expect(css).toContain("--shell-nav-width");
   });

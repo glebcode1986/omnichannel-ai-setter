@@ -1,7 +1,7 @@
 import "./globals.css";
 
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
+import { Inter } from "next/font/google";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
@@ -20,10 +20,10 @@ import { publicThemeOf, PUBLIC_THEME_COOKIE } from "@/server/public-theme";
  * Exposed as a custom property rather than a class on `<body>`, because `globals.css` sets type on many
  * selectors and a wrapper class would lose to them; a token is read wherever the stylesheet asks.
  */
-const geist = Geist({
+const ui = Inter({
   subsets: ["latin", "cyrillic"],
   display: "swap",
-  variable: "--font-geist",
+  variable: "--font-ui",
 });
 
 /**
@@ -65,7 +65,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html
       lang={locale}
-      className={geist.variable}
+      className={ui.variable}
       {...(theme === undefined ? {} : { "data-theme": theme })}
       style={{ colorScheme: theme ?? "light dark" }}
     >

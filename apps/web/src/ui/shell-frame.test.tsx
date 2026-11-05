@@ -7,10 +7,13 @@
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Navigation } from "./navigation";
-import { NAV_SECTIONS } from "./sections";
+let currentPath = "/workspaces/ws_1/profiles/bp_1/inbox";
+vi.mock("next/navigation", () => ({ usePathname: () => currentPath }));
+
+import { ShellFrame } from "./shell-frame";
+import { NAV_GROUPS, NAV_SECTIONS } from "./sections";
 import { catalogues } from "@/i18n/catalogue";
 
 /** The English section names, as the server would resolve them. */
@@ -18,9 +21,31 @@ const navLabels = Object.fromEntries(NAV_SECTIONS.map((section) => [section, cat
   (typeof NAV_SECTIONS)[number],
   string
 >;
-const navProps = { labels: navLabels, toggleLabel: catalogues.en["shell.openNavigation"], navigationLabel: catalogues.en["shell.navigationLabel"] };
+const groupLabels = Object.fromEntries(NAV_GROUPS.map((group) => [group.id, catalogues.en[`navGroup.${group.id}`]])) as Record<
+  (typeof NAV_GROUPS)[number]["id"],
+  string
+>;
+
+/** Everything the frame needs that is not under test in a given case. */
+const navProps = {
+  labels: navLabels,
+  groupLabels,
+  toggleLabel: catalogues.en["shell.openNavigation"],
+  closeLabel: catalogues.en["shell.closeNavigation"],
+  navigationLabel: catalogues.en["shell.navigationLabel"],
+  skipLabel: catalogues.en["shell.skipToContent"],
+  brand: <span>KeepSayBot</span>,
+  account: <span>account</span>,
+  crumb: <span>crumb</span>,
+  controls: <span />,
+  children: <p>page</p>,
+};
 
 const BASE = "/workspaces/ws_1/profiles/bp_1";
+
+beforeEach(() => {
+  currentPath = `${BASE}/inbox`;
+});
 
 afterEach(cleanup);
 
@@ -32,7 +57,7 @@ describe("the documentation link", () => {
     // no certificate covering the name, so a link added before the site exists takes a reader to a
     // connection failure. Keeping the item behind the address keeps "there is a link" and "there is a
     // site" the same fact.
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} docsLabel={docsLabel} />);
+    render(<ShellFrame basePath={BASE} {...navProps} docsLabel={docsLabel} />);
 
     expect(screen.queryByRole("link", { name: new RegExp(docsLabel, "u") })).toBeNull();
     expect(document.querySelector("[data-nav-external]")).toBeNull();
@@ -40,9 +65,8 @@ describe("the documentation link", () => {
 
   it("appears once the address is configured, and says it leaves the product", () => {
     render(
-      <Navigation
+      <ShellFrame
         basePath={BASE}
-        currentPath={`${BASE}/inbox`}
         {...navProps}
         docsUrl="https://doc.keepsaybot.online"
         docsLabel={docsLabel}
@@ -61,9 +85,8 @@ describe("the documentation link", () => {
   it("is not marked as the current page by a section route", () => {
     // It is not a section, and exactly one link may carry `aria-current`.
     render(
-      <Navigation
+      <ShellFrame
         basePath={BASE}
-        currentPath={`${BASE}/inbox`}
         {...navProps}
         docsUrl="https://doc.keepsaybot.online"
         docsLabel={docsLabel}
@@ -76,13 +99,12 @@ describe("the documentation link", () => {
 });
 
 describe("the shell bar", () => {
-  it("keeps appearance and language out of the collapsing list", () => {
+  it("keeps appearance and language in the bar, out of the navigation", () => {
     // They used to collapse with the sections, so changing the language on a phone meant opening a menu
     // named "Sections" to find something that is not a section.
     render(
-      <Navigation
+      <ShellFrame
         basePath={BASE}
-        currentPath={`${BASE}/inbox`}
         {...navProps}
         controls={<button type="button" data-test-control="yes">control</button>}
       />,
@@ -90,13 +112,13 @@ describe("the shell bar", () => {
 
     const control = document.querySelector("[data-test-control]");
     expect(control).not.toBeNull();
-    expect(control?.closest(".nav-bar"), "the controls belong to the bar").not.toBeNull();
-    expect(control?.closest(".nav-list"), "and never to the list that collapses").toBeNull();
+    expect(control?.closest(".shell-topbar"), "the controls belong to the bar").not.toBeNull();
+    expect(control?.closest(".shell-nav"), "and never to the navigation that collapses").toBeNull();
   });
 
   it("draws the menu button as a menu, and changes the mark when it opens", async () => {
     const user = userEvent.setup();
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     const toggle = screen.getByRole("button", { name: new RegExp(catalogues.en["shell.openNavigation"], "u") });
     const closedMark = toggle.querySelector("svg")?.innerHTML ?? "";
@@ -111,7 +133,7 @@ describe("the shell bar", () => {
 
 describe("workspace navigation", () => {
   it("offers every section the product architecture names", () => {
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     for (const section of NAV_SECTIONS) {
       expect(screen.getByRole("link", { name: navLabels[section] }).getAttribute("href")).toBe(`${BASE}/${section}`);
@@ -119,7 +141,8 @@ describe("workspace navigation", () => {
   });
 
   it("marks exactly one link as the current page", () => {
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/review`} {...navProps} />);
+    currentPath = `${BASE}/review`;
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     const current = screen.getAllByRole("link").filter((link) => link.getAttribute("aria-current") === "page");
     expect(current).toHaveLength(1);
@@ -127,15 +150,17 @@ describe("workspace navigation", () => {
   });
 
   it("keeps the current link marked inside a section's sub-routes", () => {
+    currentPath = `${BASE}/inbox/conv_1`;
     // A conversation opened from the inbox is still the inbox. Losing "you are here" one level down is a
     // small break that is very confusing without sight of the page.
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox/conversation-7`} {...navProps} />);
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     expect(screen.getByRole("link", { name: navLabels.inbox }).getAttribute("aria-current")).toBe("page");
   });
 
   it("does not mark two links when one section's path prefixes another", () => {
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/settings`} {...navProps} />);
+    currentPath = `${BASE}/review`;
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     const marked = screen.getAllByRole("link").filter((link) => link.hasAttribute("aria-current"));
     expect(marked).toHaveLength(1);
@@ -143,43 +168,73 @@ describe("workspace navigation", () => {
 
   it("opens and closes on the keyboard, and says which it is", async () => {
     const user = userEvent.setup();
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+    render(<ShellFrame basePath={BASE} {...navProps} />);
     const toggle = screen.getByRole("button", { name: /sections/i });
 
     // Collapsed by default on a narrow viewport, and the state is announced rather than implied by CSS.
+    // The flag now lives on the shell, because the sidebar is what opens: the sections are several
+    // lists, one per group, and a disclosure cannot point at several things.
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByRole("list").getAttribute("data-collapsed")).toBe("true");
+    expect(document.querySelector(".shell")?.getAttribute("data-nav-open")).toBe("false");
 
-    await user.tab();
+    await user.keyboard("{Tab}");
+    await user.keyboard("{Tab}");
     expect(document.activeElement).toBe(toggle);
     await user.keyboard("{Enter}");
 
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("list").getAttribute("data-collapsed")).toBe("false");
+    expect(document.querySelector(".shell")?.getAttribute("data-nav-open")).toBe("true");
   });
 
-  it("points the disclosure at the list it controls", () => {
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+  it("points the disclosure at the thing it opens", () => {
+    // It opens the sidebar, not one list: the sections are grouped now, so there are several lists and
+    // `aria-controls` must name the element that actually appears and disappears.
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
     const controls = screen.getByRole("button", { name: /sections/i }).getAttribute("aria-controls");
     expect(controls).not.toBeNull();
-    expect(screen.getByRole("list").id).toBe(controls);
+    expect(screen.getByRole("navigation").id).toBe(controls);
+  });
+
+  it("groups the sections under captions rather than listing seven in a row", () => {
+    render(<ShellFrame basePath={BASE} {...navProps} />);
+
+    const captions = [...document.querySelectorAll(".nav-group-label")].map((node) => node.textContent);
+    expect(captions).toEqual(NAV_GROUPS.map((group) => groupLabels[group.id]));
+    // And every section still has exactly one home, so none was lost in the grouping.
+    expect(NAV_GROUPS.flatMap((group) => [...group.sections]).toSorted()).toEqual([...NAV_SECTIONS].toSorted());
+  });
+
+  it("gives every section a mark beside its name", () => {
+    render(<ShellFrame basePath={BASE} {...navProps} />);
+
+    for (const section of NAV_SECTIONS) {
+      const link = screen.getByRole("link", { name: navLabels[section] });
+      expect(link.querySelector("svg"), `${section} has no mark`).not.toBeNull();
+      // The mark repeats the word it sits beside, so it must not be read out as well.
+      expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    }
   });
 
   it("reaches every section by tabbing, with no mouse-only step", async () => {
     const user = userEvent.setup();
-    render(<Navigation basePath={BASE} currentPath={`${BASE}/inbox`} {...navProps} />);
+    render(<ShellFrame basePath={BASE} {...navProps} />);
 
-    await user.tab();
+    // Tabbed until the sections have all been reached rather than a fixed number of times: the frame
+    // has chrome ahead of them now — the skip link, the menu button, the brand — and a count that
+    // happened to match the old markup would fail on the next thing added in front.
+    const wanted = new Set(NAV_SECTIONS.map((section) => navLabels[section]));
     const reached: string[] = [];
-    for (let index = 0; index < NAV_SECTIONS.length; index += 1) {
+    for (let step = 0; step < 40 && reached.length < wanted.size; step += 1) {
       await user.tab();
       const focused = document.activeElement;
-      if (focused !== null && focused.tagName === "A") {
-        reached.push(focused.textContent ?? "");
+      const text = focused?.textContent ?? "";
+      if (focused?.tagName === "A" && wanted.has(text)) {
+        reached.push(text);
       }
     }
 
+    // Every one of them, in the order the product architecture names them, with no mouse-only step.
     expect(reached).toEqual(NAV_SECTIONS.map((section) => navLabels[section]));
   });
 });

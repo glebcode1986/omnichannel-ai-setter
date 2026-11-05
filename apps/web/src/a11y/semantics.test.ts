@@ -46,12 +46,53 @@ function productionFiles(): readonly { readonly file: string; readonly source: s
   return found;
 }
 
-/** Lines, with comment-only ones dropped so an example in a doc comment is not a finding. */
+/**
+ * Lines, with comments dropped so an example written in prose is not a finding.
+ *
+ * Block state rather than a guess at the first character. The old version dropped a line beginning
+ * with `*`, `//` or `/*`, which covers a doc comment and misses the body of a JSX one — `{/* … *\/}`
+ * wraps prose whose continuation lines begin with ordinary words. A comment in `shell-frame.tsx`
+ * explaining why `tabIndex={-1}` had been *removed* was therefore reported as using it, and the only
+ * way to satisfy the gate was to stop explaining the fix.
+ *
+ * Commented-out code is not shipped code, so ignoring all of it is the right answer and not a
+ * weakening: the control below proves the matcher still fires on the real thing.
+ */
 function lines(source: string): readonly { readonly line: number; readonly text: string }[] {
-  return source.split("\n").map((text, index) => ({ line: index + 1, text })).filter(({ text }) => {
-    const trimmed = text.trim();
-    return !trimmed.startsWith("*") && !trimmed.startsWith("//") && !trimmed.startsWith("/*");
+  const kept: { line: number; text: string }[] = [];
+  let inBlock = false;
+  source.split("\n").forEach((raw, index) => {
+    let text = raw;
+    if (inBlock) {
+      const close = text.indexOf("*" + "/");
+      if (close === -1) {
+        return;
+      }
+      inBlock = false;
+      text = text.slice(close + 2);
+    }
+    for (;;) {
+      const open = text.indexOf("/" + "*");
+      if (open === -1) {
+        break;
+      }
+      const close = text.indexOf("*" + "/", open + 2);
+      if (close === -1) {
+        inBlock = true;
+        text = text.slice(0, open);
+        break;
+      }
+      text = text.slice(0, open) + text.slice(close + 2);
+    }
+    const lineComment = text.indexOf("//");
+    if (lineComment !== -1) {
+      text = text.slice(0, lineComment);
+    }
+    if (text.trim() !== "") {
+      kept.push({ line: index + 1, text });
+    }
   });
+  return kept;
 }
 
 function scan(pattern: RegExp, describeMatch: (match: RegExpMatchArray) => string | undefined): readonly Finding[] {
@@ -240,6 +281,13 @@ describe("the production UI's semantics", () => {
     expect(/<(div|span|li|td|tr|p|section|article)\b[^>]*\bonClick\b/.test(sample)).toBe(true);
     expect(/<button\b([^>]*)>\s*(?:&[a-z]+;|[^\w\s<>{]|)\s*<\/button>/.test(sample)).toBe(true);
     expect(/tabIndex=\{(-?\d+)\}/.test(sample)).toBe(true);
+
+    // And the comment filter: a real one is still seen, one being talked about is not. Without this
+    // the filter above could swallow everything and every check in this file would pass empty.
+    const mixed = ["<span tabIndex={-1} />", "{/* explaining why", "tabIndex={-1} was removed", "*" + "/}"].join("\n");
+    const visible = lines(mixed).map((entry) => entry.text).join("\n");
+    expect(visible).toContain("tabIndex={-1} />");
+    expect(visible, "prose inside a JSX comment is not code").not.toContain("was removed");
     expect(/<(button|a|input|select|textarea)\b[^>]*aria-hidden="true"/.test(sample)).toBe(true);
     expect(/role="(button|link)"/.test(sample)).toBe(true);
     expect(/<a\b(?![^>]*\bhref=)[^>]*>/.test(sample)).toBe(true);

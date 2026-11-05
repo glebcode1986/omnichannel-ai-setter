@@ -50,8 +50,8 @@ describe("the dark palette", () => {
     // Two empty extractions are equal, and would report agreement between blocks that do not exist. The
     // count is asserted first so every claim below is about something.
     expect(fromQuery.length).toBeGreaterThan(12);
-    expect(fromQuery).toContain("surface: #14171b");
-    expect(fromQuery).toContain("text: #eef1f5");
+    expect(fromQuery).toContain("surface: #141414");
+    expect(fromQuery).toContain("text: #ebebeb");
   });
 
   it("says the same thing whether the machine preferred it or the reader chose it", () => {

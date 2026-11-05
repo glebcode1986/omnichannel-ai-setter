@@ -21,23 +21,58 @@
  */
 
 :root {
+  /*
+   * The house palette, taken from the owner's other product rather than invented here.
+   *
+   * Read out of `fastyads.ai`'s own stylesheet with the owner's permission: a shadcn token set whose
+   * every colour is `0 0% n` — pure neutral, no hue anywhere, with one brand accent kept apart from it.
+   * The structural idea is a **grey canvas carrying white cards**, which is the opposite of what this
+   * product had: three nearly identical whites and a border around everything, which is the look of a
+   * form rather than of an application. Resend's own application is built the same way.
+   *
+   * Hue is spent in exactly two places: the brand mark and a state that must be noticed. Everything
+   * else is grey, which is where the expensive look actually comes from.
+   */
   --surface: #ffffff;
-  --surface-sunken: #f5f6f8;
+  --surface-sunken: #f5f5f5;
   --surface-raised: #ffffff;
-  --border: #d9dde3;
-  --border-strong: #888f9c;
-  --text: #16191d;
-  --text-muted: #5b6472;
-  --accent: #1c4ed8;
+  --border: #e3e3e3;
+  /* Step 9 of the scale, which is the step Radix designates for a solid border — and the lightest
+     grey that still clears the 3:1 a control's own boundary needs. #bbbbbb looked right and measured
+     1.89:1, which is the kind of wrong only the gate catches. */
+  --border-strong: #8e8e8e;
+  --text: #1f1f1f;
+  --text-muted: #616161;
+
+  /*
+   * The action colour is monochrome, and that is deliberate rather than dull.
+   *
+   * Resend's primary button is black in light and white in dark — their token is literally
+   * `--bg-accent: #fff` with `--text-on-accent: #000`. A product whose every button is brand-coloured
+   * has no way left to say "this one". Ours was #1c4ed8 everywhere, including the focus ring, so the
+   * focused control and the primary action were the same colour.
+   */
+  --accent: #4f4f4f;
   --accent-contrast: #ffffff;
+  /* The live navigation item and the chosen filter rest on this, not on the action colour. */
+  --surface-selected: #ededed;
+
+  /*
+   * The brand is not the action colour, and separating them is the whole reason this token exists.
+   * The mark and the landing page keep the blue; buttons and focus rings do not. Without this the
+   * logo turned black the moment the accent did.
+   */
+  --brand: #1c4ed8;
   --ok: #176b3f;
   --warn: #8a5300;
   --stop: #a01b28;
-  /* 8, not 10: the radius scale has no 10. */
-  --radius: 8px;
+  /* 10px: `--radius: .625rem` is what the house style uses, and the scale has the step. */
+  --radius: 10px;
   --radius-sm: 6px;
   --gap: 12px;
   --shell-nav-width: 232px;
+  /* The bar and the brand block are the same height, so the two hairlines meet. */
+  --shell-bar-height: 56px;
 
   /* A spacing ladder, so padding is chosen from a scale rather than invented per block. */
   --space-1: 4px;
@@ -82,10 +117,10 @@
   /* The product had no font-family at all and rendered in whatever the browser defaults to. One
      typeface, loaded from our own origin by `next/font`; the stack behind it is what shows while the
      file is still arriving. Inter and Helvetica are deliberately absent. */
-  /* `--font-geist` is set by `next/font` on <html>. Referencing it rather than naming the family here
-     keeps one source of truth: next/font generates its own family name and a hard-coded "Geist" would
+  /* `--font-ui` is set by `next/font` on <html>. Referencing it rather than naming the family here
+     keeps one source of truth: next/font generates its own family name and a hard-coded "Inter" would
      silently differ from it. The stack behind it is what shows while the file is still arriving. */
-  --font-sans: var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
 
   /* Публичная главная. Отдельные поверхности, потому что первый экран живёт по другим правилам,
      чем рабочий интерфейс: ему нужен контраст между полосами, а не ровный фон под таблицы.
@@ -121,17 +156,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --surface: #14171b;
-    --surface-sunken: #0e1013;
-    --surface-raised: #1c2026;
-    --border: #2c333c;
-    --border-strong: #666f80;
-    --text: #eef1f5;
-    --text-muted: #a6b0bd;
-    --accent: #7aa2ff;
+    /* Resend's own dark scale, read from their stylesheet: twelve steps of a neutral with a faint cool
+       cast. The accent inverts, white on black, which is what their own accent token says too.
+       (Written without a custom-property literal on purpose: an unterminated one inside a comment is
+       swallowed by the extraction in `theme-palette.test.ts`, which is how this comment first broke
+       the palette it was describing.) */
+    /* Three levels, because a card has to lift off the column it sits on and in the dark the two were
+       the same grey. The house style has the same three: canvas, sidebar, card. */
+    --surface: #141414;
+    --surface-sunken: #121212;
+    --surface-raised: #1a1a1a;
+    --border: #242424;
+    --border-strong: #666666;
+    --text: #ebebeb;
+    --text-muted: #8c8c8c;
+    --accent: #d1d1d1;
+    --surface-selected: #292929;
     --landing-hero: #10141b;
     --landing-band: #11151b;
-    --accent-contrast: #0e1013;
+    --accent-contrast: #121212;
+    --brand: #7aa2ff;
     --ok: #62d29a;
     --warn: #e0b054;
     --stop: #ff8f9a;
@@ -153,17 +197,26 @@
  * token the other has not.
  */
 :root[data-theme="dark"] {
-    --surface: #14171b;
-    --surface-sunken: #0e1013;
-    --surface-raised: #1c2026;
-    --border: #2c333c;
-    --border-strong: #666f80;
-    --text: #eef1f5;
-    --text-muted: #a6b0bd;
-    --accent: #7aa2ff;
+    /* Resend's own dark scale, read from their stylesheet: twelve steps of a neutral with a faint cool
+       cast. The accent inverts, white on black, which is what their own accent token says too.
+       (Written without a custom-property literal on purpose: an unterminated one inside a comment is
+       swallowed by the extraction in `theme-palette.test.ts`, which is how this comment first broke
+       the palette it was describing.) */
+    /* Three levels, because a card has to lift off the column it sits on and in the dark the two were
+       the same grey. The house style has the same three: canvas, sidebar, card. */
+    --surface: #141414;
+    --surface-sunken: #121212;
+    --surface-raised: #1a1a1a;
+    --border: #242424;
+    --border-strong: #666666;
+    --text: #ebebeb;
+    --text-muted: #8c8c8c;
+    --accent: #d1d1d1;
+    --surface-selected: #292929;
     --landing-hero: #10141b;
     --landing-band: #11151b;
-    --accent-contrast: #0e1013;
+    --accent-contrast: #121212;
+    --brand: #7aa2ff;
     --ok: #62d29a;
     --warn: #e0b054;
     --stop: #ff8f9a;
@@ -451,29 +504,258 @@ details[open] > summary::before {
  * inheriting it and landing a size above everything around them. 14/20 is the product's base; the
  * landing, the sign-in page and the legal documents are not inside this element and keep 16.
  */
+/*
+ * The frame.
+ *
+ * A sidebar down the full height, a bar across the top of everything else, and the page on a grey
+ * canvas beneath it. The shape is the owner's other product's, read from its own stylesheet with
+ * permission; what the product had instead was a column of seven equal links with the language form
+ * wedged into the middle of them, and no bar at all.
+ *
+ * Laid out with named areas rather than source order, because the two disagree on purpose: the bar is
+ * written first so a keyboard reaches the button that opens the sidebar before reaching the sidebar,
+ * and it is drawn second so the sidebar can run the full height beside it.
+ */
 .shell {
   display: grid;
-  grid-template-columns: var(--shell-nav-width) 1fr;
+  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "nav bar"
+    "nav main";
   min-height: 100vh;
   font-size: var(--text-m);
   line-height: var(--leading-m);
+  background: var(--surface-sunken);
 }
 
+/* ---- the bar ------------------------------------------------------------------------------- */
+
+.shell-topbar {
+  grid-area: bar;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--shell-bar-height);
+  padding: 0 var(--space-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-crumb {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.shell-crumb-name {
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.shell-crumb-muted {
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.shell-topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+/* The select carries the whole control in here; its `<noscript>` button is the only other child and
+   appears only where it is needed. */
+.shell-topbar-controls .switch-select {
+  min-height: 36px;
+}
+
+/* ---- the sidebar --------------------------------------------------------------------------- */
+
 .shell-nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
+}
+
+.shell-brand {
+  display: flex;
+  align-items: center;
+  min-height: var(--shell-bar-height);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  text-decoration: none;
+  color: var(--text);
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.shell-brand-mark {
+  width: 22px;
+  height: auto;
+  flex: none;
+}
+
+.shell-brand-link .mark-body {
+  fill: var(--brand);
+}
+
+.shell-brand-link .mark-eyes {
+  fill: var(--surface);
+}
+
+/* The sections scroll; the brand and the account do not go with them. */
+.shell-sections {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-4) var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  position: sticky;
-  top: 0;
-  /* `start` sized this column to its own content, so on a 913px window the navigation stopped at 587
-     and left 326px of bare white under it with a border running down beside nothing. It is a column;
-     it should occupy one. */
-  align-self: stretch;
-  height: 100vh;
-  overflow-y: auto;
+  gap: var(--space-5);
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Sentence case at the smallest step, not tracked-out capitals: a caption is read once and then
+   glanced past, and capitals cost about a sixth of the width in a 232px rail. */
+.nav-group-label {
+  margin: 0 0 var(--space-1);
+  padding: 0 var(--space-3);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-medium);
+}
+
+.nav-link svg {
+  flex: none;
+}
+
+.nav-link:hover {
+  background: var(--surface-selected);
+  color: var(--text);
+}
+
+/*
+ * The page you are on: a quiet surface and a heavier label, never a saturated fill.
+ *
+ * A fill in the action colour is the shape of a primary button and of the focus ring, which is also
+ * drawn in that colour — so the item you were on and the item you had tabbed to were the same thing.
+ * Weight carries the state as well as the surface does, which is what keeps it legible to a reader who
+ * cannot separate the two greys.
+ */
+.nav-link[aria-current="page"] {
+  background: var(--surface-selected);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.nav-link[data-nav-external] .nav-link-external,
+.nav-link-external {
+  flex: none;
+  opacity: 0.55;
+}
+
+.shell-account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+.shell-account a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.shell-account a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.shell-account-setup {
+  font-weight: var(--weight-medium);
+}
+
+/* ---- the menu button and the scrim, both of which only exist on a phone --------------------- */
+
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.shell-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 45%);
 }
 
 .shell-main {
@@ -499,83 +781,6 @@ details[open] > summary::before {
   container-name: main;
 }
 
-.nav-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.nav-link {
-  display: block;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  text-decoration: none;
-  font-size: var(--text-m);
-  line-height: var(--leading-m);
-  font-weight: var(--weight-medium);
-}
-
-.nav-link:hover {
-  background: var(--surface-sunken);
-}
-
-/*
- * The page you are on.
- *
- * It was a saturated accent fill across the full width of the column, which is the shape of a primary
- * button and of a focus ring — so the one item that is not a call to action was the loudest thing on
- * the screen. A quiet surface, a heavier label and a rail against the leading edge say the same thing
- * without shouting, and say it a second way for a reader who cannot separate the two colours.
- */
-.nav-link[aria-current="page"] {
-  background: var(--surface-sunken);
-  color: var(--text);
-  font-weight: var(--weight-semibold);
-  box-shadow: inset 2px 0 0 0 var(--accent);
-}
-
-/*
- * The shell's bar: the menu button at one end, appearance and language at the other.
- *
- * On a wide screen the button is hidden and this is simply the row the two controls sit in, above the
- * sections. On a phone it is the whole header — the one thing that stays on screen when the sections
- * are closed, which is why the controls live here rather than inside the list: a reader looking for the
- * language should not have to open a menu called "Sections" to find something that is not one.
- */
-.nav-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.nav-bar-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-inline-start: auto;
-  min-width: 0;
-}
-
-.nav-toggle {
-  display: none;
-}
-
-/* A link that leaves the product carries the mark that says so; the words say it again, for a reader
-   who cannot see the mark. */
-.nav-link[data-nav-external] {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.nav-link-external {
-  flex: none;
-  opacity: 0.55;
-}
 
 .workspace-switch {
   display: flex;
@@ -599,76 +804,50 @@ details[open] > summary::before {
  * disclosure that is a real <button> with real aria state, so it works without hover and without a mouse.
  */
 @media (max-width: 720px) {
+  /*
+   * One column, and the sidebar comes over the page instead of beside it.
+   *
+   * It used to collapse in place, which left the bar, the workspace name, a switch link and a whole
+   * language form stacked above the content before the page began. A drawer costs nothing while it is
+   * closed, and the bar it opens from is the only chrome a phone keeps.
+   */
   .shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "bar"
+      "main";
+  }
+
+  .nav-toggle {
+    display: inline-flex;
   }
 
   .shell-nav {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    width: min(280px, 86vw);
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  /*
-   * The menu, as a menu.
-   *
-   * It was a full-width button with a hairline border, a white fill and centred text — 358px wide on a
-   * 390px screen, which is the drawing of an empty text input. The owner read it as a field and never
-   * pressed it. Sized to its content, carrying three lines, and tall enough to hit.
-   */
-  .nav-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-height: 40px;
-    padding: 0 var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-raised);
-    color: var(--text);
-    font: inherit;
-    font-weight: var(--weight-medium);
-    cursor: pointer;
+  .shell[data-nav-open="true"] .shell-nav {
+    transform: translateX(0);
   }
 
-  .nav-toggle[aria-expanded="true"] {
-    background: var(--surface-sunken);
-    border-color: var(--border-strong);
+  .shell[data-nav-open="true"] .shell-scrim {
+    display: block;
   }
 
-  .nav-list[data-collapsed="true"] {
-    display: none;
+  .shell-topbar {
+    padding: 0 var(--space-4);
   }
 
   .shell-main {
     padding: var(--space-4);
-  }
-
-  /*
-   * Sticky rather than static. The navigation is the only way out of a screen on a phone, and a header
-   * that scrolls away takes it with it — on the Inbox, which is a long list, it is gone after one flick.
-   */
-  .shell-nav {
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    max-height: none;
-    height: auto;
-    padding: var(--space-3) var(--space-4);
-    gap: var(--space-3);
-    background: var(--surface);
-    box-shadow: var(--shadow-1);
-  }
-
-  /*
-   * On a phone the sidebar becomes a header, and everything in it sits above the page. Collapsed, that
-   * was the workspace name, a switch link, the sections toggle, a setup link and a whole language form —
-   * most of a screen of chrome before the heading. The secondary controls now collapse with the sections
-   * they sit beside: open "Разделы" and they are all there, closed and the phone opens on the page.
-   */
-  .shell-nav:has(.nav-list[data-collapsed="true"]) > a,
-  .shell-nav:has(.nav-list[data-collapsed="true"]) > form,
-  .shell-nav:has(.nav-list[data-collapsed="true"]) > .workspace-switch {
-    display: none;
   }
 
   .workspace-switch {
@@ -680,20 +859,8 @@ details[open] > summary::before {
 
   /* In the bar the language control is a select and nothing else: its heading and its submit button
      would not fit beside a menu button, and the select applies on change in any case. */
-  .nav-bar-controls .workspace-switch > label,
-  .nav-bar-controls .workspace-switch > button {
-    display: none;
-  }
 
-  .nav-bar-controls .workspace-switch {
-    flex-direction: row;
-    min-width: 0;
-  }
 
-  .nav-bar-controls select {
-    min-width: 0;
-    width: auto;
-  }
 }
 
 /* ---- cards and checklist ----------------------------------------------------------------------- */
@@ -1103,7 +1270,7 @@ details[open] > summary::before {
  */
 .chip[data-active="true"] {
   border-color: var(--border-strong);
-  background: var(--surface-sunken);
+  background: var(--surface-selected);
   color: var(--text);
   font-weight: var(--weight-semibold);
 }
@@ -2283,7 +2450,7 @@ details[open] > summary::before {
      recomputes that from this declaration rather than trusting the comment. */
   inset: -30% 0 auto 0;
   height: 110%;
-  background: radial-gradient(52% 52% at 50% 38%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+  background: radial-gradient(52% 52% at 50% 38%, color-mix(in srgb, var(--brand) 22%, transparent), transparent 70%);
   pointer-events: none;
   z-index: 0;
 }
@@ -3020,7 +3187,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 }
 
 .keeper .mark-body {
-  fill: var(--accent);
+  fill: var(--brand);
   transition: fill 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -3264,7 +3431,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 }
 
 .landing-logo .mark-body {
-  fill: var(--accent);
+  fill: var(--brand);
 }
 
 .landing-logo .mark-eyes {
@@ -3323,7 +3490,7 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 }
 
 .auth-brand .mark-body {
-  fill: var(--accent);
+  fill: var(--brand);
 }
 
 .auth-brand .mark-eyes {
