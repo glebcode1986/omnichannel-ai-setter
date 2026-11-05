@@ -236,9 +236,18 @@ h3 {
  * a styled text field next to a raw native dropdown. Styling the elements themselves means a control is
  * never accidentally un-designed; the component rules below still win where they say something more.
  */
-/* `button` belongs in this list: without it a control the stylesheet has not reached by class renders
-   at the browser's own 13.333px, which is where the seventh size on the Inbox was coming from. */
-button,
+/*
+ * A button takes the font and nothing else.
+ *
+ * It was briefly added to the rule below, to stop a control the stylesheet had not reached by class
+ * rendering at the browser's own 13.333px. That fixed the size and dressed every button in the product
+ * as a text field: `width: 100%`, a field background, a field border and a field radius. The shell's
+ * own menu button came out 232px wide because of it. The size was the only part worth taking.
+ */
+button {
+  font: inherit;
+}
+
 input,
 select,
 textarea {
