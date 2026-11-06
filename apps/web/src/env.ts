@@ -71,6 +71,37 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   AUTH_EMAIL_FROM: z.string().min(3).max(320).optional(),
 
   /**
+   * Whether this deployment registers anybody who asks, or only the addresses it was given (#133).
+   *
+   * `open` is the accepted public self-serve behaviour of #117 and the default when the variable is
+   * absent. `invite` is the private pilot: the email method is still offered, but a link is only ever
+   * sent to an address in `AUTH_INVITE_ALLOWLIST`, and a request for any other address is answered
+   * exactly as a sent one is.
+   *
+   * **An enum rather than a free string, so a typo cannot open registration.** A gate whose mode is read
+   * from an unvalidated variable is one `AUTH_SIGN_IN_ACCESS=invitee` away from admitting the public,
+   * and nothing downstream would report it: the page would render, the mail would send, and the only
+   * sign would be customers nobody invited. Refusing to boot is the loud failure this deserves.
+   */
+  AUTH_SIGN_IN_ACCESS: z.enum(["open", "invite"]).optional(),
+
+  /**
+   * The addresses invited to the private pilot, separated by commas, semicolons or newlines (#133).
+   *
+   * Read only when `AUTH_SIGN_IN_ACCESS` is `invite`. Deployment configuration rather than a table,
+   * because the pilot is a handful of known businesses and nothing in the product can yet create the
+   * first platform member who would administer a table — an invitation anybody can grant needs a
+   * management surface and an audit trail, and the smallest honest version of that is the operator
+   * editing the deployment's own environment. Revocation is removing the address and restarting; the
+   * link an uninvited address already holds stops working, because the gate is consulted again when a
+   * link is spent, not only when one is asked for.
+   *
+   * **Empty invites nobody.** See `sign-in-invitations.ts` — a list that happens to be empty must not
+   * read as "no restriction".
+   */
+  AUTH_INVITE_ALLOWLIST: z.string().max(8_192).optional(),
+
+  /**
    * The request header this deployment's own proxy sets to the caller's address, e.g. `x-forwarded-for`
    * (#117).
    *

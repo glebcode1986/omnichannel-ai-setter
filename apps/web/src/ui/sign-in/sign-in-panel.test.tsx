@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SignInPanel } from "./sign-in-panel";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import type { SignInAccess } from "@/server/sign-in-invitations";
 import type { SignInMethod } from "@/server/sign-in-methods";
 
 const t = createTranslator("en");
@@ -24,8 +25,8 @@ const noopWithForm = (_formData: FormData) => Promise.resolve();
 
 afterEach(cleanup);
 
-const panel = (available: readonly SignInMethod[], error?: string) => (
-  <SignInPanel t={t} available={available} error={error} googleAction={noop} emailAction={noopWithForm} />
+const panel = (available: readonly SignInMethod[], error?: string, access: SignInAccess = "open") => (
+  <SignInPanel t={t} available={available} access={access} error={error} googleAction={noop} emailAction={noopWithForm} />
 );
 
 describe("what the sign-in page offers", () => {
@@ -101,7 +102,7 @@ describe("what the sign-in page offers", () => {
 
   it("renders the whole surface in Russian for a Russian reader", () => {
     render(
-      <SignInPanel t={ru} available={["google", "email"]} googleAction={noop} emailAction={noopWithForm} />,
+      <SignInPanel t={ru} available={["google", "email"]} access="open" googleAction={noop} emailAction={noopWithForm} />,
     );
 
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(catalogues.ru["signIn.title"]);
@@ -115,5 +116,27 @@ describe("what the sign-in page offers", () => {
     expect(field.getAttribute("type")).toBe("email");
     expect(field.getAttribute("placeholder")).toBeNull();
     expect(field.getAttribute("required")).not.toBeNull();
+  });
+
+  /**
+   * The promise on the page has to match the gate behind it (#133). An invitation-only deployment that
+   * says "create an account" sends somebody who was never invited away to wait for a link that was never
+   * sent — and because the refusal is deliberately indistinguishable from a success, the page is the
+   * only place that can tell them.
+   */
+  it("promises an account to anybody only where anybody may have one", () => {
+    render(panel(["email"], undefined, "open"));
+
+    expect(screen.getByText(text("signIn.subtitle"))).toBeDefined();
+    expect(screen.queryByText(text("signIn.subtitleInvite"))).toBeNull();
+  });
+
+  it("says it is a closed pilot where only invited addresses are admitted", () => {
+    render(panel(["email"], undefined, "invite"));
+
+    expect(screen.getByText(text("signIn.subtitleInvite"))).toBeDefined();
+    expect(screen.queryByText(text("signIn.subtitle"))).toBeNull();
+    // The two strings must not be the same string, or the assertions above pass without saying anything.
+    expect(text("signIn.subtitleInvite")).not.toBe(text("signIn.subtitle"));
   });
 });

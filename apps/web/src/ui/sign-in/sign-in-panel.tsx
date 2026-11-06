@@ -29,6 +29,7 @@
 import Link from "next/link";
 
 import type { Translator } from "@/i18n/translate";
+import type { SignInAccess } from "@/server/sign-in-invitations";
 import type { SignInMethod } from "@/server/sign-in-methods";
 import { signInNotice, signInNoticeKey } from "@/server/sign-in-view";
 import { Mark } from "@/ui/landing/mark";
@@ -36,13 +37,22 @@ import { Mark } from "@/ui/landing/mark";
 export interface SignInPanelProps {
   readonly t: Translator;
   readonly available: readonly SignInMethod[];
+  /**
+   * Whether this deployment registers anybody who asks (#133).
+   *
+   * The page has to say so, because the subtitle otherwise promises something that is no longer true:
+   * "create an account" is not on offer during an invitation-only pilot, and somebody who reads that,
+   * types their address and never receives a link has been told the wrong thing by us rather than
+   * failed by their mail.
+   */
+  readonly access: SignInAccess;
   /** The raw `?error=` value, mapped here rather than by the route. */
   readonly error?: string | undefined;
   readonly googleAction: () => Promise<void>;
   readonly emailAction: (formData: FormData) => Promise<void>;
 }
 
-export function SignInPanel({ t, available, error, googleAction, emailAction }: SignInPanelProps) {
+export function SignInPanel({ t, available, access, error, googleAction, emailAction }: SignInPanelProps) {
   const notice = signInNotice(error);
   const nothingOnOffer = available.length === 0;
 
@@ -70,7 +80,13 @@ export function SignInPanel({ t, available, error, googleAction, emailAction }: 
           </p>
         ) : (
           <>
-            <p className="auth-lede">{t.t("signIn.subtitle")}</p>
+            {/* What this page promises depends on whether anybody may register. "Create an account" is
+                not on offer during an invitation-only pilot, and a reader who believes it, types an
+                address and never receives a link has been told the wrong thing by us rather than
+                failed by their mail. */}
+            <p className="auth-lede" data-sign-in-access={access}>
+              {t.t(access === "invite" ? "signIn.subtitleInvite" : "signIn.subtitle")}
+            </p>
 
             {available.includes("google") ? (
               <form action={googleAction} data-sign-in="google">

@@ -14,6 +14,9 @@
  */
 import type { NodeEnv } from "@omnichannel/env";
 
+import type { InvitationConfig, SignInAccess } from "./sign-in-invitations";
+import { signInAccess } from "./sign-in-invitations";
+
 export type SignInMethod = "google" | "email";
 
 /** Why a method is not on offer. Each one is a different thing for an operator to go and fix. */
@@ -25,7 +28,13 @@ export type WithheldReason =
   /** No `AUTH_URL`, so there is no origin to build a callback or a link from that is not a header. */
   | "NO_BASE_URL"
   /** `AUTH_URL` is plain HTTP outside development, where a link and a cookie travel in the clear. */
-  | "INSECURE_BASE_URL";
+  | "INSECURE_BASE_URL"
+  /**
+   * The deployment runs an invitation-only pilot and this method cannot be held to the invitation
+   * (#133). Not a configuration fault: the credentials may be perfectly good and will be offered again
+   * the moment `AUTH_SIGN_IN_ACCESS` goes back to `open`.
+   */
+  | "INVITE_ONLY";
 
 export interface WithheldMethod {
   readonly method: SignInMethod;
@@ -37,6 +46,8 @@ export interface SignInAvailability {
   readonly withheld: readonly WithheldMethod[];
   /** The origin every callback and emailed link is built from, absent when none is usable. */
   readonly baseUrl?: string;
+  /** Whether this deployment registers anybody who asks, so the page can say which it is. */
+  readonly access: SignInAccess;
 }
 
 /**
@@ -45,7 +56,7 @@ export interface SignInAvailability {
  * A slice rather than `WebEnv`, so the rules can be exercised without constructing a whole valid
  * environment — and so adding an unrelated variable to `env.ts` cannot change what this function means.
  */
-export interface SignInConfig {
+export interface SignInConfig extends InvitationConfig {
   readonly NODE_ENV: NodeEnv;
   readonly AUTH_URL?: string | undefined;
   readonly GOOGLE_CLIENT_ID?: string | undefined;
@@ -91,6 +102,7 @@ function baseUrlVerdict(config: SignInConfig): { readonly baseUrl: string } | { 
 /** What this deployment offers, and what it withholds with the reason an operator needs. */
 export function availableSignInMethods(config: SignInConfig): SignInAvailability {
   const origin = baseUrlVerdict(config);
+  const access = signInAccess(config);
   const google = present(config.GOOGLE_CLIENT_ID) && present(config.GOOGLE_CLIENT_SECRET);
   const googlePartial = present(config.GOOGLE_CLIENT_ID) !== present(config.GOOGLE_CLIENT_SECRET);
   const email = present(config.AUTH_EMAIL_SERVER) && present(config.AUTH_EMAIL_FROM);
@@ -105,12 +117,20 @@ export function availableSignInMethods(config: SignInConfig): SignInAvailability
         { method: "google", reason: origin.reason },
         { method: "email", reason: origin.reason },
       ],
+      access,
     };
   }
 
   const available: SignInMethod[] = [];
   const withheld: WithheldMethod[] = [];
-  if (google) {
+  if (access === "invite") {
+    // An invitation-only deployment may only offer a method it can hold to the invitation, and Google is
+    // not one: the gate in `auth.ts` would refuse an uninvited visitor only *after* they had signed in
+    // with Google and consented, which is a button that leads somewhere a customer cannot see — the one
+    // thing this module exists to prevent. The email link is gated before anything is created or sent.
+    // The credentials are not consulted here, because in this mode they cannot change the answer.
+    withheld.push({ method: "google", reason: "INVITE_ONLY" });
+  } else if (google) {
     available.push("google");
   } else {
     withheld.push({ method: "google", reason: googlePartial ? "PARTIALLY_CONFIGURED" : "NOT_CONFIGURED" });
@@ -120,7 +140,7 @@ export function availableSignInMethods(config: SignInConfig): SignInAvailability
   } else {
     withheld.push({ method: "email", reason: emailPartial ? "PARTIALLY_CONFIGURED" : "NOT_CONFIGURED" });
   }
-  return { available, withheld, baseUrl: origin.baseUrl };
+  return { available, withheld, baseUrl: origin.baseUrl, access };
 }
 
 /** The destination after a successful sign-in when the request named nothing usable. */

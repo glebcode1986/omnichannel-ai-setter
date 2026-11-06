@@ -6,6 +6,7 @@ import Nodemailer from "next-auth/providers/nodemailer";
 import { loadWebEnv } from "./env";
 import { withoutProviderTokens } from "./server/auth-adapter";
 import { getDb } from "./server/db";
+import { signInGateVerdict } from "./server/sign-in-invitations";
 import { availableSignInMethods, safeRedirectTarget } from "./server/sign-in-methods";
 import { sendSignInLink, smtpTransport } from "./server/sign-in-mailer";
 
@@ -17,6 +18,12 @@ import { sendSignInLink, smtpTransport } from "./server/sign-in-mailer";
  *
  * **Two sign-in methods, both chosen by the owner on 2026-10-28** (ADR-022, Issue #117): Google
  * OAuth/OIDC and a one-time email link. No password authentication exists.
+ *
+ * **A private pilot narrows that** (#133, owner decision 2026-11-05) without undoing it. With
+ * `AUTH_SIGN_IN_ACCESS=invite` the email link is sent only to an invited address and Google is not
+ * offered at all; with the variable absent, everything below behaves exactly as #117 accepted it. The
+ * decision itself lives in `sign-in-invitations.ts` and is enforced in the `signIn` callback, which is
+ * the only point both entry points share.
  *
  * Each provider is added **only when the configuration it needs is complete and usable**, which
  * `availableSignInMethods` decides and the sign-in page renders from. A half-configured method is absent
@@ -88,6 +95,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
         : []),
     ],
     callbacks: {
+      /**
+       * Whether this person may sign in at all — the private pilot's invitation gate (#133).
+       *
+       * Here rather than in the route or the server action, and that is the whole point: in this version
+       * `signIn()` runs `Auth()` in process, so the form the product ships never passes through the HTTP
+       * route, and a gate on either one alone would guard every caller except the other. This callback
+       * is the one place **both** go through, and `@auth/core` calls it twice over the life of a link —
+       * once when one is requested, once when one is spent — so an address taken out of the allowlist
+       * stops working even if a link is already in its inbox.
+       *
+       * It runs *before* the token is generated and *before* the transport is called
+       * (`lib/actions/signin/send-token.js`), which is what lets a refusal cost nothing and leave no
+       * trace to compare. `signInGateVerdict` returns the three values this callback is allowed to
+       * return, and is handed back unchanged so there is nowhere for the answer to be translated into a
+       * different one.
+       */
+      signIn: ({ user, account, email }) =>
+        signInGateVerdict({
+          config: env,
+          address: user.email ?? account?.providerAccountId,
+          verificationRequest: email?.verificationRequest === true,
+        }),
+
       /**
        * Where a completed sign-in may land.
        *

@@ -24,7 +24,30 @@ const config = (overrides: Partial<SignInConfig> = {}): SignInConfig => ({
 
 describe("the sign-in methods a deployment offers", () => {
   it("offers both when both are configured, against the configured origin", () => {
-    expect(availableSignInMethods(config())).toEqual({ available: ["google", "email"], withheld: [], baseUrl: BASE });
+    expect(availableSignInMethods(config())).toEqual({ available: ["google", "email"], withheld: [], baseUrl: BASE, access: "open" });
+  });
+
+  /**
+   * The private pilot (#133). Google is withheld not because its credentials are missing — they are
+   * present in this config — but because an invitation-only deployment may only offer a method it can
+   * hold to the invitation, and Google's refusal would land only after a stranger had consented.
+   */
+  it("offers only the link, and only to invited addresses, while the pilot is invitation-only", () => {
+    const verdict = availableSignInMethods(config({ AUTH_SIGN_IN_ACCESS: "invite", AUTH_INVITE_ALLOWLIST: "tester@example.com" }));
+
+    expect(verdict.access).toBe("invite");
+    expect(verdict.available).toEqual(["email"]);
+    expect(verdict.withheld).toEqual([{ method: "google", reason: "INVITE_ONLY" }]);
+    // The control: the same credentials do offer Google the moment the deployment is open again, so the
+    // line above is the mode's doing and not a broken Google configuration.
+    expect(availableSignInMethods(config()).available).toContain("google");
+  });
+
+  it("still withholds the link itself when the transport is not configured, pilot or not", () => {
+    const verdict = availableSignInMethods(config({ AUTH_SIGN_IN_ACCESS: "invite", AUTH_EMAIL_SERVER: undefined }));
+
+    expect(verdict.available).toEqual([]);
+    expect(verdict.withheld).toContainEqual({ method: "email", reason: "PARTIALLY_CONFIGURED" });
   });
 
   it("withholds a half-configured method and distinguishes it from an unconfigured one", () => {
