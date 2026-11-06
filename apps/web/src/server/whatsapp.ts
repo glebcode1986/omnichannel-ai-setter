@@ -52,6 +52,18 @@ export function getWhatsAppOnboardingDependencies(): WhatsAppOnboardingDependenc
   };
 }
 
+/**
+ * Whether this deployment can connect WhatsApp at all.
+ *
+ * The setup screen asks before it draws a button. A deployment with no WhatsApp app answers every
+ * connect with `503 not_configured`, and a button that does that reads as our failure rather than as a
+ * missing app — so the card says the installation cannot offer the channel instead of offering it.
+ * Deliberately only the configuration: no store, no cipher, no database.
+ */
+export function whatsAppSignupConfigured(): boolean {
+  return getSignupConfig() !== undefined;
+}
+
 export function getWhatsAppRouteDependencies(): WhatsAppRouteDependencies {
   return {
     onboarding: getWhatsAppOnboardingDependencies,

@@ -31,12 +31,17 @@ const account = (overrides: Partial<ChannelOnboardingFacts> = {}): ChannelOnboar
 
 describe("channel cards", () => {
   it("offers a card for a channel that has never been connected", () => {
-    render(<ChannelCards t={t} channels={[]} offered={["INSTAGRAM"]} instagramConnectPath="/connect" />);
+    render(<ChannelCards t={t} channels={[]} offered={["INSTAGRAM"]} connect={{ INSTAGRAM: { kind: "REDIRECT", action: "/connect" } }} />);
 
     // Without this the person has nothing to click: the absence of a channel is exactly when they need
     // the card most.
     expect(screen.getByText(label("NOT_CONFIGURED"))).toBeDefined();
-    expect(screen.getByRole("link", { name: /connect instagram/i }).getAttribute("href")).toBe("/connect");
+    // A form and not a link: the connect route is POST-only, and an `<a href>` pointing at it answered
+    // 405 — the one button on the setup screen connected nothing.
+    const button = screen.getByRole("button", { name: /connect instagram/i });
+    expect(button.getAttribute("type")).toBe("submit");
+    expect(button.closest("form")?.getAttribute("action")).toBe("/connect");
+    expect(button.closest("form")?.getAttribute("method")).toBe("post");
   });
 
   it("says four different things about four different situations", () => {
@@ -59,29 +64,57 @@ describe("channel cards", () => {
   });
 
   it("still offers reconnection when the authorization lapsed", () => {
-    render(<ChannelCards t={t} channels={[account({ status: "NEEDS_REAUTH" })]} offered={["INSTAGRAM"]} instagramConnectPath="/connect" />);
+    render(<ChannelCards t={t} channels={[account({ status: "NEEDS_REAUTH" })]} offered={["INSTAGRAM"]} connect={{ INSTAGRAM: { kind: "REDIRECT", action: "/connect" } }} />);
 
     // "Incomplete Meta authorization is shown as an actionable connection problem, not a generic error."
-    expect(screen.getByRole("link", { name: /connect instagram/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /connect instagram/i })).toBeDefined();
   });
 
   it("does not push a working channel to reconnect", () => {
-    render(<ChannelCards t={t} channels={[account()]} offered={["INSTAGRAM"]} instagramConnectPath="/connect" />);
+    render(<ChannelCards t={t} channels={[account()]} offered={["INSTAGRAM"]} connect={{ INSTAGRAM: { kind: "REDIRECT", action: "/connect" } }} />);
 
-    expect(screen.queryByRole("link", { name: /connect instagram/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /connect instagram/i })).toBeNull();
   });
 
   it("hides the connect action from a viewer who may not connect channels", () => {
     render(<ChannelCards t={t} channels={[]} offered={["INSTAGRAM"]} />);
 
-    expect(screen.queryByRole("link", { name: /connect instagram/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /connect instagram/i })).toBeNull();
+  });
+
+  it("offers WhatsApp where the deployment has an app, and says so where it has not", () => {
+    // WhatsApp has been connectable end to end since Issue #19 and the setup screen offered Instagram
+    // alone, so the one place a customer could have connected it did not mention it.
+    render(
+      <ChannelCards
+        t={t}
+        channels={[]}
+        offered={["INSTAGRAM", "WHATSAPP"]}
+        connect={{ WHATSAPP: { kind: "EMBEDDED", connectPath: "/wa/start", completePath: "/wa/finish" } }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /connect whatsapp/i })).toBeDefined();
+    // Instagram is offered as a channel and has no control, because this reader cannot start one — and
+    // the card says that rather than leaving an empty space somebody reads as a bug.
+    expect(screen.queryByRole("button", { name: /connect instagram/i })).toBeNull();
+    expect(screen.getByText(catalogues.en["setup.channelNotOffered"])).toBeDefined();
+  });
+
+  it("does not offer a channel this installation cannot connect", () => {
+    // A deployment with no WhatsApp app answers every connect with 503. A button that does that reads
+    // as our failure rather than as a missing app.
+    render(<ChannelCards t={t} channels={[]} offered={["INSTAGRAM", "WHATSAPP"]} connect={{}} />);
+
+    expect(screen.queryByRole("button", { name: /connect/i })).toBeNull();
+    expect(screen.getAllByText(catalogues.en["setup.channelNotOffered"]).length).toBe(2);
   });
 
   it("renders nothing that looks like a credential", () => {
     // The component is never handed one, which is the real guarantee; this asserts the guarantee holds
     // for the whole rendered subtree rather than trusting the prop types.
     const { container } = render(
-      <ChannelCards t={t} channels={[account(), account({ channel: "WHATSAPP" })]} offered={["INSTAGRAM", "WHATSAPP"]} instagramConnectPath="/connect" />,
+      <ChannelCards t={t} channels={[account(), account({ channel: "WHATSAPP" })]} offered={["INSTAGRAM", "WHATSAPP"]} connect={{ INSTAGRAM: { kind: "REDIRECT", action: "/connect" } }} />,
     );
 
     const markup = container.innerHTML;

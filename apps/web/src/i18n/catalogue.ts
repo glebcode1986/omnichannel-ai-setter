@@ -101,6 +101,11 @@ const en = {
   "setup.channelsTitle": "Channels",
   "setup.noChannels": "No channels are connected yet.",
   "setup.connectInstagram": "Connect Instagram",
+  "setup.connectWhatsApp": "Connect WhatsApp",
+  "setup.connectWorking": "Opening Meta…",
+  "setup.connectConnected": "Connected. Reloading…",
+  "setup.connectFailed": "That did not go through. Nothing was connected — try again.",
+  "setup.channelNotOffered": "This installation cannot connect this channel yet.",
   "setup.staleAction": "The setup changed while this page was open. It has been reloaded — please check and try again.",
 
   "connect.connected": "Instagram is connected.",
@@ -1273,6 +1278,11 @@ const ru: Catalogue = {
   "setup.channelsTitle": "Каналы",
   "setup.noChannels": "Каналы пока не подключены.",
   "setup.connectInstagram": "Подключить Instagram",
+  "setup.connectWhatsApp": "Подключить WhatsApp",
+  "setup.connectWorking": "Открываем Meta…",
+  "setup.connectConnected": "Подключено. Обновляем…",
+  "setup.connectFailed": "Не получилось. Ничего не подключено — попробуйте ещё раз.",
+  "setup.channelNotOffered": "Эта установка пока не умеет подключать этот канал.",
   "setup.staleAction": "Настройка изменилась, пока страница была открыта. Она перезагружена — проверьте и попробуйте снова.",
 
   "connect.connected": "Instagram подключён.",
