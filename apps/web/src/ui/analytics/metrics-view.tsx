@@ -29,6 +29,7 @@
  * printed as text beside its bar, so nothing on this page is reachable only by looking at it.
  */
 import type { OperationalSnapshot } from "@omnichannel/db";
+import { isReasonCode } from "@omnichannel/domain";
 
 import type { Translator } from "@/i18n/translate";
 import { BarRows, hasBars, type BarRow, type BarScale } from "@/ui/charts/bar-rows";
@@ -87,6 +88,18 @@ function Tile({
       <p className="muted">{caption}</p>
     </section>
   );
+}
+
+/**
+ * What a reason code is called, or the code itself.
+ *
+ * The column is `text[]` rather than an enum, so a row can hold a string this build has never heard of —
+ * a code removed from the domain, or one written by a newer deployment against the same database. Those
+ * still happened and are still counted, so the code is shown rather than dropped or renamed to
+ * "unknown"; `isReasonCode` is what decides, and the catalogue is complete for everything it admits.
+ */
+function reasonLabel(t: Translator, reason: string): string {
+  return isReasonCode(reason) ? t.t(`analytics.reason.${reason}`) : reason;
 }
 
 /**
@@ -240,7 +253,7 @@ export function MetricsView({ t, snapshot, stageLabels }: MetricsViewProps) {
                   as broken data. The longest bar means "the most common reason" and nothing else. */}
               <Bars
                 t={t}
-                rows={snapshot.reviewReasons.map((row) => ({ key: row.reason, label: row.reason, value: row.drafts }))}
+                rows={snapshot.reviewReasons.map((row) => ({ key: row.reason, label: reasonLabel(t, row.reason), value: row.drafts }))}
                 scale={{ kind: "largest" }}
               />
               {/* Said on screen rather than left for somebody to discover by adding the column up. */}

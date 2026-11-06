@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { RELEASE_REFUSALS, REVIEWER_STATUSES, ROLLOUT_STAGES, WORKSPACE_ROLES } from "@omnichannel/domain";
+import { REASON_CODES, RELEASE_REFUSALS, REVIEWER_STATUSES, ROLLOUT_STAGES, WORKSPACE_ROLES } from "@omnichannel/domain";
 
 import { catalogues, pluralCatalogues, type MessageKey } from "./catalogue";
 import { FALLBACK_LOCALE, resolveUiLocale, UI_LOCALES } from "./locales";
@@ -55,6 +55,24 @@ describe("the catalogues", () => {
         expect(catalogues[locale][key], `${locale} is missing ${key}`).toBeTruthy();
       }
     }
+  });
+
+  it("names every reason a reply can wait for, in both languages", () => {
+    // These are drawn as the labels of a chart, not hidden in a tooltip, so a code with no words is
+    // `MISSING_FACT` in capitals at the top of a Russian panel. The list comes from the domain rather
+    // than from the catalogue, which is the direction that catches an addition: a catalogue checked
+    // against itself agrees with itself.
+    const missing = [];
+    for (const code of REASON_CODES) {
+      for (const locale of UI_LOCALES) {
+        if (catalogues[locale][`analytics.reason.${code}`] === undefined) {
+          missing.push(`${locale}: analytics.reason.${code}`);
+        }
+      }
+    }
+
+    expect(missing, "a reason code reaches the screen as soon as the domain has it").toEqual([]);
+    expect(REASON_CODES.length, "and the list is not empty, which would make this vacuous").toBeGreaterThan(20);
   });
 
   it("actually translates rather than copying English through", () => {
