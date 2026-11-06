@@ -91,47 +91,68 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
         Search, channel and lead stage are one form, submitted together. They are the filters with many
         values, and turning each into a row of links would be a wall of chips; the state filters below
         stay links because there are five of them and a link is shareable.
-      */}
-      <form action={basePath} method="get" role="search" className="inbox-search">
-        <div className="field">
-          <label htmlFor="inbox-q">{t.t("inbox.searchLabel")}</label>
-          <input id="inbox-q" name="q" type="search" defaultValue={view.search ?? ""} placeholder={t.t("inbox.searchPlaceholder")} />
-        </div>
 
-        {accounts.length === 0 ? undefined : (
-          <>
+        The two selects sit inside a disclosure, and the search box does not. In a rail that is at most
+        320px wide this form resolves to one column, so every control was a row of its own: a search
+        box, two menus and a button, four rows deep, before the chips and the list a person came here to
+        read. Searching is what an inbox is for; narrowing by channel or by stage is a refinement, and a
+        refinement can be folded away. It is a `details` and not a script — a control inside a closed
+        one still belongs to the form and is still submitted, so nothing about the filter changes — and
+        it opens itself whenever either filter is set, because a filter nobody can see is a list that
+        looks wrong for no reason.
+      */}
+      <div className="inbox-toolbar">
+        <form action={basePath} method="get" role="search" className="inbox-search">
+          <div className="field">
+            <label htmlFor="inbox-q">{t.t("inbox.searchLabel")}</label>
+            <input id="inbox-q" name="q" type="search" defaultValue={view.search ?? ""} placeholder={t.t("inbox.searchPlaceholder")} />
+          </div>
+
+          {/* Open for a filter this group actually holds. Keyed to `view.channelAccountId` alone, a
+              profile with no connected accounts opened the group on a URL carrying `?account=…` and
+              showed only the stage select — the group announcing a filter it does not contain. */}
+          <details
+            className="inbox-refine"
+            open={(accounts.length > 0 && view.channelAccountId !== undefined) || view.leadStage !== undefined}
+          >
+            {/* No mark of its own. This stylesheet already draws one for every `summary` — a triangle
+                that turns a quarter when the group opens — and a component that adds a second gets two
+                marks side by side, which is exactly what the first attempt here shipped to dev. */}
+            <summary>{t.t("inbox.refine")}</summary>
+
+            {accounts.length === 0 ? undefined : (
+              <div className="field">
+                <label htmlFor="inbox-account">{t.t("inbox.filterChannel")}</label>
+                <select id="inbox-account" name="account" defaultValue={view.channelAccountId ?? ""}>
+                  <option value="">{t.t("inbox.allChannels")}</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {`${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="field">
-              <label htmlFor="inbox-account">{t.t("inbox.filterChannel")}</label>
-              <select id="inbox-account" name="account" defaultValue={view.channelAccountId ?? ""}>
-                <option value="">{t.t("inbox.allChannels")}</option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {`${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`}
+              <label htmlFor="inbox-stage">{t.t("inbox.filterLeadStage")}</label>
+              <select id="inbox-stage" name="stage" defaultValue={view.leadStage ?? ""}>
+                <option value="">{t.t("inbox.allStages")}</option>
+                {LEAD_STAGES.map((stage) => (
+                  <option key={stage} value={stage}>
+                    {t.t(`leadStage.${stage}` as MessageKey)}
                   </option>
                 ))}
               </select>
             </div>
-          </>
-        )}
+          </details>
 
-        <div className="field">
-          <label htmlFor="inbox-stage">{t.t("inbox.filterLeadStage")}</label>
-          <select id="inbox-stage" name="stage" defaultValue={view.leadStage ?? ""}>
-            <option value="">{t.t("inbox.allStages")}</option>
-            {LEAD_STAGES.map((stage) => (
-              <option key={stage} value={stage}>
-                {t.t(`leadStage.${stage}` as MessageKey)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* The state filter travels with the form, or applying a search would silently widen the view. */}
-        {view.filter === undefined ? undefined : <input type="hidden" name="filter" value={view.filter} />}
-        <button className="button" type="submit">
-          {t.t("inbox.applyFilters")}
-        </button>
-      </form>
+          {/* The state filter travels with the form, or applying a search would silently widen the view. */}
+          {view.filter === undefined ? undefined : <input type="hidden" name="filter" value={view.filter} />}
+          <button className="button" type="submit">
+            {t.t("inbox.applyFilters")}
+          </button>
+        </form>
 
       <nav aria-label={t.t("inbox.filtersLabel")}>
         <ul className="filter-row">
@@ -154,9 +175,13 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
           })}
         </ul>
       </nav>
+      </div>
 
       {rows.length === 0 ? (
-        <p className="muted" data-empty="true">
+        /* An empty state rather than a line of grey text. The thread beside this one already says
+           nothing-here with a mark and a sentence in the middle of its pane; the list said it in a
+           paragraph tucked under the filters, which reads as a caption on the controls above it. */
+        <p className="inbox-list-empty muted" data-empty="true">
           {isFilteredView(view) ? t.t("inbox.empty") : t.t("inbox.emptyUnfiltered")}
         </p>
       ) : (
@@ -234,21 +259,25 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
         </ul>
       )}
 
+      {nextCursor === undefined ? undefined : (
+        <Link className="button" href={href({ cursor: nextCursor })} data-load-more="true">
+          {t.t("inbox.loadMore")}
+        </Link>
+      )}
+
       {loadedAt === undefined ? undefined : (
         // A server-rendered list is a snapshot, and the honest thing is to say when it was taken rather
         // than let it look live. Reloading is the same URL, so the view survives it.
+        //
+        // Last, under the hairline, and after the pager rather than before it: the rule says the rail
+        // has ended, and a control that fetches more of the list belongs above it. It used to sit
+        // between the two, flush against the note with no space at all.
         <p className="muted inbox-loaded-at">
           <time dateTime={loadedAt.toISOString()}>{t.t("inbox.loadedAt", { time: t.date(loadedAt, { timeStyle: "short" }) })}</time>{" "}
           <a href={`${basePath}${inboxQueryString(view)}`} data-inbox-reload="true">
             {t.t("inbox.reload")}
           </a>
         </p>
-      )}
-
-      {nextCursor === undefined ? undefined : (
-        <Link className="button" href={href({ cursor: nextCursor })} data-load-more="true">
-          {t.t("inbox.loadMore")}
-        </Link>
       )}
     </section>
   );

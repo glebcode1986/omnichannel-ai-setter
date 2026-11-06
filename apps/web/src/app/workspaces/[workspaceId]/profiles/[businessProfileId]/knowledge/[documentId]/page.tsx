@@ -55,53 +55,62 @@ export default async function KnowledgeDocumentPage({
         </span>
       </div>
 
-      <OutcomeNotice t={t} outcome={one((await searchParams)["outcome"])} />
+      {/* The same stack the library screen uses. Without it the two panels on this route shared an
+          edge — 0px between a bordered box and the next, which reads as one box with a line through
+          it — because a panel brings no margin of its own on purpose. */}
+      <div className="page-sections">
+        <OutcomeNotice t={t} outcome={one((await searchParams)["outcome"])} />
 
-      {document.indexingState === "FAILED" ? (
-        <div className="notice" data-tone="stop" data-indexing-failed="true">
-          <p>{t.t("indexing.failedDetail")}</p>
-          {document.indexingError === null ? undefined : <p className="muted">{document.indexingError}</p>}
-        </div>
-      ) : undefined}
+        {document.indexingState === "FAILED" ? (
+          <div className="notice" data-tone="stop" data-indexing-failed="true">
+            <p>{t.t("indexing.failedDetail")}</p>
+            {document.indexingError === null ? undefined : <p className="muted">{document.indexingError}</p>}
+          </div>
+        ) : undefined}
 
-      <KnowledgeControls
-        t={t}
-        target={target}
-        documentId={documentId}
-        document={{ status: document.status, version: document.version, publishedVersion: document.publishedVersion }}
-        actions={{ publish: publishKnowledgeAction, restore: restoreKnowledgeAction, archive: archiveKnowledgeAction }}
-      />
-
-      <section>
-        <KnowledgeEditor
+        <KnowledgeControls
           t={t}
           target={target}
-          document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope, version: document.version }}
-          action={editKnowledgeAction.bind(null, target, documentId)}
+          documentId={documentId}
+          document={{ status: document.status, version: document.version, publishedVersion: document.publishedVersion }}
+          actions={{ publish: publishKnowledgeAction, restore: restoreKnowledgeAction, archive: archiveKnowledgeAction }}
         />
-      </section>
 
-      {document.publishedVersion !== null && document.publishedVersion !== document.version ? (
-        <p className="notice" data-tone="warn" data-unpublished="true">
-          {t.t("knowledge.unpublishedEdit", { saved: String(document.version), published: String(document.publishedVersion) })}
-        </p>
-      ) : undefined}
+        {/* A panel, like the add-source form on the library screen. Dropping `.knowledge-editor` from
+            the editor also dropped its `max-width: 44rem`, and a bare `section` left the edit form as
+            wide as the whole content column — 704px to 1312px. A panel is the bound every other form in
+            the product now has. */}
+        <section className="panel" data-panel="edit-source">
+          <KnowledgeEditor
+            t={t}
+            target={target}
+            document={{ id: documentId, title: document.title, facts: (current?.chunks ?? []).map((chunk) => chunk.content), scope: document.scope, version: document.version }}
+            action={editKnowledgeAction.bind(null, target, documentId)}
+          />
+        </section>
 
-      <section className="knowledge-history">
-        <h2>{t.t("knowledge.versionHistory")}</h2>
-        <ol>
-          {document.versions.map((version) => (
-            <li key={version.version} data-version={version.version} data-current={String(version.current)} data-published={String(version.published)}>
-              <h3>{versionLabel(t, version)}</h3>
-              <ul>
-                {version.chunks.map((chunk) => (
-                  <li key={chunk.id}>{chunk.content}</li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ol>
-      </section>
+        {document.publishedVersion !== null && document.publishedVersion !== document.version ? (
+          <p className="notice" data-tone="warn" data-unpublished="true">
+            {t.t("knowledge.unpublishedEdit", { saved: String(document.version), published: String(document.publishedVersion) })}
+          </p>
+        ) : undefined}
+
+        <section className="panel knowledge-history" data-panel="versions">
+          <h2>{t.t("knowledge.versionHistory")}</h2>
+          <ol>
+            {document.versions.map((version) => (
+              <li key={version.version} data-version={version.version} data-current={String(version.current)} data-published={String(version.published)}>
+                <h3>{versionLabel(t, version)}</h3>
+                <ul>
+                  {version.chunks.map((chunk) => (
+                    <li key={chunk.id}>{chunk.content}</li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ol>
+        </section>
+      </div>
     </>
   );
 }

@@ -342,10 +342,23 @@ describe("the shared query string", () => {
 describe("keyboard operation", () => {
   it("reaches the search, the filters and the conversations by tabbing, in that order", async () => {
     const user = userEvent.setup();
-    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
+    // Rendered with the refinements **open**, and that is not a convenience. A browser hides the
+    // contents of a closed `details` and takes them out of the tab order; jsdom implements no such
+    // thing — its default stylesheet is `details, summary { display: block }` and a select inside a
+    // closed group is focusable here. So the closed order this environment would report is fiction,
+    // and the only honest sequence to assert is the one where the two agree. What a closed group does
+    // to the tab order is not covered by anything in this repository, and nothing here can cover it.
+    render(<ConversationList t={t} rows={mixedChannels} view={{ leadStage: "QUALIFIED" }} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
+    expect((document.querySelector("details.inbox-refine") as HTMLDetailsElement).open, "the premise of the order below").toBe(true);
 
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
+    // The disclosure's own control comes before the two filters it holds, which is what a `summary` is:
+    // a focusable control that opens the group. Reaching the selects without passing it would mean the
+    // group could be opened only with a mouse.
+    await user.tab();
+    expect(document.activeElement?.tagName.toLowerCase()).toBe("summary");
+    expect(document.activeElement?.textContent).toBe(text("inbox.refine"));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByLabelText(text("inbox.filterChannel")));
     await user.tab();
@@ -360,6 +373,43 @@ describe("keyboard operation", () => {
       await user.tab();
     }
     expect(document.activeElement?.getAttribute("href")).toBe(`${BASE}/cv_ig`);
+  });
+
+  it("hands a closed disclosure's filters to the form anyway", () => {
+    // The whole reason the two selects may be folded away: a control inside a closed `details` is still
+    // a control of the form it is in, so folding them changes what is on screen and nothing else. If
+    // that stopped being true, narrowing by stage would silently do nothing for anyone who had not
+    // opened the group.
+    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} />);
+
+    const disclosure = document.querySelector("details.inbox-refine") as HTMLDetailsElement;
+    expect(disclosure.open, "closed when nothing is narrowing the list").toBe(false);
+    const stage = screen.getByLabelText(text("inbox.filterLeadStage"));
+    // Narrowed rather than asserted: `form` is the whole point of this test, and it exists on a select
+    // and not on an `HTMLElement`, so a cast here would be the test agreeing with itself.
+    if (!(stage instanceof HTMLSelectElement)) {
+      throw new Error("the stage filter must be a select");
+    }
+    expect(stage.closest("details")).toBe(disclosure);
+    expect(stage.form, "and still belongs to the search form").toBe(document.querySelector("form.inbox-search"));
+  });
+
+  it("stays shut for a filter it does not hold", () => {
+    // No connected accounts means no channel select, so a URL carrying `?account=…` would open an
+    // empty-handed group: the disclosure announcing a filter that is not inside it. The list is still
+    // filtered by that value — whether an unknown account id should narrow anything at all is a
+    // separate question this does not answer.
+    render(<ConversationList t={t} rows={mixedChannels} view={{ channelAccountId: "ca_gone" }} basePath={BASE} accounts={[]} />);
+
+    expect(screen.queryByLabelText(text("inbox.filterChannel")), "no accounts, no channel select").toBeNull();
+    expect((document.querySelector("details.inbox-refine") as HTMLDetailsElement).open).toBe(false);
+  });
+
+  it("opens itself when a filter it holds is already set", () => {
+    // A filter nobody can see is a list that looks wrong for no reason.
+    render(<ConversationList t={t} rows={mixedChannels} view={{ leadStage: "QUALIFIED" }} basePath={BASE} accounts={ACCOUNTS} />);
+
+    expect((document.querySelector("details.inbox-refine") as HTMLDetailsElement).open).toBe(true);
   });
 
   it("gives the search box a real label rather than only a placeholder", () => {

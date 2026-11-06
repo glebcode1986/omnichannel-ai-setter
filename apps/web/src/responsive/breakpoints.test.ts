@@ -588,6 +588,7 @@ describe("the supported widths", () => {
       { selector: ".inbox-context p", what: "the contact name, the handle, and the draft's intent" },
       { selector: ".reason-codes", what: "a cited source id is one token" },
       { selector: ".effective-voice dd", what: "a persona, a greeting or a sign-off is whatever somebody typed into the voice editor" },
+      { selector: ".knowledge-name", what: "a source's title is whatever somebody typed, and one word of it can be the whole title" },
     ] as const;
 
     // Two remedies satisfy the rule above, and the rule is about the *outcome*: the surface contains
@@ -682,6 +683,32 @@ describe("the supported widths", () => {
     // And it has to be able to say no: the same floor, moved out from under the boundary, is refused.
     expect(absorbed(".chart-days")).toBe(false);
     expect(exempt.every(({ selector }) => scrollBoundaries.some((container) => selector.startsWith(container)))).toBe(true);
+  });
+
+  it("gives a free-text filter a placeholder wherever the labels are hidden", () => {
+    // `.inbox-search label` is visually hidden on purpose: every select in that row names what it
+    // filters in its own first option — "Every channel", "Any status". A text box names nothing, so in
+    // that row it has to carry a placeholder or it is an unlabelled box on screen. The Knowledge
+    // library's search had none and read as a blank field between two menus; this is the rule that was
+    // being applied by hand.
+    expect(declarationsFor(".inbox-search label"), "this test's premise: that row hides its labels").toMatch(
+      /clip-path:\s*inset\(50%\)/u,
+    );
+
+    const rows = [
+      ...componentSources().matchAll(/<form[^>]*className="inbox-search"[\s\S]*?<\/form>/gu),
+    ].map((found) => found[0]);
+    expect(rows.length, "the rows that hide their labels").toBeGreaterThan(2);
+
+    const bare = rows.flatMap((row) =>
+      [...row.matchAll(/<input[^>]*type="(?:search|text)"[^>]*>/gu)]
+        .map((found) => found[0])
+        .filter((control) => !control.includes("placeholder=")),
+    );
+
+    expect(bare, "a text box in a row with hidden labels needs a placeholder").toEqual([]);
+    // And there are text boxes to be wrong about, or this passes by finding none.
+    expect(rows.some((row) => /<input[^>]*type="search"/u.test(row))).toBe(true);
   });
 
   it("keeps each label and its control one element, which is what lets the row wrap", () => {

@@ -38,33 +38,40 @@ export function KnowledgeEditor({ t, document, action, suggestedTitle }: Knowled
   const isNew = document === undefined;
 
   return (
-    <form action={action} className="knowledge-editor">
+    <form action={action} className="form-grid">
       {/* What this form was rendered against. The store refuses an edit whose expected version is not the
           current one, so a stale tab is told rather than silently winning. */}
       {document === undefined ? undefined : <input type="hidden" name="expectedVersion" value={String(document.version)} />}
 
-      <label htmlFor="knowledge-title">{t.t("knowledge.titleLabel")}</label>
-      <input id="knowledge-title" name="title" type="text" defaultValue={document?.title ?? suggestedTitle ?? ""} required />
-
-      <label htmlFor="knowledge-facts">{t.t("knowledge.factsLabel")}</label>
-      <textarea id="knowledge-facts" name="facts" rows={8} defaultValue={document?.facts.join("\n") ?? ""} required />
-      <p className="muted">{t.t("knowledge.factsHint")}</p>
+      <div className="field">
+        <label htmlFor="knowledge-title">{t.t("knowledge.titleLabel")}</label>
+        <input id="knowledge-title" name="title" type="text" defaultValue={document?.title ?? suggestedTitle ?? ""} required />
+      </div>
 
       {/* Scope is fixed once a source exists: moving base knowledge into one profile, or the reverse,
           changes who it answers for, and doing that through an edit form would be a silent migration. */}
       {isNew ? (
-        <>
+        <div className="field">
           <label htmlFor="knowledge-scope">{t.t("knowledge.scopeLabel")}</label>
           <select id="knowledge-scope" name="scope" defaultValue="BUSINESS_PROFILE">
             <option value="BUSINESS_PROFILE">{t.t("knowledge.scopeProfile")}</option>
             <option value="WORKSPACE">{t.t("knowledge.scopeWorkspace")}</option>
           </select>
-        </>
+        </div>
       ) : undefined}
 
-      <button className="button" data-variant="primary" type="submit" data-action={isNew ? "create" : "save"}>
-        {isNew ? t.t("knowledge.create") : t.t("knowledge.save")}
-      </button>
+      {/* One fact per line, so the box takes the row rather than half of it. */}
+      <div className="field" data-span="full">
+        <label htmlFor="knowledge-facts">{t.t("knowledge.factsLabel")}</label>
+        <textarea id="knowledge-facts" name="facts" rows={8} defaultValue={document?.facts.join("\n") ?? ""} required />
+        <p className="muted">{t.t("knowledge.factsHint")}</p>
+      </div>
+
+      <div className="form-actions" data-span="full">
+        <button className="button" data-variant="primary" type="submit" data-action={isNew ? "create" : "save"}>
+          {isNew ? t.t("knowledge.create") : t.t("knowledge.save")}
+        </button>
+      </div>
     </form>
   );
 }

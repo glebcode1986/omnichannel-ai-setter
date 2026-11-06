@@ -195,6 +195,32 @@ describe("the production UI's semantics", () => {
     expect(report([...roles, ...hrefless])).toEqual([]);
   });
 
+  it("gives every disclosure a name a person can read", () => {
+    // Nothing else in this file reaches a `summary`: the icon-only check matches `<button>` and
+    // `orphanControls` matches `input|select|textarea`, so a disclosure with no words in it — an icon,
+    // an entity, a single glyph — passed every assertion here. A `summary` is the control that opens
+    // the group, and its own text is the only name it has.
+    const findings: Finding[] = [];
+    for (const { file, source } of productionFiles()) {
+      for (const found of source.matchAll(/<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary>/gu)) {
+        const inner = (found[1] ?? "")
+          // JSX comments, elements and entities are not a name; a `t.t(...)` call is.
+          .replaceAll(/\{\/\*[\s\S]*?\*\/\}/gu, "")
+          .replaceAll(/<[^>]*>/gu, "")
+          .replaceAll(/&[a-z]+;/gu, "")
+          .trim();
+        if (inner === "") {
+          const line = source.slice(0, found.index ?? 0).split("\n").length;
+          findings.push({ file, line, what: "<summary> with no readable name" });
+        }
+      }
+    }
+
+    expect(report(findings)).toEqual([]);
+    // And there are disclosures to be wrong about.
+    expect(productionFiles().filter(({ source }) => source.includes("<summary")).length).toBeGreaterThan(0);
+  });
+
   it("keeps headings in order inside each file", () => {
     const findings: Finding[] = [];
     for (const { file, source } of productionFiles()) {

@@ -88,6 +88,51 @@ describe("a chart inside a panel", () => {
     expect(resolved("plot", "grid-area")).toContain("2 / 1");
   });
 
+  it("keeps the rail's disclosure out of the card every other `details` gets", () => {
+    // `details` carries a card: a border, a raised surface, 16px of side padding and another 16px
+    // underneath when open. Inherited in a 147px rail track that leaves the two selects 115px, and the
+    // group grows taller the moment it opens. The chrome belongs on the summary here, so the fields it
+    // reveals get the whole track.
+    document.body.innerHTML = `
+      <section class="inbox-list">
+        <details class="inbox-refine" id="shut"><summary id="shut-summary">Narrow</summary></details>
+        <details class="inbox-refine" id="open" open><summary>Narrow</summary></details>
+        <details id="ordinary"><summary>Ordinary</summary></details>
+        <details id="ordinary-open" open><summary>Ordinary</summary></details>
+      </section>
+    `;
+    const padding = (id: string): string => {
+      const style = getComputedStyle(document.getElementById(id) as HTMLElement);
+      return [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].join(" ");
+    };
+
+    expect(padding("shut")).toBe("0px 0px 0px 0px");
+    expect(padding("open"), "and it does not grow when it opens").toBe("0px 0px 0px 0px");
+    // What this pair does and does not prove, measured both ways rather than assumed. Change
+    // `.inbox-refine[open]`'s value and the second assertion fails, so the override is really being
+    // read here. *Delete* the rule and it still passes, because jsdom does not give `details[open]` —
+    // a type plus an attribute — its precedence over a bare class, so nothing reinstates the padding.
+    // A browser does give it that precedence, which is why the rule exists; an open group on dev
+    // measures 0 on all four sides.
+    // `border: 0` jsdom decomposes, so the longhand answers for the reset. It cannot decompose
+    // `border: 1px solid var(--border)` and returns nothing for either spelling of it, so the summary
+    // is asked about the two properties it does answer: the chrome moved there rather than vanishing.
+    expect(resolved("shut", "border-top-width")).toBe("0px");
+    expect(resolved("shut-summary", "background")).toBe("var(--surface-raised)");
+    expect(resolved("shut-summary", "min-height")).toBe("var(--field-height)");
+    // `display` is deliberately not asserted. jsdom reports `list-item` for a `summary` whatever the
+    // stylesheet says — measured, with the rule in place and matching, while `background` and
+    // `min-height` from the same rule come back correctly — so an assertion here would fail on
+    // working code. The browser value was measured on dev instead: `inline-flex`, 14px, 38px tall,
+    // identical to the submit beside it. Nothing in this repository can check it, because the
+    // component tests that walk the tab order load no stylesheet at all.
+    // And an ordinary disclosure elsewhere in the product still gets its card — including the extra
+    // space underneath when it opens, which is the declaration the two assertions above are the
+    // override of. Without this the pair would pass in an environment that never applied it.
+    expect(padding("ordinary")).not.toBe("0px 0px 0px 0px");
+    expect(getComputedStyle(document.getElementById("ordinary-open") as HTMLElement).paddingBottom).toBe("var(--space-4)");
+  });
+
   it("keeps the two-pixel floor on a mark, where the data cannot overrule it", () => {
     // The component sets `--bar` and `--column`, never a width or a height: an inline length would win
     // over these rules and the smallest rows would round to nothing. jsdom does not substitute `var()`,
@@ -359,6 +404,42 @@ describe("no rule is shadowed by a twin", () => {
     expect(shadowed, "the later declaration silently wins and the earlier one is dead").toEqual([]);
   });
 
+  /** Every component the product renders, as `{ file, source }`. */
+  function productionComponents(): readonly { readonly file: string; readonly source: string }[] {
+    const found: { file: string; source: string }[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const full = path.join(directory, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+        } else if (/\.tsx$/.test(entry) && !/\.test\.tsx$/.test(entry)) {
+          found.push({ file: path.relative(srcRoot, full), source: readFileSync(full, "utf8") });
+        }
+      }
+    };
+    for (const group of ["app", "ui"]) {
+      walk(path.join(srcRoot, group));
+    }
+    return found;
+  }
+
+  it("draws one disclosure mark, and no component adds a second", () => {
+    // The `summary` rule near the top of this file hides the browser's triangle and draws one of ours
+    // that turns a quarter when the group opens. A component that brings its own gets two marks in a
+    // row — which is what the Inbox's refinement disclosure looked like on dev before anybody zoomed
+    // in on it, and the component had a comment explaining why it needed the mark it was duplicating.
+    const marks = topLevelBlocks().filter((block) => /(?:^|,)\s*summary::before$/u.test(block.selector.trim()));
+    expect(marks.length, "exactly one rule draws the disclosure mark").toBe(1);
+
+    const offenders = productionComponents()
+      .filter(({ source }) => [...source.matchAll(/<summary[\s\S]*?<\/summary>/gu)].some((found) => found[0].includes("<svg")))
+      .map(({ file }) => file);
+    expect(offenders, "a summary takes the stylesheet's mark, not one of its own").toEqual([]);
+
+    // And there are summaries to be wrong about, or this passes by there being none.
+    expect(productionComponents().filter(({ source }) => source.includes("<summary")).length).toBeGreaterThan(0);
+  });
+
   it("draws one box, from one rule", () => {
     // `.card`, `.metric-panel`, `.metric-tile`, `.knowledge-tester`, `.knowledge-history` and
     // `.conversation-controls` each drew the same card with their own numbers — four sets of padding and
@@ -367,7 +448,9 @@ describe("no rule is shadowed by a twin", () => {
     //
     // A twin here is not a shadowed declaration, so the test above cannot see it: the selectors differ,
     // so both rules apply and both are live. The duplication is in the design, not in the cascade.
-    for (const name of [".panel", ".card", ".metric-panel", ".metric-tile", ".knowledge-tester", ".knowledge-history", ".conversation-controls"]) {
+    // `.knowledge-tester` was on this list until nothing rendered it any more. A name here that no
+    // component uses makes this test pass about a box nobody can see.
+    for (const name of [".panel", ".card", ".metric-panel", ".metric-tile", ".knowledge-history", ".conversation-controls"]) {
       const drawing = topLevelBlocks().filter(
         (block) =>
           block.selector
@@ -391,21 +474,7 @@ describe("no rule is shadowed by a twin", () => {
     expect(declarations, "the class form is gone").not.toMatch(/\.button\.primary\b/u);
     expect(declarations, "and the attribute form is what remains").toMatch(/\.button\[data-variant="primary"\]/u);
 
-    const components: { file: string; source: string }[] = [];
-    const walk = (directory: string): void => {
-      for (const entry of readdirSync(directory)) {
-        const full = path.join(directory, entry);
-        if (statSync(full).isDirectory()) {
-          walk(full);
-        } else if (/\.tsx$/.test(entry) && !/\.test\.tsx$/.test(entry)) {
-          components.push({ file: path.relative(srcRoot, full), source: readFileSync(full, "utf8") });
-        }
-      }
-    };
-    for (const group of ["app", "ui"]) {
-      walk(path.join(srcRoot, group));
-    }
-
+    const components = productionComponents();
     expect(components.length, "components were actually read, or this passes by finding none").toBeGreaterThan(30);
     expect(
       components.filter(({ source }) => /className="[^"]*\bprimary\b/u.test(source)).map(({ file }) => file),

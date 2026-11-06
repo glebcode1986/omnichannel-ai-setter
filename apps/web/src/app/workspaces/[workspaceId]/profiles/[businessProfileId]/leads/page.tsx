@@ -78,7 +78,7 @@ export default async function LeadsPage({
       <form action={leadsPath} method="get" role="search" className="inbox-search">
         <div className="field">
           <label htmlFor="leads-q">{t.t("inbox.searchLabel")}</label>
-          <input id="leads-q" name="q" type="search" defaultValue={search ?? ""} />
+          <input id="leads-q" name="q" type="search" defaultValue={search ?? ""} placeholder={t.t("inbox.searchPlaceholder")} />
         </div>
 
         <div className="field">
@@ -98,7 +98,7 @@ export default async function LeadsPage({
 
         <div className="field">
           <label htmlFor="leads-tag">{t.t("leads.tags")}</label>
-          <input id="leads-tag" name="tag" type="text" defaultValue={tag ?? ""} />
+          <input id="leads-tag" name="tag" type="text" defaultValue={tag ?? ""} placeholder={t.t("leads.tagPlaceholder")} />
         </div>
 
         <button className="button" type="submit">

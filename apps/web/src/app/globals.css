@@ -440,7 +440,9 @@ summary::before {
 }
 
 details[open] > summary::before {
-  transform: rotate(90deg);
+  /* The nudge survives the turn: `rotate(90deg)` alone replaces the whole transform, so the mark sat
+     a pixel lower open than shut. */
+  transform: translateY(-1px) rotate(90deg);
 }
 
 /* Pointers that are fingers get targets a finger can hit, without enlarging a mouse-driven desktop. */
@@ -895,7 +897,6 @@ details[open] > summary::before {
 .card,
 .metric-panel,
 .metric-tile,
-.knowledge-tester,
 .knowledge-history,
 .conversation-controls {
   background: var(--surface);
@@ -973,7 +974,8 @@ details[open] > summary::before {
   font-weight: 600;
 }
 
-.button {
+.button,
+.inbox-refine > summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1322,6 +1324,115 @@ details[open] > summary::before {
   font-weight: var(--weight-semibold);
 }
 
+/*
+ * The rail's controls, as one block with the list under it.
+ *
+ * The list column is at most 320px, so its filter form resolves to a single column and every control
+ * was a row of its own: a search box, two menus and a button, then five chips over two lines — seven
+ * rows of chrome above the conversations somebody opened this screen to read, with nothing saying
+ * where the controls ended and the list began.
+ */
+.inbox-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The block owns the space between its parts, so neither the form nor the chips brings its own: a
+   flex gap and a margin both apply, and the form sat 20px above the chips instead of 8. */
+.inbox-toolbar .inbox-search,
+.inbox-toolbar .filter-row {
+  margin-bottom: 0;
+}
+
+/*
+ * In the rail, the search box takes the row.
+ *
+ * The filter row is an auto-fit grid and the rail is 320px, so it resolves to two 147px tracks — and
+ * "Имя или ник" in 147px is a box you cannot read what you typed in. Searching is what this column is
+ * for; the disclosure and the submit are the pair that shares the row under it.
+ */
+/*
+ * In the rail the row is two columns at most, and the search box takes both.
+ *
+ * `auto-fit` collapses a track only when nothing is placed in it *or spanning across it*, so a
+ * full-row span keeps every generated track alive: measured at a 900px window the rail made four
+ * 144px tracks, put the search across all four, and left 305px of empty row beside the submit with
+ * the form a whole line taller for it. Capping the count is the fix; the span then only ever spans
+ * tracks that are used.
+ */
+.inbox-list .inbox-search {
+  grid-template-columns: repeat(auto-fill, minmax(min(max(8rem, 48%), 100%), 1fr));
+  /* Top-aligned, not centred: when the refinements open, their cell grows and a centred submit floats
+     to the middle of it instead of staying level with the control beside it. */
+  align-items: start;
+}
+
+.inbox-list .inbox-search > .field {
+  grid-column: 1 / -1;
+}
+
+/*
+ * The folded refinements. `summary` is a control and is drawn as one of the quiet ones — the same
+ * height as a field, so the column keeps its rhythm whether the group is open or shut.
+ *
+ * Only what differs from the `summary` rule near the top of this file: that one already removes the
+ * browser's triangle, draws one of ours and turns it when the group opens. The first version of this
+ * block repeated the removal and added a second mark, and dev showed both of them side by side.
+ */
+/*
+ * The box goes on the summary, not on the `details`.
+ *
+ * `details` above carries a card — a border, a raised surface and 16px of side padding, with another
+ * 16px underneath when it is open. Inherited here that put the two selects inside a card inset 16px
+ * each side of a 147px track, which leaves them 115px, and the group grew 16px taller the moment it
+ * opened. The disclosure in this rail is a control, so the control takes the chrome and the fields it
+ * reveals take the whole track.
+ */
+.inbox-refine {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+}
+
+.inbox-refine[open] {
+  padding-bottom: 0;
+}
+
+/*
+ * Only what a button does not already say. The first version restated six of `.button`'s declarations
+ * here — the same height, border, radius, surface, shadow, weight and the same hover — and then set a
+ * different type size, so the disclosure read at 12px beside a 14px submit in the same row. That is
+ * the mistake the frame rule 500 lines above this one was written about.
+ */
+.inbox-refine > summary {
+  justify-content: flex-start;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+}
+
+.inbox-refine > summary:hover {
+  color: var(--text);
+}
+
+.inbox-refine > .field {
+  margin-top: var(--space-2);
+}
+
+/* Not a caption on the controls above it, which is what a bare muted paragraph under a filter row
+   reads as. The thread beside this one says nothing-here in the middle of its pane; this is the same
+   sentence given room. */
+.inbox-list-empty {
+  margin: var(--space-5) 0;
+  padding: 0 var(--space-3);
+  text-align: center;
+}
+
 .conversation-rows {
   list-style: none;
   margin: 0;
@@ -1358,6 +1469,11 @@ details[open] > summary::before {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-2);
+  /* The name inside truncates, and truncating does not reduce a cell's min-content contribution — so
+     the full nowrap width travelled up through this flex box, which is itself a grid item with an
+     automatic minimum. Measured at a 901px window: 83px of a 34-character handle painted under the
+     thread column with nothing to scroll it. */
+  min-width: 0;
 }
 
 .conversation-time {
@@ -1680,10 +1796,14 @@ details[open] > summary::before {
 
 .inbox-loaded-at {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--text-s);
   line-height: var(--leading-s);
-  margin: var(--gap) 0 0;
+  /* A footer under the list, with the same hairline the toolbar has above it — the rail then reads as
+     controls, list, and when the list was taken, rather than as three paragraphs. */
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
 }
 
 /* ---- review queue and conversation controls ---------------------------------------------------- */
@@ -1842,7 +1962,12 @@ details[open] > summary::before {
 }
 
 .knowledge-name {
-  font-weight: 600;
+  /* On the ladder; `600` is the number the ladder's `--weight-semibold` holds. */
+  font-weight: var(--weight-semibold);
+  /* A title is whatever somebody typed. Wrapping the sources section in a panel spent 34px of the
+     row's width, and a 34-character title then took the document 18px wide at 320px with nothing to
+     scroll it. */
+  overflow-wrap: anywhere;
 }
 
 .knowledge-editor {
@@ -1988,10 +2113,10 @@ details[open] > summary::before {
   gap: var(--space-3);
 }
 
-.knowledge-tester,
-.knowledge-history {
-  margin-bottom: var(--gap);
-}
+/* `.knowledge-tester` used to be here too, and nothing renders it any more — the tester is a `.panel`
+   now, like every other section on that screen. The margin went with it: the one route that still
+   renders `.knowledge-history` stacks its panels in a `.page-sections`, which owns the space between
+   them, and this bought 12px under the last one and nothing between any of them. */
 
 .retrieval-hits {
   list-style: decimal;
