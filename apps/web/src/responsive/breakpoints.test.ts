@@ -670,9 +670,13 @@ describe("the supported widths", () => {
       if (absorbed(selector)) {
         continue;
       }
-      expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} on ${selector} is a width this element may not fit in`).toBe(
-        true,
-      );
+      // `100%` on its own is accepted for the same reason `min(…, 100%)` is, and it is the stronger
+      // case rather than a weaker one: it *is* the container's width, so it cannot exceed it by any
+      // amount. The dropdown's list uses it to be at least as wide as the control it hangs from.
+      expect(
+        floor === "0" || floor === "100%" || /^min\(.+,\s*100%\)$/u.test(floor),
+        `min-width: ${floor} on ${selector} is a width this element may not fit in`,
+      ).toBe(true);
     }
 
     // The exemption is not allowed to be the whole answer. If every minimum width in the file became

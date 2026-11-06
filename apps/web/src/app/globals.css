@@ -341,6 +341,104 @@ select {
   cursor: pointer;
 }
 
+/*
+ * The product's own select.
+ *
+ * A native one is fully styleable while closed and not at all while open — the list is drawn by the
+ * operating system — so a console that has spent this much effort not looking like a system dialog
+ * dropped a grey system menu out of every filter. The closed state below is deliberately the same
+ * shape as the base control, because it replaces one: same height, same radius, same hairline, same
+ * mark. Only the list is new.
+ */
+.select {
+  position: relative;
+  min-width: 0;
+}
+
+.select-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--field-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-button:hover,
+.select[data-open="true"] .select-button {
+  border-color: var(--border-strong);
+}
+
+/* The value, which truncates rather than widening the control it is in. */
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The same two triangles the native control is given above, drawn here instead of by the browser. */
+.select-mark {
+  flex: none;
+  width: 10px;
+  height: 6px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: 0 0, 5px 0;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.select-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  /* At least the control's width and never narrower, but free to grow for a long option — and capped
+     at the viewport so a long one cannot push the page sideways. */
+  min-width: 100%;
+  max-width: min(22rem, calc(100vw - var(--space-5) * 2));
+  /* Eight rows and then it scrolls, which is roughly where a list stops being scannable. */
+  max-height: calc(var(--field-height) * 8);
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-2);
+}
+
+.select-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The keyboard's position and the stored value are two different things, so they are drawn two
+   different ways: one is where you are, the other is what is chosen. */
+.select-option[data-active="true"] {
+  background: var(--surface-selected);
+}
+
+.select-option[aria-selected="true"] {
+  font-weight: var(--weight-medium);
+}
+
+.select-option[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 input:hover,
 select:hover,
 textarea:hover {
@@ -4399,7 +4497,15 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   padding: 2px;
 }
 
-.switch-select {
+/*
+ * In the header the language control is a pill, like the theme switch beside it, and not a field.
+ *
+ * Both spellings are here because both ship: `.switch-select` is the native control the server renders
+ * and a reader without scripting keeps, and `.switch .select-button` is the product's own once the
+ * page hydrates. They have to look the same or the header changes shape as it loads.
+ */
+.switch-select,
+.switch .select-button {
   appearance: auto;
   border: 0;
   border-radius: 999px;
@@ -4415,8 +4521,17 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
   cursor: pointer;
 }
 
-.switch-select:hover {
+.switch-select:hover,
+.switch .select-button:hover,
+.switch .select[data-open="true"] .select-button {
   background: var(--surface-raised);
+  border-color: transparent;
+}
+
+/* The list hangs from the right edge of a control that sits at the right edge of the header. */
+.switch .select-list {
+  left: auto;
+  right: 0;
 }
 
 /* The sign-in and legal pages have no header of their own, so the controls take the corner. Absolute

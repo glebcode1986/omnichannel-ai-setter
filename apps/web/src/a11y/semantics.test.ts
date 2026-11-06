@@ -146,9 +146,30 @@ describe("the production UI's semantics", () => {
   it("has no clickable element that is not a button or a link", () => {
     // The single most common keyboard failure: a `div` with an onClick is unreachable by Tab, invisible
     // to a screen reader as a control, and does not respond to Enter or Space.
-    const findings = scan(/<(div|span|li|td|tr|p|section|article)\b[^>]*\bonClick\b/g, (match) => `<${match[1] ?? ""}> has onClick`);
+    //
+    // One shape is exempt, and it is exempt because the opposite would be the bug: an element carrying
+    // `role="option"`. Options inside a listbox are deliberately *not* tab stops — focus stays on the
+    // combobox and moves by `aria-activedescendant` — so turning each one into a button would give a
+    // ten-item menu ten tab stops and break the pattern it is part of. The exemption is narrow: the
+    // same file must also declare the `role="listbox"` the options belong to, so a lone `role="option"`
+    // on a div cannot be used to wave a handler through.
+    const findings = productionFiles().flatMap(({ file, source }) =>
+      lines(source).flatMap(({ line, text }) => {
+        const found = /<(div|span|li|td|tr|p|section|article)\b([^>]*)\bonClick\b/u.exec(text);
+        if (found === null) {
+          return [];
+        }
+        const isOption = /role="option"/u.test(found[2] ?? "") || /role="option"/u.test(text);
+        if (isOption && source.includes('role="listbox"')) {
+          return [];
+        }
+        return [{ file, line, what: `<${found[1] ?? ""}> has onClick` }];
+      }),
+    );
 
     expect(report(findings)).toEqual([]);
+    // And the exemption is not the whole answer: the scan still has to be able to say no.
+    expect(/<(div|span|li|td|tr|p|section|article)\b[^>]*\bonClick\b/u.test('<div className="x" onClick={go}>')).toBe(true);
   });
 
   it("gives every form control a name, by wrapping it in a label or pointing one at it", () => {

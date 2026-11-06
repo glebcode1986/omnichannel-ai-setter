@@ -6,8 +6,14 @@
  * It was a row of buttons, one per language, which is a fine control for two and stops being a control
  * somewhere around the fifth — it becomes a paragraph the header has to find room for. The product is
  * meant to gain languages, so the shape has to survive that: a select is the same size at twenty as at
- * two, and it arrives with keyboard handling, type-to-search, and a platform-native overlay on a phone
- * that no hand-built menu matches.
+ * two.
+ *
+ * The product's own select rather than a native one, and the reason is on this control more than any
+ * other: it sits in the header of every screen, and a native list drops a system-drawn menu out of it.
+ * `Select` keeps the native element until the page hydrates, so a reader without scripting still has a
+ * working control. It also follows the value the server rendered, which this control used not to: the
+ * page, `<html lang>` and the database all moved to Russian and the box went on reading "English",
+ * because an uncontrolled select reads its default once and the action re-renders the same element.
  *
  * Submitting on change is the whole interaction — there is no "apply" step to forget — and `requestSubmit`
  * is used rather than `submit()` because only the former runs validation and fires the submit event the
@@ -21,6 +27,7 @@
 import { useRef } from "react";
 
 import type { UiLocale } from "@/i18n/locales";
+import { Select } from "@/ui/select";
 
 export interface LanguageOption {
   readonly value: UiLocale;
@@ -42,22 +49,15 @@ export function LanguageSelect({ label, applyLabel, locale, options, action }: L
 
   return (
     <form action={action} className="switch switch-field" ref={form}>
-      <select
-        className="switch-select"
+      <Select
+        ariaLabel={label}
         name="locale"
-        aria-label={label}
-        defaultValue={locale}
-        data-public-locale-select="true"
-        onChange={() => {
+        onChoose={() => {
           form.current?.requestSubmit();
         }}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        options={options.map((option) => ({ value: option.value, label: option.label }))}
+        value={locale}
+      />
       <noscript>
         <button className="switch-option" type="submit">
           {applyLabel}
