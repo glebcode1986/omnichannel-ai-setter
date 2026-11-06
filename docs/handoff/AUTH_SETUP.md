@@ -29,6 +29,8 @@ are not one client with two redirect URIs.
 | `GOOGLE_CLIENT_SECRET` | Google | Same client. Server-side only; it is never sent to a browser, never logged, and never written to a test snapshot. |
 | `AUTH_EMAIL_SERVER` | email link | An SMTP connection URL, e.g. `smtps://user:password@smtp.example:465`. Any SMTP service the deployment already trusts; the product is coupled to none. |
 | `AUTH_EMAIL_FROM` | email link | The sender identity those links are sent as, e.g. `Omnichannel <no-reply@example.com>`. Must be an address the sending domain below is authorized for. |
+| `AUTH_SIGN_IN_ACCESS` | the private pilot | `open` or `invite`; absent means `open`. `invite` sends a link only to an address in `AUTH_INVITE_ALLOWLIST` and withholds Google entirely. **Any other value refuses the boot**, deliberately: a gate one keystroke from admitting the public should fail loudly rather than quietly. See *The private pilot* below. |
+| `AUTH_INVITE_ALLOWLIST` | the private pilot | The invited addresses, separated by commas, semicolons or newlines. Read only while the mode is `invite`. **Empty invites nobody**, never everybody. Case and surrounding spaces do not matter; a wildcard does not exist — `*@example.com` is one literal address nobody has. |
 | `AUTH_TRUSTED_CLIENT_IP_HEADER` | per-caller rate limiting | The name of the header **your own reverse proxy sets and sanitizes**, e.g. `x-forwarded-for`. Leave it unset unless a proxy in front of this process overwrites that header on every request. See *Attributing a caller* below: setting it switches per-caller limiting on; leaving it unset leaves per-address limiting in place and nothing else. |
 
 ## Google: what to register
@@ -80,6 +82,58 @@ cleartext window at all, where STARTTLS has one before the upgrade.
 The transport gives up after twenty seconds in the worst case regardless (`sign-in-mailer.ts`), so a
 blocked port now produces a refusal the page can show instead of a request that hangs. That is a
 backstop, not a fix: a refusal every time is still a sign-in nobody can complete.
+
+### What has actually been exercised, and when
+
+Measured on the development deployment on **2026-11-06**, against the real origin over TLS with a
+browser, not with `curl`. This is the environment half of the evidence: it says nothing about the code in
+any particular commit, and the code half is the test suite.
+
+| Step | Result |
+|---|---|
+| Sending domain in the provider | `keepsaybot.online` verified, sending enabled |
+| Outbound SMTP from inside the `web` container | 25, 465, 587 time out · **2465 and 2587 open** |
+| Link requested from the live form | accepted, page reached "Check your email" |
+| Provider's delivery status | **delivered** |
+| Link in the message | built from `AUTH_URL`, not from the `Host` header |
+| Clicking it | session created, landed on `/workspaces`, address marked verified |
+| Clicking it a second time | refused — `/sign-in?error=Verification` |
+| Clicking a link whose row had been expired by hand | refused the same way, and the row was consumed |
+| Six requests for one address inside the window | five sent, **the sixth sent nothing**, logged `signin.rate_limited` with `refusedBy=IDENTIFIER` and no address |
+
+Until that day the click had **never** been exercised here: the only three tokens the database held were
+unspent and expired, and two of the three requests that made them predate the port fix and never left the
+building at all.
+
+## The private pilot: invitation only
+
+The owner's decision of 2026-11-05 (#133): the beta is private, free and open by invitation to known
+businesses, with the email link as the only way in. Two variables turn it on:
+
+```
+AUTH_SIGN_IN_ACCESS=invite
+AUTH_INVITE_ALLOWLIST=first@business.example, second@business.example
+```
+
+**To invite somebody:** add the address, restart the web container, tell them to ask for a link at
+`/sign-in`. **To revoke:** take the address out and restart. Revocation reaches a link that was already
+sent — the gate is consulted again when a link is spent, not only when one is asked for — but it does
+**not** end a session that address already has. Delete its rows in `auth_sessions` for that.
+
+A restart is required because the environment is read from the process, so an edited `.env` reaches
+nothing until the container is recreated.
+
+**What an uninvited visitor sees:** the same page an invited one does. They type their address, they are
+told a link is on its way, and no link is sent, no token is written and no account is created. That is
+deliberate — the alternative tells a stranger which of their guesses is somebody's invitation — and it is
+why the sign-in page says "KeepSayBot is in a closed pilot" in invite mode rather than "create an
+account". **It also means an invited tester who mistypes their own address gets the same reassuring page
+and no mail**, so when somebody says the link never arrived, check the spelling in the allowlist before
+checking the transport.
+
+**Google is withheld in this mode**, with the reason `INVITE_ONLY`, and its configuration is left alone.
+It is not a method the gate can hold: the refusal would land only after a stranger had already consented,
+which is a button into a dead end. Putting the mode back to `open` offers it again, unchanged.
 
 ## Account linking, deliberately off
 
@@ -163,6 +217,20 @@ Public self-serve registration stays off until all of them are true:
 - [ ] Staging verification of both flows by a person, including an expired link and a cancelled Google
       consent.
 - [ ] Explicit owner release authorization.
+- [ ] `AUTH_SIGN_IN_ACCESS` is the mode that was decided. While the pilot is private it is `invite`;
+      leaving it absent is public self-serve registration, which is a product decision and not a default
+      to arrive at by forgetting.
+
+## Housekeeping nothing does for you
+
+Expired verification tokens are **never pruned**. `@auth/core` deletes a token when a link is spent, and
+an unspent one stays in `auth_verification_tokens` after it expires — six were sitting in the development
+database on 2026-11-06, the oldest from the day before. They are unusable, so this is litter rather than
+exposure, but the table grows with every link nobody clicks:
+
+```sql
+DELETE FROM auth_verification_tokens WHERE expires <= now();
+```
 
 Nothing in this repository can tick these, and no test asserts that they are ticked. A green build means
 the flows are implemented and guarded, not that this deployment can send mail.
