@@ -72,23 +72,35 @@ function nextDay(day: string): string {
 /**
  * A clean number at or above `max`, for the top of an axis.
  *
- * One, two or five times a power of ten. The alternative — scaling to the largest value itself — makes
- * the tallest column full height in every window, so a week with four messages and a week with four
- * hundred draw the same picture and only the caption differs.
+ * Why not scale to the largest value itself: the tallest column would be full height in every window, so
+ * a week with four messages and a week with four hundred draw the same picture and only the caption
+ * differs. The ceiling is what makes two windows comparable.
+ *
+ * Why the ladder has eleven rungs and not three. One, two or five times a power of ten is the textbook
+ * set, and measured against every count from 1 to 2000 it leaves the tallest column at 40% of the band
+ * in the worst case and 74% on average — twenty-two messages took a ceiling of fifty and the chart read
+ * as a sparkline. These rungs measure 75% at worst and 89% on average, and twenty-two now takes
+ * twenty-five. Both numbers are computed in the test rather than claimed here.
+ *
+ * Rounded up to a whole number, because every quantity on this page is a count and an axis that ends at
+ * 2.5 messages is not one.
  *
  * Returns 0 for a maximum of 0, which the callers read as "nothing to draw" rather than dividing by it.
  */
+const AXIS_LADDER = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10] as const;
+
 export function niceTop(max: number): number {
   if (!Number.isFinite(max) || max <= 0) {
     return 0;
   }
   const magnitude = 10 ** Math.floor(Math.log10(max));
-  for (const step of [1, 2, 5]) {
+  for (const step of AXIS_LADDER) {
     if (step * magnitude >= max) {
-      return step * magnitude;
+      return Math.ceil(step * magnitude);
     }
   }
-  return 10 * magnitude;
+  // Only reachable if `max` is not inside its own magnitude, which it always is.
+  return Math.ceil(10 * magnitude);
 }
 
 /**

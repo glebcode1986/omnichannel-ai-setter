@@ -196,9 +196,11 @@ describe("the analytics dashboard", () => {
   it("counts messages and conversations as separate columns", () => {
     render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
 
-    const volume = document.querySelector('[data-panel="volume"]') as HTMLElement;
-    expect(within(volume).getByText("12")).toBeDefined();
-    expect(within(volume).getByText("4")).toBeDefined();
+    // Asked of the table and not of the panel: the chart above it states its own axis ceiling, which for
+    // this fixture is also twelve, and a panel-wide search finds both and cannot say which it meant.
+    const table = document.querySelector('[data-panel="volume"] table') as HTMLElement;
+    expect(within(table).getByText("12")).toBeDefined();
+    expect(within(table).getByText("4")).toBeDefined();
   });
 
   it("draws the volume chart over the window the page measured, not over the rows it got back", () => {
@@ -255,6 +257,24 @@ describe("the analytics dashboard", () => {
     expect(reasons.querySelector(".bar-rows")?.getAttribute("data-scale")).toBe("largest");
     expect((reasons.querySelector('[data-row="MISSING_FACT"] .bar-fill') as HTMLElement).style.getPropertyValue("--bar")).toBe("100.00%");
     expect((reasons.querySelector('[data-row="LOW_CONFIDENCE"] .bar-fill') as HTMLElement).style.getPropertyValue("--bar")).toBe("50.00%");
+  });
+
+  it("says why a reply waited in words, and keeps a code it does not know", () => {
+    // The codes are the chart's labels now, so an untranslated one is not a missing tooltip — it is
+    // MISSING_FACT in capitals at the top of a panel. And the column is `text[]`: a row can hold a
+    // string this build has never heard of, which still happened and is still counted.
+    render(
+      <MetricsView
+        t={t}
+        snapshot={snapshot({ reviewReasons: [{ reason: "MISSING_FACT", drafts: 2 }, { reason: "FROM_A_NEWER_BUILD", drafts: 1 }] })}
+        stageLabels={labels}
+      />,
+    );
+
+    const reasons = document.querySelector('[data-panel="reasons"]') as HTMLElement;
+    expect(within(reasons).getByText(text("analytics.reason.MISSING_FACT"))).toBeDefined();
+    expect(within(reasons).queryByText("MISSING_FACT"), "the code itself is not the label").toBeNull();
+    expect(within(reasons).getByText("FROM_A_NEWER_BUILD"), "an unknown code is shown rather than dropped").toBeDefined();
   });
 
   it("draws our own delivery record and deliberately does not draw the provider's", () => {

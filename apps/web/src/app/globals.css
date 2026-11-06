@@ -2547,7 +2547,9 @@ details[open] > summary::before {
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: 84px;
+  /* Measured on dev rather than chosen: at 84px the band was shorter than the legend and the date row
+     together, so the chart read as decoration beside the table instead of as the panel's own content. */
+  height: 120px;
   margin: 0;
   padding: 0;
   list-style: none;

@@ -50,13 +50,14 @@ describe("one column per day", () => {
   });
 
   it("scales both series to one clean ceiling, which it states", () => {
-    render(dayChart([{ day: "2026-10-02", primary: 12, secondary: 4 }]));
+    render(dayChart([{ day: "2026-10-02", primary: 13, secondary: 4 }]));
 
-    // 20, not 12: an axis that ends at the tallest column makes every window look identical.
-    expect(document.querySelector(".chart-top")?.textContent).toBe("20");
+    // 15, not 13: an axis that ends at the tallest column makes every window look identical, so a week
+    // with thirteen messages and a week with thirteen hundred would draw the same picture.
+    expect(document.querySelector(".chart-top")?.textContent).toBe("15");
     const columns = [...(slots()[1]?.querySelectorAll(".chart-column") ?? [])] as HTMLElement[];
-    expect(columns[0]?.style.getPropertyValue("--column")).toBe("60.00%");
-    expect(columns[1]?.style.getPropertyValue("--column")).toBe("20.00%");
+    expect(columns[0]?.style.getPropertyValue("--column")).toBe("86.67%");
+    expect(columns[1]?.style.getPropertyValue("--column")).toBe("26.67%");
   });
 
   it("reserves a width per day, so ninety of them scroll instead of becoming a texture", () => {

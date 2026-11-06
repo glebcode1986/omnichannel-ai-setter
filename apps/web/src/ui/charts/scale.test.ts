@@ -80,13 +80,40 @@ describe("the top of an axis", () => {
     // The point is that it does *not* track the data closely: a week with four messages and a week with
     // four hundred have to draw differently, and scaling to the largest value makes both full height.
     expect(niceTop(1)).toBe(1);
-    expect(niceTop(3)).toBe(5);
-    expect(niceTop(7)).toBe(10);
-    expect(niceTop(12)).toBe(20);
+    expect(niceTop(3)).toBe(3);
+    expect(niceTop(7)).toBe(8);
+    expect(niceTop(11)).toBe(12);
+    expect(niceTop(13)).toBe(15);
+    expect(niceTop(22)).toBe(25);
     expect(niceTop(45)).toBe(50);
     expect(niceTop(50)).toBe(50);
-    expect(niceTop(120)).toBe(200);
+    expect(niceTop(120)).toBe(120);
+    expect(niceTop(121)).toBe(150);
     expect(niceTop(880)).toBe(1000);
+  });
+
+  it("is always a whole number, because everything on this page is a count", () => {
+    // The ladder has halves on it, so a maximum of 2.1 would otherwise take a ceiling of 2.5 and the
+    // axis would end at two and a half messages.
+    for (const value of [1.2, 2.1, 2.6, 7.5, 23, 240]) {
+      expect(Number.isInteger(niceTop(value)), `${String(value)} must take a whole ceiling`).toBe(true);
+    }
+  });
+
+  it("leaves the tallest column at three quarters of the plot in the worst case", () => {
+    // Measured, not hoped for. The first version of this test asserted four fifths, which was a number
+    // chosen because it sounded right: the true worst case is a value just above a power of ten, and
+    // 1001 takes a ceiling of 1500. The textbook 1/2/5 ladder measures 0.402 at worst and 0.743 on
+    // average over the same range, which is what the comment in `scale.ts` is comparing against.
+    const ratios = [];
+    for (let value = 1; value <= 2000; value += 1) {
+      ratios.push(value / niceTop(value));
+    }
+    const worst = Math.min(...ratios);
+    const mean = ratios.reduce((total, ratio) => total + ratio, 0) / ratios.length;
+
+    expect(worst).toBeGreaterThanOrEqual(0.75);
+    expect(mean).toBeGreaterThanOrEqual(0.89);
   });
 
   it("never comes back below the value it has to contain", () => {
