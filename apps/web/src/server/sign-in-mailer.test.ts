@@ -1,10 +1,14 @@
 /**
  * Sending the link, against a transport that records instead of sending (#117).
  */
+import net from "node:net";
+import type { AddressInfo } from "node:net";
+
+import { createTransport } from "nodemailer";
 import { describe, expect, it } from "vitest";
 
 import { publicLocaleFrom, PUBLIC_LOCALE_COOKIE } from "./public-locale";
-import { sendSignInLink, type MailTransport, type OutgoingMail } from "./sign-in-mailer";
+import { sendSignInLink, smtpTransport, withTimeouts, type MailTransport, type OutgoingMail } from "./sign-in-mailer";
 import { catalogues } from "@/i18n/catalogue";
 
 function recorder(): MailTransport & { readonly sent: OutgoingMail[] } {
@@ -61,6 +65,80 @@ describe("sending a sign-in link", () => {
     await expect(
       sendSignInLink(failing, { identifier: "a@b.test", url: URL_WITH_TOKEN, expires: EXPIRES, from: "f@b.test" }),
     ).rejects.toThrow("smtp refused");
+  });
+});
+
+/**
+ * A send that cannot finish has to fail, and nodemailer's own defaults do not make it fail in any time
+ * a person waiting on a form would recognise as an answer.
+ */
+describe("the SMTP transport", () => {
+  /** What nodemailer resolved the URL to — the only place the parsed options are visible. */
+  function optionsFor(server: string): Record<string, unknown> {
+    const built = createTransport(withTimeouts(server)) as unknown as { transporter: { options: Record<string, unknown> } };
+    return built.transporter.options;
+  }
+
+  it("hands nodemailer three timeouts, and nodemailer keeps them", () => {
+    // Both halves matter. Attaching query parameters that the parser silently drops would leave this
+    // file looking careful and the transport running on two-minute defaults.
+    const options = optionsFor("smtps://user:secret@smtp.example.test:2465");
+
+    expect({
+      connectionTimeout: options["connectionTimeout"],
+      greetingTimeout: options["greetingTimeout"],
+      socketTimeout: options["socketTimeout"],
+    }).toEqual({ connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000 });
+
+    // And the URL still says what it said: scheme, port and credentials are nodemailer's to read, which
+    // is why they are not re-parsed here.
+    expect({ host: options["host"], port: options["port"], secure: options["secure"] }).toEqual({
+      host: "smtp.example.test",
+      port: 2465,
+      secure: true,
+    });
+  });
+
+  it("leaves a deployment's own timeout alone", () => {
+    // "Any SMTP service a deployment already trusts" is the contract. A relay that needs longer is a
+    // thing the deployment knows and this file does not.
+    expect(optionsFor("smtp://u:p@smtp.example.test:587?greetingTimeout=45000")["greetingTimeout"]).toBe(45_000);
+  });
+
+  it("is not confused by a URL it cannot parse", () => {
+    // `createTransport` refuses this and says something about SMTP. If `new URL` threw first, the person
+    // reading the log would be told about a URL instead.
+    expect(withTimeouts("not a url")).toBe("not a url");
+  });
+
+  it("gives up on a relay that accepts the connection and never greets", async () => {
+    // The failure measured on the development host, reproduced in miniature: a socket that opens and
+    // then says nothing. Nodemailer's default is thirty seconds of that before it admits anything is
+    // wrong, and the request stays open the whole time — which is how a sign-in page sat on the form
+    // with no link coming and no error shown. The timeouts are overridden to milliseconds here, which
+    // also exercises the rule above.
+    const silent = net.createServer(() => {
+      // Deliberately empty: accept the connection and send no banner.
+    });
+    await new Promise<void>((resolve) => {
+      silent.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = silent.address() as AddressInfo;
+
+    try {
+      const transport = smtpTransport(`smtp://u:p@127.0.0.1:${String(port)}?connectionTimeout=200&greetingTimeout=200&socketTimeout=400`);
+      const started = Date.now();
+      await expect(
+        transport.send({ to: "a@b.test", from: "c@d.test", subject: "s", text: "t", html: "<p>t</p>" }),
+      ).rejects.toThrow();
+      expect(Date.now() - started, "it must give up, not wait out nodemailer's default").toBeLessThan(5_000);
+    } finally {
+      await new Promise<void>((resolve) => {
+        silent.close(() => {
+          resolve();
+        });
+      });
+    }
   });
 });
 

@@ -21,6 +21,7 @@ import { signIn } from "../auth";
 import { loadWebEnv } from "../env";
 import { field } from "./form-fields";
 import { EMAIL_PROVIDER_ID, LINK_SENT_PATH, signInAttemptAllowed } from "./sign-in-guard";
+import { LINK_REQUEST_ANSWER } from "./sign-in-invitations";
 import { availableSignInMethods, safeRedirectTarget } from "./sign-in-methods";
 import { PUBLIC_LOCALE_COOKIE } from "./public-locale";
 import { isUiLocale } from "@/i18n/locales";
@@ -83,13 +84,47 @@ export async function requestSignInLinkAction(callbackUrl: string | undefined, f
   }
 
   const redirectTo = `${methods.baseUrl}${safeRedirectTarget(callbackUrl, methods.baseUrl)}`;
+  let answer: unknown;
   try {
-    await signIn(EMAIL_PROVIDER_ID, { email, redirectTo });
+    // `redirect: false`, so this action chooses where the browser lands rather than inheriting the
+    // library's own `/api/auth/verify-request` URL. Two reasons, and neither is cosmetic. The refusal a
+    // few lines up lands on `LINK_SENT_PATH`, so a success that landed anywhere else would be the one
+    // difference a caller could measure between "sent" and "refused" — the property this file claims to
+    // hold, undone by a URL. And an `/api/...` address in the bar is not where a person should be left
+    // standing after asking for mail. Nothing is lost by taking the redirect into our own hands: the
+    // library writes its cookies into the jar before returning either way.
+    answer = await signIn(EMAIL_PROVIDER_ID, { email, redirectTo, redirect: false });
   } catch (error) {
     if (error instanceof AuthError) {
       refuse(error.type);
     }
     throw error;
+  }
+  if (typeof answer !== "string") {
+    // The installed version hands back the URL it would have redirected to. Anything else means the
+    // contract changed underneath this call, and the one answer that must not be given on a maybe is
+    // "check your mail".
+    refuse("Configuration");
+  }
+  // **Only a link that was actually answered as sent lands on the sent page.** When the transport fails,
+  // this version does not throw — it hands back a URL carrying the error — and reporting "check your
+  // mail" over a send that never happened is precisely the failure this deployment already had once.
+  redirect(answeredAsLinkRequest(answer) ? LINK_SENT_PATH : `${methods.baseUrl}${safeRedirectTarget(answer, methods.baseUrl)}`);
+}
+
+/**
+ * Whether the library answered this the way it answers a link request — sent, or refused by the
+ * invitation gate, which are deliberately the same answer.
+ *
+ * Compared as a path with its query rather than as a whole URL, because the value comes back absolute
+ * and the origin has already been decided by `AUTH_URL`.
+ */
+function answeredAsLinkRequest(answer: string): boolean {
+  try {
+    const parsed = new URL(answer);
+    return `${parsed.pathname}${parsed.search}` === LINK_REQUEST_ANSWER;
+  } catch {
+    return false;
   }
 }
 

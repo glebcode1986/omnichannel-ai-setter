@@ -17,6 +17,7 @@
 import type { UiLocale } from "@/i18n/locales";
 import { localeNames, UI_LOCALES } from "@/i18n/locales";
 import type { Translator } from "@/i18n/translate";
+import type { SignInAccess } from "@/server/sign-in-invitations";
 import type { SignInMethod } from "@/server/sign-in-methods";
 import { signInNotice, signInNoticeKey } from "@/server/sign-in-view";
 
@@ -24,6 +25,15 @@ export interface SignInPanelProps {
   readonly t: Translator;
   readonly locale: UiLocale;
   readonly available: readonly SignInMethod[];
+  /**
+   * Whether this deployment registers anybody who asks (#133).
+   *
+   * The page has to say so, because the subtitle otherwise promises something that is no longer true:
+   * "create an account" is not on offer during an invitation-only pilot, and somebody who reads that,
+   * types their address and never receives a link has been told the wrong thing by us rather than
+   * failed by their mail.
+   */
+  readonly access: SignInAccess;
   /** The raw `?error=` value, mapped here rather than by the route. */
   readonly error?: string | undefined;
   readonly googleAction: () => Promise<void>;
@@ -31,7 +41,7 @@ export interface SignInPanelProps {
   readonly languageAction: (locale: string) => Promise<void>;
 }
 
-export function SignInPanel({ t, locale, available, error, googleAction, emailAction, languageAction }: SignInPanelProps) {
+export function SignInPanel({ t, locale, available, access, error, googleAction, emailAction, languageAction }: SignInPanelProps) {
   const notice = signInNotice(error);
   const nothingOnOffer = available.length === 0;
 
@@ -51,7 +61,7 @@ export function SignInPanel({ t, locale, available, error, googleAction, emailAc
         <p data-sign-in="unavailable">{t.t("signIn.unavailableBody")}</p>
       ) : (
         <>
-          <p>{t.t("signIn.subtitle")}</p>
+          <p data-sign-in-access={access}>{t.t(access === "invite" ? "signIn.subtitleInvite" : "signIn.subtitle")}</p>
 
           {available.includes("google") ? (
             <form action={googleAction} data-sign-in="google">
