@@ -74,7 +74,7 @@ export function SignInPanel({ t, available, error, googleAction, emailAction }: 
 
             {available.includes("google") ? (
               <form action={googleAction} data-sign-in="google">
-                <button className="button primary auth-submit" type="submit" data-action="sign-in-google">
+                <button className="button auth-submit" data-variant="primary" type="submit" data-action="sign-in-google">
                   {t.t("signIn.google")}
                 </button>
               </form>

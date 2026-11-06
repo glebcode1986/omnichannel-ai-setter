@@ -146,7 +146,7 @@ export function ReviewCard({ t, item, basePath, from, actions, target }: ReviewC
           <>
             <form action={bind(actions.approve)}>
               {context}
-              <button className="button primary" type="submit" data-action="approve">
+              <button className="button" data-variant="primary" type="submit" data-action="approve">
                 {t.t("review.approve")}
               </button>
             </form>

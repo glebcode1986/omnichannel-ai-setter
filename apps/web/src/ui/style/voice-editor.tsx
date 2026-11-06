@@ -28,14 +28,27 @@ export function VoiceEditor({ t, layer, action }: VoiceEditorProps) {
   const id = (name: string) => `style-${layer.scope}-${name}`;
 
   return (
-    <form action={action} className="knowledge-editor" data-layer={layer.scope}>
-      <h3>{layer.scope === "WORKSPACE" ? t.t("style.layerWorkspace") : t.t("style.layerProfile")}</h3>
-      {layer.exists ? undefined : (
-        <p className="muted" data-unwritten="true">
-          {t.t("style.layerUnwritten")}
-        </p>
-      )}
-      {layer.scope === "BUSINESS_PROFILE" ? <p className="muted">{t.t("style.inherits")}</p> : undefined}
+    /*
+     * A column inside the voice panel, not a card of its own: a card inside a card is two boxes, and the
+     * panel around both layers is already the box. What was missing was not a border — it was that the
+     * two stacks were different widths, because each was as wide as its own longest control, and the
+     * heading above them was set as a muted all-caps label rather than as a heading.
+     */
+    <form action={action} className="voice-layer" data-layer={layer.scope}>
+      {/* One block, with a floor under it, so the first field of each column starts on the same line. The
+          profile layer carries a sentence the workspace layer does not — an empty field here means "use
+          the base", which is the opposite of "say nothing" — and that one extra line put every row of
+          the right column 28px below its pair on the left. The sentence stays beside the fields it is
+          about rather than moving to the panel, because that is what it is about. */}
+      <header className="voice-layer-head">
+        <h3>{layer.scope === "WORKSPACE" ? t.t("style.layerWorkspace") : t.t("style.layerProfile")}</h3>
+        {layer.exists ? undefined : (
+          <p className="muted" data-unwritten="true">
+            {t.t("style.layerUnwritten")}
+          </p>
+        )}
+        {layer.scope === "BUSINESS_PROFILE" ? <p className="muted">{t.t("style.inherits")}</p> : undefined}
+      </header>
       <input type="hidden" name="scope" value={layer.scope} />
       {/*
         What this form was rendered against. Two tabs open on one business's voice is ordinary, and each
@@ -45,51 +58,74 @@ export function VoiceEditor({ t, layer, action }: VoiceEditorProps) {
       */}
       <input type="hidden" name="expectedUpdatedAt" value={layer.updatedAt?.toISOString() ?? ""} />
 
-      <label htmlFor={id("persona")}>{t.t("style.persona")}</label>
-      <input id={id("persona")} name="persona" type="text" defaultValue={layer.persona ?? ""} />
+      <div className="form-grid">
+        <div className="field">
+          <label htmlFor={id("persona")}>{t.t("style.persona")}</label>
+          <input id={id("persona")} name="persona" type="text" defaultValue={layer.persona ?? ""} />
+        </div>
 
-      <label htmlFor={id("tone")}>{t.t("style.tone")}</label>
-      <input id={id("tone")} name="tone" type="text" defaultValue={layer.tone ?? ""} />
+        <div className="field">
+          <label htmlFor={id("tone")}>{t.t("style.tone")}</label>
+          <input id={id("tone")} name="tone" type="text" defaultValue={layer.tone ?? ""} />
+        </div>
 
-      <label htmlFor={id("replyLength")}>{t.t("style.replyLength")}</label>
-      <select id={id("replyLength")} name="replyLength" defaultValue={layer.replyLength ?? ""}>
-        <option value="">{t.t("style.noOpinion")}</option>
-        {REPLY_LENGTHS.map((value) => (
-          <option key={value} value={value}>
-            {t.t(`replyLength.${value}`)}
-          </option>
-        ))}
-      </select>
+        <div className="field">
+          <label htmlFor={id("replyLength")}>{t.t("style.replyLength")}</label>
+          <select id={id("replyLength")} name="replyLength" defaultValue={layer.replyLength ?? ""}>
+            <option value="">{t.t("style.noOpinion")}</option>
+            {REPLY_LENGTHS.map((value) => (
+              <option key={value} value={value}>
+                {t.t(`replyLength.${value}`)}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <label htmlFor={id("emoji")}>{t.t("style.emoji")}</label>
-      <select id={id("emoji")} name="emoji" defaultValue={layer.emoji ?? ""}>
-        <option value="">{t.t("style.noOpinion")}</option>
-        {EMOJI_USAGES.map((value) => (
-          <option key={value} value={value}>
-            {t.t(`emojiUsage.${value}`)}
-          </option>
-        ))}
-      </select>
+        <div className="field">
+          <label htmlFor={id("emoji")}>{t.t("style.emoji")}</label>
+          <select id={id("emoji")} name="emoji" defaultValue={layer.emoji ?? ""}>
+            <option value="">{t.t("style.noOpinion")}</option>
+            {EMOJI_USAGES.map((value) => (
+              <option key={value} value={value}>
+                {t.t(`emojiUsage.${value}`)}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <label htmlFor={id("greeting")}>{t.t("style.greeting")}</label>
-      <input id={id("greeting")} name="greeting" type="text" defaultValue={layer.greeting ?? ""} />
+        <div className="field">
+          <label htmlFor={id("greeting")}>{t.t("style.greeting")}</label>
+          <input id={id("greeting")} name="greeting" type="text" defaultValue={layer.greeting ?? ""} />
+        </div>
 
-      <label htmlFor={id("signOff")}>{t.t("style.signOff")}</label>
-      <input id={id("signOff")} name="signOff" type="text" defaultValue={layer.signOff ?? ""} />
+        <div className="field">
+          <label htmlFor={id("signOff")}>{t.t("style.signOff")}</label>
+          <input id={id("signOff")} name="signOff" type="text" defaultValue={layer.signOff ?? ""} />
+        </div>
 
-      <label htmlFor={id("preferred")}>{t.t("style.preferred")}</label>
-      <textarea id={id("preferred")} name="preferred" rows={3} defaultValue={layer.preferredPhrases.join("\n")} />
+        {/* Lists of phrases, one per line, so they take the row rather than half of it. */}
+        <div className="field" data-span="full">
+          <label htmlFor={id("preferred")}>{t.t("style.preferred")}</label>
+          <textarea id={id("preferred")} name="preferred" rows={3} defaultValue={layer.preferredPhrases.join("\n")} />
+        </div>
 
-      <label htmlFor={id("avoided")}>{t.t("style.avoided")}</label>
-      <textarea id={id("avoided")} name="avoided" rows={3} defaultValue={layer.avoidedPhrases.join("\n")} />
+        <div className="field" data-span="full">
+          <label htmlFor={id("avoided")}>{t.t("style.avoided")}</label>
+          <textarea id={id("avoided")} name="avoided" rows={3} defaultValue={layer.avoidedPhrases.join("\n")} />
+        </div>
 
-      <label htmlFor={id("language")}>{t.t("style.language")}</label>
-      <input id={id("language")} name="language" type="text" defaultValue={layer.language ?? ""} />
-      <p className="muted">{t.t("style.languageHint")}</p>
+        <div className="field">
+          <label htmlFor={id("language")}>{t.t("style.language")}</label>
+          <input id={id("language")} name="language" type="text" defaultValue={layer.language ?? ""} />
+          <p className="muted">{t.t("style.languageHint")}</p>
+        </div>
 
-      <button className="button primary" type="submit" data-action="save-voice">
-        {t.t("style.saveVoice")}
-      </button>
+        <div className="form-actions" data-span="full">
+          <button className="button" data-variant="primary" type="submit" data-action="save-voice">
+            {t.t("style.saveVoice")}
+          </button>
+        </div>
+      </div>
     </form>
   );
 }

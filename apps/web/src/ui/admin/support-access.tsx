@@ -61,7 +61,7 @@ export function SupportAccess({
             </label>
           ) : undefined}
 
-          <button className="button primary" type="submit" data-action="open-session">
+          <button className="button" data-variant="primary" type="submit" data-action="open-session">
             {t.t("admin.openSession")}
           </button>
         </form>

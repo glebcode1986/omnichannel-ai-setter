@@ -76,7 +76,7 @@ export function StageConfig({ t, stages, target, action }: StageConfigProps) {
           </tbody>
         </table>
         <p className="muted">{t.t("stages.hiddenHint")}</p>
-        <button className="button primary" type="submit" data-action="save-stages">
+        <button className="button" data-variant="primary" type="submit" data-action="save-stages">
           {t.t("stages.save")}
         </button>
       </form>

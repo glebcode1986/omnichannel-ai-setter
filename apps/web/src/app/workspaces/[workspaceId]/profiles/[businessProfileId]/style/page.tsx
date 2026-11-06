@@ -71,76 +71,81 @@ export default async function StylePage({
         <h1>{t.t("style.title")}</h1>
       </div>
 
-      <OutcomeNotice t={t} outcome={one(query["outcome"])} />
+      {/* One rhythm down the page: every block below is a panel and the stack owns the space between
+          them. The sections used to be bare `section` elements on the grey canvas, so the only thing
+          separating "how the business sounds" from the example library was a heading. */}
+      <div className="page-sections">
+        <OutcomeNotice t={t} outcome={one(query["outcome"])} />
 
-      {/* Said once, at the top, because it is the one thing about this screen somebody could get badly
-          wrong. Facts live in Knowledge; this page decides only how a reply sounds. */}
-      <p className="notice" data-not-factual="true">
-        {t.t("style.notFactual")}
-      </p>
+        {/* Said once, at the top, because it is the one thing about this screen somebody could get badly
+            wrong. Facts live in Knowledge; this page decides only how a reply sounds. */}
+        <p className="notice" data-not-factual="true">
+          {t.t("style.notFactual")}
+        </p>
 
-      <section>
-        <h2>{t.t("style.voiceTitle")}</h2>
-        <div className="voice-layers">
-          {layers.map((layer) => (
-            <VoiceEditor key={layer.scope} t={t} layer={layer} target={target} action={saveVoiceAction.bind(null, target)} />
-          ))}
-        </div>
-      </section>
+        <section className="panel" data-panel="voice">
+          <h2>{t.t("style.voiceTitle")}</h2>
+          <div className="voice-layers">
+            {layers.map((layer) => (
+              <VoiceEditor key={layer.scope} t={t} layer={layer} target={target} action={saveVoiceAction.bind(null, target)} />
+            ))}
+          </div>
+        </section>
 
-      <StyleTestPanel t={t} test={test} basePath={basePath} {...(ask === undefined ? {} : { ask })} />
+        <StyleTestPanel t={t} test={test} basePath={basePath} {...(ask === undefined ? {} : { ask })} />
 
-      <section>
-        <h2>{t.t("style.suggestionsTitle")}</h2>
-        <StyleExampleList
-          t={t}
-          examples={suggestions.examples}
-          target={target}
-          kind="SUGGESTED"
-          actions={actions}
-          {...(suggestionsNextHref === undefined ? {} : { nextHref: suggestionsNextHref })}
-          earlierHistoryHrefs={earlierHistoryHrefs}
-          {...(lifecycle === undefined ? {} : { lifecycle })}
-          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
-        />
-      </section>
+        <section className="panel" data-panel="suggestions">
+          <h2>{t.t("style.suggestionsTitle")}</h2>
+          <StyleExampleList
+            t={t}
+            examples={suggestions.examples}
+            target={target}
+            kind="SUGGESTED"
+            actions={actions}
+            {...(suggestionsNextHref === undefined ? {} : { nextHref: suggestionsNextHref })}
+            earlierHistoryHrefs={earlierHistoryHrefs}
+            {...(lifecycle === undefined ? {} : { lifecycle })}
+            {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
+          />
+        </section>
 
-      <section>
-        <h2>{t.t("style.examplesTitle")}</h2>
-        <AddExampleForm t={t} target={target} action={addStyleExampleAction.bind(null, target)} />
-        <StyleExampleList
-          t={t}
-          examples={verified.examples}
-          target={target}
-          kind="VERIFIED"
-          actions={actions}
-          {...(verifiedNextHref === undefined ? {} : { nextHref: verifiedNextHref })}
-          earlierHistoryHrefs={earlierHistoryHrefs}
-          {...(lifecycle === undefined ? {} : { lifecycle })}
-          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
-        />
-      </section>
+        <section className="panel" data-panel="examples">
+          <h2>{t.t("style.examplesTitle")}</h2>
+          <AddExampleForm t={t} target={target} action={addStyleExampleAction.bind(null, target)} />
+          <StyleExampleList
+            t={t}
+            examples={verified.examples}
+            target={target}
+            kind="VERIFIED"
+            actions={actions}
+            {...(verifiedNextHref === undefined ? {} : { nextHref: verifiedNextHref })}
+            earlierHistoryHrefs={earlierHistoryHrefs}
+            {...(lifecycle === undefined ? {} : { lifecycle })}
+            {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
+          />
+        </section>
 
-      {/*
-        Withdrawn and declined examples. Without this section the restore control was unreachable: the
-        row left both rendered lists the moment somebody archived or rejected it, and nothing ever passed
-        an ARCHIVED or REJECTED example to the component that knows how to bring one back.
-      */}
-      <section>
-        <h2>{t.t("style.retiredTitle")}</h2>
-        <p className="muted">{t.t("style.retiredExplain")}</p>
-        <StyleExampleList
-          t={t}
-          examples={retired.examples}
-          target={target}
-          kind="RETIRED"
-          actions={actions}
-          {...(retiredNextHref === undefined ? {} : { nextHref: retiredNextHref })}
-          earlierHistoryHrefs={earlierHistoryHrefs}
-          {...(lifecycle === undefined ? {} : { lifecycle })}
-          {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
-        />
-      </section>
+        {/*
+          Withdrawn and declined examples. Without this section the restore control was unreachable: the
+          row left both rendered lists the moment somebody archived or rejected it, and nothing ever passed
+          an ARCHIVED or REJECTED example to the component that knows how to bring one back.
+        */}
+        <section className="panel" data-panel="retired">
+          <h2>{t.t("style.retiredTitle")}</h2>
+          <p className="muted">{t.t("style.retiredExplain")}</p>
+          <StyleExampleList
+            t={t}
+            examples={retired.examples}
+            target={target}
+            kind="RETIRED"
+            actions={actions}
+            {...(retiredNextHref === undefined ? {} : { nextHref: retiredNextHref })}
+            earlierHistoryHrefs={earlierHistoryHrefs}
+            {...(lifecycle === undefined ? {} : { lifecycle })}
+            {...(latestHistoryHref === undefined ? {} : { latestHistoryHref })}
+          />
+        </section>
+      </div>
     </>
   );
 }

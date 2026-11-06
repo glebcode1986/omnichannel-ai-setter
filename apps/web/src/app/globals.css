@@ -871,12 +871,41 @@ details[open] > summary::before {
   grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
-.card {
-  background: var(--surface-raised);
+/*
+ * One frame, declared once.
+ *
+ * Six rules drew the same box with four different sets of numbers: `.card` on `--surface-raised` with
+ * 16px of padding, `.metric-panel` and `.metric-tile` on `--surface` with 16, `.knowledge-tester` and
+ * `.knowledge-history` on `--surface-raised` with a hand-written 12, `.conversation-controls` the same
+ * again. Settings is where that showed: two of those boxes were on screen at once and the form between
+ * them had no box at all, so the page read as three unrelated things rather than one screen.
+ *
+ * `--surface` and not `--surface-raised`: the page behind these is `--surface-sunken`, so this is the
+ * middle of the three levels the house palette defines, and it is the level the dashboard already uses.
+ *
+ * The names stay as a list rather than collapsing into one class, because renaming a box on nine screens
+ * is a separate change from giving them one box.
+ *
+ * Seven names, not every box in the product: `.review-card` and `.step` still draw their own, with 12px
+ * of padding and no shadow. They are the review queue and the setup checklist, which are screens this
+ * change did not touch and nobody has looked at yet — so they are named here as the remainder rather
+ * than quietly included, and "one frame" means these seven until they join.
+ */
+.panel,
+.card,
+.metric-panel,
+.metric-tile,
+.knowledge-tester,
+.knowledge-history,
+.conversation-controls {
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-4);
   box-shadow: var(--shadow-1);
+  /* A grid item's automatic minimum size is its content, and the content here is a table or a caption
+     that may not break. Zero lets the box shrink to its track instead of widening the page. */
+  min-width: 0;
 }
 
 .card h3 {
@@ -966,6 +995,11 @@ details[open] > summary::before {
   border-color: var(--border-strong);
 }
 
+/*
+ * One spelling. `.button.primary` declared these same four properties 780 lines further down, and
+ * fifteen components used that one while five used this — two ways to write one thing, which is how a
+ * third comes to be added.
+ */
 .button[data-variant="primary"] {
   background: var(--accent);
   border-color: var(--accent);
@@ -1723,16 +1757,12 @@ details[open] > summary::before {
   color: var(--text-muted);
 }
 
-.review-edit textarea,
-.review-dismiss input,
-.control-pause input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
+/*
+ * There was a fourth copy of the field chrome here — the same padding, border, radius and `--surface`
+ * background the `.knowledge-editor` block carried, for the review and takeover controls. It mattered
+ * once the panels around them moved to `--surface` too: `.control-pause input` then computed exactly
+ * its container's colour in dark and had only its own hairline left. The base layer draws these.
+ */
 
 .review-edit textarea {
   /* A floor the card cannot satisfy is not a floor, it is an overflow: the review card leaves 262px and
@@ -1746,20 +1776,6 @@ details[open] > summary::before {
   flex-direction: row;
   align-items: center;
   gap: 6px;
-}
-
-.button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 600;
-}
-
-.conversation-controls {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
 }
 
 .conversation-controls h3 {
@@ -1832,7 +1848,9 @@ details[open] > summary::before {
 .knowledge-editor {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /* On the ladder. `6px` is not a step, and it was the gap between every label and every control in
+     nine forms. */
+  gap: var(--space-2);
   max-width: 44rem;
 }
 
@@ -1842,31 +1860,136 @@ details[open] > summary::before {
   color: var(--text-muted);
 }
 
-.knowledge-editor input,
-.knowledge-editor textarea,
-.knowledge-editor select {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.knowledge-editor textarea {
-  resize: vertical;
-}
-
+/*
+ * There used to be a block here giving every control in these nine forms its own padding, border,
+ * radius and background — the third spelling of the field chrome, with a 10px radius and no minimum
+ * height, so a text box on Settings was a different shape from the identical text box on the Inbox.
+ * The base layer at the top of this file already draws a control; the whole point of its existing is
+ * that a component does not have to.
+ */
 .knowledge-editor .button {
   align-self: flex-start;
 }
 
+/*
+ * A form's fields, two across where there is room and one where there is not.
+ *
+ * Settings and Style were one 44rem column each, so the box for "7 seconds" was as wide as the box for
+ * a paragraph, and the two ends of one range sat one above the other with a label between them. Pairs
+ * that belong together now sit together, and anything holding sentences takes the whole row.
+ *
+ * Two columns or one, and never three or four. A plain `auto-fit` floor gave a different answer to every
+ * group on the same page — measured at 1440: the groups with three items resolved to four tracks of
+ * 269px while "Presence", which has two, collapsed its empty tracks and gave each field 555px. Same
+ * page, same panel, fields twice the width of the fields above them.
+ *
+ * `48%` is what caps it: two tracks of nearly half can fit and three never can, whatever the container
+ * is. `14rem` is the floor below which one column is the honest answer, and `min(…, 100%)` is the
+ * correction every auto-fit grid in this file carries — a floor the container cannot honour is not a
+ * floor, it is an overflow.
+ *
+ * `auto-fill` and not `auto-fit`, which is the second half of the same defect: `auto-fit` collapses a
+ * track no item occupies, so the Caution group — which holds one field — drew a 1126px select directly
+ * under a 555px one. An unoccupied `auto-fill` track keeps its size, so a lone field is the width of
+ * every other field on the page. Below the width where one column fits there is no second track to
+ * keep, so nothing changes there.
+ */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(max(14rem, 48%), 100%), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+/* A field is its label, its control and the sentence that explains it, as one cell. That pairing is
+   what lets the grid wrap without a hint landing under somebody else's control. */
+.form-grid .field {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.form-grid .field > label {
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+}
+
+.form-grid .field > .muted {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+/* Anything that holds sentences, and anything that is not a field at all — a notice, the submit row. */
+.form-grid > [data-span="full"] {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+/*
+ * A named group of fields. No border: a box inside a box is two boxes, and the panel around the form is
+ * already the box. The legend and the space are the grouping.
+ */
+.form-group {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.form-group > legend {
+  padding: 0;
+  /* No bottom margin: a `legend` is laid out by the fieldset rather than in normal flow, and the space
+     under it belongs to whatever comes first inside the group. Setting it here and then subtracting it
+     again on the hint below was arithmetic standing in for one decision. */
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+/* Whatever opens a group, under its name. */
+.form-group > .muted,
+.form-group > .form-grid,
+.form-group > .form-stack {
+  margin-top: var(--space-3);
+}
+
+.form-group > .muted {
+  margin-bottom: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+
+/* Groups stacked down a form, with the panel's own rhythm between them. */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* A group inside a group — the custom timing ranges inside the timing group — names itself more quietly
+   than its parent, or the two headings compete and neither reads as the outer one. */
+.form-group .form-group > legend {
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+/* The submit, and anything standing beside it. */
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .knowledge-tester,
 .knowledge-history {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
   margin-bottom: var(--gap);
 }
 
@@ -1895,16 +2018,102 @@ details[open] > summary::before {
 .voice-layers {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
-  gap: var(--gap);
+  /* Two rows, shared: the heading block and the fields. A layer opts into them below, so the two
+     columns' first field starts on the same line without anybody measuring a heading. */
+  grid-template-rows: auto 1fr;
+  /* Air, not a rule. A divider between the columns would have to know how many columns there are, and
+     `auto-fit` is the thing that decides that; the gap works at one column and at two. */
+  gap: var(--space-6);
 }
 
-.voice-layers h3 {
+/*
+ * The layer takes its parent's two rows instead of making its own.
+ *
+ * The profile layer carries a sentence the workspace layer does not — an empty field here means "use
+ * the base", the opposite of "say nothing", and it has to be said beside the fields it is about — so
+ * its heading block is a line taller and every row below it sat lower than its pair. The first fix was
+ * a `min-height` on the heading computed from the type scale, which held at two columns and left a 40px
+ * hole under every heading at one, where there is nothing to align. A shared row has no constant in it
+ * and knows how many columns there are, because the grid that owns it does.
+ */
+.voice-layer {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 2;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* The heading and whatever has to be said beside it, as one block — which is the row the two layers
+   share. No height of its own: the subgrid above gives both columns the taller of the two. */
+.voice-layer-head {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+}
+
+/*
+ * A heading, set as one. It used to be `text-transform: uppercase` in the muted colour, which is the
+ * house spelling for a *label* — so "BASE VOICE, FOR ALL BUSINESS PROFILES" read as a system annotation
+ * over a form rather than as the name of the thing being edited.
+ */
+.voice-layer h3 {
   margin: 0;
   font-size: var(--text-m);
   line-height: var(--leading-m);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+/* Inside the heading block, not a direct child of the layer: these moved into a `header` so the two
+   columns could be given one floor, and a rule left pointing at the old place stopped matching — which
+   put the browser's own 16px paragraph margins back and made the misalignment worse than before. */
+.voice-layer-head > .muted {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+/*
+ * What the model is actually given, after the two layers are merged. It had no rule at all, so it drew
+ * as the browser's own `dl`: every value indented 40px under its term, no column, no alignment.
+ */
+.effective-voice {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+}
+
+/*
+ * The name above the value, which is the shape every other field on these two screens now has.
+ *
+ * A two-column list was the first attempt and `breakpoints.test.ts` refused it, correctly: a term column
+ * wide enough for "Язык, на котором пишет бизнес" leaves a phone 103px for the value, and a grid whose
+ * columns carry a width cannot collapse. Stacking has no width to get wrong.
+ */
+.effective-voice > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.effective-voice dt {
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
   color: var(--text-muted);
+}
+
+.effective-voice dd {
+  margin: 0;
+  min-width: 0;
+  /* A persona, a greeting or a sign-off is whatever somebody typed, and one unbroken 50-character token
+     took the document 22px wide at 320px. */
+  overflow-wrap: anywhere;
+}
+
+.effective-voice dd ul {
+  margin: 0;
+  padding-left: var(--space-4);
 }
 
 .style-examples {
@@ -2349,11 +2558,39 @@ details[open] > summary::before {
  * `.metrics` is the stack of the two and nothing else, so each tier can carry the track size that suits
  * what is in it — a tile holds a word and a number, a panel holds a six-column table, and one grid
  * cannot size both.
+ *
+ * `.page-sections` is the same stack, under its general name: every other screen stacked its panels on
+ * the browser's own paragraph margins, so the space between two sections was whatever the last element
+ * inside the first one happened to carry. Declared together rather than near each other, because two
+ * rules with one value is how the value comes to differ.
  */
+.page-sections,
 .metrics {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+}
+
+/*
+ * A panel's own rhythm, for the blocks it is handed.
+ *
+ * Every heading in this product is `margin: 0` on purpose — a component owns the space around what it
+ * renders — and that works until a panel is handed a heading, a sentence and a form by three different
+ * components. The Style tester was the case: "Written in this voice" sat on the button above it and
+ * "The examples behind it" sat on the line above that, with nothing between any of them.
+ */
+.panel > * {
+  margin-top: var(--space-3);
+  margin-bottom: 0;
+}
+
+.panel > :first-child {
+  margin-top: 0;
+}
+
+/* A sub-heading opens a new block inside the panel, so it takes the panel's gap and not a paragraph's. */
+.panel > h3 {
+  margin-top: var(--space-5);
 }
 
 .metric-tiles {
@@ -2370,18 +2607,6 @@ details[open] > summary::before {
   grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: var(--space-3);
   align-items: start;
-}
-
-.metric-panel,
-.metric-tile {
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-1);
-  /* A grid item's automatic minimum size is its content, and the content here is a table or a caption
-     that may not break. Zero lets the card shrink to its track instead of widening the page. */
-  min-width: 0;
 }
 
 /* A panel is the scroll boundary, and only a panel needs to be: without this the widest table decides
@@ -2408,6 +2633,25 @@ details[open] > summary::before {
   line-height: var(--leading-s);
 }
 
+/*
+ * A panel's title, at the size every other `h2` in the product is.
+ *
+ * It was briefly set to `--text-m` semibold by being added to the rule below — which is 14px/600, the
+ * same as a `.form-group` legend and the same as a plain `h3`. On the Style tester that made the panel
+ * name, the sub-heading inside it and a voice layer's name all one size, which is the mistake the
+ * legend rule avoids one level down.
+ */
+.panel > h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-l);
+  line-height: var(--leading-l);
+  font-weight: var(--weight-semibold);
+}
+
+/*
+ * A dashboard panel's heading stays smaller, and that is not an inconsistency: those sit three across
+ * in a dense grid and name a table of numbers, where a page-level panel names a section of a screen.
+ */
 .metric-panel h2 {
   margin: 0 0 var(--space-3);
   font-size: var(--text-m);

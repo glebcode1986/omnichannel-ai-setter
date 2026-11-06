@@ -41,18 +41,28 @@ export function StyleTestPanel({ t, test, basePath, ask }: StyleTestPanelProps) 
   const { trial, candidate, effective } = test;
 
   return (
-    <section className="knowledge-tester">
+    <section className="panel" data-panel="style-test">
       <h2>{t.t("styleTest.title")}</h2>
-      <form action={basePath} method="get" role="search" className="inbox-search">
-        <div className="field">
+      {/* `form-grid`, not `inbox-search`: the filter row hides its labels because each of its selects
+          names what it filters in its own first option, and this is a single empty text box whose label
+          is the only thing saying what to type into it. */}
+      <form action={basePath} method="get" role="search" className="form-grid">
+        <div className="field" data-span="full">
           <label htmlFor="style-ask">{t.t("styleTest.queryLabel")}</label>
           <input id="style-ask" name="ask" type="search" defaultValue={ask ?? ""} />
         </div>
-        <button className="button" type="submit">
-          {t.t("styleTest.run")}
-        </button>
+        {/* What the button does, above the button. It used to sit under the form, so the reading order
+            was box, button, and then the sentence explaining what pressing it produces. */}
+        <p className="muted" data-span="full">
+          {t.t("styleTest.explain")}
+        </p>
+
+        <div className="form-actions" data-span="full">
+          <button className="button" type="submit">
+            {t.t("styleTest.run")}
+          </button>
+        </div>
       </form>
-      <p className="muted">{t.t("styleTest.explain")}</p>
 
       <h3>{t.t("styleTest.candidateTitle")}</h3>
       {candidate.status === "WRITTEN" ? (

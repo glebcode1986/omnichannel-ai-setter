@@ -102,7 +102,7 @@ export function KillSwitches({
           <label htmlFor="admin-switch-reason">{t.t("admin.switchReason")}</label>
           <input id="admin-switch-reason" name="reason" type="text" required />
 
-          <button className="button primary" type="submit" data-action="pull-switch">
+          <button className="button" data-variant="primary" type="submit" data-action="pull-switch">
             {t.t("admin.pullSwitch")}
           </button>
         </form>

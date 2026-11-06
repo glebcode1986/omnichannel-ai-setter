@@ -62,7 +62,7 @@ export function KnowledgeEditor({ t, document, action, suggestedTitle }: Knowled
         </>
       ) : undefined}
 
-      <button className="button primary" type="submit" data-action={isNew ? "create" : "save"}>
+      <button className="button" data-variant="primary" type="submit" data-action={isNew ? "create" : "save"}>
         {isNew ? t.t("knowledge.create") : t.t("knowledge.save")}
       </button>
     </form>

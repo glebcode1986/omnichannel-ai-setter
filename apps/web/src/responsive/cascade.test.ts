@@ -16,7 +16,7 @@
  * What this file does not prove: that anything is the right *size* on a real screen. Nothing in this
  * repository can prove that, and the branch's own measurements were taken in a browser by hand.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -357,6 +357,62 @@ describe("no rule is shadowed by a twin", () => {
       .map(([key, lines]) => `${key} declared at lines ${lines.join(" and ")}`);
 
     expect(shadowed, "the later declaration silently wins and the earlier one is dead").toEqual([]);
+  });
+
+  it("draws one box, from one rule", () => {
+    // `.card`, `.metric-panel`, `.metric-tile`, `.knowledge-tester`, `.knowledge-history` and
+    // `.conversation-controls` each drew the same card with their own numbers — four sets of padding and
+    // two different surfaces. Settings is where it showed: two of those boxes were on screen at once
+    // with the form between them in no box at all, which is what "there is no frame" meant.
+    //
+    // A twin here is not a shadowed declaration, so the test above cannot see it: the selectors differ,
+    // so both rules apply and both are live. The duplication is in the design, not in the cascade.
+    for (const name of [".panel", ".card", ".metric-panel", ".metric-tile", ".knowledge-tester", ".knowledge-history", ".conversation-controls"]) {
+      const drawing = topLevelBlocks().filter(
+        (block) =>
+          block.selector
+            .split(",")
+            .map((part) => part.trim())
+            .includes(name) && (block.properties.includes("background") || block.properties.includes("border")),
+      );
+
+      expect(drawing.length, `${name} must take its box from exactly one rule`).toBe(1);
+    }
+  });
+
+  it("has one primary button, and every component writes it that way", () => {
+    // `.button.primary` and `.button[data-variant="primary"]` declared the same four properties 780
+    // lines apart; fifteen components used the class and five the attribute. Deleting the class
+    // un-styles whichever component a rename misses, and one was missed — a `className` with a third
+    // word in it, which an exact-string replacement does not match and this assertion does.
+    // Comments stripped: the note beside the surviving rule quotes the deleted one on purpose, and a
+    // scan of the raw file reads that sentence as the rule still being there.
+    const declarations = css.replace(/\/\*[\s\S]*?\*\//gu, "");
+    expect(declarations, "the class form is gone").not.toMatch(/\.button\.primary\b/u);
+    expect(declarations, "and the attribute form is what remains").toMatch(/\.button\[data-variant="primary"\]/u);
+
+    const components: { file: string; source: string }[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const full = path.join(directory, entry);
+        if (statSync(full).isDirectory()) {
+          walk(full);
+        } else if (/\.tsx$/.test(entry) && !/\.test\.tsx$/.test(entry)) {
+          components.push({ file: path.relative(srcRoot, full), source: readFileSync(full, "utf8") });
+        }
+      }
+    };
+    for (const group of ["app", "ui"]) {
+      walk(path.join(srcRoot, group));
+    }
+
+    expect(components.length, "components were actually read, or this passes by finding none").toBeGreaterThan(30);
+    expect(
+      components.filter(({ source }) => /className="[^"]*\bprimary\b/u.test(source)).map(({ file }) => file),
+      "a primary button is an attribute, not a class",
+    ).toEqual([]);
+    // And the surviving spelling is in use, or the line above passes because nothing is primary at all.
+    expect(components.filter(({ source }) => source.includes('data-variant="primary"')).length).toBeGreaterThan(10);
   });
 
   it("reads the whole stylesheet, and would see a planted twin", () => {

@@ -107,7 +107,7 @@ export function SubscriptionCard({ t, data, actions }: SubscriptionCardProps) {
             </form>
           ) : (
             <form action={actions.resume}>
-              <button className="button primary" type="submit" data-action="resume-subscription">
+              <button className="button" data-variant="primary" type="submit" data-action="resume-subscription">
                 {t.t("billing.resume")}
               </button>
             </form>

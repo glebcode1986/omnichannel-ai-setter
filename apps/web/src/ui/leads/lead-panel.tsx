@@ -75,7 +75,7 @@ export function LeadPanel({ t, lead, stages, members, history, qualification, ta
           defaultValue={lead.nextActionAt === null ? "" : lead.nextActionAt.toISOString().slice(0, 10)}
         />
 
-        <button className="button primary" type="submit" data-action="save-lead">
+        <button className="button" data-variant="primary" type="submit" data-action="save-lead">
           {t.t("leads.save")}
         </button>
       </form>

@@ -282,8 +282,21 @@ function visibleControls(text: string): number {
  * describe, and nothing could say so.
  */
 const FILTER_ROWS = [
-  { row: "inbox-search", field: ".inbox-search .field", what: "the Inbox, review, leads, knowledge, style and settings rows" },
+  { row: "inbox-search", field: ".inbox-search .field", what: "the Inbox, review, leads and knowledge rows" },
   { row: "filter-bar", field: ".filter-bar label", what: "the analytics and audit filters" },
+  // Settings and Style moved off `inbox-search` onto `form-grid`, because that row hides its labels and
+  // theirs are not redundant. Named here the same day they moved: a row that leaves this list keeps
+  // working and stops being checked, and the sentence it left behind would have gone on claiming it.
+  //
+  // Three rows and not one, because `filterForms` finds a form by the class *on the form element*, and
+  // these three carry different ones. The first draft named only `form-grid` and claimed the settings
+  // form and the voice editors in its sentence — and neither is a `form-grid`: the settings form is a
+  // `form-stack` of groups whose grids are `div`s inside it, and a voice editor is a `voice-layer`. A
+  // mutation that pulled a control out of its wrapper on the settings form survived, which is how the
+  // sentence was found to be describing coverage that did not exist.
+  { row: "form-grid", field: ".form-grid .field", what: "the simulation, the style and knowledge testers, and the add-example form" },
+  { row: "form-stack", layout: ".form-grid", field: ".form-grid .field", what: "the settings form, whose groups each hold a grid" },
+  { row: "voice-layer", layout: ".form-grid", field: ".form-grid .field", what: "the two voice editors" },
 ] as const;
 
 /**
@@ -300,7 +313,10 @@ const FILTER_ROWS = [
 function balancedFields(form: string): string[] {
   const found: string[] = [];
   for (const [tag, opener] of [
-    ["div", /<div className="field">/gu],
+    // `[^>]*` and not a literal `>`: a field that spans both columns carries `data-span="full"`, and an
+    // exact-match opener skipped every one of them — which would have undercounted the fields of the
+    // very forms this list is about to start reading.
+    ["div", /<div className="field"[^>]*>/gu],
     ["label", /<label(?=[\s>])/gu],
   ] as const) {
     const close = `</${tag}>`;
@@ -428,12 +444,15 @@ describe("the supported widths", () => {
     const narrow = rulesAt(375);
 
     // The invariant the list above cannot express: a grid whose columns carry a width cannot fit a phone,
-    // whoever adds it. `repeat(auto-fit, …)` collapses by itself and `1fr auto` is two flexible columns,
+    // whoever adds it. `repeat(auto-fit, …)` and `repeat(auto-fill, …)` both collapse to one column by
+    // themselves — they differ only in whether an *unoccupied* track keeps its size, which is a question
+    // about a group with one field in it and not about whether a phone fits — and `1fr auto` is two
+    // flexible columns,
     // so neither is at risk. What remains must be overridden in a narrow block — and the search runs over
     // the base rules only, since a grid declared inside a narrow block is already the override.
     const fixed = [...baseCss.matchAll(/grid-template-columns:\s*(?<columns>[^;]+);/gu)].filter((found) => {
       const columns = found.groups?.columns ?? "";
-      return !columns.includes("repeat(auto-fit") && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
+      return !/repeat\(auto-(?:fit|fill)/u.test(columns) && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
     });
 
     // Asked as a set of owners rather than a count of declarations. A count said 2 and broke the moment
@@ -496,9 +515,17 @@ describe("the supported widths", () => {
     //
     // The analytics row then proved the point by being the eighth field: it was a flexed card whose
     // labels were given `flex: 1 1 10rem` inside a 900px block, and no assertion here could see it.
-    for (const { row, field, what } of FILTER_ROWS) {
-      expect(declarationsFor(`.${row}`), `${what}: the row must wrap on its own`).toMatch(
-        /grid-template-columns:\s*repeat\(auto-fit/u,
+    //
+    // `layout` and not `row` for two of them: the class on the `<form>` is how the form is *found*, and
+    // on the settings form and the voice editors it is a flex column of groups — what lays the fields
+    // out is the `.form-grid` inside each group. Asking the wrong element would have forced a stack of
+    // groups to declare itself a grid of columns, which is a different thing.
+    for (const entry of FILTER_ROWS) {
+      const { row, field, what } = entry;
+      const layout = "layout" in entry ? entry.layout : `.${row}`;
+
+      expect(declarationsFor(layout), `${what}: the fields must wrap on their own`).toMatch(
+        /grid-template-columns:\s*repeat\(auto-(?:fit|fill)/u,
       );
       expect(declarationsFor(field), `${what}: a field is one element`).toMatch(/display:\s*grid/u);
 
@@ -507,9 +534,9 @@ describe("the supported widths", () => {
       // whole file, which is a different and larger claim than the one above it: a container query is the
       // right instrument for a surface whose size really is decided by its container, and the Inbox is
       // one (Issue #112). Asked of the row itself now.
-      expect(rulesAt(375), `${what}: no viewport rule may decide the filter row`).not.toContain(`.${row}`);
+      expect(rulesAt(375), `${what}: no viewport rule may decide the layout`).not.toContain(layout);
       for (const body of balancedBodies("@container")) {
-        expect(body, `${what}: no container query may decide it either`).not.toContain(`.${row}`);
+        expect(body, `${what}: no container query may decide it either`).not.toContain(layout);
       }
     }
   });
@@ -560,6 +587,7 @@ describe("the supported widths", () => {
       { selector: ".conversation-name", what: "a row's identifier, which is a handle when there is no name" },
       { selector: ".inbox-context p", what: "the contact name, the handle, and the draft's intent" },
       { selector: ".reason-codes", what: "a cited source id is one token" },
+      { selector: ".effective-voice dd", what: "a persona, a greeting or a sign-off is whatever somebody typed into the voice editor" },
     ] as const;
 
     // Two remedies satisfy the rule above, and the rule is about the *outcome*: the surface contains
@@ -588,17 +616,23 @@ describe("the supported widths", () => {
     expect(css).not.toMatch(/\.inbox-context strong/u);
   });
 
-  it("caps every auto-fit floor at the container, not at a width it hopes for", () => {
+  it("caps every auto-fit and auto-fill floor at the container, not at a width it hopes for", () => {
     // The minimum in `minmax` is a floor the track keeps even when the container is narrower, so
     // `minmax(20rem, 1fr)` draws a 320px column inside a 288px box. The style page did exactly that at
     // 320px while every wider measurement was clean — a grid that is supposed to fit, not fitting.
     // Comments are stripped: the prose above that rule quotes the broken form on purpose.
     const declarations = css.replace(/\/\*[\s\S]*?\*\//gu, "");
-    const floors = [...declarations.matchAll(/repeat\(auto-fit,\s*minmax\((?<floor>.+?),\s*1fr\)\)/gu)].map(
+    // Both keywords, or a grid switched from one to the other stops having its floor checked at all —
+    // which is exactly what happened the day `.form-grid` moved to `auto-fill` so a lone field would
+    // stop drawing full width.
+    const floors = [...declarations.matchAll(/repeat\(auto-(?:fit|fill),\s*minmax\((?<floor>.+?),\s*1fr\)\)/gu)].map(
       (found) => (found.groups?.floor ?? "").trim(),
     );
 
-    expect(floors.length, "the auto-fit grids this stylesheet declares").toBeGreaterThan(0);
+    expect(floors.length, "the auto-fit and auto-fill grids this stylesheet declares").toBeGreaterThan(0);
+    // And both keywords are really present, or the alternation above is checking one of them.
+    expect(declarations, "an auto-fit grid exists").toMatch(/repeat\(auto-fit,/u);
+    expect(declarations, "an auto-fill grid exists").toMatch(/repeat\(auto-fill,/u);
     for (const floor of floors) {
       expect(floor, `${floor} is a floor the track keeps below the container's own width`).toMatch(
         /^min\(.+,\s*100%\)$/u,

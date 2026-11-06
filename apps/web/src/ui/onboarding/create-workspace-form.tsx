@@ -25,7 +25,7 @@ export function CreateWorkspaceForm({ t, action }: CreateWorkspaceFormProps) {
       <input id="workspace-name" name="name" type="text" required maxLength={NAME_MAX_LENGTH} autoComplete="organization" />
       <p className="muted">{t.t("onboarding.nameHint", { max: String(NAME_MAX_LENGTH) })}</p>
 
-      <button className="button primary" type="submit" data-action="create-workspace">
+      <button className="button" data-variant="primary" type="submit" data-action="create-workspace">
         {t.t("onboarding.createWorkspace")}
       </button>
     </form>

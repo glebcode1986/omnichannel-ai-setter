@@ -43,14 +43,20 @@ export default async function KnowledgePage({
 
       <section className="knowledge-tester">
         <h2>{t.t("tester.title")}</h2>
-        <form action={basePath} method="get" role="search" className="inbox-search">
-          <div className="field">
+        {/* `form-grid` and not `inbox-search`, for the reason the Style tester moved: the filter row
+            hides its labels because each of its selects names what it filters in its own first option,
+            and this is one empty text box whose label is the only thing saying what to type. The list
+            filter further down this page stays a filter row, because it is one. */}
+        <form action={basePath} method="get" role="search" className="form-grid">
+          <div className="field" data-span="full">
             <label htmlFor="knowledge-ask">{t.t("tester.queryLabel")}</label>
             <input id="knowledge-ask" name="ask" type="search" defaultValue={testQuery ?? ""} />
           </div>
-          <button className="button" type="submit">
-            {t.t("tester.run")}
-          </button>
+          <div className="form-actions" data-span="full">
+            <button className="button" type="submit">
+              {t.t("tester.run")}
+            </button>
+          </div>
         </form>
         <RetrievalResults t={t} mode={trial.mode} hits={trial.hits} unavailable={trial.unavailable} asked={testQuery !== undefined} />
       </section>

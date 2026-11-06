@@ -208,7 +208,7 @@ export function StyleExampleList({
               <p className="muted">{t.t("style.suggestionExplain")}</p>
               <div className="control-row">
                 <form action={actions.approve.bind(null, target, example.id)}>
-                  <button className="button primary" type="submit" data-action="approve-example">
+                  <button className="button" data-variant="primary" type="submit" data-action="approve-example">
                     {t.t("style.approve")}
                   </button>
                 </form>

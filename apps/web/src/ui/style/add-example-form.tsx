@@ -18,25 +18,34 @@ export interface AddExampleFormProps {
 
 export function AddExampleForm({ t, action }: AddExampleFormProps) {
   return (
-    <form action={action} className="knowledge-editor" data-form="add-example">
-      <label htmlFor="style-inbound">{t.t("style.exampleInbound")}</label>
-      <textarea id="style-inbound" name="inbound" rows={2} required />
+    <form action={action} className="form-grid" data-form="add-example">
+      {/* Both halves are sentences, so each takes the row. */}
+      <div className="field" data-span="full">
+        <label htmlFor="style-inbound">{t.t("style.exampleInbound")}</label>
+        <textarea id="style-inbound" name="inbound" rows={2} required />
+      </div>
 
-      <label htmlFor="style-outbound">{t.t("style.exampleOutbound")}</label>
-      <textarea id="style-outbound" name="outbound" rows={3} required />
+      <div className="field" data-span="full">
+        <label htmlFor="style-outbound">{t.t("style.exampleOutbound")}</label>
+        <textarea id="style-outbound" name="outbound" rows={3} required />
+      </div>
 
       {/* Which layer the example belongs to. Defaulted to this profile, because that is the narrower of
           the two and the one a mistake costs least: an example meant for one business that lands on the
           base voice changes how every other profile in the workspace sounds. */}
-      <label htmlFor="style-example-scope">{t.t("style.exampleScope")}</label>
-      <select id="style-example-scope" name="scope" defaultValue="BUSINESS_PROFILE">
-        <option value="BUSINESS_PROFILE">{t.t("style.layerProfile")}</option>
-        <option value="WORKSPACE">{t.t("style.layerWorkspace")}</option>
-      </select>
+      <div className="field">
+        <label htmlFor="style-example-scope">{t.t("style.exampleScope")}</label>
+        <select id="style-example-scope" name="scope" defaultValue="BUSINESS_PROFILE">
+          <option value="BUSINESS_PROFILE">{t.t("style.layerProfile")}</option>
+          <option value="WORKSPACE">{t.t("style.layerWorkspace")}</option>
+        </select>
+      </div>
 
-      <button className="button primary" type="submit" data-action="add-example">
-        {t.t("style.addExample")}
-      </button>
+      <div className="form-actions" data-span="full">
+        <button className="button" data-variant="primary" type="submit" data-action="add-example">
+          {t.t("style.addExample")}
+        </button>
+      </div>
     </form>
   );
 }

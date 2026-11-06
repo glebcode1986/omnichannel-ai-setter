@@ -65,7 +65,7 @@ export function Composer({ t, conversation, target, hasPendingReply, humanAgentA
         </>
       ) : undefined}
 
-      <button className="button primary" type="submit" data-action="compose">
+      <button className="button" data-variant="primary" type="submit" data-action="compose">
         {t.t("composer.send")}
       </button>
       {/* Said plainly: pressing this queues a reply, it does not deliver one. */}

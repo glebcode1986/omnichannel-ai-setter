@@ -22,7 +22,7 @@ export function CheckoutActions({ t, checkoutReady }: { readonly t: Translator; 
   }
 
   return (
-    <button className="button primary" type="submit" data-action="accept-and-continue">
+    <button className="button" data-variant="primary" type="submit" data-action="accept-and-continue">
       {t.t("checkout.acceptAndContinue")}
     </button>
   );
