@@ -18,10 +18,21 @@
  * outcomes, the two delivery records, the leads and the token usage — sits below them. Nothing was
  * dropped and nothing new is computed: the tiles are the three single-figure panels this file already
  * had, with the response pair split so that each tile carries one number.
+ *
+ * **Four panels are drawn, and the rest are deliberately not.** A shape answers a question a column of
+ * figures does not: whether volume is rising, which reason dominates, how much of the model's output a
+ * person had to touch. Those four get a chart. The others keep their lists for stated reasons — the
+ * provider's panel is not drawn *because* ours is, since two bar charts side by side are an invitation
+ * to read one against the other and that reconciliation is exactly what this page refuses to perform;
+ * the usage table's point is the ratio between its six columns, which one bar per model would flatten;
+ * and the leads table carries two measures per stage that a single bar cannot hold. Every number stays
+ * printed as text beside its bar, so nothing on this page is reachable only by looking at it.
  */
 import type { OperationalSnapshot } from "@omnichannel/db";
 
 import type { Translator } from "@/i18n/translate";
+import { BarRows, hasBars, type BarRow, type BarScale } from "@/ui/charts/bar-rows";
+import { DayColumns } from "@/ui/charts/day-columns";
 
 export interface MetricsViewProps {
   readonly t: Translator;
@@ -78,6 +89,43 @@ function Tile({
   );
 }
 
+/**
+ * Bars when there is something to draw, and the page's own sentence when there is not.
+ *
+ * `hasBars` is asked here and inside `BarRows`, which is the same question answered in one place: a
+ * panel that decided for itself would eventually disagree with the component and render a heading above
+ * an empty box.
+ */
+function Bars({ t, rows, scale }: { readonly t: Translator; readonly rows: readonly BarRow[]; readonly scale: BarScale }) {
+  return hasBars(rows, scale) ? <BarRows rows={rows} scale={scale} /> : <p className="muted">{t.t("analytics.noData")}</p>;
+}
+
+/**
+ * The seven outcomes a draft can reach, plus the drafts that have reached none of them.
+ *
+ * The store counts outcomes by the draft's status, and those statuses do not cover every draft it
+ * counted: one waiting to send unattended is `PENDING` without needing review and falls in none of the
+ * seven. So the seven sum to at most `generated` and the difference is a real group of drafts. Bars drawn
+ * as shares of `generated` without that row would leave the same gap in every track with nothing on
+ * screen to explain it, which is the shape of a bug rather than of a fact.
+ *
+ * Clamped at zero. The seven cannot exceed the whole — each counted row falls in at most one of them —
+ * and if that ever stopped being true, a bar drawn backwards is not the way to find out.
+ */
+function draftRows(t: Translator, drafts: OperationalSnapshot["drafts"]): readonly BarRow[] {
+  const outcomes: readonly BarRow[] = [
+    { key: "autoSent", label: t.t("analytics.draftsAutoSent"), value: drafts.autoSent },
+    { key: "humanSent", label: t.t("analytics.draftsHumanSent"), value: drafts.humanApprovedSent },
+    { key: "awaiting", label: t.t("analytics.draftsAwaiting"), value: drafts.awaitingReview },
+    { key: "ambiguous", label: t.t("analytics.draftsAmbiguous"), value: drafts.heldAmbiguous },
+    { key: "dismissed", label: t.t("analytics.draftsDismissed"), value: drafts.dismissed },
+    { key: "superseded", label: t.t("analytics.draftsSuperseded"), value: drafts.superseded },
+    { key: "failed", label: t.t("analytics.draftsFailed"), value: drafts.failed },
+  ];
+  const open = Math.max(0, drafts.generated - outcomes.reduce((total, row) => total + row.value, 0));
+  return open === 0 ? outcomes : [...outcomes, { key: "open", label: t.t("analytics.draftsNoOutcome"), value: open }];
+}
+
 export function MetricsView({ t, snapshot, stageLabels }: MetricsViewProps) {
   const { volume, responseTimes, drafts, delivery, leads, usage } = snapshot;
 
@@ -129,49 +177,55 @@ export function MetricsView({ t, snapshot, stageLabels }: MetricsViewProps) {
           {volume.length === 0 ? (
             <p className="muted">{t.t("analytics.noData")}</p>
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">{t.t("analytics.day")}</th>
-                  <th scope="col">{t.t("analytics.volumeMessages")}</th>
-                  <th scope="col">{t.t("analytics.volumeConversations")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {volume.map((point) => (
-                  <tr key={point.day}>
-                    <th scope="row">{point.day}</th>
-                    <td>{point.inboundMessages}</td>
-                    {/* Counted separately, because ten messages from one person and one from ten people
-                        are the same number and not the same day. */}
-                    <td>{point.inboundConversations}</td>
+            <>
+              {/* The axis is the window the page says it measured, not the rows the store returned: a
+                  day with no inbound has no row and would otherwise be missing from the chart rather
+                  than empty in it. The table below carries every date and both numbers, which is why
+                  the drawing can stay a drawing. */}
+              <DayColumns
+                window={snapshot.window}
+                points={volume.map((point) => ({ day: point.day, primary: point.inboundMessages, secondary: point.inboundConversations }))}
+                primaryLabel={t.t("analytics.volumeMessages")}
+                secondaryLabel={t.t("analytics.volumeConversations")}
+                titleFor={(day, messages, conversations) => t.t("analytics.volumeOnDay", { day, messages, conversations })}
+              />
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">{t.t("analytics.day")}</th>
+                    <th scope="col">{t.t("analytics.volumeMessages")}</th>
+                    <th scope="col">{t.t("analytics.volumeConversations")}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {volume.map((point) => (
+                    <tr key={point.day}>
+                      <th scope="row">{point.day}</th>
+                      <td>{point.inboundMessages}</td>
+                      {/* Counted separately, because ten messages from one person and one from ten
+                          people are the same number and not the same day. */}
+                      <td>{point.inboundConversations}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
         </section>
 
         <section className="metric-panel" data-panel="drafts">
           <h2>{t.t("analytics.drafts")}</h2>
-          <dl>
-            <dt>{t.t("analytics.draftsGenerated")}</dt>
-            <dd>{drafts.generated}</dd>
-            <dt>{t.t("analytics.draftsAutoSent")}</dt>
-            <dd>{drafts.autoSent}</dd>
-            <dt>{t.t("analytics.draftsHumanSent")}</dt>
-            <dd>{drafts.humanApprovedSent}</dd>
-            <dt>{t.t("analytics.draftsAwaiting")}</dt>
-            <dd>{drafts.awaitingReview}</dd>
-            <dt>{t.t("analytics.draftsAmbiguous")}</dt>
-            <dd>{drafts.heldAmbiguous}</dd>
-            <dt>{t.t("analytics.draftsDismissed")}</dt>
-            <dd>{drafts.dismissed}</dd>
-            <dt>{t.t("analytics.draftsSuperseded")}</dt>
-            <dd>{drafts.superseded}</dd>
-            <dt>{t.t("analytics.draftsFailed")}</dt>
-            <dd>{drafts.failed}</dd>
-          </dl>
+          {drafts.generated === 0 ? (
+            <p className="muted">{t.t("analytics.noData")}</p>
+          ) : (
+            <>
+              {/* The denominator in words, because every bar below is a share of it and a share whose
+                  whole is not stated cannot be checked. It also keeps "Generated" out of the chart: a
+                  row that is full width by definition is a bar nobody can read anything from. */}
+              <p className="muted">{t.t("analytics.draftsOfGenerated", { generated: drafts.generated })}</p>
+              <Bars t={t} rows={draftRows(t, drafts)} scale={{ kind: "whole", of: drafts.generated }} />
+            </>
+          )}
         </section>
 
         <section className="metric-panel" data-panel="reasons">
@@ -180,22 +234,15 @@ export function MetricsView({ t, snapshot, stageLabels }: MetricsViewProps) {
             <p className="muted">{t.t("analytics.noData")}</p>
           ) : (
             <>
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">{t.t("analytics.reason")}</th>
-                    <th scope="col">{t.t("analytics.reasonDrafts")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {snapshot.reviewReasons.map((row) => (
-                    <tr key={row.reason}>
-                      <th scope="row">{row.reason}</th>
-                      <td>{row.drafts}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {/* Scaled to the largest reason and never to the draft count, which is this panel's own
+                  invariant turned into geometry: a draft that waited for three reasons is counted under
+                  all three, so bars drawn as shares of the drafts would add up past the whole and read
+                  as broken data. The longest bar means "the most common reason" and nothing else. */}
+              <Bars
+                t={t}
+                rows={snapshot.reviewReasons.map((row) => ({ key: row.reason, label: row.reason, value: row.drafts }))}
+                scale={{ kind: "largest" }}
+              />
               {/* Said on screen rather than left for somebody to discover by adding the column up. */}
               <p className="muted">{t.t("analytics.reasonsOverlap")}</p>
             </>
@@ -205,20 +252,22 @@ export function MetricsView({ t, snapshot, stageLabels }: MetricsViewProps) {
         <section className="metric-panel" data-panel="application-state">
           <h2>{t.t("analytics.application")}</h2>
           <p className="muted">{t.t("analytics.applicationHint")}</p>
-          <dl>
-            <dt>{t.t("analytics.scheduled")}</dt>
-            <dd>{delivery.application.scheduled}</dd>
-            <dt>{t.t("analytics.heldReview")}</dt>
-            <dd>{delivery.application.heldForReview}</dd>
-            <dt>{t.t("analytics.heldAmbiguous")}</dt>
-            <dd>{delivery.application.heldAmbiguous}</dd>
-            <dt>{t.t("analytics.handedToProvider")}</dt>
-            <dd>{delivery.application.handedToProvider}</dd>
-            <dt>{t.t("analytics.cancelled")}</dt>
-            <dd>{delivery.application.cancelled}</dd>
-            <dt>{t.t("analytics.failedAfterRetries")}</dt>
-            <dd>{delivery.application.failedAfterRetries}</dd>
-          </dl>
+          {/* Scaled to the largest of our own states rather than to a total, because the page does not
+              claim these partition anything: a job can be counted in more than one of them over a
+              window in which it moved. The provider's panel below is deliberately left as a list — two
+              bar charts side by side would invite exactly the reconciliation this page refuses. */}
+          <Bars
+            t={t}
+            rows={[
+              { key: "scheduled", label: t.t("analytics.scheduled"), value: delivery.application.scheduled },
+              { key: "heldReview", label: t.t("analytics.heldReview"), value: delivery.application.heldForReview },
+              { key: "heldAmbiguous", label: t.t("analytics.heldAmbiguous"), value: delivery.application.heldAmbiguous },
+              { key: "handedToProvider", label: t.t("analytics.handedToProvider"), value: delivery.application.handedToProvider },
+              { key: "cancelled", label: t.t("analytics.cancelled"), value: delivery.application.cancelled },
+              { key: "failedAfterRetries", label: t.t("analytics.failedAfterRetries"), value: delivery.application.failedAfterRetries },
+            ]}
+            scale={{ kind: "largest" }}
+          />
         </section>
 
         {/* Its own panel, never a column beside ours. The caption is the point. */}

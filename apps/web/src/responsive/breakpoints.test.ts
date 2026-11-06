@@ -77,8 +77,8 @@ const TABLE_SURFACES = [
     tableClass: null,
     treatment: "scrolls",
     source: "ui/analytics/metrics-view.tsx",
-    columns: [3, 2, 3, 6],
-    what: "analytics: four tables in one panel, and the widest decides whether the panel fits",
+    columns: [3, 3, 6],
+    what: "analytics: three tables in one panel, and the widest decides whether the panel fits",
   },
   {
     container: ".audit-log",
@@ -613,13 +613,41 @@ describe("the supported widths", () => {
     // 1124px) {` as a declared minimum width of `1124px) { .inbox { grid-template-columns: …` and
     // demanded that a container query's threshold be capped at 100% of a container. A query condition is
     // not a width an element is given.
-    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;{]+);/gu)].map((found) => (found.groups?.floor ?? "").trim());
+    //
+    // With one shape allowed to exceed, and the selector is what makes it checkable rather than a name on
+    // a list here. A surface this file already *requires* to scroll absorbs a child wider than itself —
+    // that is what the `scrolls` treatment above means, and the four analytics tables have always relied
+    // on it. So a minimum width declared on a descendant of such a container is sound, and a minimum
+    // width declared anywhere else is the defect this scan was written for. Ninety daily columns at a
+    // phone's width is 1.8px a column; the chart claims six and scrolls inside the panel instead.
+    const scrollBoundaries = TABLE_SURFACES.filter((surface) => surface.treatment === "scrolls").map((surface) => surface.container);
+    // A trailing space, so the container's own rule is not mistaken for a rule about something inside it.
+    const absorbed = (selector: string): boolean => scrollBoundaries.some((container) => selector.includes(`${container} `));
+
+    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;{]+);/gu)].map((found) => ({
+      floor: (found.groups?.floor ?? "").trim(),
+      selector: selectorOwning(declarations, found.index ?? 0),
+    }));
     expect(widths.length, "the declared minimum widths").toBeGreaterThan(0);
-    for (const floor of widths) {
-      expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} is a width this element may not fit in`).toBe(
+
+    const exempt = widths.filter((width) => absorbed(width.selector));
+    for (const { floor, selector } of widths) {
+      if (absorbed(selector)) {
+        continue;
+      }
+      expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} on ${selector} is a width this element may not fit in`).toBe(
         true,
       );
     }
+
+    // The exemption is not allowed to be the whole answer. If every minimum width in the file became
+    // exempt, this test would pass by checking nothing — and if none ever were, the branch above would be
+    // dead code that silently stops working the day somebody needs it.
+    expect(exempt.length, "the minimum widths inside a scroll boundary").toBeGreaterThan(0);
+    expect(widths.length - exempt.length, "the minimum widths that still have to fit").toBeGreaterThan(0);
+    // And it has to be able to say no: the same floor, moved out from under the boundary, is refused.
+    expect(absorbed(".chart-days")).toBe(false);
+    expect(exempt.every(({ selector }) => scrollBoundaries.some((container) => selector.startsWith(container)))).toBe(true);
   });
 
   it("keeps each label and its control one element, which is what lets the row wrap", () => {

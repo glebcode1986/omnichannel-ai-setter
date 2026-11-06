@@ -2481,6 +2481,181 @@ details[open] > summary::before {
   border-color: var(--border-strong);
 }
 
+/*
+ * Charts, drawn with the product's own two greys.
+ *
+ * The data ramp is `--border-strong` and `--accent`, in that order, and it is a ramp rather than a set of
+ * categorical hues on purpose: this palette has no hue to spend. The house style keeps colour for the
+ * brand mark and for a state somebody must notice, so a chart that introduced a third and fourth hue
+ * would be the loudest thing in the product. Both steps clear 3:1 against the surface they sit on in
+ * both themes — 3.28:1 in light, 3.21:1 in dark, measured, and `contrast.test.ts` keeps checking the
+ * tokens they come from.
+ *
+ * These rules are below `.metric-panel dl` because they have to beat it: `.bar-rows` is a `dl` inside a
+ * panel, and a plain `.bar-rows` selector loses to `.metric-panel dl` on specificity whichever order
+ * they are written in.
+ */
+.chart {
+  margin: 0 0 var(--space-4);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+}
+
+/* Identity comes from a swatch beside the words, never from colouring the words: the lighter of the two
+   steps is a 3:1 mark and would be illegible as 12px text. */
+.chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.chart-key::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.chart-key[data-series="secondary"]::before {
+  background: var(--accent);
+}
+
+/* The axis ceiling, pushed to the end of the legend row so it sits directly above the line it labels. */
+.chart-top {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * One slot per day, and a minimum width per slot rather than a squeeze.
+ *
+ * Ninety days across a phone is four pixels a day, which is a texture and not a chart. `--day-count`
+ * comes from the component, so the row claims six pixels a day and scrolls inside the panel — which is
+ * already a scroll container for the wide tables — instead of compressing to nothing.
+ */
+.chart-days {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 84px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* The axis: two solid hairlines one step off the surface. Dashes would read as a threshold. */
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+/*
+ * The one element in this stylesheet that is allowed to be wider than the box it sits in, and the
+ * selector is what says so: `.metric-panel` is a declared scroll boundary — `breakpoints.test.ts`
+ * requires it to be, because the four tables inside it are already wider than a phone — so a child that
+ * exceeds it is absorbed rather than bursting the page. Written as a descendant rule and not on
+ * `.chart-days` for exactly that reason: the promise is about this surface, not about the component, and
+ * the same chart dropped somewhere with no scroll boundary gets no minimum.
+ */
+.metric-panel .chart-days {
+  min-width: calc(var(--day-count) * 6px);
+}
+
+.chart-days > li {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  align-self: stretch;
+}
+
+/*
+ * Capped at 24px and centred, so a seven-day window draws columns with air around them rather than seven
+ * blocks filling the panel. The 2px flex gap is what separates neighbours; nothing is given a border.
+ */
+.chart-column {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(100%, 24px);
+  /* The floor lives here and not in the arithmetic: one message in a window of five thousand is a mark
+     two pixels tall rather than nothing at all, and the percentage the component passes still describes
+     the data. A zero draws no element, so "none" and "almost none" stay different. */
+  height: max(2px, var(--column));
+  border-radius: 2px 2px 0 0;
+  background: var(--border-strong);
+}
+
+/* Narrower and darker, in front: conversations are the conversations those messages arrived in, so the
+   count is a subset and is drawn as one. A stack would claim they add up. */
+.chart-column[data-series="secondary"] {
+  width: min(50%, 12px);
+  background: var(--accent);
+}
+
+.chart-span {
+  display: flex;
+  justify-content: space-between;
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The label and its number on one line, the bar under them at full panel width. One layout at every
+   width: a three-column row would wrap a sentence like "Held, outcome unknown" into two lines on a
+   phone and cost the height it was meant to save. */
+.metric-panel .bar-rows {
+  display: grid;
+  grid-template-columns: none;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+}
+
+.bar-row dt {
+  grid-area: 1 / 1;
+}
+
+.bar-row .bar-value {
+  grid-area: 1 / 2;
+}
+
+.bar-row .bar-plot {
+  grid-area: 2 / 1 / 3 / 3;
+}
+
+.bar-track {
+  display: block;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-selected);
+}
+
+/* `--bar` is set on the element by the component; the rounded end is the data end, square at the origin. */
+.bar-fill {
+  display: block;
+  width: max(2px, var(--bar));
+  height: 100%;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--accent);
+}
+
+
 .audit-log table {
   width: 100%;
   border-collapse: collapse;

@@ -45,6 +45,94 @@ function token(name: string): string {
   return (found?.groups?.value ?? "").trim();
 }
 
+describe("a chart inside a panel", () => {
+  beforeEach(() => {
+    // A bar list and a day row, in the panel they are always rendered in. The panel is what makes this
+    // worth resolving rather than grepping: `.metric-panel dl` styles every definition list inside it,
+    // and `.bar-rows` is one.
+    mount(`
+      <section class="metric-panel" data-panel="drafts">
+        <dl class="bar-rows" id="bars" data-chart="bars" data-scale="whole">
+          <div class="bar-row" id="row" data-row="autoSent">
+            <dt id="label">Sent unattended</dt>
+            <dd class="bar-value" id="value">4</dd>
+            <dd class="bar-plot" id="plot" aria-hidden="true">
+              <span class="bar-track" id="track"><span class="bar-fill" id="fill" style="--bar: 40.00%"></span></span>
+            </dd>
+          </div>
+        </dl>
+        <figure class="chart" data-chart="days">
+          <ol class="chart-days" id="days" style="--day-count: 7">
+            <li id="slot"><span class="chart-column" id="column" style="--column: 60.00%"></span></li>
+          </ol>
+        </figure>
+      </section>
+    `);
+  });
+
+  const resolved = (id: string, property: string): string =>
+    getComputedStyle(document.getElementById(id) as HTMLElement).getPropertyValue(property);
+
+  it("lets the bar list lay itself out, rather than inheriting the panel's two columns", () => {
+    // `.metric-panel dl` declares `grid-template-columns: 1fr auto`, and it is a class plus a type — so it
+    // beats a bare `.bar-rows` whichever order the two are written in, and the label, the number and the
+    // bar would be dealt into alternating columns. The rule has to name the panel too, and this is the
+    // assertion that fails if somebody "tidies" it back to `.bar-rows`.
+    expect(resolved("bars", "grid-template-columns")).toBe("none");
+    expect(resolved("bars", "display")).toBe("grid");
+  });
+
+  it("places the label and its number on one line, with the bar across both", () => {
+    expect(resolved("label", "grid-area")).toContain("1 / 1");
+    expect(resolved("value", "grid-area")).toContain("1 / 2");
+    expect(resolved("plot", "grid-area")).toContain("2 / 1");
+  });
+
+  it("keeps the two-pixel floor on a mark, where the data cannot overrule it", () => {
+    // The component sets `--bar` and `--column`, never a width or a height: an inline length would win
+    // over these rules and the smallest rows would round to nothing. jsdom does not substitute `var()`,
+    // which is the point — the declaration that won is what names the floor.
+    expect(resolved("fill", "width")).toBe("max(2px, var(--bar))");
+    expect(resolved("column", "height")).toBe("max(2px, var(--column))");
+  });
+
+  it("gives the day row its minimum width only because it is inside a scroll boundary", () => {
+    expect(resolved("days", "min-width")).toBe("calc(var(--day-count) * 6px)");
+    // And the boundary is really declared, which is the condition the width depends on.
+    expect(resolved("bars", "display"), "the panel exists in this mount").toBe("grid");
+    expect(getComputedStyle(document.querySelector(".metric-panel") as HTMLElement).overflowX).toBe("auto");
+  });
+
+  it("draws the two series as two steps of one grey, not as two hues", () => {
+    // `background`, not `background-color`: the declaration is a shorthand holding a `var()`, and jsdom
+    // cannot decompose that — it reports the longhand as its initial transparent, which is not what any
+    // browser paints. The shorthand names the rule that won, which is the question being asked.
+    document.body.innerHTML = `
+      <section class="metric-panel">
+        <span class="chart-column" id="outer"></span>
+        <span class="chart-column" id="inner" data-series="secondary"></span>
+        <span class="bar-fill" id="mark"></span>
+        <span class="bar-track" id="rail"></span>
+      </section>
+    `;
+    expect(resolved("outer", "background")).toBe("var(--border-strong)");
+    expect(resolved("inner", "background")).toBe("var(--accent)");
+    expect(resolved("mark", "background")).toBe("var(--accent)");
+    // The unfilled part of a bar is a lighter step of the same neutral, never a second colour.
+    expect(resolved("rail", "background")).toBe("var(--surface-selected)");
+
+    // Every one of them carries no hue, which is the house rule this chart had to work within: colour is
+    // spent on the brand mark and on a state somebody must notice, and nowhere else. A chart that
+    // introduced two hues of its own would be the loudest thing in the product.
+    for (const name of ["--border-strong", "--accent", "--surface-selected"]) {
+      const hex = token(name);
+      expect(hex, `${name} must be a plain hex to read channels from`).toMatch(/^#[0-9a-f]{6}$/iu);
+      const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+      expect([green, blue], `${name} must carry no hue`).toEqual([red, red]);
+    }
+  });
+});
+
 describe("the cascade, as a browser resolves it", () => {
   beforeEach(() => {
     // The board's real shape: a column, its heading, its list, and one card with a secondary line.

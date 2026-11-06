@@ -20,7 +20,10 @@ const text = (key: MessageKey) => catalogues.en[key];
 afterEach(cleanup);
 
 const snapshot = (overrides: Partial<OperationalSnapshot> = {}): OperationalSnapshot => ({
-  window: { from: new Date("2026-10-01T00:00:00.000Z"), to: new Date("2026-10-08T00:00:00.000Z"), timeZone: "Europe/Madrid" },
+  // Madrid local midnights, which is what `windowOf` produces and the only kind of window the product
+  // can ask for. UTC midnights with a Madrid zone would straddle eight local days and draw eight columns
+  // for a seven-day range — correct for that window, and a window no screen can reach.
+  window: { from: new Date("2026-09-30T22:00:00.000Z"), to: new Date("2026-10-07T22:00:00.000Z"), timeZone: "Europe/Madrid" },
   volume: [{ day: "2026-10-01", inboundMessages: 12, inboundConversations: 4 }],
   responseTimes: { samples: 3, medianSeconds: 42, p90Seconds: 120 },
   drafts: { generated: 10, autoSent: 4, humanApprovedSent: 3, awaitingReview: 2, heldAmbiguous: 1, dismissed: 0, superseded: 0, failed: 0 },
@@ -196,5 +199,92 @@ describe("the analytics dashboard", () => {
     const volume = document.querySelector('[data-panel="volume"]') as HTMLElement;
     expect(within(volume).getByText("12")).toBeDefined();
     expect(within(volume).getByText("4")).toBeDefined();
+  });
+
+  it("draws the volume chart over the window the page measured, not over the rows it got back", () => {
+    // The fixture window is seven days and the fixture has one busy day. Six empty slots is a quiet
+    // week; one column is a one-day week, and the store cannot tell the difference because it has no row
+    // to return for a day with no inbound message.
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    const volume = document.querySelector('[data-panel="volume"]') as HTMLElement;
+    expect(volume.querySelectorAll(".chart-days > li").length).toBe(7);
+    expect(volume.querySelectorAll(".chart-column").length, "one day of data, two series").toBe(2);
+    // And the table is still there underneath it, which is what lets the drawing stay a drawing.
+    expect(within(volume).getByText(text("analytics.day"))).toBeDefined();
+  });
+
+  it("accounts for every draft it says was generated, and labels the ones with no outcome yet", () => {
+    // The store counts outcomes by status, and the statuses it names do not cover every draft: one
+    // waiting to send unattended is PENDING without needing review. Six of ten drafts in none of the
+    // seven buckets would otherwise leave the same unexplained gap in every bar on the panel.
+    render(
+      <MetricsView
+        t={t}
+        snapshot={snapshot({
+          drafts: { generated: 10, autoSent: 4, humanApprovedSent: 0, awaitingReview: 0, heldAmbiguous: 0, dismissed: 0, superseded: 0, failed: 0 },
+        })}
+        stageLabels={labels}
+      />,
+    );
+
+    const drafts = document.querySelector('[data-panel="drafts"]') as HTMLElement;
+    expect(within(drafts).getByText("Of 10 drafts generated in this period")).toBeDefined();
+    const open = drafts.querySelector('[data-row="open"]') as HTMLElement;
+    expect(within(open).getByText(text("analytics.draftsNoOutcome")), "the six with no outcome are named").toBeDefined();
+    expect(open.querySelector(".bar-value")?.textContent).toBe("6");
+    // Shares of the generated count, so the four sent unattended are four tenths of their track.
+    expect((drafts.querySelector('[data-row="autoSent"] .bar-fill') as HTMLElement).style.getPropertyValue("--bar")).toBe("40.00%");
+  });
+
+  it("adds no such row when the outcomes already account for everything", () => {
+    // The fixture's seven outcomes sum to its ten generated drafts. A row of zero "no outcome yet" would
+    // be a category this window has nothing in.
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    expect(document.querySelector('[data-panel="drafts"] [data-row="open"]')).toBeNull();
+  });
+
+  it("measures the reasons against each other and never against the drafts they came from", () => {
+    // Two drafts for the commonest reason out of ten generated. Drawn as shares of the drafts the bar
+    // would be a fifth of its track and the panel's own caption — a draft is counted under every reason
+    // it waited for — would make the column add up past the whole.
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    const reasons = document.querySelector('[data-panel="reasons"]') as HTMLElement;
+    expect(reasons.querySelector(".bar-rows")?.getAttribute("data-scale")).toBe("largest");
+    expect((reasons.querySelector('[data-row="MISSING_FACT"] .bar-fill') as HTMLElement).style.getPropertyValue("--bar")).toBe("100.00%");
+    expect((reasons.querySelector('[data-row="LOW_CONFIDENCE"] .bar-fill') as HTMLElement).style.getPropertyValue("--bar")).toBe("50.00%");
+  });
+
+  it("draws our own delivery record and deliberately does not draw the provider's", () => {
+    // Not an omission. Two bar charts side by side are an invitation to read one against the other, and
+    // reconciling what we handed over with what the platform reported is the one thing this page refuses
+    // to do — a reader doing it by eye would reach a conclusion the numbers do not support.
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    expect(document.querySelector('[data-panel="application-state"] .bar-rows')).not.toBeNull();
+    const theirs = document.querySelector('[data-panel="provider-state"]') as HTMLElement;
+    expect(theirs.querySelector(".bar-rows"), "no bars added beside the list").toBeNull();
+    // Asked positively as well, and not only as an absence: a panel whose list was *replaced* by bars
+    // would satisfy "there are no extra bars here" while being exactly the change this pins down. So the
+    // plain list has to still be the thing rendering the provider's figures.
+    const list = theirs.querySelector("dl");
+    expect(list, "the provider's figures are a list").not.toBeNull();
+    expect(list?.classList.contains("bar-rows")).toBe(false);
+    expect(list?.querySelectorAll("dt").length, "all five of the provider's figures").toBe(5);
+    expect(within(theirs).getByText(text("analytics.awaitingReport"))).toBeDefined();
+    expect(list?.querySelector("dd")?.textContent).toBe("7");
+  });
+
+  it("keeps every number a bar stands for printed as text", () => {
+    // The whole reason the drawings are allowed to be `aria-hidden`: nothing on this page is reachable
+    // only by looking at it. Four handed to the provider, as a number, in our own panel.
+    render(<MetricsView t={t} snapshot={snapshot()} stageLabels={labels} />);
+
+    const ours = document.querySelector('[data-panel="application-state"]') as HTMLElement;
+    const handed = ours.querySelector('[data-row="handedToProvider"]') as HTMLElement;
+    expect(handed.querySelector(".bar-value")?.textContent).toBe("7");
+    expect(handed.querySelector(".bar-plot")?.getAttribute("aria-hidden")).toBe("true");
   });
 });
