@@ -36,6 +36,7 @@ export default async function SignInPage({ searchParams }: { readonly searchPara
         t={t}
         locale={locale}
         available={methods.available}
+        access={methods.access}
         error={one(query["error"])}
         googleAction={signInWithGoogleAction.bind(null, callbackUrl)}
         emailAction={requestSignInLinkAction.bind(null, callbackUrl)}
