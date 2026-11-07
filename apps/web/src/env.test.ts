@@ -58,6 +58,31 @@ describe("loadWebEnv", () => {
     expect(env.WHATSAPP_SIGNUP_CONFIG_ID).toBeUndefined();
   });
 
+  it("boots without an Instagram app, which is what `.env.example` ships", () => {
+    // These three were required to boot until 2026-11-07, and two consequences followed. `.env.example`
+    // ships `INSTAGRAM_APP_ID=` and `INSTAGRAM_APP_SECRET=` empty, `parseEnv` reads `KEY=` as unset, so
+    // the file this repository hands a new developer could not satisfy its own schema. And a deployment
+    // with no Instagram app had to invent values, which put placeholders in front of an operator as a
+    // working connect button that sent them to Meta's error page.
+    const { INSTAGRAM_APP_ID: _id, INSTAGRAM_APP_SECRET: _secret, INSTAGRAM_REDIRECT_URI: _uri, ...withoutInstagram } = required;
+    const absent = loadWebEnv(withoutInstagram);
+    // Empty is the same as absent, because that is the shape a `.env` file actually carries.
+    const empty = loadWebEnv({ ...required, INSTAGRAM_APP_ID: "", INSTAGRAM_APP_SECRET: "", INSTAGRAM_REDIRECT_URI: "" });
+
+    for (const env of [absent, empty]) {
+      expect(env.INSTAGRAM_APP_ID).toBeUndefined();
+      expect(env.INSTAGRAM_APP_SECRET).toBeUndefined();
+      expect(env.INSTAGRAM_REDIRECT_URI).toBeUndefined();
+    }
+  });
+
+  it("still refuses a redirect URI that is present and wrong", () => {
+    // Optional does not mean unvalidated: a value that is there must be a usable HTTPS URL, or the one
+    // thing it exists for — matching what is registered with Meta exactly — cannot hold.
+    expect(() => loadWebEnv({ ...required, INSTAGRAM_REDIRECT_URI: "http://app.example.test/callback" })).toThrow(EnvValidationError);
+    expect(() => loadWebEnv({ ...required, INSTAGRAM_REDIRECT_URI: "not-a-url" })).toThrow(EnvValidationError);
+  });
+
   it("refuses a Graph version that is not one", () => {
     // It goes straight into a request path. A typo here would send every onboarding call to a URL Meta
     // answers with an error that reads nothing like "your configuration is wrong".
@@ -99,8 +124,6 @@ describe("loadWebEnv", () => {
       ["CHANNEL_CREDENTIAL_KEY", { ...required, CHANNEL_CREDENTIAL_KEY: Buffer.alloc(16, 3).toString("base64") }],
       ["CHANNEL_CREDENTIAL_KEY", { ...required, CHANNEL_CREDENTIAL_KEY: "fake-password-not-base64!!" }],
       ["CHANNEL_CREDENTIAL_KEY_ID", { ...required, CHANNEL_CREDENTIAL_KEY_ID: "" }],
-      ["INSTAGRAM_APP_ID", { ...required, INSTAGRAM_APP_ID: "" }],
-      ["INSTAGRAM_APP_SECRET", { ...required, INSTAGRAM_APP_SECRET: "" }],
       // Meta requires HTTPS, and an http redirect would expose the code in transit.
       ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "http://app.example.test/callback" }],
       ["INSTAGRAM_REDIRECT_URI", { ...required, INSTAGRAM_REDIRECT_URI: "not-a-url" }],

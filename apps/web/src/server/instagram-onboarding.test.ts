@@ -11,6 +11,7 @@ import {
   disconnectInstagramAccount,
   startInstagramConnect,
   STATE_COOKIE_NAME,
+  type DisconnectDependencies,
   type OnboardingDependencies,
 } from "./instagram-onboarding";
 import {
@@ -451,6 +452,7 @@ describe("instagram onboarding", () => {
 describe("instagram routes", () => {
   const routeDependencies = (overrides: Partial<InstagramRouteDependencies> = {}): InstagramRouteDependencies => ({
     onboarding: () => ({}) as OnboardingDependencies,
+    disconnect: () => ({}) as DisconnectDependencies,
     authorize: () => Promise.resolve(context()),
     logger: () => createLogger({ level: "error", sink: () => undefined }),
     connectedRedirectUrl: ({ status }) => `/channels?instagram=${status}`,
@@ -507,7 +509,7 @@ describe("instagram routes", () => {
   it("answers a disconnect for an unknown account with not found, not a server error", async () => {
     const handler = createInstagramDisconnectHandler(
       routeDependencies({
-        onboarding: () =>
+        disconnect: () =>
           ({
             store: {
               findAccountById: () => Promise.resolve(undefined),
@@ -515,7 +517,7 @@ describe("instagram routes", () => {
             },
             logger: createLogger({ level: "error", sink: () => undefined }),
             now: () => NOW,
-          }) as unknown as OnboardingDependencies,
+          }) as unknown as DisconnectDependencies,
       }),
     );
 
@@ -524,6 +526,70 @@ describe("instagram routes", () => {
     });
 
     expect(response.status).toBe(404);
+  });
+
+  describe("a deployment with no Instagram app", () => {
+    it("refuses a connect with the outcome its own page can read, and writes no state row", async () => {
+      const start = vi.spyOn(await import("./instagram-onboarding"), "startInstagramConnect");
+      const handler = createInstagramConnectHandler(routeDependencies({ onboarding: () => undefined }));
+
+      const response = await handler(new Request("https://app.example.test/x", { method: "POST" }), {
+        params: Promise.resolve({ workspaceId: "ws_1", businessProfileId: "bp_1" }),
+      });
+
+      // A redirect carrying a fixed token, because the operator submitted a form and reads whatever comes
+      // back. A `503` body would read as this product failing rather than as a missing app.
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/channels?instagram=not_configured");
+      expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+      // Refused before the flow began: no state row, so nothing expires later and nothing is left behind.
+      expect(start).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    });
+
+    it("refuses a callback the same way rather than attempting an exchange", async () => {
+      const complete = vi.spyOn(await import("./instagram-onboarding"), "completeInstagramConnect");
+      const handler = createInstagramCallbackHandler(routeDependencies({ onboarding: () => undefined }));
+
+      const response = await handler(new Request("https://app.example.test/cb?code=c&state=s"));
+
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe("/channels?instagram=not_configured");
+      expect(complete).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    });
+
+    it("still lets an operator disconnect an account connected while there was one", async () => {
+      // The case that must not regress. Removing the credentials from a deployment would otherwise strand
+      // every account it had already connected: un-sendable, still holding an encrypted token, and with no
+      // control left that could remove it. `disconnect` is composed without the app for that reason.
+      const detached: string[] = [];
+      const handler = createInstagramDisconnectHandler(
+        routeDependencies({
+          onboarding: () => undefined,
+          disconnect: () =>
+            ({
+              store: {
+                disconnectAccount: (_context: unknown, id: string) => {
+                  detached.push(id);
+                  return Promise.resolve();
+                },
+              },
+              logger: createLogger({ level: "error", sink: () => undefined }),
+              now: () => NOW,
+            }) as unknown as DisconnectDependencies,
+        }),
+      );
+
+      const response = await handler(new Request("https://app.example.test/x", { method: "POST" }), {
+        params: Promise.resolve({ workspaceId: "ws_1", businessProfileId: "bp_1", channelAccountId: "ca_1" }),
+      });
+
+      expect(response.status).toBe(204);
+      // Asserted on the store, not only on the status: a 204 above a write that never happened is the
+      // shape that passes while the token stays where it was.
+      expect(detached).toEqual(["ca_1"]);
+    });
   });
 
   it("reads the state nonce only from the named cookie", async () => {

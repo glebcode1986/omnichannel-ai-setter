@@ -127,7 +127,10 @@ HTTPS is a functional requirement, not a hardening preference:
   `NO_BASE_URL`.
 - An `AUTH_URL` that is plain HTTP outside development withholds sign-in with reason
   `INSECURE_BASE_URL` — a link and a session cookie would otherwise travel in the clear.
-- `INSTAGRAM_REDIRECT_URI` must be HTTPS and must match the value registered with Meta exactly.
+- `INSTAGRAM_REDIRECT_URI` must be HTTPS and must match the value registered with Meta exactly. A
+  value under a name no deployment can own — `invalid`, `example`, `example.com/.net/.org` (RFC 2606) —
+  is read as "no Instagram app configured", because a callback there can never arrive; `localhost` and
+  `.test` are accepted, since the operator's own browser is what follows the redirect.
 - The domain hosting WhatsApp Embedded Signup must be HTTPS and listed in the Meta app's Allowed
   Domains and Valid OAuth Redirect URIs.
 
@@ -158,9 +161,11 @@ value would otherwise let a caller choose its own rate-limit identity.
 No values appear here. Required means: the schema gives it neither a default nor `optional()`, so the
 process will not boot without it.
 
-**`apps/web` — 8 required:** `DATABASE_URL`, `AUTH_SECRET`, `REDIS_URL`,
-`CHANNEL_CREDENTIAL_KEY_ID`, `CHANNEL_CREDENTIAL_KEY`, `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`,
-`INSTAGRAM_REDIRECT_URI`.
+**`apps/web` — 5 required:** `DATABASE_URL`, `AUTH_SECRET`, `REDIS_URL`,
+`CHANNEL_CREDENTIAL_KEY_ID`, `CHANNEL_CREDENTIAL_KEY`.
+
+The three Instagram app values were in this list until 2026-11-07 and are now optional together, like
+WhatsApp's: absent, the channel is not offered rather than offered as a button that fails at Meta.
 
 **`apps/worker` — 3 required:** `DATABASE_URL`, `REDIS_URL`, `ANTHROPIC_API_KEY`.
 

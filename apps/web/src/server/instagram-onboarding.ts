@@ -56,6 +56,16 @@ export interface OnboardingDependencies {
   readonly humanAgentApproval: "APPROVED" | "NOT_APPROVED" | "UNKNOWN";
 }
 
+/**
+ * What detaching an account needs, which is less than connecting one.
+ *
+ * Narrowed deliberately rather than documented: an operator must be able to disconnect an account after
+ * the deployment's Instagram app has gone away, and the only way to be sure of that is for the function
+ * not to be able to ask for the app. Otherwise removing the credentials would strand the account —
+ * readable, un-sendable, still holding an encrypted token, with no control left that could remove it.
+ */
+export type DisconnectDependencies = Pick<OnboardingDependencies, "store" | "logger" | "now">;
+
 export interface StartedConnect {
   /** Where the browser must be sent. Contains no secret of ours. */
   readonly authorizeUrl: string;
@@ -187,7 +197,7 @@ export async function completeInstagramConnect(
 }
 
 export async function disconnectInstagramAccount(
-  dependencies: OnboardingDependencies,
+  dependencies: DisconnectDependencies,
   context: BusinessProfileContext,
   channelAccountId: string,
 ): Promise<void> {

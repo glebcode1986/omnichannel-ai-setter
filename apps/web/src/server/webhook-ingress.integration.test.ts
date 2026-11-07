@@ -54,7 +54,9 @@ const AT_MS = 1_789_000_000_000;
 const CREDENTIAL_EXPIRES = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
 
 interface Env {
-  readonly INSTAGRAM_APP_SECRET: string;
+  // Optional, like the schema's: both halves of the Instagram app can be absent, and a case below omits
+  // each one in turn to prove neither alone is enough to bind an adapter.
+  readonly INSTAGRAM_APP_SECRET?: string;
   readonly INSTAGRAM_VERIFY_TOKEN?: string;
   readonly INSTAGRAM_HUMAN_AGENT_APPROVAL: "APPROVED" | "NOT_APPROVED" | "UNKNOWN";
   // WhatsApp is deliberately unconfigured in this suite: it asserts the Instagram path, and an
@@ -232,6 +234,21 @@ describe.skipIf(!databaseTestsEnabled())("the production Instagram webhook ingre
     // The reason names the setting, never a value: this log line is read by whoever is holding the secret.
     expect(JSON.stringify(logs)).not.toContain(APP_SECRET);
     expect(JSON.stringify(logs)).not.toContain(VERIFY_TOKEN);
+  }, 180_000);
+
+  it("fails closed when the app secret is not configured", async () => {
+    const before = await storedMessages();
+    const { INSTAGRAM_APP_SECRET: _omitted, ...unconfigured } = configured;
+
+    // The symmetric half of the case above, and the one that could have failed open: the app secret is
+    // what a webhook's signature is checked against, so a deployment without it has nothing to verify
+    // with. It must bind no adapter — not reach verification and compare against an absent secret.
+    const response = await route(unconfigured).post(inboundEnvelope(EXTERNAL_ACCOUNT_ID, "mid.ingress-no-secret"));
+
+    expect(response.status).toBe(404);
+    expect(await storedMessages()).toEqual(before);
+    expect(enqueued).toEqual([]);
+    expect(logs.find((line) => line.event === "webhook.adapter_unconfigured")).toBeDefined();
   }, 180_000);
 
   it("answers Meta's subscription handshake only with the configured token", async () => {

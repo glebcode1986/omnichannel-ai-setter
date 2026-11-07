@@ -23,12 +23,20 @@ import {
   startInstagramConnect,
   STATE_COOKIE_NAME,
   type ConnectFailureReason,
+  type DisconnectDependencies,
   type OnboardingDependencies,
 } from "./instagram-onboarding";
 import { UnauthenticatedError } from "./workspace-context";
 
 export interface InstagramRouteDependencies {
-  readonly onboarding: () => OnboardingDependencies;
+  /**
+   * `undefined` where this deployment has no Instagram app configured. Connecting then refuses before a
+   * state row is written, rather than sending the operator to Meta with credentials Meta has never heard
+   * of — which answers with Meta's own error page, carrying nothing of ours and no way back.
+   */
+  readonly onboarding: () => OnboardingDependencies | undefined;
+  /** Detaching needs no app, so it is composed separately and keeps working without one. */
+  readonly disconnect: () => DisconnectDependencies;
   readonly authorize: (workspaceId: string | undefined, businessProfileId: string | undefined) => Promise<BusinessProfileContext>;
   readonly logger: () => Logger;
   /** Where the browser lands after a callback; the outcome travels as a query parameter, never a message. */
@@ -43,8 +51,16 @@ export function createInstagramConnectHandler(dependencies: InstagramRouteDepend
   return async function POST(_request: Request, context: RouteParams): Promise<Response> {
     const params = await context.params;
     try {
+      const onboarding = dependencies.onboarding();
+      if (onboarding === undefined) {
+        // A redirect carrying a fixed token, not a `503` body. This is a real form submission, so whatever
+        // comes back is what the operator reads; the page they came from already knows how to say this
+        // one. Reachable when a tab was open while the credentials were removed, or by a hand-made POST —
+        // the screens stop offering the control, which is where the honesty belongs.
+        return notConfiguredRedirect(dependencies, params);
+      }
       const businessProfile = await dependencies.authorize(params["workspaceId"], params["businessProfileId"]);
-      const started = await startInstagramConnect(dependencies.onboarding(), businessProfile);
+      const started = await startInstagramConnect(onboarding, businessProfile);
       // 303 so the browser follows with GET, and the cookie is set on the same response.
       return new Response(null, {
         status: 303,
@@ -64,8 +80,14 @@ export function createInstagramCallbackHandler(dependencies: InstagramRouteDepen
   return async function GET(request: Request): Promise<Response> {
     const url = new URL(request.url);
     try {
+      const onboarding = dependencies.onboarding();
+      if (onboarding === undefined) {
+        // No app, so there is no exchange to attempt. The state row the flow needs cannot exist either,
+        // because connecting refused; this covers the credentials being removed mid-flow.
+        return notConfiguredRedirect(dependencies, {});
+      }
       const result = await completeInstagramConnect(
-        dependencies.onboarding(),
+        onboarding,
         {
           state: url.searchParams.get("state") ?? undefined,
           code: url.searchParams.get("code") ?? undefined,
@@ -105,7 +127,9 @@ export function createInstagramDisconnectHandler(dependencies: InstagramRouteDep
       if (channelAccountId === undefined) {
         return new Response(null, { status: 404 });
       }
-      await disconnectInstagramAccount(dependencies.onboarding(), businessProfile, channelAccountId);
+      // `disconnect`, not `onboarding`: an account connected while this deployment had an Instagram app
+      // must still be detachable after the app is gone, or removing the credentials would strand it.
+      await disconnectInstagramAccount(dependencies.disconnect(), businessProfile, channelAccountId);
       return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
     } catch (error) {
       return errorResponse(error, dependencies.logger());
@@ -136,6 +160,24 @@ function readCookie(header: string | null, name: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * "This installation has no Instagram app", said the way every other outcome of this flow is said.
+ *
+ * The cookie is cleared unconditionally. There can be no legitimate flow in progress — connecting is what
+ * sets the cookie and connecting is what refused — so the only cookie this can clear is a stale one.
+ */
+function notConfiguredRedirect(dependencies: InstagramRouteDependencies, params: Readonly<Record<string, string | undefined>>): Response {
+  const location = dependencies.connectedRedirectUrl({
+    ...(params["workspaceId"] === undefined ? {} : { workspaceId: params["workspaceId"] }),
+    ...(params["businessProfileId"] === undefined ? {} : { businessProfileId: params["businessProfileId"] }),
+    status: "not_configured",
+  });
+  return new Response(null, {
+    status: 303,
+    headers: { location, "set-cookie": clearedStateCookie(), "cache-control": "no-store" },
+  });
 }
 
 /** Outcome vocabulary for the browser. Fixed tokens only: provider text never reaches a URL or a page. */

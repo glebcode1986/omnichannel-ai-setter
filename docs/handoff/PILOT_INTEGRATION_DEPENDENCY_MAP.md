@@ -64,11 +64,29 @@ scoped follow-up.
 
 **CONFIG, with one attestation that no API provides.**
 
-Instagram: `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI` are **required to boot**
-`apps/web` at all, so a pilot with no Instagram still has to supply values — which invites placeholders
-into production configuration. `INSTAGRAM_HUMAN_AGENT_APPROVAL` must be set to `APPROVED` only once Meta
-has approved the Human Agent feature, and **no API reports this**: it is an operator attestation, and
-setting it falsely widens what the product believes it may do.
+Instagram: `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_REDIRECT_URI` are **optional
+together**, as WhatsApp's three are below, and without them the channel is not offered: the screens draw
+no connect control and the connect route answers with the `not_configured` outcome instead of starting a
+flow that cannot finish.
+
+They were required to boot until 2026-11-07, and the audit entry that used to stand here said so and
+named the consequence — "a pilot with no Instagram still has to supply values, which invites placeholders
+into production configuration". Both halves of that came true. `apps/web/.env.example` ships two of them
+empty, and `parseEnv` reads `KEY=` as unset, so the file this repository hands a new developer could not
+satisfy its own schema. And the development host carries placeholders, so the one button on its setup
+screen sent the operator to Meta, which refused an app id it had never heard of and answered with its own
+error page.
+
+A redirect URI under a name no deployment can own — RFC 2606's `invalid`, `example`, `example.com`,
+`example.net`, `example.org` — also counts as absent, because a callback there can never arrive.
+`localhost` and `.test` do not: an OAuth redirect is followed by the operator's own browser, so both are
+working local configurations, and `.env.example` ships one. Credentials are not judged: no documentation
+states a format for a Meta app id, so a plausible address beside a nonsense app id is still offered and
+still fails at the provider. Unsetting the values is the explicit way to say the channel is not offered.
+
+`INSTAGRAM_HUMAN_AGENT_APPROVAL` must be set to `APPROVED` only once Meta has approved the Human Agent
+feature, and **no API reports this**: it is an operator attestation, and setting it falsely widens what
+the product believes it may do.
 
 WhatsApp: `WHATSAPP_APP_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_SIGNUP_CONFIG_ID` are optional together,
 and without them the connect endpoints refuse with `not_configured` instead of starting a flow that

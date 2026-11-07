@@ -133,11 +133,29 @@ export const webEnvSchema = runtimeEnvSchema.extend({
   CHANNEL_CREDENTIAL_KEY_ID: z.string().min(1).max(64),
   /** 32-byte AES-256-GCM key, base64 encoded (44 characters). Never logged, never sent to the browser. */
   CHANNEL_CREDENTIAL_KEY: z.base64().length(44),
-  /** Meta app credentials for Instagram Login (ADR-006). */
-  INSTAGRAM_APP_ID: z.string().min(1).max(64),
-  INSTAGRAM_APP_SECRET: z.string().min(1).max(256),
+  /**
+   * Meta app credentials for Instagram Login (ADR-006).
+   *
+   * All three or none, and optional for the same reason `GOOGLE_CLIENT_ID` and `AUTH_URL` are: a
+   * deployment that has no Instagram app must still boot, and where any of them is absent the channel is
+   * **not offered at all** rather than offered as a button that fails at the provider. Half a client is
+   * not a client — an app id without a secret cannot complete the exchange, and a secret without a
+   * redirect URI has nowhere to come back to.
+   *
+   * They were required to boot until now, which made every deployment claim an Instagram app whether or
+   * not it had one. Two things followed. `.env.example` ships these two empty, and `parseEnv` reads
+   * `KEY=` as unset, so the file this repository hands a new developer could not satisfy its own schema.
+   * And the development host carries placeholders, so the one button on its setup screen sent the
+   * operator to Meta, which refused an app id it had never heard of and showed them its own error page.
+   *
+   * `INSTAGRAM_APP_SECRET` is also the webhook signature secret, and `createChannelAdapters` binds no
+   * Instagram adapter without it — refusing a webhook before verification rather than accepting one
+   * unverified, which is what `INSTAGRAM_VERIFY_TOKEN` below already does.
+   */
+  INSTAGRAM_APP_ID: z.string().min(1).max(64).optional(),
+  INSTAGRAM_APP_SECRET: z.string().min(1).max(256).optional(),
   /** Exactly the HTTPS redirect URI registered with Meta; never derived from an incoming request. */
-  INSTAGRAM_REDIRECT_URI: z.url({ protocol: /^https$/ }),
+  INSTAGRAM_REDIRECT_URI: z.url({ protocol: /^https$/ }).optional(),
   /**
    * Token echoed back to Meta during the webhook subscription handshake. Optional so a deployment that
    * does not receive Instagram webhooks still boots; where it is absent no Instagram adapter is bound at

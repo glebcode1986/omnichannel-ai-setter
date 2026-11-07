@@ -119,6 +119,7 @@ const en = {
   "connect.unavailable": "The provider did not answer. Nothing changed — try again shortly.",
   "connect.error": "That connection attempt could not be completed. Start it again.",
   "connect.not_entitled": "Your plan does not include this channel. Change plan to connect it.",
+  "connect.not_configured": "This installation has no Instagram app configured, so the connection cannot be started. Nothing changed.",
 
   "inbox.searchLabel": "Search conversations",
   "inbox.searchPlaceholder": "Name or handle",
@@ -1297,6 +1298,7 @@ const ru: Catalogue = {
   "connect.unavailable": "Провайдер не ответил. Ничего не изменилось — попробуйте чуть позже.",
   "connect.error": "Эту попытку подключения не удалось завершить. Начните заново.",
   "connect.not_entitled": "Ваш тариф не включает этот канал. Смените тариф, чтобы подключить его.",
+  "connect.not_configured": "В этой установке не настроено приложение Instagram, поэтому подключение начать нельзя. Ничего не изменилось.",
 
   "inbox.searchLabel": "Поиск по диалогам",
   "inbox.searchPlaceholder": "Имя или ник",

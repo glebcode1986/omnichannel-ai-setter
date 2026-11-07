@@ -53,10 +53,14 @@ export function createChannelAdapters(options: ChannelAdapterOptions): ChannelAd
   const { INSTAGRAM_APP_SECRET: appSecret, INSTAGRAM_VERIFY_TOKEN: verifyToken } = options.env;
   const instagram = createInstagramAdapterRegistry({
     bindingFor: (account) => {
-      if (verifyToken === undefined) {
+      // Both, as the WhatsApp branch below already required both. `INSTAGRAM_APP_SECRET` became optional
+      // with the rest of the Instagram app credentials (#115 follow-up), and it is the secret the webhook
+      // signature is checked against — so a deployment without it must bind no adapter at all, refusing
+      // the webhook before verification rather than reaching verification with nothing to verify against.
+      if (appSecret === undefined || verifyToken === undefined) {
         // Stated once per webhook and without the values themselves: an operator has to be able to see
         // why Instagram is refused, and the reason must not be a place a secret can leak.
-        options.logger.warn("webhook.adapter_unconfigured", { channel: "INSTAGRAM", reason: "INSTAGRAM_VERIFY_TOKEN is not configured" });
+        options.logger.warn("webhook.adapter_unconfigured", { channel: "INSTAGRAM", reason: "Instagram app credentials are not configured" });
         return undefined;
       }
       return {
