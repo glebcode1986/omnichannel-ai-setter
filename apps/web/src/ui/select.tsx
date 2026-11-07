@@ -297,13 +297,24 @@ export function Select({ name, options, value, ariaLabel, id, disabled = false, 
               aria-selected={option.value === chosen}
               className="select-option"
               data-active={String(index === active)}
+              /* The option's value, which a native `<select>` put in the DOM and a listbox does not.
+                 Without it the set of values a control offers is unreadable from the rendered markup —
+                 only the labels are there — and every test that checked "these are the choices" would
+                 have had to be rewritten into a weaker one about words on screen. */
+              data-value={option.value}
               id={optionId(index)}
               key={option.value}
               role="option"
               onPointerEnter={() => {
                 setActive(index);
               }}
-              onClick={() => {
+              onClick={(event) => {
+                // Cancelled, because this control is routinely written inside a wrapping `<label>` — the
+                // shape every filter row in this app uses — and label activation is the *default action*
+                // of a click anywhere inside it. Without this, choosing an option also forwarded the
+                // click to the combobox, which toggled the list straight back open: the value was taken
+                // and the menu stayed up. An option has no default action of its own to lose.
+                event.preventDefault();
                 choose(index);
               }}
             >

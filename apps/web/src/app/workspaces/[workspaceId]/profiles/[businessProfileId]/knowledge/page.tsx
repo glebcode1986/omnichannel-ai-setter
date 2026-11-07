@@ -7,6 +7,7 @@
  */
 import { KnowledgeList } from "@/ui/knowledge/knowledge-list";
 import { KnowledgeEditor } from "@/ui/knowledge/knowledge-editor";
+import { Select } from "@/ui/select";
 import { RetrievalResults } from "@/ui/knowledge/retrieval-results";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { createKnowledgeAction } from "@/server/knowledge-actions";
@@ -93,35 +94,42 @@ export default async function KnowledgePage({
 
             <div className="field">
               <label htmlFor="knowledge-status">{t.t("knowledge.filterStatus")}</label>
-              <select id="knowledge-status" name="status" defaultValue={filter.status ?? ""}>
-                <option value="">{t.t("knowledge.allStatuses")}</option>
-                {KNOWLEDGE_STATUSES.map((value) => (
-                  <option key={value} value={value}>
-                    {t.t(`knowledgeStatus.${value}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="knowledge-status"
+                name="status"
+                value={filter.status ?? ""}
+                options={[
+                  { value: "", label: t.t("knowledge.allStatuses") },
+                  ...KNOWLEDGE_STATUSES.map((value) => ({ value, label: t.t(`knowledgeStatus.${value}`) })),
+                ]}
+              />
             </div>
 
             <div className="field">
               <label htmlFor="knowledge-indexing">{t.t("knowledge.filterIndexing")}</label>
-              <select id="knowledge-indexing" name="indexing" defaultValue={filter.indexingState ?? ""}>
-                <option value="">{t.t("knowledge.allIndexing")}</option>
-                {KNOWLEDGE_INDEXING_STATES.map((value) => (
-                  <option key={value} value={value}>
-                    {t.t(`indexing.${value}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="knowledge-indexing"
+                name="indexing"
+                value={filter.indexingState ?? ""}
+                options={[
+                  { value: "", label: t.t("knowledge.allIndexing") },
+                  ...KNOWLEDGE_INDEXING_STATES.map((value) => ({ value, label: t.t(`indexing.${value}`) })),
+                ]}
+              />
             </div>
 
             <div className="field">
               <label htmlFor="knowledge-scope-filter">{t.t("knowledge.filterScope")}</label>
-              <select id="knowledge-scope-filter" name="scope" defaultValue={filter.scope ?? ""}>
-                <option value="">{t.t("knowledge.allScopes")}</option>
-                <option value="WORKSPACE">{t.t("knowledge.scopeWorkspace")}</option>
-                <option value="BUSINESS_PROFILE">{t.t("knowledge.scopeProfile")}</option>
-              </select>
+              <Select
+                id="knowledge-scope-filter"
+                name="scope"
+                value={filter.scope ?? ""}
+                options={[
+                  { value: "", label: t.t("knowledge.allScopes") },
+                  { value: "WORKSPACE", label: t.t("knowledge.scopeWorkspace") },
+                  { value: "BUSINESS_PROFILE", label: t.t("knowledge.scopeProfile") },
+                ]}
+              />
             </div>
 
             <button className="button" type="submit">

@@ -11,11 +11,15 @@ import type { AuditEventKind } from "@omnichannel/domain";
 
 import type { Translator } from "@/i18n/translate";
 import { AI_MODES, OFFERED_TIME_ZONES, RANGE_PRESETS, type AnalyticsView } from "@/server/analytics-view";
+import { Select, type SelectOption } from "@/ui/select";
 
-export interface FilterOption {
-  readonly value: string;
-  readonly label: string;
-}
+/**
+ * An option in one of these filters, which is an option in any of the product's selects.
+ *
+ * An alias rather than a second declaration of the same two fields: the row's controls are the product's
+ * own `Select` now, and two names for one shape is how the two drift apart.
+ */
+export type FilterOption = SelectOption;
 
 export interface FilterBarProps {
   readonly t: Translator;
@@ -34,82 +38,47 @@ export function FilterBar({ t, view, action, accounts, members, stages, kinds, s
     <form className="filter-bar" method="get" action={action} data-filter-bar="true">
       <label>
         {t.t("analytics.range")}
-        <select name="range" defaultValue={view.range}>
-          {RANGE_PRESETS.map((range) => (
-            <option key={range} value={range}>
-              {t.t(`analytics.range.${range}`)}
-            </option>
-          ))}
-        </select>
+        <Select name="range" value={view.range} options={RANGE_PRESETS.map((range) => ({ value: range, label: t.t(`analytics.range.${range}`) }))} />
       </label>
       <label>
         {t.t("analytics.timeZone")}
-        <select name="tz" defaultValue={view.timeZone}>
-          {/* The reader's own zone if they typed one into the URL, so choosing again does not lose it. */}
-          {[...new Set([view.timeZone, ...OFFERED_TIME_ZONES])].map((zone) => (
-            <option key={zone} value={zone}>
-              {zone}
-            </option>
-          ))}
-        </select>
+        {/* The reader's own zone if they typed one into the URL, so choosing again does not lose it. */}
+        <Select
+          name="tz"
+          value={view.timeZone}
+          options={[...new Set([view.timeZone, ...OFFERED_TIME_ZONES])].map((zone) => ({ value: zone, label: zone }))}
+        />
       </label>
       <label>
         {t.t("analytics.account")}
-        <select name="account" defaultValue={view.channelAccountId ?? ""}>
-          <option value="">{t.t("analytics.allAccounts")}</option>
-          {accounts.map((account) => (
-            <option key={account.value} value={account.value}>
-              {account.label}
-            </option>
-          ))}
-        </select>
+        <Select name="account" value={view.channelAccountId ?? ""} options={[{ value: "", label: t.t("analytics.allAccounts") }, ...accounts]} />
       </label>
       <label>
         {t.t("analytics.mode")}
-        <select name="mode" defaultValue={view.mode ?? ""}>
-          <option value="">{t.t("analytics.allModes")}</option>
-          {AI_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {t.t(`aiMode.${mode}`)}
-            </option>
-          ))}
-        </select>
+        <Select
+          name="mode"
+          value={view.mode ?? ""}
+          options={[{ value: "", label: t.t("analytics.allModes") }, ...AI_MODES.map((mode) => ({ value: mode, label: t.t(`aiMode.${mode}`) }))]}
+        />
       </label>
       <label>
         {t.t("analytics.stage")}
-        <select name="stage" defaultValue={view.leadStage ?? ""}>
-          <option value="">{t.t("analytics.allStages")}</option>
-          {stages.map((stage) => (
-            <option key={stage.value} value={stage.value}>
-              {stage.label}
-            </option>
-          ))}
-        </select>
+        <Select name="stage" value={view.leadStage ?? ""} options={[{ value: "", label: t.t("analytics.allStages") }, ...stages]} />
       </label>
       <label>
         {t.t("analytics.owner")}
-        <select name="owner" defaultValue={view.assignedUserId ?? ""}>
-          <option value="">{t.t("analytics.allOwners")}</option>
-          {members.map((member) => (
-            <option key={member.value} value={member.value}>
-              {member.label}
-            </option>
-          ))}
-        </select>
+        <Select name="owner" value={view.assignedUserId ?? ""} options={[{ value: "", label: t.t("analytics.allOwners") }, ...members]} />
       </label>
       {kinds === undefined ? undefined : (
         <label>
           {t.t("audit.kind")}
           {/* Only the kinds this reader may see. Offering one that would return nothing would tell an
               Agent that admin-only rows exist, which is what withholding them is for. */}
-          <select name="kind" defaultValue={view.kinds[0] ?? ""}>
-            <option value="">{t.t("audit.allKinds")}</option>
-            {kinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {t.t(`audit.kind.${kind}`)}
-              </option>
-            ))}
-          </select>
+          <Select
+            name="kind"
+            value={view.kinds[0] ?? ""}
+            options={[{ value: "", label: t.t("audit.allKinds") }, ...kinds.map((kind) => ({ value: kind, label: t.t(`audit.kind.${kind}`) }))]}
+          />
         </label>
       )}
       {showSearch === true ? (

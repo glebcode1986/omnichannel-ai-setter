@@ -8,6 +8,7 @@
  * this profile and the Workspace layer was unreachable from the product.
  */
 import type { Translator } from "@/i18n/translate";
+import { Select } from "@/ui/select";
 import type { StyleTarget } from "@/server/style-actions";
 
 export interface AddExampleFormProps {
@@ -35,10 +36,15 @@ export function AddExampleForm({ t, action }: AddExampleFormProps) {
           base voice changes how every other profile in the workspace sounds. */}
       <div className="field">
         <label htmlFor="style-example-scope">{t.t("style.exampleScope")}</label>
-        <select id="style-example-scope" name="scope" defaultValue="BUSINESS_PROFILE">
-          <option value="BUSINESS_PROFILE">{t.t("style.layerProfile")}</option>
-          <option value="WORKSPACE">{t.t("style.layerWorkspace")}</option>
-        </select>
+        <Select
+          id="style-example-scope"
+          name="scope"
+          value="BUSINESS_PROFILE"
+          options={[
+            { value: "BUSINESS_PROFILE", label: t.t("style.layerProfile") },
+            { value: "WORKSPACE", label: t.t("style.layerWorkspace") },
+          ]}
+        />
       </div>
 
       <div className="form-actions" data-span="full">

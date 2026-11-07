@@ -12,6 +12,7 @@ import { LeadBoard } from "@/ui/leads/lead-board";
 import { LeadPanel } from "@/ui/leads/lead-panel";
 import { StageConfig } from "@/ui/leads/stage-config";
 import { stageName } from "@/ui/leads/stage-name";
+import { Select } from "@/ui/select";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { requestTranslator } from "@/i18n/request-locale";
 import { pageBusinessProfileContext } from "@/server/page-context";
@@ -83,17 +84,18 @@ export default async function LeadsPage({
 
         <div className="field">
           <label htmlFor="leads-stage">{t.t("leads.tableHeadStage")}</label>
-          <select id="leads-stage" name="stage" defaultValue={filter.stage ?? ""}>
-            <option value="">{t.t("inbox.filterAll")}</option>
-            {/* The same name the board and the panel show. Printing `display.label` here put the
-                product's English placeholder in the filter beside a translated column heading, from the
-                same array — see `ui/leads/stage-name.ts`. */}
-            {stages.map((display) => (
-              <option key={display.stage} value={display.stage}>
-                {stageName(t, display)}
-              </option>
-            ))}
-          </select>
+          {/* `stageName` and not `display.label`: the same name the board and the panel show. Printing
+              the raw label here put the product's English placeholder in the filter beside a translated
+              column heading, from the same array — see `ui/leads/stage-name.ts`. */}
+          <Select
+            id="leads-stage"
+            name="stage"
+            value={filter.stage ?? ""}
+            options={[
+              { value: "", label: t.t("inbox.filterAll") },
+              ...stages.map((display) => ({ value: display.stage, label: stageName(t, display) })),
+            ]}
+          />
         </div>
 
         <div className="field">

@@ -457,7 +457,10 @@ summary:focus-visible {
 
 input:disabled,
 select:disabled,
-textarea:disabled {
+textarea:disabled,
+/* The product's own select is a `button`, which the three names above do not cover. Without this, a
+   settings form a viewer may not edit drew eleven controls that looked and felt editable. */
+.select-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
@@ -481,7 +484,8 @@ label {
 
 label > input,
 label > select,
-label > textarea {
+label > textarea,
+label > .select {
   margin-top: var(--space-1);
 }
 
@@ -1373,8 +1377,9 @@ details[open] > summary::before {
  * hidden — and an `.inbox-search input` rule restating the base field's border, radius, padding and
  * background with its own numbers.
  */
-.inbox-search input,
-.inbox-search select {
+/* `input` alone now: the `.select` wrapper carries `min-width: 0` in its own rule, so naming it here
+   again would be the second spelling of one value. */
+.inbox-search input {
   min-width: 0;
 }
 
@@ -2462,7 +2467,15 @@ details[open] > summary::before {
   border-top: 1px solid var(--border);
 }
 
-.lead-move select {
+/*
+ * How the control shares the row, and nothing else.
+ *
+ * There were two `.lead-move select` rules here, ten lines apart: this one, and a second restating the
+ * padding, border, radius and background the base control rule already gives — with a different radius
+ * and a different surface. That is the drift the base rule exists to end, and it is the same thing the
+ * `.filter-bar` comment below describes finding. One rule now, and it says only what the flex row needs.
+ */
+.lead-move .select {
   flex: 1 1 8rem;
   min-width: 0;
 }
@@ -2470,14 +2483,6 @@ details[open] > summary::before {
 .lead-move .button {
   flex: 0 0 auto;
   padding: 0 var(--space-3);
-}
-
-.lead-move select {
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
 }
 
 /*
@@ -2741,10 +2746,11 @@ details[open] > summary::before {
  * A label and its control are one element, which is what lets the row wrap: CSS pairs no siblings, and
  * a grid that flowed the two down separate rows could only ever be a fixed number of columns wide.
  *
- * `min-width: 0` is pre-existing and load-bearing. A grid item's automatic minimum size is its content,
- * and a `<select>`'s content is its longest option; rename a lead stage to a sentence and this row takes
- * the page sideways with it. Zero lets the item shrink and the select truncate its own text, which is
- * what a select is for.
+ * `min-width: 0` is pre-existing and load-bearing. A grid item's automatic minimum size is its content;
+ * rename a lead stage to a sentence and this row would take the page sideways with it. Zero lets the item
+ * shrink, and `.select-value` then ellipsises the chosen label rather than widening the control. The
+ * native control did the truncating itself, which is why this used to be stated in terms of its longest
+ * option — the product's select has to be told, and it is, in `.select-value`.
  */
 .filter-bar label {
   display: grid;
@@ -2762,9 +2768,9 @@ details[open] > summary::before {
  * exists to end.
  *
  * `min-width: 0` is not in the base rule and cannot be: a grid item's automatic minimum size is its
- * content, and a select's content is its longest option.
+ * content. For an `input` that is its value; it is named here for that reason alone, since the product's
+ * own select declares the same thing on `.select` and no longer needs restating in every row.
  */
-.filter-bar select,
 .filter-bar input {
   min-width: 0;
 }
@@ -4488,10 +4494,10 @@ svg[data-eyes="plain"] .mark-eyes[data-set="sly"] {
 /*
  * The language select, wearing the same pill as the control beside it.
  *
- * The border and background belong to the `.switch` wrapper, so the select itself is stripped: the
- * product's base `select` styling gives it a border and a surface of its own, which inside a bordered
- * pill reads as a box in a box. The arrow is the platform's, deliberately — it is the affordance every
- * reader already knows, and the one that keeps working when the list grows past what a corner can show.
+ * The border and background belong to the `.switch` wrapper, so the control itself is stripped: the base
+ * styling gives it a border and a surface of its own, which inside a bordered pill reads as a box in a
+ * box. Before hydration the mark is the platform's, which is the affordance every reader knows; after it,
+ * the product draws the same two triangles itself in `.select-mark`, so the pill does not change shape.
  */
 .switch-field {
   padding: 2px;

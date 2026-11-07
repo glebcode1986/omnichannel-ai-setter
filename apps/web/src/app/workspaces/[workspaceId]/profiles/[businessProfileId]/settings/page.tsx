@@ -23,6 +23,7 @@ import { listPolicyAudits, readPolicies } from "@omnichannel/db";
 import { CONFIDENCE_PRESETS, MAX_PRESENCE_TYPING_LEAD_MS, POLICY_IMPACTS, PRESENCE_MODES, TIMING_PRESETS } from "@omnichannel/domain";
 
 import { OutcomeNotice } from "@/ui/outcome-notice";
+import { Select } from "@/ui/select";
 import { requestTranslator } from "@/i18n/request-locale";
 import { pageBusinessProfileContext } from "@/server/page-context";
 import { getDb } from "@/server/db";
@@ -229,13 +230,13 @@ export default async function SettingsPage({
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="settings-mode">{t.t("settings.mode")}</label>
-                    <select id="settings-mode" name="mode" defaultValue={form.mode} disabled={!mayEdit}>
-                      {MODES.map((mode) => (
-                        <option key={mode} value={mode}>
-                          {t.t(`aiMode.${mode}`)}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      id="settings-mode"
+                      name="mode"
+                      value={form.mode}
+                      disabled={!mayEdit}
+                      options={MODES.map((mode) => ({ value: mode, label: t.t(`aiMode.${mode}`) }))}
+                    />
                   </div>
 
                   <div className="field">
@@ -273,22 +274,25 @@ export default async function SettingsPage({
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="settings-confidence">{t.t("settings.confidence")}</label>
-                    <select id="settings-confidence" name="confidencePreset" defaultValue={form.confidencePreset} disabled={!mayEdit}>
-                      {/* An owner who tuned values by hand is told so rather than shown a preset that no
-                          longer describes them. Choosing a preset then replaces those values. */}
-                      {/* Offered whenever the *stored* settings are hand-tuned, not only when the proposal
-                          is. Keyed to the proposal, an owner who had tuned a threshold by hand and then
-                          selected a preset could not change their mind without abandoning the whole
-                          proposal. */}
-                      {form.confidencePreset === "" || stored?.confidencePreset === undefined ? (
-                        <option value="">{t.t("settings.custom")}</option>
-                      ) : undefined}
-                      {CONFIDENCE_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {t.t(`confidencePreset.${preset}`)}
-                        </option>
-                      ))}
-                    </select>
+                    {/* An owner who tuned values by hand is told so rather than shown a preset that no
+                        longer describes them. Choosing a preset then replaces those values.
+
+                        Offered whenever the *stored* settings are hand-tuned, not only when the proposal
+                        is. Keyed to the proposal, an owner who had tuned a threshold by hand and then
+                        selected a preset could not change their mind without abandoning the whole
+                        proposal. */}
+                    <Select
+                      id="settings-confidence"
+                      name="confidencePreset"
+                      value={form.confidencePreset}
+                      disabled={!mayEdit}
+                      options={[
+                        ...(form.confidencePreset === "" || stored?.confidencePreset === undefined
+                          ? [{ value: "", label: t.t("settings.custom") }]
+                          : []),
+                        ...CONFIDENCE_PRESETS.map((preset) => ({ value: preset, label: t.t(`confidencePreset.${preset}`) })),
+                      ]}
+                    />
                   </div>
                 </div>
               </fieldset>
@@ -298,13 +302,13 @@ export default async function SettingsPage({
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="settings-timing">{t.t("settings.timing")}</label>
-                    <select id="settings-timing" name="timingPreset" defaultValue={form.timingPreset} disabled={!mayEdit}>
-                      {TIMING_PRESETS.map((preset) => (
-                        <option key={preset} value={preset}>
-                          {t.t(`timingPreset.${preset}`)}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      id="settings-timing"
+                      name="timingPreset"
+                      value={form.timingPreset}
+                      disabled={!mayEdit}
+                      options={TIMING_PRESETS.map((preset) => ({ value: preset, label: t.t(`timingPreset.${preset}`) }))}
+                    />
                     <p className="muted">{t.t("settings.timingHint")}</p>
                   </div>
 
@@ -401,13 +405,13 @@ export default async function SettingsPage({
                       greyed out — and the store would have refused the save in any case. */}
                   <div className="field">
                     <label htmlFor="settings-presence">{t.t("settings.presence")}</label>
-                    <select id="settings-presence" name="presenceMode" defaultValue={form.presenceMode} disabled={!mayEdit}>
-                      {PRESENCE_MODES.map((value) => (
-                        <option key={value} value={value}>
-                          {t.t(`presenceMode.${value}`)}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      id="settings-presence"
+                      name="presenceMode"
+                      value={form.presenceMode}
+                      disabled={!mayEdit}
+                      options={PRESENCE_MODES.map((value) => ({ value, label: t.t(`presenceMode.${value}`) }))}
+                    />
                     <p className="muted">{t.t("settings.presenceHint")}</p>
                   </div>
 
@@ -431,29 +435,24 @@ export default async function SettingsPage({
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="settings-instagram">{t.t("settings.instagram")}</label>
-                    <select
+                    <Select
                       id="settings-instagram"
                       name="instagramAfterWindowPolicy"
-                      defaultValue={form.instagramAfterWindowPolicy}
+                      value={form.instagramAfterWindowPolicy}
                       disabled={!mayEdit}
-                    >
-                      {INSTAGRAM.map((value) => (
-                        <option key={value} value={value}>
-                          {t.t(`instagramAfterWindow.${value}`)}
-                        </option>
-                      ))}
-                    </select>
+                      options={INSTAGRAM.map((value) => ({ value, label: t.t(`instagramAfterWindow.${value}`) }))}
+                    />
                   </div>
 
                   <div className="field">
                     <label htmlFor="settings-whatsapp">{t.t("settings.whatsapp")}</label>
-                    <select id="settings-whatsapp" name="whatsappAfterWindowPolicy" defaultValue={form.whatsappAfterWindowPolicy} disabled={!mayEdit}>
-                      {WHATSAPP.map((value) => (
-                        <option key={value} value={value}>
-                          {t.t(`whatsappAfterWindow.${value}`)}
-                        </option>
-                      ))}
-                    </select>
+                    <Select
+                      id="settings-whatsapp"
+                      name="whatsappAfterWindowPolicy"
+                      value={form.whatsappAfterWindowPolicy}
+                      disabled={!mayEdit}
+                      options={WHATSAPP.map((value) => ({ value, label: t.t(`whatsappAfterWindow.${value}`) }))}
+                    />
                   </div>
 
                   <div className="field" data-span="full">
@@ -537,35 +536,32 @@ export default async function SettingsPage({
                 not affect the answer, and neither Instagram after-window choice was ever exercised. */}
             <div className="field">
               <label htmlFor="sim-channel">{t.t("sim.channel")}</label>
-              <select id="sim-channel" name="simChannel" defaultValue={simulationInputs.channel}>
-                {SIMULATION_CHANNELS.map((channel) => (
-                  <option key={channel} value={channel}>
-                    {t.t(`channel.${channel}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sim-channel"
+                name="simChannel"
+                value={simulationInputs.channel}
+                options={SIMULATION_CHANNELS.map((channel) => ({ value: channel, label: t.t(`channel.${channel}`) }))}
+              />
             </div>
 
             <div className="field">
               <label htmlFor="sim-window">{t.t("sim.window")}</label>
-              <select id="sim-window" name="simWindow" defaultValue={simulationInputs.window}>
-                {SIMULATION_WINDOWS.map((window) => (
-                  <option key={window} value={window}>
-                    {t.t(`simWindow.${window}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sim-window"
+                name="simWindow"
+                value={simulationInputs.window}
+                options={SIMULATION_WINDOWS.map((window) => ({ value: window, label: t.t(`simWindow.${window}`) }))}
+              />
             </div>
 
             <div className="field">
               <label htmlFor="sim-account">{t.t("sim.account")}</label>
-              <select id="sim-account" name="simAccount" defaultValue={simulationInputs.account}>
-                {SIMULATION_ACCOUNTS.map((account) => (
-                  <option key={account} value={account}>
-                    {t.t(`simAccount.${account}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sim-account"
+                name="simAccount"
+                value={simulationInputs.account}
+                options={SIMULATION_ACCOUNTS.map((account) => ({ value: account, label: t.t(`simAccount.${account}`) }))}
+              />
             </div>
 
             {/* The input that makes the Instagram choice above mean something: that policy opens a
@@ -573,13 +569,12 @@ export default async function SettingsPage({
                 Instagram choices gave the same refusal and nothing selected here could change an answer. */}
             <div className="field">
               <label htmlFor="sim-human-support">{t.t("sim.humanSupport")}</label>
-              <select id="sim-human-support" name="simHumanSupport" defaultValue={simulationInputs.humanSupport}>
-                {SIMULATION_HUMAN_SUPPORT.map((value) => (
-                  <option key={value} value={value}>
-                    {t.t(`simHumanSupport.${value}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sim-human-support"
+                name="simHumanSupport"
+                value={simulationInputs.humanSupport}
+                options={SIMULATION_HUMAN_SUPPORT.map((value) => ({ value: value, label: t.t(`simHumanSupport.${value}`) }))}
+              />
             </div>
 
             {/* What would be sent. Outside WhatsApp's service window an ordinary reply is not a route at
@@ -587,13 +582,12 @@ export default async function SettingsPage({
                 the allowlist below could never change an answer. */}
             <div className="field">
               <label htmlFor="sim-reply-kind">{t.t("sim.replyKind")}</label>
-              <select id="sim-reply-kind" name="simReplyKind" defaultValue={simulationInputs.replyKind}>
-                {SIMULATION_REPLY_KINDS.map((value) => (
-                  <option key={value} value={value}>
-                    {t.t(`simReplyKind.${value}`)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="sim-reply-kind"
+                name="simReplyKind"
+                value={simulationInputs.replyKind}
+                options={SIMULATION_REPLY_KINDS.map((value) => ({ value: value, label: t.t(`simReplyKind.${value}`) }))}
+              />
             </div>
 
             <div className="field">

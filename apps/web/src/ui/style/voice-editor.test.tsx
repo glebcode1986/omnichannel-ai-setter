@@ -13,6 +13,7 @@ import type { StyleProfileLayerView } from "@omnichannel/db";
 import { VoiceEditor } from "./voice-editor";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { chosen, offered, offeredLabels } from "@/testing/select";
 
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
@@ -44,8 +45,10 @@ describe("reading a written layer back", () => {
     editor();
 
     expect(screen.getByLabelText(text("style.persona"))).toHaveProperty("value", "A calm neighbourhood salon");
-    expect(screen.getByLabelText(text("style.replyLength"))).toHaveProperty("value", "SHORT");
-    expect(screen.getByLabelText(text("style.emoji"))).toHaveProperty("value", "SPARING");
+    // The two selects are read through what the form will submit rather than through the control, which
+    // shows a label: `chosen` reads the hidden input the product's own select carries the value in.
+    expect(chosen("replyLength")).toBe("SHORT");
+    expect(chosen("emoji")).toBe("SPARING");
     expect(screen.getByLabelText(text("style.signOff"))).toHaveProperty("value", "See you soon");
   });
 
@@ -67,7 +70,7 @@ describe("an empty field", () => {
     editor({ persona: null, replyLength: null, emoji: null, preferredPhrases: [] });
 
     expect(screen.getByLabelText(text("style.persona"))).toHaveProperty("value", "");
-    expect(screen.getByLabelText(text("style.replyLength"))).toHaveProperty("value", "");
+    expect(chosen("replyLength")).toBe("");
     expect(screen.getByLabelText(text("style.preferred"))).toHaveProperty("value", "");
   });
 
@@ -78,12 +81,15 @@ describe("an empty field", () => {
     expect(screen.getByText(text("style.inherits"))).toBeDefined();
   });
 
-  it("does not claim inheritance in the base layer, which has nothing beneath it", () => {
+  it("does not claim inheritance in the base layer, which has nothing beneath it", async () => {
     editor({ scope: "WORKSPACE" });
 
     expect(screen.queryByText(text("style.inherits"))).toBeNull();
-    // The selects still offer "no preference", which is a value rather than a claim about inheriting.
-    expect(screen.getAllByText(text("style.noOpinion")).length).toBe(2);
+    // The selects still *offer* "no preference", which is a value rather than a claim about inheriting.
+    // Read from each control's own list: counting the words on screen stopped meaning this the moment the
+    // options were drawn only while open, and a count of two would then have been a count of nothing.
+    expect(await offeredLabels(text("style.replyLength"))).toContain(text("style.noOpinion"));
+    expect(await offeredLabels(text("style.emoji"))).toContain(text("style.noOpinion"));
   });
 });
 
@@ -103,14 +109,11 @@ describe("a layer nobody has written", () => {
 });
 
 describe("the vocabularies it offers", () => {
-  it("offers the reply lengths and emoji settings the domain defines, plus no opinion", () => {
+  it("offers the reply lengths and emoji settings the domain defines, plus no opinion", async () => {
     editor();
 
-    const lengths = [...screen.getByLabelText(text("style.replyLength")).querySelectorAll("option")].map((option) => option.value);
-    const emoji = [...screen.getByLabelText(text("style.emoji")).querySelectorAll("option")].map((option) => option.value);
-
-    expect(lengths).toEqual(["", "SHORT", "MEDIUM", "LONG"]);
-    expect(emoji).toEqual(["", "NONE", "SPARING", "FREELY"]);
+    expect(await offered(text("style.replyLength"))).toEqual(["", "SHORT", "MEDIUM", "LONG"]);
+    expect(await offered(text("style.emoji"))).toEqual(["", "NONE", "SPARING", "FREELY"]);
   });
 
   it("labels the language field and says what leaving it empty means", () => {

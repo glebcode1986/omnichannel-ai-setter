@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AddExampleForm } from "./add-example-form";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { chosen, offered } from "@/testing/select";
 
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
@@ -32,12 +33,10 @@ describe("the add-example form", () => {
     expect(screen.getByLabelText(text("style.exampleOutbound"))).toHaveProperty("required", true);
   });
 
-  it("offers both layers, so a Workspace example can actually be created", () => {
+  it("offers both layers, so a Workspace example can actually be created", async () => {
     form();
 
-    const scope = screen.getByLabelText(text("style.exampleScope"));
-    const values = [...(scope as HTMLSelectElement).options].map((option) => option.value);
-    expect(values).toEqual(["BUSINESS_PROFILE", "WORKSPACE"]);
+    expect(await offered(text("style.exampleScope"))).toEqual(["BUSINESS_PROFILE", "WORKSPACE"]);
   });
 
   it("defaults to this profile, which is the narrower of the two", () => {
@@ -45,13 +44,17 @@ describe("the add-example form", () => {
 
     // An example meant for one business that lands on the base voice changes how every other profile in
     // the workspace sounds, so the default is the mistake that costs least.
-    expect(screen.getByLabelText(text("style.exampleScope"))).toHaveProperty("value", "BUSINESS_PROFILE");
+    //
+    // Read from what the form will submit, not from the words on the control: the control shows a label
+    // and the form carries a value, and a test that compared labels would pass on one submitting the
+    // other scope.
+    expect(chosen("scope")).toBe("BUSINESS_PROFILE");
   });
 
   it("reads in Russian", () => {
     form(createTranslator("ru"));
 
-    expect(screen.getByLabelText(catalogues.ru["style.exampleScope"])).toBeDefined();
+    expect(screen.getByRole("combobox", { name: catalogues.ru["style.exampleScope"] })).toBeDefined();
     expect(screen.getByText(catalogues.ru["style.addExample"])).toBeDefined();
   });
 });

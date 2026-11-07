@@ -14,6 +14,7 @@ import { DEFAULT_STAGE_LABELS, type LeadRow, type StageDisplay } from "@omnichan
 import { LeadBoard } from "./lead-board";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { offered } from "@/testing/select";
 
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
@@ -64,12 +65,11 @@ describe("moving a lead", () => {
     expect(form.querySelector('input[name="conversationId"]')?.getAttribute("value")).toBe("cv_1");
   });
 
-  it("offers every stage as a destination, including hidden ones", () => {
+  it("offers every stage as a destination, including hidden ones", async () => {
     // Hiding a column is a display choice; a lead can still be moved into that stage deliberately.
     board([lead()], stages([{ stage: "LOST", hidden: true }]));
 
-    const options = [...(document.querySelector(".lead-move select") as HTMLSelectElement).options].map((option) => option.value);
-    expect(options).toEqual(["NEW", "ENGAGED", "QUALIFIED", "WON", "LOST"]);
+    expect(await offered(text("leads.moveTo"))).toEqual(["NEW", "ENGAGED", "QUALIFIED", "WON", "LOST"]);
   });
 
   it("uses the workspace's own label for a renamed stage", () => {

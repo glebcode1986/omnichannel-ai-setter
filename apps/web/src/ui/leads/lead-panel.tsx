@@ -19,6 +19,7 @@ import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
 import { stageNameOf } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
+import { Select } from "@/ui/select";
 
 export interface LeadPanelProps {
   readonly t: Translator;
@@ -48,15 +49,16 @@ export function LeadPanel({ t, lead, stages, members, history, qualification, ta
         <input type="hidden" name="conversationId" value={lead.conversationId} />
 
         <label htmlFor="lead-assignee">{t.t("leads.assignee")}</label>
-        <select id="lead-assignee" name="assignedUserId" defaultValue={lead.assignedUserId ?? ""}>
-          {/* An empty option is "nobody owns this", which is a real choice and not a missing value. */}
-          <option value="">{t.t("leads.unassigned")}</option>
-          {members.map((member) => (
-            <option key={member.userId} value={member.userId}>
-              {member.name ?? member.userId}
-            </option>
-          ))}
-        </select>
+        {/* The empty option is "nobody owns this", which is a real choice and not a missing value. */}
+        <Select
+          id="lead-assignee"
+          name="assignedUserId"
+          value={lead.assignedUserId ?? ""}
+          options={[
+            { value: "", label: t.t("leads.unassigned") },
+            ...members.map((member) => ({ value: member.userId, label: member.name ?? member.userId })),
+          ]}
+        />
 
         <label htmlFor="lead-tags">{t.t("leads.tags")}</label>
         <textarea id="lead-tags" name="tags" rows={2} defaultValue={lead.tags.join("\n")} />

@@ -14,6 +14,7 @@ import type { AssignableMember, LeadRow, QualificationAnswer, StageDisplay, Stag
 import { LeadPanel } from "./lead-panel";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { chosen, control, offeredLabels } from "@/testing/select";
 
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
@@ -71,7 +72,7 @@ describe("the edit form", () => {
   it("reads every field back", () => {
     panel();
 
-    expect(screen.getByLabelText(text("leads.assignee"))).toHaveProperty("value", "usr_owner");
+    expect(chosen("assignedUserId")).toBe("usr_owner");
     expect(screen.getByLabelText(text("leads.tags"))).toHaveProperty("value", "vip\nreturning");
     expect(screen.getByLabelText(text("leads.note"))).toHaveProperty("value", "Prefers mornings.");
     expect(screen.getByLabelText(text("leads.nextAction"))).toHaveProperty("value", "Call back");
@@ -81,15 +82,15 @@ describe("the edit form", () => {
   it("offers nobody as a real choice, not as a missing value", () => {
     panel({ lead: lead({ assignedUserId: null, assignedUserName: null }) });
 
-    const select = screen.getByLabelText(text("leads.assignee"));
-    expect(select).toHaveProperty("value", "");
-    expect(within(select).getByText(text("leads.unassigned"))).toBeDefined();
+    expect(chosen("assignedUserId")).toBe("");
+    // And "nobody" is the word on the control, not an empty box: an unassigned lead reads as a decision.
+    expect(control(text("leads.assignee")).textContent).toContain(text("leads.unassigned"));
   });
 
-  it("offers a member with no name by their id rather than a blank row", () => {
+  it("offers a member with no name by their id rather than a blank row", async () => {
     panel();
 
-    expect(within(screen.getByLabelText(text("leads.assignee"))).getByText("usr_agent")).toBeDefined();
+    expect(await offeredLabels(text("leads.assignee"))).toContain("usr_agent");
   });
 
   it("does not put the stage in this form", () => {

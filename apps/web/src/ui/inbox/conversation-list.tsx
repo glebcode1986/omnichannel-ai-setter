@@ -15,6 +15,7 @@ import type { InboxRow } from "@omnichannel/db";
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
+import { Select } from "@/ui/select";
 import { inboxQueryString, isFilteredView, type InboxView } from "./view";
 
 /** A channel account as the filter needs it: an id and a label. Deliberately not the stored record — see
@@ -123,27 +124,32 @@ export function ConversationList({ t, rows, view, basePath, selectedId, nextCurs
             {accounts.length === 0 ? undefined : (
               <div className="field">
                 <label htmlFor="inbox-account">{t.t("inbox.filterChannel")}</label>
-                <select id="inbox-account" name="account" defaultValue={view.channelAccountId ?? ""}>
-                  <option value="">{t.t("inbox.allChannels")}</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {`${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  id="inbox-account"
+                  name="account"
+                  value={view.channelAccountId ?? ""}
+                  options={[
+                    { value: "", label: t.t("inbox.allChannels") },
+                    ...accounts.map((account) => ({
+                      value: account.id,
+                      label: `${t.t(`channel.${account.channel}` as MessageKey)} · ${account.label}`,
+                    })),
+                  ]}
+                />
               </div>
             )}
 
             <div className="field">
               <label htmlFor="inbox-stage">{t.t("inbox.filterLeadStage")}</label>
-              <select id="inbox-stage" name="stage" defaultValue={view.leadStage ?? ""}>
-                <option value="">{t.t("inbox.allStages")}</option>
-                {LEAD_STAGES.map((stage) => (
-                  <option key={stage} value={stage}>
-                    {t.t(`leadStage.${stage}` as MessageKey)}
-                  </option>
-                ))}
-              </select>
+              <Select
+                id="inbox-stage"
+                name="stage"
+                value={view.leadStage ?? ""}
+                options={[
+                  { value: "", label: t.t("inbox.allStages") },
+                  ...LEAD_STAGES.map((stage) => ({ value: stage, label: t.t(`leadStage.${stage}` as MessageKey) })),
+                ]}
+              />
             </div>
           </details>
 

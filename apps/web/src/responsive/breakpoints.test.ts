@@ -267,9 +267,14 @@ function declarationsFor(selector: string, within: string = css): string {
  * Controls that take a cell in the grid. A hidden input is excluded on purpose rather than by oversight:
  * the browser's own stylesheet gives it `display: none`, so it is not a grid item and carrying state in
  * one outside a field costs nothing. Every filter bar here has at least one.
+ *
+ * `Select` is in the list because it is one: the product's own select, a `role="combobox"` button with a
+ * hidden input behind it, which occupies a cell exactly as the native control it replaced did. Leaving it
+ * out would have made every converted row read as a row of empty labels — which is what happened, and is
+ * why the analytics filters reported one control where there are eight.
  */
 function visibleControls(text: string): number {
-  return [...text.matchAll(/<(?:input|select|textarea)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"')).length;
+  return [...text.matchAll(/<(?:input|select|textarea|Select)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"')).length;
 }
 
 /**

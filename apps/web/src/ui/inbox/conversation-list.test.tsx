@@ -16,6 +16,7 @@ import { ConversationList } from "./conversation-list";
 import { inboxQueryString } from "./view";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { chosen, offered } from "@/testing/select";
 
 const t = createTranslator("en");
 const text = (key: MessageKey) => catalogues.en[key];
@@ -188,16 +189,15 @@ describe("the filters", () => {
     // The state filter is a link, so it rides along as a hidden field; the account and the stage are the
     // form's own controls and have to come back pre-selected or applying a search would reset them.
     expect(form.querySelector('input[name="filter"]')?.getAttribute("value")).toBe("mine");
-    expect(screen.getByLabelText(text("inbox.filterChannel"))).toHaveProperty("value", "ca_wa");
-    expect(screen.getByLabelText(text("inbox.filterLeadStage"))).toHaveProperty("value", "QUALIFIED");
+    expect(chosen("account")).toBe("ca_wa");
+    expect(chosen("stage")).toBe("QUALIFIED");
   });
 
-  it("offers every connected account, and every channel as the default", () => {
+  it("offers every connected account, and every channel as the default", async () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} />);
 
-    const select = screen.getByLabelText(text("inbox.filterChannel"));
-    expect([...select.querySelectorAll("option")].map((option) => option.getAttribute("value"))).toEqual(["", "ca_ig", "ca_wa"]);
-    expect(select).toHaveProperty("value", "");
+    expect(await offered(text("inbox.filterChannel"))).toEqual(["", "ca_ig", "ca_wa"]);
+    expect(chosen("account")).toBe("");
   });
 
   it("hides the channel filter when the profile has no connected account to filter by", () => {
@@ -206,11 +206,10 @@ describe("the filters", () => {
     expect(screen.queryByLabelText(text("inbox.filterChannel"))).toBeNull();
   });
 
-  it("offers every lead stage the domain defines, in the domain's order", () => {
+  it("offers every lead stage the domain defines, in the domain's order", async () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} />);
 
-    const options = [...screen.getByLabelText(text("inbox.filterLeadStage")).querySelectorAll("option")];
-    expect(options.map((option) => option.getAttribute("value"))).toEqual(["", ...LEAD_STAGES]);
+    expect(await offered(text("inbox.filterLeadStage"))).toEqual(["", ...LEAD_STAGES]);
   });
 
   it("does not carry the cursor through a search", () => {
@@ -384,11 +383,14 @@ describe("keyboard operation", () => {
 
     const disclosure = document.querySelector("details.inbox-refine") as HTMLDetailsElement;
     expect(disclosure.open, "closed when nothing is narrowing the list").toBe(false);
-    const stage = screen.getByLabelText(text("inbox.filterLeadStage"));
-    // Narrowed rather than asserted: `form` is the whole point of this test, and it exists on a select
-    // and not on an `HTMLElement`, so a cast here would be the test agreeing with itself.
-    if (!(stage instanceof HTMLSelectElement)) {
-      throw new Error("the stage filter must be a select");
+    // The *hidden input* is what carries the value now: the product's own select is a combobox button
+    // with the value in an input beside it, so this is the element whose membership of the form decides
+    // whether a folded filter is still applied. Asserting on the button would have proved nothing.
+    const stage = document.querySelector('input[type="hidden"][name="stage"]');
+    // Narrowed rather than asserted: `form` is the whole point of this test, and it exists on an input
+    // and not on an `Element`, so a cast here would be the test agreeing with itself.
+    if (!(stage instanceof HTMLInputElement)) {
+      throw new Error("the stage filter must carry its value in a hidden input");
     }
     expect(stage.closest("details")).toBe(disclosure);
     expect(stage.form, "and still belongs to the search form").toBe(document.querySelector("form.inbox-search"));

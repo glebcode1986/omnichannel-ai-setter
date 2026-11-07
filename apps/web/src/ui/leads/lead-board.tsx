@@ -22,6 +22,7 @@ import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
 import { stageName, stageNameOf } from "@/ui/leads/stage-name";
 import type { LeadTarget } from "@/server/lead-actions";
+import { Select } from "@/ui/select";
 
 export interface LeadBoardProps {
   readonly t: Translator;
@@ -107,13 +108,12 @@ export function LeadBoard({ t, leads, stages, target, basePath, filtered, moveAc
                       <input type="hidden" name="conversationId" value={lead.conversationId} />
                       <input type="hidden" name="expectedStage" value={lead.stage} />
                       <label htmlFor={`move-${lead.conversationId}`}>{t.t("leads.moveTo")}</label>
-                      <select id={`move-${lead.conversationId}`} name="toStage" defaultValue={lead.stage}>
-                        {stages.map((candidate) => (
-                          <option key={candidate.stage} value={candidate.stage}>
-                            {nameOfStage(candidate)}
-                          </option>
-                        ))}
-                      </select>
+                      <Select
+                        id={`move-${lead.conversationId}`}
+                        name="toStage"
+                        value={lead.stage}
+                        options={stages.map((candidate) => ({ value: candidate.stage, label: nameOfStage(candidate) }))}
+                      />
                       <button className="button" type="submit" data-action="move">
                         {t.t("leads.move")}
                       </button>

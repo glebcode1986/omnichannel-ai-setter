@@ -12,6 +12,7 @@
 import type { StyleProfileLayerView } from "@omnichannel/db";
 
 import type { Translator } from "@/i18n/translate";
+import { Select } from "@/ui/select";
 import type { StyleTarget } from "@/server/style-actions";
 
 export interface VoiceEditorProps {
@@ -71,26 +72,28 @@ export function VoiceEditor({ t, layer, action }: VoiceEditorProps) {
 
         <div className="field">
           <label htmlFor={id("replyLength")}>{t.t("style.replyLength")}</label>
-          <select id={id("replyLength")} name="replyLength" defaultValue={layer.replyLength ?? ""}>
-            <option value="">{t.t("style.noOpinion")}</option>
-            {REPLY_LENGTHS.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`replyLength.${value}`)}
-              </option>
-            ))}
-          </select>
+          <Select
+            id={id("replyLength")}
+            name="replyLength"
+            value={layer.replyLength ?? ""}
+            options={[
+              { value: "", label: t.t("style.noOpinion") },
+              ...REPLY_LENGTHS.map((value) => ({ value, label: t.t(`replyLength.${value}`) })),
+            ]}
+          />
         </div>
 
         <div className="field">
           <label htmlFor={id("emoji")}>{t.t("style.emoji")}</label>
-          <select id={id("emoji")} name="emoji" defaultValue={layer.emoji ?? ""}>
-            <option value="">{t.t("style.noOpinion")}</option>
-            {EMOJI_USAGES.map((value) => (
-              <option key={value} value={value}>
-                {t.t(`emojiUsage.${value}`)}
-              </option>
-            ))}
-          </select>
+          <Select
+            id={id("emoji")}
+            name="emoji"
+            value={layer.emoji ?? ""}
+            options={[
+              { value: "", label: t.t("style.noOpinion") },
+              ...EMOJI_USAGES.map((value) => ({ value, label: t.t(`emojiUsage.${value}`) })),
+            ]}
+          />
         </div>
 
         <div className="field">

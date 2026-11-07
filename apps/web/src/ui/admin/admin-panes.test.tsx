@@ -21,6 +21,7 @@ import { SupportAccess } from "./support-access";
 import { WorkspaceSummary } from "./workspace-summary";
 import { catalogues, type MessageKey } from "@/i18n/catalogue";
 import { createTranslator } from "@/i18n/translate";
+import { offered } from "@/testing/select";
 
 const t = createTranslator("en");
 const ru = createTranslator("ru");
@@ -258,11 +259,10 @@ describe("the kill switches", () => {
     expect(global.document.querySelector('[data-admin="cannot-operate-switch"]')?.textContent).toBe(text("admin.notYourRole"));
   });
 
-  it("offers every scope the domain defines, so a narrower pause is reachable", () => {
+  it("offers every scope the domain defines, so a narrower pause is reachable", async () => {
     render(<KillSwitches t={t} switches={[]} workspaceId="ws-1" canOperate actions={{ pull: vi.fn(), lift: vi.fn() }} />);
 
-    const options = [...global.document.querySelectorAll<HTMLOptionElement>('select[name="scope"] option')].map((option) => option.value);
-    expect(options).toEqual(["GLOBAL", "WORKSPACE", "BUSINESS_PROFILE", "CHANNEL_ACCOUNT"]);
+    expect(await offered(t.t("admin.switchScope"))).toEqual(["GLOBAL", "WORKSPACE", "BUSINESS_PROFILE", "CHANNEL_ACCOUNT"]);
     // Pre-filled when the console is looking at one tenant, so the common case needs no copy-pasting.
     expect(global.document.querySelector<HTMLInputElement>('input[name="workspaceId"]')?.value).toBe("ws-1");
   });

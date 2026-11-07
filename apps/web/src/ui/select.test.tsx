@@ -226,6 +226,41 @@ describe("the keyboard, which is the part a hand-built menu loses", () => {
   });
 });
 
+describe("inside a wrapping label, which is how every filter row in this app is written", () => {
+  const wrapped = () =>
+    render(
+      <label>
+        Channel
+        <Select name="channel" options={OPTIONS} value="ALL" />
+      </label>,
+    );
+
+  it("is named by the label and not by its own selected value", () => {
+    // Measured rather than assumed: for a `<button>`, content usually wins, and here it does not — the
+    // host-language label comes first in the name computation. So a converted filter row keeps saying
+    // which field it is, and does not announce itself as "Every channel".
+    wrapped();
+
+    expect(screen.getByRole("combobox", { name: "Channel" })).toBeDefined();
+    expect(screen.queryByRole("combobox", { name: "Every channel" })).toBeNull();
+  });
+
+  it("closes when an option is clicked, rather than being reopened by the label", async () => {
+    // The trap this is here for. Label activation is the default action of a click anywhere inside the
+    // label, so the click that chose an option was also forwarded to the combobox and toggled the list
+    // back open: the value was taken and the menu stayed up, which reads as a broken control. The option
+    // handler cancels the default for that reason.
+    const user = userEvent.setup();
+    wrapped();
+
+    await user.click(screen.getByRole("combobox", { name: "Channel" }));
+    await user.click(screen.getByRole("option", { name: "WhatsApp" }));
+
+    expect(hidden().value).toBe("WA");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+});
+
 describe("an option that cannot be chosen", () => {
   const withDisabled = [
     { value: "ALL", label: "Every channel" },

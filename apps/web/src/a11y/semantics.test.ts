@@ -15,6 +15,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const uiRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -113,33 +114,106 @@ function scan(pattern: RegExp, describeMatch: (match: RegExpMatchArray) => strin
 const report = (findings: readonly Finding[]): readonly string[] => findings.map((f) => `${f.file}:${String(f.line)} ${f.what}`);
 
 /**
- * Controls in one file with no label.
+ * Every control in a file that nothing gives a name to.
  *
- * A control is named if it sits inside a `<label>`, if a label points at its id, or if it carries an
- * `aria-label`. Extracted from the test that uses it so the same logic can be run over a sample with a
- * known answer — otherwise a clean repository and a broken matcher look identical.
+ * **Walked with the compiler, because the line-window version lied.** It paired a `<label>` with the next
+ * `<input|select|textarea>` inside 600 characters and then accepted any control within twelve lines of
+ * that label. Converting the analytics filters to the product's own `Select` stretched one row past the
+ * window, and the gate reported a search input that was plainly inside its `<label>` — a false finding,
+ * and the only way to satisfy it would have been to write the markup more tightly. Ancestry is a fact the
+ * AST knows exactly, so it is read rather than estimated.
+ *
+ * A control is a native `input`, `select` or `textarea`, **or the product's own `Select`**, which is the
+ * same thing wearing our own clothes: a hidden input carrying the value and a `role="combobox"` button
+ * drawing it. Leaving it out would have quietly stopped checking every row it was converted into.
+ *
+ * Named if an ancestor is a `<label>`, or a `<label htmlFor>` in the same file points at its `id`, or it
+ * carries its own `aria-label` / `ariaLabel`. `type="hidden"` and `type="submit"` are not controls a
+ * reader names.
  */
-function orphanControls(source: string): readonly string[] {
-  const labelled = new Set([...source.matchAll(/<label[^>]*\bhtmlFor="([^"]+)"/g)].map((match) => match[1] ?? ""));
-  const wrapped = new Set<number>();
-  for (const match of source.matchAll(/<label[\s\S]{0,600}?<(?:input|select|textarea)\b/g)) {
-    wrapped.add(source.slice(0, match.index ?? 0).split("\n").length);
-  }
-  const orphans: string[] = [];
-  for (const { line, text } of lines(source)) {
-    for (const match of text.matchAll(/<(input|select|textarea)\b([^>]*)>/g)) {
-      const attributes = match[2] ?? "";
-      if (/type="(hidden|submit)"/.test(attributes) || /\baria-label=/.test(attributes)) {
-        continue;
+function orphanControls(source: string, file: string): readonly string[] {
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const referenced = new Set<string>();
+  const controls: { readonly node: ts.JsxSelfClosingElement | ts.JsxOpeningElement; readonly tag: string }[] = [];
+
+  const attribute = (node: ts.JsxSelfClosingElement | ts.JsxOpeningElement, name: string): ts.JsxAttribute | undefined =>
+    node.attributes.properties.find(
+      (property): property is ts.JsxAttribute => ts.isJsxAttribute(property) && ts.isIdentifier(property.name) && property.name.text === name,
+    );
+  /**
+   * The attribute's value as written.
+   *
+   * Text and not a parsed value, because almost no id in this app is a string literal: they are
+   * `id("persona")` and `` `move-${lead.conversationId}` ``. Reading only literals reported sixteen
+   * properly labelled controls as orphans — every one of them a `<label htmlFor>` beside its control —
+   * and two identical expressions are the same id by construction, which is as exact as this needs to be.
+   */
+  const valueText = (found: ts.JsxAttribute | undefined): string | undefined => {
+    const initializer = found?.initializer;
+    if (initializer === undefined) {
+      return undefined;
+    }
+    if (ts.isStringLiteral(initializer)) {
+      return JSON.stringify(initializer.text);
+    }
+    return ts.isJsxExpression(initializer) && initializer.expression !== undefined ? initializer.expression.getText(parsed) : undefined;
+  };
+  const tagOf = (node: ts.JsxSelfClosingElement | ts.JsxOpeningElement): string =>
+    ts.isIdentifier(node.tagName) ? node.tagName.text : node.tagName.getText(parsed);
+
+  /**
+   * Whether this control names itself, in any of the spellings this codebase uses.
+   *
+   * Including through a spread, which is how a reusable control takes an optional name:
+   * `{...(ariaLabel === undefined ? {} : { "aria-label": ariaLabel })}`. The name may therefore be absent
+   * at runtime — and that is fine here, because the name then comes from the *caller*, and every call site
+   * is in this same scan. `select.tsx` was reported as an orphan for exactly this reason.
+   */
+  const carriesAnAriaLabel = (node: ts.JsxSelfClosingElement | ts.JsxOpeningElement): boolean =>
+    node.attributes.properties.some((property) =>
+      ts.isJsxSpreadAttribute(property)
+        ? /aria-label|ariaLabel/u.test(property.getText(parsed))
+        : ts.isJsxAttribute(property) && ts.isIdentifier(property.name) && ["ariaLabel"].includes(property.name.text),
+    ) || node.attributes.properties.some((property) => ts.isJsxAttribute(property) && property.name.getText(parsed) === "aria-label");
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+      const tag = tagOf(node);
+      if (tag === "label") {
+        const target = valueText(attribute(node, "htmlFor"));
+        if (target !== undefined) {
+          referenced.add(target);
+        }
       }
-      const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
-      const inWrappedLabel = [...wrapped].some((start) => line >= start && line - start <= 12);
-      if (!(id !== undefined && labelled.has(id)) && !inWrappedLabel) {
-        orphans.push(`${String(line)} <${match[1] ?? ""}> is neither inside a <label> nor referenced by one`);
+      if (["input", "select", "textarea", "Select"].includes(tag)) {
+        const type = valueText(attribute(node, "type"));
+        if (type !== '"hidden"' && type !== '"submit"' && !carriesAnAriaLabel(node)) {
+          controls.push({ node, tag });
+        }
       }
     }
-  }
-  return orphans;
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+
+  const insideLabel = (node: ts.Node): boolean => {
+    for (let at: ts.Node | undefined = node.parent; at !== undefined; at = at.parent) {
+      if (ts.isJsxElement(at) && tagOf(at.openingElement) === "label") {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  return controls
+    .filter(({ node }) => {
+        const id = valueText(attribute(node, "id"));
+      return !(id !== undefined && referenced.has(id)) && !insideLabel(node);
+    })
+    .map(({ node, tag }) => {
+      const line = parsed.getLineAndCharacterOfPosition(node.getStart(parsed)).line + 1;
+      return `${String(line)} <${tag}> is neither inside a <label> nor referenced by one`;
+    });
 }
 
 describe("the production UI's semantics", () => {
@@ -176,9 +250,15 @@ describe("the production UI's semantics", () => {
     // The commonest real shape in this codebase is `<label>Text<input …/></label>`, which needs no id.
     // A control that is neither wrapped nor referenced is one whose purpose a screen reader announces as
     // "edit text, blank".
-    const orphans = productionFiles().flatMap(({ file, source }) => orphanControls(source).map((what) => `${file}:${what}`));
+    const orphans = productionFiles().flatMap(({ file, source }) => orphanControls(source, file).map((what) => `${file}:${what}`));
 
     expect(orphans).toEqual([]);
+    // And the walk can still say no. Without this, a matcher that found no controls at all would look
+    // exactly like a clean repository — which is what the line-window version did on its last day.
+    expect(orphanControls('<div><input name="q" /></div>', "probe.tsx")).toHaveLength(1);
+    expect(orphanControls('<label>Q<input name="q" /></label>', "probe.tsx")).toEqual([]);
+    expect(orphanControls('<label htmlFor="q">Q</label><Select id="q" name="q" />', "probe.tsx")).toEqual([]);
+    expect(orphanControls('<div><Select name="q" /></div>', "probe.tsx")).toHaveLength(1);
   });
 
   it("gives every icon-only control a name", () => {
@@ -307,9 +387,18 @@ describe("the production UI's semantics", () => {
     const labelled = '      <label>\n        Search\n        <input type="search" name="q" />\n      </label>';
     const referenced = '      <label htmlFor="named">Search</label>\n      <input id="named" type="search" />';
 
-    expect(orphanControls(loose)).toEqual(["2 <input> is neither inside a <label> nor referenced by one"]);
-    expect(orphanControls(labelled)).toEqual([]);
-    expect(orphanControls(referenced)).toEqual([]);
+    // The two shapes almost nothing in this app writes as a string literal, and the ones the line-window
+    // version of this matcher reported sixteen false findings on.
+    const templated = '      <label htmlFor={`move-${id}`}>Move</label>\n      <select id={`move-${id}`} name="to" />';
+    const called = '      <label htmlFor={id("persona")}>Persona</label>\n      <input id={id("persona")} name="persona" />';
+
+    expect(orphanControls(loose, "probe.tsx")).toEqual(["2 <input> is neither inside a <label> nor referenced by one"]);
+    expect(orphanControls(labelled, "probe.tsx")).toEqual([]);
+    expect(orphanControls(referenced, "probe.tsx")).toEqual([]);
+    expect(orphanControls(templated, "probe.tsx")).toEqual([]);
+    expect(orphanControls(called, "probe.tsx")).toEqual([]);
+    // And a mismatched id is still a finding, so matching by text is not matching anything.
+    expect(orphanControls('<label htmlFor={id("a")}>A</label><input id={id("b")} name="b" />', "probe.tsx")).toHaveLength(1);
   });
 
   it("would notice each failure if one were introduced", () => {

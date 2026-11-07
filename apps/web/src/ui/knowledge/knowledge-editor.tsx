@@ -11,6 +11,7 @@
  */
 import type { Translator } from "@/i18n/translate";
 import type { KnowledgeTarget } from "@/server/knowledge-submission";
+import { Select } from "@/ui/select";
 
 export interface KnowledgeEditorProps {
   readonly t: Translator;
@@ -53,10 +54,15 @@ export function KnowledgeEditor({ t, document, action, suggestedTitle }: Knowled
       {isNew ? (
         <div className="field">
           <label htmlFor="knowledge-scope">{t.t("knowledge.scopeLabel")}</label>
-          <select id="knowledge-scope" name="scope" defaultValue="BUSINESS_PROFILE">
-            <option value="BUSINESS_PROFILE">{t.t("knowledge.scopeProfile")}</option>
-            <option value="WORKSPACE">{t.t("knowledge.scopeWorkspace")}</option>
-          </select>
+          <Select
+            id="knowledge-scope"
+            name="scope"
+            value="BUSINESS_PROFILE"
+            options={[
+              { value: "BUSINESS_PROFILE", label: t.t("knowledge.scopeProfile") },
+              { value: "WORKSPACE", label: t.t("knowledge.scopeWorkspace") },
+            ]}
+          />
         </div>
       ) : undefined}
 

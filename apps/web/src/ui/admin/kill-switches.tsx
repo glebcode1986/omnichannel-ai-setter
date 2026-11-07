@@ -16,6 +16,7 @@ import { SUSPENSION_SCOPES } from "@omnichannel/domain";
 
 import type { MessageKey } from "@/i18n/catalogue";
 import type { Translator } from "@/i18n/translate";
+import { Select } from "@/ui/select";
 
 export function KillSwitches({
   t,
@@ -79,13 +80,12 @@ export function KillSwitches({
       {canOperate ? (
         <form action={actions.pull} className="stack" data-admin="pull-switch">
           <label htmlFor="admin-switch-scope">{t.t("admin.switchScope")}</label>
-          <select id="admin-switch-scope" name="scope" defaultValue="WORKSPACE">
-            {SUSPENSION_SCOPES.map((scope) => (
-              <option key={scope} value={scope}>
-                {t.t(`suspensionScope.${scope}` as MessageKey)}
-              </option>
-            ))}
-          </select>
+          <Select
+            id="admin-switch-scope"
+            name="scope"
+            value="WORKSPACE"
+            options={SUSPENSION_SCOPES.map((scope) => ({ value: scope, label: t.t(`suspensionScope.${scope}` as MessageKey) }))}
+          />
 
           {/* The narrow scopes need their identifiers, and the domain refuses a scope whose identifiers
               disagree with it — a profile-scoped pause with no profile named is a global stop wearing a
