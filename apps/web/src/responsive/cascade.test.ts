@@ -495,3 +495,80 @@ describe("no rule is shadowed by a twin", () => {
     expect(css.split("\n")[(card?.line ?? 1) - 1]).toContain(".lead-column li");
   });
 });
+
+describe("a card grid, which is always a list", () => {
+  beforeEach(() => {
+    // The markup three screens render: the workspace chooser, the profile chooser and the channel cards.
+    // Each used to carry `style={{ listStyle: "none", margin: 0, padding: 0 }}` of its own, so the reset
+    // survived in three places and belonged to none of them. Moving it into the rule made the components
+    // simpler and the stylesheet load-bearing — and nothing could then say if the rule were deleted. A
+    // mutation that removed those three declarations from `.card-grid` survived every other test.
+    mount(`
+      <section class="panel">
+        <ul class="card-grid" id="grid">
+          <li class="card" id="card"><h3 id="title">Main</h3></li>
+        </ul>
+      </section>
+    `);
+  });
+
+  const style = (id: string) => getComputedStyle(document.getElementById(id) as HTMLElement);
+
+  it("draws no bullet and takes no indent from the browser's own list styling", () => {
+    expect(style("grid").listStyleType, "a bullet beside a card is the browser's default showing through").toBe("none");
+    expect(style("grid").paddingLeft, "and the 40px indent that comes with it").toBe("0px");
+    expect(style("grid").marginTop).toBe("0px");
+    expect(style("grid").marginBottom).toBe("0px");
+  });
+
+  it("sizes the card's title from the scale rather than from a number on the element", () => {
+    // `1.1rem` was written inline on two of these, which is a size on no scale and invisible to this file.
+    expect(style("title").fontSize).toBe("var(--text-l)");
+    // The shorthand, because it holds a `var()` and jsdom will not decompose one into its longhands —
+    // `marginTop` comes back empty on a rule that plainly sets it.
+    expect(style("title").margin).toBe("0 0 var(--space-1)");
+  });
+});
+
+describe("the empty state, which three screens now share", () => {
+  beforeEach(() => {
+    // One name for the Inbox's reading column and for the two screens a customer meets after signing in.
+    // It was `inbox-empty*`; a second set of the same five numbers under a second name is how the two
+    // come to differ, so the rename is only worth it while something holds the single rule in place —
+    // renaming the selector survived every other test in this repository.
+    mount(`
+      <section class="panel">
+        <div class="empty-state" id="state">
+          <p class="empty-state-title" id="title">Nothing yet</p>
+          <p class="empty-state-body" id="body">What this is, in one line.</p>
+        </div>
+      </section>
+      <div class="inbox-thread-empty"><div class="empty-state inbox-empty" id="thread"></div></div>
+    `);
+  });
+
+  const style = (id: string) => getComputedStyle(document.getElementById(id) as HTMLElement);
+
+  it("is a centred column with room around it, not a sentence floating in a wide box", () => {
+    const state = style("state");
+    expect(state.display).toBe("flex");
+    expect(state.flexDirection).toBe("column");
+    expect(state.alignItems).toBe("center");
+    expect(state.justifyContent).toBe("center");
+    expect(state.textAlign).toBe("center");
+    expect(state.padding).toBe("var(--space-6) var(--space-5)");
+  });
+
+  it("holds its explanation to a readable measure", () => {
+    // A line of explanation stretched to the width of a panel is a line nobody finishes.
+    expect(style("body").maxWidth).toBe("22rem");
+    expect(style("title").fontWeight).toBe("var(--weight-semibold)");
+  });
+
+  it("leaves the column's own sizing to the column", () => {
+    // `flex: 1` is the thread column filling the height `.inbox-thread-empty` gives it, which is the one
+    // thing about this box that is the Inbox's business and not the shared rule's.
+    expect(style("thread").flexGrow).toBe("1");
+    expect(style("state").flexGrow, "and no other use of it grows into anything").not.toBe("1");
+  });
+});

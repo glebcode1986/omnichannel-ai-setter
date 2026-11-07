@@ -55,7 +55,7 @@ export function ChannelCards({ t, channels, offered, connect = {} }: ChannelCard
     <section aria-labelledby="channels-heading" className="stack">
       <h2 id="channels-heading">{t.t("setup.channelsTitle")}</h2>
       {channels.length === 0 ? <p className="muted">{t.t("setup.noChannels")}</p> : undefined}
-      <ul className="card-grid" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      <ul className="card-grid">
         {offered.map((channel) => {
           const account = channels.find((candidate) => candidate.channel === channel);
           const readiness = account === undefined ? "NOT_CONFIGURED" : channelReadiness(account);

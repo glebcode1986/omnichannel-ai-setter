@@ -6,6 +6,9 @@
  * store refuses again inside its own transaction. An AGENT who constructs the request gets
  * `WorkspacePermissionError` whether or not this component drew a button for them.
  *
+ * On the product's own field frame — `form-stack` holding a `form-grid` of `field`s — and not on
+ * `knowledge-editor`, which is what it used to borrow: a class named after a different feature.
+ *
  * When the control is withheld the reason is said out loud instead of leaving a blank space, because "I
  * cannot find where to add a profile" and "I am not allowed to" are different problems and only one of
  * them is worth asking an administrator about.
@@ -31,14 +34,20 @@ export function CreateProfileForm({ t, action, allowed }: CreateProfileFormProps
   }
 
   return (
-    <form action={action} className="knowledge-editor" data-form="create-profile">
-      <label htmlFor="profile-name">{t.t("onboarding.profileNameLabel")}</label>
-      <input id="profile-name" name="name" type="text" required maxLength={NAME_MAX_LENGTH} />
-      <p className="muted">{t.t("onboarding.nameHint", { max: String(NAME_MAX_LENGTH) })}</p>
+    <form action={action} className="form-stack" data-form="create-profile">
+      <div className="form-grid">
+        <div className="field">
+          <label htmlFor="profile-name">{t.t("onboarding.profileNameLabel")}</label>
+          <input id="profile-name" name="name" type="text" required maxLength={NAME_MAX_LENGTH} />
+          <p className="muted">{t.t("onboarding.nameHint", { max: String(NAME_MAX_LENGTH) })}</p>
+        </div>
+      </div>
 
-      <button className="button" data-variant="primary" type="submit" data-action="create-profile">
-        {t.t("onboarding.createProfile")}
-      </button>
+      <div className="form-actions">
+        <button className="button" data-variant="primary" type="submit" data-action="create-profile">
+          {t.t("onboarding.createProfile")}
+        </button>
+      </div>
     </form>
   );
 }

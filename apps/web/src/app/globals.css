@@ -969,10 +969,25 @@ details[open] > summary::before {
 
 /* ---- cards and checklist ----------------------------------------------------------------------- */
 
+/*
+ * A grid of cards, which in this product is always a `<ul>`.
+ *
+ * The list reset belongs here and not at each call site. Three components carried
+ * `style={{ listStyle: "none", margin: 0, padding: 0 }}` — the same three declarations written out three
+ * times, in hand-typed values, on the one screen a new customer sees first. Harmless on a `<div>`, so
+ * the rule costs nothing where the grid is not a list.
+ */
 .card-grid {
   display: grid;
   gap: var(--gap);
   grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  /* The longhand, not `list-style`, so the declaration that matters is the one a test can read back:
+     jsdom resolves the cascade but does not decompose a shorthand, and `list-style: none` left
+     `list-style-type` reporting the browser's own `disc`. Identical in effect — there is no marker
+     image here to reset. */
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
 }
 
 /*
@@ -1011,8 +1026,14 @@ details[open] > summary::before {
   min-width: 0;
 }
 
+/*
+ * The card's own title. The size is here because two onboarding cards carried a hand-written `1.1rem`
+ * inline — a value on no scale, beside a `margin` that restated this very rule.
+ */
 .card h3 {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-l);
+  line-height: var(--leading-m);
 }
 
 /*
@@ -1074,6 +1095,12 @@ details[open] > summary::before {
 
 .step-name {
   font-weight: 600;
+}
+
+/* Its own line under the name and the badge. `.step` is a wrapping flex row, so a full basis is what
+   breaks it; it was written inline on the element, which is the one place a stylesheet cannot see it. */
+.step-description {
+  flex-basis: 100%;
 }
 
 .button,
@@ -1738,38 +1765,45 @@ details[open] > summary::before {
 }
 
 /*
- * Nothing chosen yet.
+ * Nothing here yet.
  *
- * A sentence floating in the middle of a 60%-wide box is what the product said for this, which reads
- * as a page that failed to load rather than one waiting for you. A mark, a line of explanation, and
- * the height of the column it is holding open.
+ * A sentence floating in the middle of a wide box is what the product said for this, which reads as a
+ * page that failed to load rather than one waiting for you. A mark, a line of explanation, and room.
+ *
+ * One name, used by the Inbox's reading column and by the two screens a customer meets right after
+ * signing in. It was `inbox-empty*`, and the workspace screens would have needed a second set of the
+ * same five numbers under a second name — which is how the two come to differ.
  */
-.inbox-empty {
+.empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
-  flex: 1;
-  min-height: 18rem;
   padding: var(--space-6) var(--space-5);
   text-align: center;
 }
 
+/* The thread column's own sizing, which is not the empty state's business: it fills the column it is
+   holding open, and `.inbox-thread-empty` below is what gives that column its height. */
+.inbox-empty {
+  flex: 1;
+}
+
 /* The section's own glyph, enlarged. Not the brand: a logo in an empty state says "the product",
-   and what this space needs to say is "the inbox is waiting". */
-.inbox-empty-mark {
+   and what this space needs to say is "this part is waiting". */
+.empty-state-mark {
   display: inline-flex;
   color: var(--text-muted);
   opacity: 0.55;
 }
 
-.inbox-empty-mark svg {
+.empty-state-mark svg {
   width: 32px;
   height: 32px;
 }
 
-.inbox-empty-title {
+.empty-state-title {
   margin: 0;
   font-size: var(--text-m);
   line-height: var(--leading-m);
@@ -1777,7 +1811,7 @@ details[open] > summary::before {
   color: var(--text);
 }
 
-.inbox-empty-body {
+.empty-state-body {
   margin: 0;
   max-width: 22rem;
   color: var(--text-muted);

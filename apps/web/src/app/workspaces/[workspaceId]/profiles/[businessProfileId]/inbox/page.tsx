@@ -38,12 +38,12 @@ export default async function InboxPage({
       />
       {/* Holds the middle column open on a desktop so choosing a conversation does not shift the list. */}
       <section className="inbox-thread inbox-thread-empty" aria-live="polite">
-        <div className="inbox-empty">
-          <span className="inbox-empty-mark">
+        <div className="empty-state inbox-empty">
+          <span className="empty-state-mark">
             <SectionIcon section="inbox" />
           </span>
-          <p className="inbox-empty-title">{screen.t.t("inbox.chooseConversation")}</p>
-          <p className="inbox-empty-body">{screen.t.t("inbox.chooseConversationBody")}</p>
+          <p className="empty-state-title">{screen.t.t("inbox.chooseConversation")}</p>
+          <p className="empty-state-body">{screen.t.t("inbox.chooseConversationBody")}</p>
         </div>
       </section>
     </div>
