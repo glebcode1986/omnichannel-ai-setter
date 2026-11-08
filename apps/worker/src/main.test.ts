@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { unexpectedStderrEvents } from "./testing/permitted-stderr";
+
 const appDir = path.resolve(import.meta.dirname, "..");
 
 interface ProcessResult {
@@ -57,36 +59,14 @@ const ANTHROPIC_API_KEY = "sk-ant-fake-key-for-tests";
 const VALID_ENV: Readonly<Record<string, string>> = { NODE_ENV: "test", LOG_LEVEL: "info", REDIS_URL, DATABASE_URL, ANTHROPIC_API_KEY };
 
 /**
- * The five warnings these runs may legitimately produce, and nothing else.
+ * Nothing on stderr but the five events `testing/permitted-stderr.ts` allows, and never the URL.
  *
- * - `queue.redis_unavailable`: Redis is deliberately unreachable in most of these runs, and surviving it
- *   quietly (without echoing the URL) is the point.
- * - `worker.no_channel_adapter`: no Meta app credentials are configured, so the worker correctly
- *   announces at boot that it cannot deliver, rather than discovering it on the first customer message.
- * - `worker.no_media_port`: no credential-encryption key is configured, so no stored access token can be
- *   decrypted and no recording can be fetched. Announced at boot for the same reason as the line above,
- *   and a voice note then fails with a named reason that becomes a review item (Issue #21).
- * - `worker.lingering_after_stop`: the process outlived its own shutdown deadline because a handle some
- *   library owns stayed open after everything the worker owns had closed. Not a failed shutdown — the
- *   worker reports it and still exits 0 (see `shutdown.ts`). Rare locally, seen on loaded CI runners.
- * - `queue.client_error`: a queue client's own connection failure, carrying the error's name and code
- *   and never the URL. The monitor used to drop this one, and dropping it is what killed the worker
- *   during the outage it was built to survive, so its presence here is the fix rather than noise. One
- *   per queue family per outage, which is why a run without Redis produces four.
- *
- * A genuine shutdown timeout is a different event, at error level, and would fail both this check and
- * the exit code. The URL check below is what keeps this list from becoming a way to admit a leak.
+ * The list lives there rather than here because `bundle.test.ts` asserts the same thing about the same
+ * process, and kept its own copy of it — four of the five — so a documented, expected outcome failed the
+ * build on a loaded machine.
  */
-const PERMITTED_STDERR_EVENTS = new Set([
-  "queue.redis_unavailable",
-  "queue.client_error",
-  "worker.no_channel_adapter",
-  "worker.no_media_port",
-  "worker.lingering_after_stop",
-]);
-
 function expectNoUnexpectedStderr(stderr: string): void {
-  expect(events(stderr).filter((event) => !PERMITTED_STDERR_EVENTS.has(event))).toEqual([]);
+  expect(unexpectedStderrEvents(stderr)).toEqual([]);
   expect(stderr).not.toContain("127.0.0.1:1");
 }
 
@@ -220,25 +200,68 @@ describe.skipIf(process.platform === "win32")("worker entrypoint", () => {
     expect(startedFields(result.stdout).loops).toContain("checkout_expiry");
   }, 30_000);
 
-  it("keeps running and still shuts down gracefully when its stdout pipe is closed", async () => {
-    const result = await new Promise<ProcessResult>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
-        cwd: appDir,
-        env: { PATH: process.env.PATH ?? "", ...VALID_ENV, LOG_LEVEL: "debug" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stderr = "";
-      child.stdout.destroy();
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-      child.on("error", reject);
-      child.on("close", (code, signal) => resolve({ code, signal, stdout: "", stderr }));
-      setTimeout(() => child.kill("SIGTERM"), 2_000);
+  /*
+   * Two cases, because the one they replaced raced its own subject.
+   *
+   * It destroyed stdout at spawn and then sent SIGTERM on a **fixed two-second timer**. Every other test
+   * here waits for `"worker.started"` before signalling; this one could not, having thrown stdout away,
+   * so it guessed. `main.ts` installs the shutdown handlers immediately before `runtime.start()` logs
+   * that line — so a SIGTERM that arrives first meets no handler and Node's default action terminates
+   * the process. The assertion then reads `code: null`, a process killed by a signal, and calls it a
+   * failed graceful shutdown. Booting through `tsx` takes longer than two seconds on a loaded machine,
+   * which is exactly when this suite runs, and it failed here twice.
+   *
+   * Neither case below contains a clock.
+   */
+  it("boots with a closed stdout pipe and does not die of it", async () => {
+    // A write to a destroyed pipe is an `EPIPE` on the first log line. Getting as far as the delivery
+    // engine's own boot warning — which goes to stderr — is the proof that it did not.
+    const outcome = await new Promise<{ readonly booted: boolean; readonly stderr: string; readonly child: ReturnType<typeof spawn> }>(
+      (resolve, reject) => {
+        const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
+          cwd: appDir,
+          env: { PATH: process.env.PATH ?? "", ...VALID_ENV, LOG_LEVEL: "debug" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stderr = "";
+        child.stdout.destroy();
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+          if (stderr.includes('"event":"worker.no_channel_adapter"')) {
+            resolve({ booted: true, stderr, child });
+          }
+        });
+        child.on("error", reject);
+        // Whichever happens first. Dying before that line is the failure this case is about, and it
+        // resolves rather than hangs so the assertion below is what reports it.
+        child.on("close", () => {
+          resolve({ booted: false, stderr, child });
+        });
+      },
+    );
+
+    expect(outcome.booted, "it got through boot with nothing to write to").toBe(true);
+    expect(outcome.stderr).not.toContain("worker.fatal");
+    // No graceful claim is made here, so nothing is signalled: SIGKILL only releases the process.
+    outcome.child.kill("SIGKILL");
+  }, 30_000);
+
+  it("still shuts down gracefully when its stdout pipe is closed", async () => {
+    // Keyed to `worker.started`, which is logged immediately *after* the shutdown handlers are installed,
+    // so the signal below cannot arrive before something is listening for it. stdout is destroyed the
+    // moment that line is read — which is what the shutdown sequence then fails to write to.
+    const result = await runWorker({ ...VALID_ENV, LOG_LEVEL: "debug" }, (stdout, child) => {
+      // `child.stdout` is typed nullable because a `spawn` can be configured without the pipe; this one
+      // is not, and the callback only runs on data from it.
+      const pipe = child.stdout;
+      if (pipe !== null && !pipe.destroyed && stdout.includes('"event":"worker.started"')) {
+        pipe.destroy();
+        child.kill("SIGTERM");
+      }
     });
 
     expect(result.stderr).not.toContain("worker.fatal");
-    expect(result.code).toBe(0);
+    expect(result.code, "a signal-killed process reports a null code, which is what the fixed timer used to produce").toBe(0);
   }, 30_000);
 
   it("rides out its own Redis being unreachable, and says it survived", async () => {

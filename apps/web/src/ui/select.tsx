@@ -257,9 +257,18 @@ export function Select({ name, options, value, ariaLabel, id, disabled = false, 
 
   return (
     <div className="select" data-open={String(open)}>
-      {/* What the form sees. The native control is gone by now, so this is the only thing carrying a
-          value, and it carries it under the same name the form already expected. */}
-      <input type="hidden" name={name} value={chosen} />
+      {/*
+        What the form sees. The native control is gone by now, so this is the only thing carrying a value,
+        and it carries it under the same name the form already expected.
+
+        `disabled` is on it for a reason that is easy to miss: a disabled control is **excluded from
+        submission**, and a disabled `<select>` therefore sends nothing at all. Without this the hidden
+        input kept sending, so converting the settings screen quietly turned eleven fields a viewer may
+        not edit from absent into present — the same values, but "the form did not carry this" and "the
+        form carried the stored value" are different facts, and a partial update or an audit of what was
+        submitted reads them differently. Measured against a native control side by side, not assumed.
+      */}
+      <input type="hidden" name={name} value={chosen} disabled={disabled} />
       <button
         className="select-button"
         type="button"

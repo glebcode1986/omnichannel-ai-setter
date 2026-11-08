@@ -4,20 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { bundleWorker } from "../bundle";
+import { unexpectedStderrEvents } from "./testing/permitted-stderr";
 
 const appDir = path.resolve(import.meta.dirname, "..");
 // Inside apps/worker/node_modules so externalized dependencies resolve exactly as they do from dist/.
 const outDir = path.join(appDir, "node_modules", ".cache", "worker-bundle-test");
 
-/**
- * Boot-time warnings this run legitimately produces: no Redis, no Meta app credentials, and no
- * credential-encryption key — so no stored access token can be decrypted and no recording fetched.
- *
- * `queue.client_error` is each queue client reporting that failure in its own right — name and code,
- * never the URL, once per queue family. The monitor used to drop it instead, which is what ended the
- * process during an outage it was supposed to ride out, so it belongs on this list.
- */
-const EXPECTED_STARTUP_WARNINGS = ["queue.redis_unavailable", "queue.client_error", "worker.no_channel_adapter", "worker.no_media_port"];
 /** Whatever this environment provides, the log must never echo it back. */
 const REDIS_URL = process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:1";
 
@@ -58,9 +50,12 @@ describe.skipIf(process.platform === "win32")("production bundle", () => {
     // Without a reachable Redis, without Meta app credentials and without a credential key, the only
     // stderr entries allowed are the URL-free outage warning and the worker saying what it cannot do —
     // which it should say at boot rather than discover on the first customer message.
-    for (const line of result.stderr.split("\n").filter((entry) => entry.trim().length > 0)) {
-      expect(EXPECTED_STARTUP_WARNINGS).toContain((JSON.parse(line) as { event: string }).event);
-    }
+    //
+    // From `testing/permitted-stderr.ts`, not from a list of its own. This test kept a copy of four of
+    // the five, and the one it was missing — `worker.lingering_after_stop` — is the event the other
+    // file's own prose calls expected on a loaded machine. So this assertion failed `pnpm verify` for a
+    // documented outcome, which is the cost of the second copy rather than of anything the worker did.
+    expect(unexpectedStderrEvents(result.stderr)).toEqual([]);
     // The list above admits a connection error, so this is what keeps it from admitting a leak with it:
     // a connection error's own message carries the host and can carry a password.
     expect(result.stderr).not.toContain(REDIS_URL);

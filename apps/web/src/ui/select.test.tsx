@@ -226,6 +226,34 @@ describe("the keyboard, which is the part a hand-built menu loses", () => {
   });
 });
 
+describe("a control the reader may not change", () => {
+  it("submits nothing, which is what the native control it replaced did", () => {
+    // The defect this is here for, found by rendering the two side by side: a disabled `<select>` is
+    // excluded from submission and sends no field at all, while a hidden input beside a disabled button
+    // keeps sending. The settings screen disables eleven controls for a viewer who may not edit, so the
+    // conversion had quietly turned eleven absent fields into eleven present ones.
+    const { container } = render(
+      <form>
+        <Select name="mode" options={OPTIONS} value="WA" ariaLabel="Channel" disabled />
+      </form>,
+    );
+
+    const form = container.querySelector("form") as HTMLFormElement;
+    expect([...new FormData(form).keys()]).toEqual([]);
+    expect(screen.getByRole("combobox", { name: "Channel" })).toHaveProperty("disabled", true);
+  });
+
+  it("still submits when it is not disabled, so the rule above is not simply off", () => {
+    const { container } = render(
+      <form>
+        <Select name="mode" options={OPTIONS} value="WA" ariaLabel="Channel" />
+      </form>,
+    );
+
+    expect([...new FormData(container.querySelector("form") as HTMLFormElement).entries()]).toEqual([["mode", "WA"]]);
+  });
+});
+
 describe("inside a wrapping label, which is how every filter row in this app is written", () => {
   const wrapped = () =>
     render(
