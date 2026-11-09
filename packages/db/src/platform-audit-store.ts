@@ -19,6 +19,7 @@
  *
  * **It is append-only**, by trigger. An internal audit somebody could edit is not one.
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   PLATFORM_AUDIT_KINDS,
   platformAuditSeverity,
@@ -135,23 +136,28 @@ export async function searchPlatformAuditEvents(db: DbExecutor, context: Platfor
   const limit = Math.min(Math.max(Math.trunc(search.limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
   const rows = await db.platformAuditEvent.findMany({
     where: {
-      ...(search.kinds === undefined || search.kinds.length === 0 ? {} : { kind: { in: [...search.kinds] } }),
-      ...(search.severities === undefined || search.severities.length === 0 ? {} : { severity: { in: [...search.severities] } }),
-      ...(search.workspaceId === undefined ? {} : { workspaceId: search.workspaceId }),
-      ...(search.platformMemberId === undefined ? {} : { platformMemberId: search.platformMemberId }),
+      ...(search.kinds === undefined || search.kinds.length === 0 ? {} : ({ kind: { in: [...search.kinds] } } satisfies Prisma.PlatformAuditEventWhereInput)),
+      ...(search.severities === undefined || search.severities.length === 0 ? {} : ({ severity: { in: [...search.severities] } } satisfies Prisma.PlatformAuditEventWhereInput)),
+      ...(search.workspaceId === undefined ? {} : ({ workspaceId: search.workspaceId } satisfies Prisma.PlatformAuditEventWhereInput)),
+      ...(search.platformMemberId === undefined ? {} : ({ platformMemberId: search.platformMemberId } satisfies Prisma.PlatformAuditEventWhereInput)),
       ...(search.from === undefined && search.to === undefined
         ? {}
-        : { occurredAt: { ...(search.from === undefined ? {} : { gte: search.from }), ...(search.to === undefined ? {} : { lte: search.to }) } }),
+        : ({
+            occurredAt: {
+              ...(search.from === undefined ? {} : ({ gte: search.from } satisfies Prisma.DateTimeFilter)),
+              ...(search.to === undefined ? {} : ({ lte: search.to } satisfies Prisma.DateTimeFilter)),
+            },
+          } satisfies Prisma.PlatformAuditEventWhereInput)),
       // Keyset paging on `(occurredAt, id)`, the same shape the customer audit uses: an offset would
       // skip or repeat rows as new ones land, and new ones land while an operator is reading.
       ...(search.cursor === undefined
         ? {}
-        : {
+        : ({
             OR: [
               { occurredAt: { lt: search.cursor.occurredAt } },
               { occurredAt: search.cursor.occurredAt, id: { lt: search.cursor.id } },
             ],
-          }),
+          } satisfies Prisma.PlatformAuditEventWhereInput)),
     },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: limit + 1,

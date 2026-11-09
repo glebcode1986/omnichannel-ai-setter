@@ -230,7 +230,7 @@ export async function saveStyleProfile(
   // Conditional on the same instant the decision was made from, so a save committed between the read
   // above and this write loses rather than being overwritten.
   const changed = await db.styleProfile.updateMany({
-    where: { id: existing.id, ...(expected === undefined ? {} : { updatedAt: existing.updatedAt }) },
+    where: { id: existing.id, ...(expected === undefined ? {} : ({ updatedAt: existing.updatedAt } satisfies Prisma.StyleProfileWhereInput)) },
     data,
   });
   if (changed.count === 0) {

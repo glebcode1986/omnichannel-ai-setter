@@ -27,6 +27,7 @@
  * (which ignores the time window). Those two disagree with the delivery path and are their own change;
  * a console that reused either would show a third answer to "what is paused right now".
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   activeSuspension,
   SUSPENSION_SCOPES,
@@ -449,8 +450,10 @@ export async function listReconciliations(
   requirePlatformPermission(context, "READ_METADATA", "list ambiguous operations");
   const rows = await db.deliveryReconciliation.findMany({
     where: {
-      ...(query.workspaceId === undefined ? {} : { workspaceId: query.workspaceId }),
-      ...(query.states === undefined || query.states.length === 0 ? { state: { in: ["PENDING", "NEEDS_HUMAN"] } } : { state: { in: query.states as never } }),
+      ...(query.workspaceId === undefined ? {} : ({ workspaceId: query.workspaceId } satisfies Prisma.DeliveryReconciliationWhereInput)),
+      ...(query.states === undefined || query.states.length === 0
+        ? ({ state: { in: ["PENDING", "NEEDS_HUMAN"] } } satisfies Prisma.DeliveryReconciliationWhereInput)
+        : ({ state: { in: query.states as never } } satisfies Prisma.DeliveryReconciliationWhereInput)),
     },
     orderBy: [{ detectedAt: "desc" }],
     take: Math.min(Math.max(Math.trunc(query.limit ?? 50), 1), 200),

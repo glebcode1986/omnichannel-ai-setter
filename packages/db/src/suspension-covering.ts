@@ -22,6 +22,7 @@
  * transaction, after taking the key that orders it against a switch being pulled. That was the original
  * reason for the second copy, and it is one parameter rather than a second implementation.
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   activeSuspension,
   toBusinessProfileId,
@@ -64,12 +65,12 @@ export async function loadCoveringSuspensions(db: DbExecutor, target: CoveringTa
         {
           scope: "BUSINESS_PROFILE",
           workspaceId: target.workspaceId,
-          ...(target.businessProfileId === undefined ? {} : { businessProfileId: target.businessProfileId }),
+          ...(target.businessProfileId === undefined ? {} : ({ businessProfileId: target.businessProfileId } satisfies Prisma.AutomationSuspensionWhereInput)),
         },
         {
           scope: "CHANNEL_ACCOUNT",
           workspaceId: target.workspaceId,
-          ...(target.channelAccountId === undefined ? {} : { channelAccountId: target.channelAccountId }),
+          ...(target.channelAccountId === undefined ? {} : ({ channelAccountId: target.channelAccountId } satisfies Prisma.AutomationSuspensionWhereInput)),
         },
       ],
     },

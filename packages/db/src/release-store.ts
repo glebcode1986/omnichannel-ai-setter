@@ -19,6 +19,7 @@
  * line in a report. And when that question cannot be answered — too many unreviewed proposals stacked
  * above the live one to see it — the answer is a refusal rather than a shrug: see `readReleaseInForce`.
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   isGateSeverity,
   isReviewVerdict,
@@ -334,7 +335,7 @@ const CANDIDATE_SELECT = {
  */
 export async function readRelease(db: DbExecutor, sha: string, stage?: RolloutStage): Promise<ReleaseView | null> {
   const row = await db.releaseRecord.findFirst({
-    where: { sha, ...(stage === undefined ? {} : { stage }) },
+    where: { sha, ...(stage === undefined ? {} : ({ stage } satisfies Prisma.ReleaseRecordWhereInput)) },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: CANDIDATE_SELECT,
   });
@@ -539,7 +540,7 @@ async function readCatalogue(db: DbExecutor, at: Date | undefined, limit: number
     // this literal — the duplicate-key shape that cost `listKillSwitches` its expiry predicate.
     where: {
       reviewedSha: { in: [...new Set(rows.map((row) => row.sha))] },
-      ...(at === undefined ? {} : { submittedAt: { lte: at } }),
+      ...(at === undefined ? {} : ({ submittedAt: { lte: at } } satisfies Prisma.ReleaseReviewWhereInput)),
     },
     select: { reviewer: true, verdict: true, reviewedSha: true, submittedAt: true },
   });

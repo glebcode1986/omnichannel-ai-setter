@@ -5300,3 +5300,46 @@ working notes, which claimed it had been "filed as a separate task". It had not 
 PR thread and every issue finds no mention of it. It therefore sat unreported for eighteen days while the
 chain grew by nine branches. The finding was sound; the handoff of it was not, and the lesson is that a
 defect is not filed until it is somewhere the owner can read.
+
+## A key inside a conditional spread is not type-checked — 2026-11-09
+
+`...(x === undefined ? {} : { key: x })` is how this repository passes an optional field, and **renaming
+that key produces no diagnostic**: excess-property checking does not apply to the result of a spread. The
+same key written as a plain property raises `TS2561`. `exactOptionalPropertyTypes` is why the idiom exists,
+so the pattern is not the mistake — the silence is.
+
+Measured with the type checker rather than a text search, because the two disagree sharply: of **570**
+sites, **36** target `Readonly<Record<string, unknown>>` or Prisma's `JsonObject`, where any key is legal
+and a guard would assert nothing, and **23** have no contextual type at all. A raw grep counts all of them
+as problems.
+
+**Every one of the 49 `filter`-position sites is now guarded** with `satisfies <the Prisma where type>`.
+That is the position that matters: a dropped `where` key does not fail, it widens the query, which is how
+a paged read once returned another Business Profile's rows. The 84 `write` and 377 `value` sites are left
+and held by a ceiling.
+
+`scripts/verification/spread-key-ratchet.test.ts` is the gate (no database, ~7s, in the ordinary test run):
+no exposed `filter` site, a ceiling of 461 on the rest, and no unreviewed pair of spreads writing the same
+key. A generic helper (`only(cond ? {} : {…})`) looks like a guard and is **vacuous** — contextual type
+does not flow through a spread into a generic call.
+
+Two things this does **not** claim as new. That a Prisma `where` ignores an unknown key at all is recorded
+at `89bce19`, this branch's base, with the `SelectSubset` signature that explains it; reproduced here with
+the control that commit asks for (a real key given a wrong value type fails with `TS2322`, so the silence
+is the key and not an `any`). And the duplicate-key collision is the class `09280cf` had just fixed by
+hand in `listStyleExamples`, where scope and cursor both wrote `OR` and the scope lost. What is added is
+the boundary between the two guards, measured: `satisfies` on the whole `where` catches a misspelled key
+written directly and **not** one inside a spread, and `satisfies` on the branch is the reverse. This change
+applies the branch form, which is the half the task names; the direct half is left to its own change.
+
+Two defect-shaped pairs were found by the same audit, one real:
+
+- `packages/db/src/review-queue-store.ts:156+157` both write `conversation`. With `channelAccountId` and
+  `reviewMode` both set, the later spread replaces the earlier and the channel filter is silently gone.
+  **Unreachable today** — `reviewFilterOf` passes neither field, and no test sets both — so it is reported
+  and left, not repaired inside a refactor-only change.
+- `apps/web/src/server/inbox-view.ts:66+67` both write `takeover`, and are benign: both arms compare
+  `view.filter` to a different literal of a single-valued field.
+
+Full measurement, including the probe table of what the checker does and does not catch:
+`docs/handoff/CONDITIONAL_SPREAD_KEYS.md`.

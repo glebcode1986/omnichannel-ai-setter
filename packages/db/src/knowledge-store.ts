@@ -14,6 +14,7 @@
  * **A failed ingestion cannot look active.** The database refuses it: a CHECK forbids the combination, so
  * the invariant holds against this store, a migration, a console and anything written later.
  */
+import type { Prisma } from "./generated/prisma/client";
 import { createHash } from "node:crypto";
 
 import type { DbClient, DbExecutor } from "./client";
@@ -101,19 +102,19 @@ export async function listKnowledge(
       // Base knowledge (no profile) and this profile's own. Never another profile's, which is the whole
       // of tenancy here: `businessProfileId: null` is shared on purpose, anything else is not ours.
       ...scopeFilter(filter.scope, scope.businessProfileId),
-      ...(filter.status === undefined ? {} : { status: filter.status }),
-      ...(filter.indexingState === undefined ? {} : { indexingState: filter.indexingState }),
+      ...(filter.status === undefined ? {} : ({ status: filter.status } satisfies Prisma.KnowledgeDocumentWhereInput)),
+      ...(filter.indexingState === undefined ? {} : ({ indexingState: filter.indexingState } satisfies Prisma.KnowledgeDocumentWhereInput)),
       ...(filter.search === undefined || filter.search.trim() === ""
         ? {}
-        : { title: { contains: filter.search.trim(), mode: "insensitive" as const } }),
+        : ({ title: { contains: filter.search.trim(), mode: "insensitive" as const } } satisfies Prisma.KnowledgeDocumentWhereInput)),
       ...(page.cursor === undefined
         ? {}
-        : {
+        : ({
             OR: [
               { updatedAt: { lt: page.cursor.updatedAt } },
               { updatedAt: page.cursor.updatedAt, id: { lt: page.cursor.id } },
             ],
-          }),
+          } satisfies Prisma.KnowledgeDocumentWhereInput)),
     },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     take: limit + 1,
