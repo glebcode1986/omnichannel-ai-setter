@@ -41,6 +41,23 @@ explains it: `findMany<T extends …FindManyArgs>(args?: Prisma.SelectSubset<T, 
 on `suspension-covering.ts`: renaming the plainly written top-level key `liftedAt` to `liftedAtZZ` gives
 **0 errors**.
 
+**But "never checks" is too strong, and the correction matters for how a control is written.** The
+variable is not the position — it is whether a key the target *knows* sits beside the misspelled one. Six
+shapes against the real generated client, one variable:
+
+| where the unknown key was written | alone in its literal | beside a known key |
+|---|---|---|
+| top level of `where` | **`TS2561`** | **0 errors** |
+| an element of `OR` | **`TS2561`** | **0 errors** |
+| an element of `AND` | **`TS2561`** | **0 errors** |
+
+Position makes no difference at all; the companion does. So every real site here is silent for one
+reason: a `where` that filters anything carries a tenancy key, and that key is the companion. It also
+means a positive control written as `{ where: { typoZZ: v } }` **passes for the wrong reason** — it proves
+the lone-key rule, not the hole. A control for this hole needs a companion key, which is why the fixtures
+in `spread-key-audit.test.ts` carry one and why the classifier's verdict turns on exactly that
+(`weakTypeMayCatch`, which one site out of 572 qualifies for).
+
 What is added here is the sharper rule and the two measurements that fix the boundary.
 
 **Values are checked. Keys are not.** Controls run in this package, so a silent `tsc` cannot be mistaken
