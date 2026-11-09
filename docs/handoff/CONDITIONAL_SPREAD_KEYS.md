@@ -83,13 +83,25 @@ key below having a companion inside its own literal:
 | a direct key of `where` | 0 errors | **`TS2561`** |
 | inside an `OR` element | 0 errors | **`TS2561`** |
 | inside an `AND` element | 0 errors | **`TS2561`** |
-| an `AND` element arriving by an **array** spread | 0 errors | **`TS2322`** |
+| an `AND` element arriving by an **array** spread | 0 errors | **caught** (code varies — see below) |
 | **spread into the `where` object itself** | 0 errors | **0 errors** |
 
 So one annotation on the literal buys everything except the last row — and the last row is exactly what
 `satisfies` on the spread's **branch** catches. Neither guard is a substitute for the other, and together
 they are complete. This change applies the branch form, the class it was asked to close; the whole-`where`
 form is the other half and belongs to its own change.
+
+The one code worth not quoting is the array-spread row's, because it is incidental: it depends on what
+else is in the array. Measured four ways —
+
+| the array holds | code |
+|---|---|
+| the spread and nothing else | `TS2322` |
+| a predicate of a declared type beside the spread | `TS2561` |
+| (and without an annotation, every form is silent) | — |
+
+So "caught" is the fact; `TS2322` or `TS2561` is the shape of the array. Both reproduce here. The session
+on #135 found the discrepancy between our two tables and explained it rather than picking a winner.
 
 **Why a control here is easy to get wrong** — the check applies to the **literal**, not to the call, and
 at the depth being measured. A companion added to the outer `where` makes *that* literal two-keyed and

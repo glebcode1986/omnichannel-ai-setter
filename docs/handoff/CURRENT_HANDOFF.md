@@ -5330,7 +5330,8 @@ is the key and not an `any`). And the duplicate-key collision is the class `0928
 hand in `listStyleExamples`, where scope and cursor both wrote `OR` and the scope lost. What is added is
 the boundary between the two guards, measured in both directions: a `satisfies` on the whole `where`
 catches an unknown key written directly, inside an `OR` element, inside an `AND` element and even in an
-element arriving by an array spread — everything except a key **spread into the `where` object itself**,
+element arriving by an array spread (caught either way; the code there varies with what else is in the
+array) — everything except a key **spread into the `where` object itself**,
 which is exactly what `satisfies` on the spread's branch catches. The two compose and together are
 complete. This change applies the branch form, the half the task names; the whole-`where` form is the
 other half and belongs to its own change.
