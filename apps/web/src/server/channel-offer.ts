@@ -29,12 +29,18 @@
  * required property at least fails as a missing property once every key is misspelled; `Partial<Record<…>>`
  * only trips TypeScript's weak-type check, which needs *no* key in common — and a sibling always leaves one.
  *
+ * `Pick` rather than the whole `connect` type, because the whole type admits *either* key: a branch that
+ * supplied `WHATSAPP` — the copy-paste this file invites, two near-identical branches — satisfied it and
+ * compiled, withdrawing Instagram exactly as the original defect did. Narrowed to the one key each branch
+ * is responsible for, that is `TS2322`. Measured; the broad form survives it and this one does not.
+ *
  * The class is wider than this file — 124 of these spreads in `apps/web/src` reach a declared key set —
  * but two things decide whether any one of them matters, and neither is the key's name. **The verdict
  * belongs to the site:** `whatsapp-account-events.ts` spreads the same `reason` nine lines apart into a
  * declared type and into `LogFields`, which is `Readonly<Record<string, unknown>>` and admits any key, so
  * `satisfies` there would be a no-op that merely looks like hardening. **And a test defends only a field
- * it asserts** — a value computed in the flow rather than read back proves nothing about the key landing.
+ * it asserts** — the shape to look for is a *fake that answers a constant*, which silently moves the only
+ * assertion into a test that calls the store directly and never exercises the spread at all.
  */
 import { WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "@omnichannel/db";
 import type { ChannelType } from "@omnichannel/domain";
@@ -66,7 +72,10 @@ export function channelOffer(
       // Instagram is a form POST to our own route, which answers `303` to Meta's authorize URL and sets
       // the state cookie on the same response.
       ...(instagramOAuthConfigured()
-        ? ({ INSTAGRAM: { kind: "REDIRECT", action: `${base}/instagram/connect` } } satisfies ChannelOffer["connect"])
+        ? ({ INSTAGRAM: { kind: "REDIRECT", action: `${base}/instagram/connect` } } satisfies Pick<
+            ChannelOffer["connect"],
+            "INSTAGRAM"
+          >)
         : {}),
       // WhatsApp is Embedded Signup (ADR-015): Meta hands the result to our page through their SDK, so
       // the route answers JSON and something in the browser drives it.
@@ -77,7 +86,7 @@ export function channelOffer(
               connectPath: `${base}/whatsapp/connect`,
               completePath: `${base}/whatsapp/complete`,
             },
-          } satisfies ChannelOffer["connect"])
+          } satisfies Pick<ChannelOffer["connect"], "WHATSAPP">)
         : {}),
     },
   };
