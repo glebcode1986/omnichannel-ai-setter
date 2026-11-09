@@ -16,6 +16,18 @@
  *
  * `offered` lists both channels regardless, so an unconnected one still gets a card that says where it
  * stands; `connect` carries an entry only for the ones that can actually be started.
+ *
+ * **Each conditional branch carries `satisfies`, and that is load-bearing.** The same hole that produced
+ * the dead prop reaches object literals, and what opens it is the **spread**, not the shape of the target:
+ * excess-property checking applies to an object literal written in place and not to the result of a
+ * spread. Measured both ways against this one type — `INSTAGRAM_TYPO` as a direct property of `connect`
+ * is `TS2353`, while the identical key inside a bare `...(cond ? { … } : {})` compiles with no diagnostic
+ * at all, which would have withdrawn Instagram's connect button on every deployment: the exact defect
+ * this file was written to end. `satisfies` puts the branch back in a checked position, so both are errors.
+ *
+ * Being all-optional costs this type its last fallback rather than causing the hole. A target with a
+ * required property at least fails as a missing property once every key is misspelled; `Partial<Record<…>>`
+ * only trips TypeScript's weak-type check, which needs *no* key in common — and a sibling always leaves one.
  */
 import { WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "@omnichannel/db";
 import type { ChannelType } from "@omnichannel/domain";
@@ -46,17 +58,19 @@ export function channelOffer(
     connect: {
       // Instagram is a form POST to our own route, which answers `303` to Meta's authorize URL and sets
       // the state cookie on the same response.
-      ...(instagramOAuthConfigured() ? { INSTAGRAM: { kind: "REDIRECT" as const, action: `${base}/instagram/connect` } } : {}),
+      ...(instagramOAuthConfigured()
+        ? ({ INSTAGRAM: { kind: "REDIRECT", action: `${base}/instagram/connect` } } satisfies ChannelOffer["connect"])
+        : {}),
       // WhatsApp is Embedded Signup (ADR-015): Meta hands the result to our page through their SDK, so
       // the route answers JSON and something in the browser drives it.
       ...(whatsAppSignupConfigured()
-        ? {
+        ? ({
             WHATSAPP: {
-              kind: "EMBEDDED" as const,
+              kind: "EMBEDDED",
               connectPath: `${base}/whatsapp/connect`,
               completePath: `${base}/whatsapp/complete`,
             },
-          }
+          } satisfies ChannelOffer["connect"])
         : {}),
     },
   };
