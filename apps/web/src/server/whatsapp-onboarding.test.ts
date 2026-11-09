@@ -42,6 +42,7 @@ import {
   FLAGGED_QUALITY_REASON,
   startWhatsAppConnect,
   TEMPLATES_UNSYNCED_REASON,
+  type DisconnectDependencies,
   type WhatsAppOnboardingDependencies,
 } from "./whatsapp-onboarding";
 
@@ -251,6 +252,8 @@ function fakeStore(options: { readonly liveElsewhere?: string } = {}) {
 
 interface Harness {
   readonly dependencies: WhatsAppOnboardingDependencies;
+  /** What the disconnect route is given: the same store and clock, and transport without credentials. */
+  readonly disconnectDependencies: DisconnectDependencies;
   readonly store: ReturnType<typeof fakeStore>;
   /** Raw log lines, which is how the redaction assertions can look at everything that was written. */
   readonly logs: string[];
@@ -276,6 +279,15 @@ function harness(results: readonly WhatsAppHttpResult[], options: { readonly liv
         ids += 1;
         return `id_${String(ids)}`;
       },
+    },
+    // Built by picking the transport out of the signup config rather than by passing the config itself:
+    // what reaches `disconnectWhatsAppAccount` here holds no `appId`, `appSecret` or `configId`, which is
+    // the state a deployment is in once those three are unset.
+    disconnectDependencies: {
+      store: store.store,
+      graph: { http: config.http, graphVersion: config.graphVersion },
+      logger,
+      now: () => NOW,
     },
   };
 }
@@ -390,7 +402,7 @@ describe("a valid onboarding", () => {
       authorize(),
     );
     expect(connected.ok).toBe(true);
-    await disconnectWhatsAppAccount(test.dependencies, context(), connected.ok ? connected.channelAccountId : "");
+    await disconnectWhatsAppAccount(test.disconnectDependencies, context(), connected.ok ? connected.channelAccountId : "");
 
     const second = await started(test);
     const again = await completeWhatsAppConnect(
@@ -759,7 +771,7 @@ describe("disconnecting", () => {
     );
     const channelAccountId = connected.ok ? connected.channelAccountId : "";
 
-    const result = await disconnectWhatsAppAccount(test.dependencies, context(), channelAccountId);
+    const result = await disconnectWhatsAppAccount(test.disconnectDependencies, context(), channelAccountId);
 
     expect(result).toEqual({ ok: true, unsubscribed: true });
     expect(test.store.accounts[0]?.status).toBe("DISCONNECTED");
@@ -779,16 +791,42 @@ describe("disconnecting", () => {
       authorize(),
     );
 
-    const result = await disconnectWhatsAppAccount(test.dependencies, context(), connected.ok ? connected.channelAccountId : "");
+    const result = await disconnectWhatsAppAccount(test.disconnectDependencies, context(), connected.ok ? connected.channelAccountId : "");
 
     expect(result).toEqual({ ok: true, unsubscribed: false });
     expect(test.store.accounts[0]?.status).toBe("DISCONNECTED");
   });
 
+  it("still detaches an account connected while there was an app, with no app configuration left", async () => {
+    // The case that must not regress. `disconnectDependencies` carries no `appId`, `appSecret` or
+    // `configId` — the state a deployment is in once those three are unset — and the account must still
+    // come off. Refusing would leave it readable, un-sendable, still holding an encrypted token, and with
+    // no control that could remove it, because this route is the only control there is.
+    const test = harness([...happyScript(), success()]);
+    const start = await started(test);
+    const connected = await completeWhatsAppConnect(
+      test.dependencies,
+      { state: start.state, code: EXCHANGE_CODE, notice: finishNotice(), pin: PIN, cookieNonce: start.cookieNonce },
+      authorize(),
+    );
+    expect(connected.ok).toBe(true);
+
+    const result = await disconnectWhatsAppAccount(test.disconnectDependencies, context(), connected.ok ? connected.channelAccountId : "");
+
+    expect(result).toEqual({ ok: true, unsubscribed: true });
+    // Asserted on the store, not only on the returned `ok`: an `ok` above a write that never happened is
+    // the shape that passes while the token stays where it was.
+    expect(test.store.accounts[0]?.status).toBe("DISCONNECTED");
+    expect(test.store.connections[0]).toMatchObject({ connectedAt: undefined, webhookSubscribedAt: undefined });
+    expect([...test.store.credentials.values()][0]?.revokedAt).toEqual(NOW);
+    // And Meta was still told, because the unsubscribe edge needs the business token rather than our app.
+    expect(test.requests.at(-1)?.url).toContain(`${WABA_ID}/subscribed_apps?method=delete`);
+  });
+
   it("reports nothing to disconnect for an account that is not this profile's", async () => {
     const test = harness([]);
 
-    expect(await disconnectWhatsAppAccount(test.dependencies, context(), "ca_someone_else")).toEqual({ ok: false, unsubscribed: false });
+    expect(await disconnectWhatsAppAccount(test.disconnectDependencies, context(), "ca_someone_else")).toEqual({ ok: false, unsubscribed: false });
   });
 });
 
@@ -801,7 +839,7 @@ describe("secret redaction", () => {
       { state: start.state, code: EXCHANGE_CODE, notice: finishNotice(), pin: PIN, cookieNonce: start.cookieNonce },
       authorize(),
     );
-    await disconnectWhatsAppAccount(test.dependencies, context(), connected.ok ? connected.channelAccountId : "");
+    await disconnectWhatsAppAccount(test.disconnectDependencies, context(), connected.ok ? connected.channelAccountId : "");
 
     const written = JSON.stringify(test.logs);
     expect(written).not.toContain(EXCHANGE_CODE);

@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { UnauthenticatedError } from "./workspace-context";
 import { createWhatsAppCompleteHandler, createWhatsAppConnectHandler, createWhatsAppDisconnectHandler, type WhatsAppRouteDependencies } from "./whatsapp-routes";
 import { exchanged, debugToken, finishNotice, phoneNumbers, signupConfig, success, templates } from "./testing/whatsapp-signup";
-import { startWhatsAppConnect, type WhatsAppOnboardingDependencies } from "./whatsapp-onboarding";
+import { startWhatsAppConnect, type DisconnectDependencies, type WhatsAppOnboardingDependencies } from "./whatsapp-onboarding";
 
 const context = () =>
   ({ workspaceId: "ws_1", businessProfileId: "bp_1", userId: "user_1", workspaceMemberId: "member_1", role: "OWNER" }) as unknown as BusinessProfileContext;
@@ -25,13 +25,44 @@ const params = (overrides: Readonly<Record<string, string>> = {}) => ({
 function dependencies(
   options: {
     readonly onboarding?: () => WhatsAppOnboardingDependencies | undefined;
+    readonly disconnect?: () => DisconnectDependencies;
     readonly authorize?: () => Promise<BusinessProfileContext>;
   } = {},
 ): WhatsAppRouteDependencies {
   return {
     onboarding: options.onboarding ?? (() => undefined),
+    // The default finds no such account, which is the 404 every disconnect case here but one expects.
+    disconnect: options.disconnect ?? (() => disconnecting().dependencies),
     authorize: options.authorize ?? (() => Promise.resolve(context())),
     logger: () => createLogger({ level: "error", sink: () => undefined }),
+  };
+}
+
+/**
+ * The disconnect dependency, with a store that records the detach instead of performing one.
+ *
+ * `connection` is what `readConnection` answers: `undefined` for an account that is not this profile's,
+ * or a row with no credential, which keeps the provider unsubscribe out of a transport-free test.
+ */
+function disconnecting(connection?: { readonly wabaId: string }): {
+  readonly dependencies: DisconnectDependencies;
+  readonly detached: string[];
+} {
+  const detached: string[] = [];
+  return {
+    detached,
+    dependencies: {
+      store: {
+        readConnection: () => Promise.resolve(connection === undefined ? undefined : { ...connection, credentialId: undefined }),
+        disconnectWhatsAppAccount: (_ctx: unknown, channelAccountId: string) => {
+          detached.push(channelAccountId);
+          return Promise.resolve();
+        },
+      },
+      graph: { http: { send: () => Promise.resolve({ kind: "NO_RESPONSE", reason: "TIMEOUT", message: "not called" }) } },
+      logger: createLogger({ level: "error", sink: () => undefined }),
+      now: () => new Date(),
+    } as unknown as DisconnectDependencies,
   };
 }
 
@@ -100,11 +131,27 @@ describe("a deployment with no WhatsApp app configured", () => {
     expect(await response.json()).toEqual({ status: "not_configured" });
   });
 
-  it("refuses the completion and the disconnect too", async () => {
+  it("refuses the completion too", async () => {
     expect((await createWhatsAppCompleteHandler(dependencies())(post({}), params())).status).toBe(503);
-    expect(
-      (await createWhatsAppDisconnectHandler(dependencies())(post({}), params({ channelAccountId: "ca_1" }))).status,
-    ).toBe(503);
+  });
+
+  it("still lets an operator disconnect an account connected while there was one", async () => {
+    // The case that must not regress, and the reason `disconnect` is a dependency of its own. Refusing
+    // here because the app configuration is gone would strand every account the deployment had already
+    // connected: readable, un-sendable, still holding an encrypted token, and with no control left that
+    // could remove it, because this route is the only control there is.
+    const flow = disconnecting({ wabaId: "waba_1" });
+
+    const response = await createWhatsAppDisconnectHandler(dependencies({ onboarding: () => undefined, disconnect: () => flow.dependencies }))(
+      post({}),
+      params({ channelAccountId: "ca_1" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "disconnected", unsubscribed: false });
+    // Asserted on the store, not only on the status: a success above a write that never happened is the
+    // shape that passes while the token stays where it was.
+    expect(flow.detached).toEqual(["ca_1"]);
   });
 });
 
@@ -228,21 +275,20 @@ describe("authorization", () => {
 
 describe("disconnecting", () => {
   it("answers 404 when the route names no account", async () => {
-    const flow = onboarding();
-
-    const response = await createWhatsAppDisconnectHandler(dependencies({ onboarding: () => flow.dependencies }))(post({}), params());
+    const response = await createWhatsAppDisconnectHandler(dependencies())(post({}), params());
 
     expect(response.status).toBe(404);
   });
 
   it("answers 404 for an account that is not this profile's", async () => {
-    const flow = onboarding();
+    const flow = disconnecting();
 
-    const response = await createWhatsAppDisconnectHandler(dependencies({ onboarding: () => flow.dependencies }))(
+    const response = await createWhatsAppDisconnectHandler(dependencies({ disconnect: () => flow.dependencies }))(
       post({}),
       params({ channelAccountId: "ca_someone_else" }),
     );
 
     expect(response.status).toBe(404);
+    expect(flow.detached).toEqual([]);
   });
 });

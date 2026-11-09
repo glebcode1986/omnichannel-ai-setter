@@ -32,13 +32,19 @@ import {
   startWhatsAppConnect,
   STATE_COOKIE_NAME,
   type ConnectFailureReason,
+  type DisconnectDependencies,
   type WhatsAppOnboardingDependencies,
 } from "./whatsapp-onboarding";
 import { UnauthenticatedError } from "./workspace-context";
 
 export interface WhatsAppRouteDependencies {
-  /** `undefined` when this deployment has no WhatsApp app configured. */
+  /**
+   * `undefined` when this deployment has no WhatsApp app configured. Connect and complete refuse then;
+   * disconnect does not read this at all.
+   */
   readonly onboarding: () => WhatsAppOnboardingDependencies | undefined;
+  /** Detaching needs no app, so it is composed separately and keeps working without one. */
+  readonly disconnect: () => DisconnectDependencies;
   readonly authorize: (workspaceId: string | undefined, businessProfileId: string | undefined) => Promise<BusinessProfileContext>;
   readonly logger: () => Logger;
 }
@@ -128,15 +134,13 @@ export function createWhatsAppDisconnectHandler(dependencies: WhatsAppRouteDepen
     const params = await context.params;
     const channelAccountId = params["channelAccountId"];
     try {
-      const onboarding = dependencies.onboarding();
-      if (onboarding === undefined) {
-        return json(503, { status: "not_configured" });
-      }
       const businessProfile = await dependencies.authorize(params["workspaceId"], params["businessProfileId"]);
       if (channelAccountId === undefined) {
         return new Response(null, { status: 404 });
       }
-      const result = await disconnectWhatsAppAccount(onboarding, businessProfile, channelAccountId);
+      // No `not_configured` refusal here, unlike connect and complete: detaching needs no WhatsApp app,
+      // and refusing would strand every account connected before the configuration was removed.
+      const result = await disconnectWhatsAppAccount(dependencies.disconnect(), businessProfile, channelAccountId);
       if (!result.ok) {
         return new Response(null, { status: 404 });
       }

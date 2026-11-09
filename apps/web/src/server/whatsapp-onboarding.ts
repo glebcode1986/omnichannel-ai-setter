@@ -46,6 +46,7 @@ import {
   unsubscribeMessagingAccount,
   coexistenceCapabilities,
   type SignupFailureReason,
+  type WhatsAppGraphConfig,
   type WhatsAppOnboardingMode,
   type WhatsAppSignupConfig,
 } from "@omnichannel/channel-whatsapp";
@@ -91,6 +92,24 @@ export interface WhatsAppOnboardingDependencies {
   /** Opaque, unguessable values for the state ID and the cookie nonce. */
   readonly newId: () => string;
 }
+
+/**
+ * What detaching an account needs, which is less than connecting one.
+ *
+ * Narrowed deliberately rather than documented: an operator must be able to disconnect an account after
+ * this deployment's WhatsApp app configuration has gone away, and the only way to be sure of that is for
+ * the function not to be able to ask for it. Otherwise unsetting `WHATSAPP_APP_ID`, `WHATSAPP_APP_SECRET`
+ * or `WHATSAPP_SIGNUP_CONFIG_ID` would strand every account already connected — readable, un-sendable,
+ * still holding an encrypted token, and with no control left that could remove it, because this API route
+ * is the only control there is.
+ *
+ * The provider unsubscribe survives the narrowing rather than being given up: `graph` is transport only,
+ * and Meta's edge identifies our app by the stored business token rather than by any credential of ours,
+ * so detaching still asks Meta to stop delivering even on a deployment that can no longer start a signup.
+ */
+export type DisconnectDependencies = Pick<WhatsAppOnboardingDependencies, "store" | "logger" | "now"> & {
+  readonly graph: WhatsAppGraphConfig;
+};
 
 export interface StartedSignup {
   /** What the client script needs to launch the flow. None of it is secret. */
@@ -343,9 +362,12 @@ export async function completeWhatsAppConnect(
  * happens. The alternative is worse — a workspace told "could not disconnect" while its credential is
  * still live and its worker still sending — and an unsubscribe that did not land only means Meta keeps
  * delivering events for an account whose webhook route now resolves to a disconnected row and drops them.
+ *
+ * Takes `DisconnectDependencies`, so it cannot reach for the signup configuration and keeps working on a
+ * deployment that no longer has one. See that type for why that matters.
  */
 export async function disconnectWhatsAppAccount(
-  dependencies: WhatsAppOnboardingDependencies,
+  dependencies: DisconnectDependencies,
   context: BusinessProfileContext,
   channelAccountId: string,
 ): Promise<{ readonly ok: boolean; readonly unsubscribed: boolean }> {
@@ -358,7 +380,7 @@ export async function disconnectWhatsAppAccount(
   if (connection.credentialId !== undefined) {
     const stored = await dependencies.store.readCredential(context, { credentialId: connection.credentialId, purpose: CREDENTIAL_PURPOSE });
     if (stored !== undefined) {
-      const result = await unsubscribeMessagingAccount(dependencies.signup, stored.token, connection.wabaId);
+      const result = await unsubscribeMessagingAccount(dependencies.graph, stored.token, connection.wabaId);
       unsubscribed = result.ok;
       if (!result.ok) {
         dependencies.logger.warn("whatsapp.unsubscribe_failed", {

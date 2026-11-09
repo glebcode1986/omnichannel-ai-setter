@@ -76,6 +76,7 @@ export {
   type SignupFailureReason,
   type SignupNotice,
   type SignupResult,
+  type WhatsAppGraphConfig,
   type WhatsAppOnboardingMode,
   type WhatsAppSignupConfig,
 } from "./onboarding";

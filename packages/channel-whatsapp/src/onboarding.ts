@@ -67,6 +67,17 @@ export interface WhatsAppSignupConfig {
 }
 
 /**
+ * The part of a signup configuration that is only transport: where Graph is and how to reach it.
+ *
+ * Separated because not every Graph call needs the app's own credentials. The unsubscribe edge that
+ * disconnect uses names the app nowhere in the request — the business token in the `Authorization` header
+ * is what identifies it — so `appId`, `appSecret` and `configId` are not merely unused there, they are
+ * unusable. Asking for this alone keeps the unsubscribe callable on a deployment whose WhatsApp app
+ * configuration has been removed, which is what stops an already-connected account being stranded.
+ */
+export type WhatsAppGraphConfig = Pick<WhatsAppSignupConfig, "http" | "graphHost" | "graphVersion">;
+
+/**
  * Why a step failed, in fixed vocabulary. Provider prose never travels with it: Meta's messages quote the
  * request, and one of these values ends up in a redirect an operator can read.
  */
@@ -355,7 +366,7 @@ export async function subscribeMessagingAccount(config: WhatsAppSignupConfig, ac
 }
 
 /** The reverse, for disconnect: the app stops receiving this customer's events. */
-export async function unsubscribeMessagingAccount(config: WhatsAppSignupConfig, accessToken: string, wabaId: string): Promise<SignupResult<true>> {
+export async function unsubscribeMessagingAccount(config: WhatsAppGraphConfig, accessToken: string, wabaId: string): Promise<SignupResult<true>> {
   const url = graphUrl(config, `${wabaId}/subscribed_apps`);
   // Meta accepts the method override on this edge, and the port deliberately offers only GET and POST:
   // one transport shape per package means one place where a timeout or a retry opinion can live.
@@ -481,11 +492,11 @@ function nextPageUrl(config: WhatsAppSignupConfig, payload: JsonObject): string 
   }
 }
 
-function graphUrl(config: WhatsAppSignupConfig, path: string): URL {
+function graphUrl(config: WhatsAppGraphConfig, path: string): URL {
   return new URL(`https://${config.graphHost ?? DEFAULT_GRAPH_HOST}/${config.graphVersion ?? DEFAULT_GRAPH_VERSION}/${path}`);
 }
 
-async function get(config: WhatsAppSignupConfig, url: URL, accessToken?: string): Promise<WhatsAppHttpResult> {
+async function get(config: WhatsAppGraphConfig, url: URL, accessToken?: string): Promise<WhatsAppHttpResult> {
   return config.http.send({
     url: url.toString(),
     method: "GET",
@@ -494,7 +505,7 @@ async function get(config: WhatsAppSignupConfig, url: URL, accessToken?: string)
   });
 }
 
-async function post(config: WhatsAppSignupConfig, url: URL, accessToken: string, body: Readonly<Record<string, unknown>>): Promise<WhatsAppHttpResult> {
+async function post(config: WhatsAppGraphConfig, url: URL, accessToken: string, body: Readonly<Record<string, unknown>>): Promise<WhatsAppHttpResult> {
   return config.http.send({
     url: url.toString(),
     method: "POST",
