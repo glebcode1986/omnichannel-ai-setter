@@ -25,6 +25,7 @@
  * revert changes its author never saw. `expectedVersion` is required rather than optional for the usual
  * reason: an optional guard is a guard the next caller forgets.
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   confidencePresetOf,
   confidenceSettingsFor,
@@ -513,7 +514,7 @@ export async function listPolicyAudits(
       ...scope,
       ...(page.cursor === undefined
         ? {}
-        : { OR: [{ changedAt: { lt: page.cursor.changedAt } }, { changedAt: page.cursor.changedAt, id: { lt: page.cursor.id } }] }),
+        : ({ OR: [{ changedAt: { lt: page.cursor.changedAt } }, { changedAt: page.cursor.changedAt, id: { lt: page.cursor.id } }] } satisfies Prisma.PolicyChangeAuditWhereInput)),
     },
     orderBy: [{ changedAt: "desc" }, { id: "desc" }],
     // One more than asked for, which is how this read knows there is a next page rather than guessing

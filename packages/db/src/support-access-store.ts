@@ -22,6 +22,7 @@
  * has not set; what this does is count the actor's recent break-glass sessions for the same workspace and
  * put that count in the audit row, so a chain reads as a chain instead of as diligence.
  */
+import type { Prisma } from "./generated/prisma/client";
 import {
   supportScopeOf,
   validateSupportSessionRequest,
@@ -233,8 +234,8 @@ export async function readSupportScope(
       // Either a workspace-wide session, or one for exactly this profile. A session for *another*
       // profile is excluded here, and `supportScopeOf` would refuse it as `OUT_OF_SCOPE` anyway.
       ...(target.businessProfileId === undefined
-        ? { businessProfileId: null }
-        : { OR: [{ businessProfileId: null }, { businessProfileId: target.businessProfileId }] }),
+        ? ({ businessProfileId: null } satisfies Prisma.SupportAccessSessionWhereInput)
+        : ({ OR: [{ businessProfileId: null }, { businessProfileId: target.businessProfileId }] } satisfies Prisma.SupportAccessSessionWhereInput)),
     },
     // Deliberately *not* filtered by the clock or by revocation. Filtering here would make the query the
     // thing that decides, and an operator whose session ran out five minutes ago would be told there was

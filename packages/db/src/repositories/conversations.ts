@@ -1,3 +1,4 @@
+import type { Prisma } from "../generated/prisma/client";
 import { isValidIdentifier, type ConversationStatus, type LeadStage } from "@omnichannel/domain";
 
 import type { DbExecutor } from "../client";
@@ -79,7 +80,7 @@ export async function listInboxConversations(
     where: {
       ...scope,
       status: query.status ?? "OPEN",
-      ...(query.channelAccountId === undefined ? {} : { channelAccountId: query.channelAccountId }),
+      ...(query.channelAccountId === undefined ? {} : ({ channelAccountId: query.channelAccountId } satisfies Prisma.ConversationWhereInput)),
     },
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
     take: limit,

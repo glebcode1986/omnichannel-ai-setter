@@ -17,6 +17,7 @@
  * events are admin-only, and "admin-only" has to mean absent rather than redacted: a row that appears as
  * `***` still discloses that somebody's access changed at 14:02, which is most of what was being hidden.
  */
+import type { Prisma } from "./generated/prisma/client";
 import { ADMIN_ONLY_AUDIT_KINDS, AUDIT_EVENT_KINDS, type AuditActorKind, type AuditEventKind } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
@@ -214,23 +215,30 @@ export async function searchAuditEvents(db: DbExecutor, context: WorkspaceContex
       // straight into the disjunction it silently reduced the query to workspace-level rows only, which
       // showed an owner their membership history and none of their own profiles' work.
       ...profileCondition(context, search.businessProfileId),
-      ...(isAdmin ? {} : { sensitive: false }),
-      ...(kinds.length === 0 ? {} : { kind: { in: [...kinds] } }),
-      ...(search.channelAccountId === undefined ? {} : { channelAccountId: search.channelAccountId }),
-      ...(search.conversationId === undefined ? {} : { conversationId: search.conversationId }),
-      ...(search.actorUserId === undefined ? {} : { actorUserId: search.actorUserId }),
+      ...(isAdmin ? {} : ({ sensitive: false } satisfies Prisma.AuditEventWhereInput)),
+      ...(kinds.length === 0 ? {} : ({ kind: { in: [...kinds] } } satisfies Prisma.AuditEventWhereInput)),
+      ...(search.channelAccountId === undefined ? {} : ({ channelAccountId: search.channelAccountId } satisfies Prisma.AuditEventWhereInput)),
+      ...(search.conversationId === undefined ? {} : ({ conversationId: search.conversationId } satisfies Prisma.AuditEventWhereInput)),
+      ...(search.actorUserId === undefined ? {} : ({ actorUserId: search.actorUserId } satisfies Prisma.AuditEventWhereInput)),
       ...(search.from === undefined && search.to === undefined
         ? {}
-        : { occurredAt: { ...(search.from === undefined ? {} : { gte: search.from }), ...(search.to === undefined ? {} : { lt: search.to }) } }),
-      ...(search.term === undefined || search.term.trim() === "" ? {} : { summary: { contains: search.term.trim(), mode: "insensitive" } }),
+        : ({
+            occurredAt: {
+              ...(search.from === undefined ? {} : ({ gte: search.from } satisfies Prisma.DateTimeFilter)),
+              ...(search.to === undefined ? {} : ({ lt: search.to } satisfies Prisma.DateTimeFilter)),
+            },
+          } satisfies Prisma.AuditEventWhereInput)),
+      ...(search.term === undefined || search.term.trim() === ""
+        ? {}
+        : ({ summary: { contains: search.term.trim(), mode: "insensitive" } } satisfies Prisma.AuditEventWhereInput)),
       ...(search.cursor === undefined
         ? {}
-        : {
+        : ({
             OR: [
               { occurredAt: { lt: search.cursor.occurredAt } },
               { occurredAt: search.cursor.occurredAt, id: { lt: search.cursor.id } },
             ],
-          }),
+          } satisfies Prisma.AuditEventWhereInput)),
     },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     // One more than asked, so the cursor is offered only when there is genuinely another page. A cursor

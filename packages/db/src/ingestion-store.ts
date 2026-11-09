@@ -62,7 +62,7 @@ export function createIngestionStore(db: DbClient): IngestionStore {
         OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
       } satisfies Prisma.QueueOutboxWhereInput;
       const candidates = await db.queueOutbox.findMany({
-        where: { ...claimable, ...(ids === undefined ? {} : { id: { in: [...ids] } }) },
+        where: { ...claimable, ...(ids === undefined ? {} : ({ id: { in: [...ids] } } satisfies Prisma.QueueOutboxWhereInput)) },
         orderBy: { createdAt: "asc" },
         take: limit,
         select: { id: true },
