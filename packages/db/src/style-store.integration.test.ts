@@ -679,6 +679,78 @@ describe.skipIf(!databaseTestsEnabled())("Style Training", () => {
       expect(edited.every((example) => example.provenance === "HUMAN_EDITED_DRAFT")).toBe(true);
       expect(shared.every((example) => example.scope === "WORKSPACE")).toBe(true);
     }, 180_000);
+
+    it("keeps the Business-Profile scope on the second page, not only the first", async () => {
+      // The scope and the keyset cursor are both disjunctions. Spread into one `where` as two bare `OR`
+      // keys the later one won, so the cursor replaced the scope and every page after the first was
+      // filtered by `workspaceId` alone — the Style screen's three lists then showed sibling profiles'
+      // examples, and `styleCursorOf` supplies a cursor from page two onward on all three. Page one was
+      // correctly scoped, which is why nothing here caught it: every other test reads a first page.
+      //
+      // In a workspace of its own, because this asserts the exact contents of an exact page and the
+      // shared fixture carries rows from every test above it.
+      //
+      // `createdAt` is stamped rather than left to the clock. The column is millisecond precision and the
+      // tiebreak is a v7 id whose order inside one millisecond is random, so four quick creates do not
+      // reliably sort in creation order. The arrangement matters: the sibling's example has to fall
+      // *inside* the window page two reads, or the leaked row lands outside the page that was asked for
+      // and the test passes with the defect present.
+      const own = await seedWorkspace(db(), "style-paging", ["mine", "theirs"]);
+      const [mine, theirs] = own.profiles as [SeededProfile, SeededProfile];
+
+      const write = async (who: SeededProfile, outboundText: string, minutesAhead: number) => {
+        expect(await createStyleExample(db(), who.context, { inboundContext: `${outboundText} why?`, outboundText })).toEqual({ status: "SAVED" });
+        const written = await listStyleExamples(db(), who.context, {}, { limit: 100 });
+        const id = written.examples.find((example) => example.outboundText === outboundText)?.id ?? "";
+        expect(id, "the fixture example must have been written").not.toBe("");
+        await db().styleExample.update({ where: { id }, data: { createdAt: new Date(Date.now() + minutesAhead * 60_000) } });
+        return id;
+      };
+
+      // `(createdAt desc, id desc)` reads these back as newest, middle, sibling, oldest.
+      const oldest = await write(mine, "Paging, my oldest.", 10);
+      const theirExample = await write(theirs, "Paging, the sibling's.", 20);
+      const middle = await write(mine, "Paging, my middle.", 30);
+      const newest = await write(mine, "Paging, my newest.", 40);
+
+      // The leaked row exists, is ACTIVE, and its own profile can read it. Without this the assertions
+      // below would pass just as well if it had never been written.
+      const theirOwn = await listStyleExamples(db(), theirs.context, { status: "ACTIVE" }, { limit: 100 });
+      expect(theirOwn.examples.map((example) => example.id)).toEqual([theirExample]);
+
+      // Page one, the control: correctly scoped with the defect present too, and not empty — so the page
+      // below cannot pass by refusing everything.
+      const first = await listStyleExamples(db(), mine.context, { status: "ACTIVE" }, { limit: 2 });
+      expect(first.examples.map((example) => example.id)).toEqual([newest, middle]);
+      const after = first.nextCursor;
+      expect(after, "page one must offer a cursor, or there is no second page under test").toBeDefined();
+
+      // Page two, the regression: `[sibling, oldest]` while the scope is discarded, `[oldest]` once both
+      // disjunctions survive.
+      const second = await listStyleExamples(db(), mine.context, { status: "ACTIVE" }, {
+        limit: 2,
+        ...(after === undefined ? {} : { cursor: after }),
+      });
+      expect(second.examples.map((example) => example.id)).not.toContain(theirExample);
+      expect(second.examples.map((example) => example.id)).toEqual([oldest]);
+
+      // And every page, not only the second: one row at a time, so each step carries a cursor.
+      const walked: string[] = [];
+      let cursor: StyleExampleCursor | undefined;
+      let pages = 0;
+      do {
+        const page = await listStyleExamples(db(), mine.context, { status: "ACTIVE" }, {
+          limit: 1,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        walked.push(...page.examples.map((example) => example.id));
+        cursor = page.nextCursor;
+        pages += 1;
+        expect(pages, "paging must terminate").toBeLessThan(20);
+      } while (cursor !== undefined);
+
+      expect(walked).toEqual([newest, middle, oldest]);
+    }, 180_000);
   });
 
   describe("style is not knowledge", () => {

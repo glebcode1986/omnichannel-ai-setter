@@ -13,6 +13,7 @@
  */
 import type { EmojiUsage, ReplyLength } from "@omnichannel/domain";
 
+import type { Prisma } from "./generated/prisma/client";
 import type { DbClient, DbExecutor } from "./client";
 import { recordAuditEvent } from "./audit-store";
 import { profileScopeOf, requireRole, WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "./tenancy";
@@ -360,13 +361,37 @@ export async function listStyleExamples(
   const rows = await db.styleExample.findMany({
     where: {
       workspaceId: scope.workspaceId,
-      ...exampleScopeFilter(filter.scope, scope.businessProfileId),
-      ...statusFilter(filter.status),
-      ...(filter.provenance === undefined ? {} : { provenance: filter.provenance }),
-      ...(page.cursor === undefined
-        ? {}
-        : { OR: [{ createdAt: { lt: page.cursor.createdAt } }, { createdAt: page.cursor.createdAt, id: { lt: page.cursor.id } }] }),
-    },
+      // One `AND` of predicates, not four spreads into one literal.
+      //
+      // Two of these are disjunctions. The Business-Profile scope is one — `exampleScopeFilter` returns
+      // `OR: [workspace-scoped, this profile]` when no scope is asked for — and so is the keyset cursor.
+      // Spread as bare keys they both wrote `OR`, and in a single object literal the later key wins, so
+      // the scope was discarded on every read that carried a cursor. All three lists on the Style screen
+      // page, and `styleCursorOf` supplies a cursor from page two onward: page one was scoped correctly
+      // and every page after it was filtered by `workspaceId` alone. A member holding `businessProfileScope
+      // = SELECTED` (#57) could read the phrasing of profiles they were never granted, and nothing on the
+      // screen said the list had widened.
+      //
+      // Every predicate is a member here, including the two that can only ever be a single scalar key.
+      // That is the point: as bare keys their safety depended on which keys each helper happens to return,
+      // which is a property of code elsewhere that changes with no diagnostic anywhere — nothing in `tsc`,
+      // ESLint or Prisma flags a key a spread duplicates. As `AND` members a collision is not possible to
+      // write. `inbox-store.ts` documents the same trap and `listKillSwitches` in
+      // `platform-actions-store.ts` was repaired for it; the shape comes from both.
+      //
+      // `satisfies` is the other half, and it is not decoration. Prisma's generated argument type reaches
+      // `where` through a generic, so without it an unknown column here draws no diagnostic at all — not
+      // even written as a direct property. With it, a wrong name fails both as a direct key and inside
+      // this `AND`. A key inside a *spread* is still unchecked either way, which is why the two
+      // disjunctions are named helpers with declared return types rather than spreads: see
+      // `exampleScopeFilter`, which records the measurements.
+      AND: [
+        exampleScopeFilter(filter.scope, scope.businessProfileId),
+        statusFilter(filter.status),
+        ...(filter.provenance === undefined ? [] : [{ provenance: filter.provenance }]),
+        ...(page.cursor === undefined ? [] : [exampleCursorFilter(page.cursor)]),
+      ],
+    } satisfies Prisma.StyleExampleWhereInput,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
     select: {
@@ -566,7 +591,27 @@ function statusFilter(
   return typeof status === "string" ? { status } : { status: { in: [...status] } };
 }
 
-function exampleScopeFilter(wanted: StyleScope | undefined, businessProfileId: string) {
+/**
+ * Which examples this context may read: the Workspace-wide library, this Business Profile's, or both.
+ *
+ * The return type is written out rather than inferred, and that is load-bearing: excess-property checking
+ * never reaches the result of a spread, so this annotation is what puts these literals somewhere a wrong
+ * column name can fail at all.
+ *
+ * Measured on this file rather than assumed — the same key, `tsc --noEmit` each time:
+ *
+ * - in the literals below, against this declared return type — **`TS2561`**, naming the column it meant;
+ * - as a direct property of `findMany`'s `where`, no `satisfies` — **silent, exit 0**, because Prisma's
+ *   generated argument type reaches `where` through a generic and the check never applies;
+ * - as a direct property, with `satisfies` — **`TS2561`**; inside that `AND` array, with `satisfies` —
+ *   **`TS2322`**;
+ * - inside a conditional *spread* into the `where` — **silent, exit 0, with or without `satisfies`**.
+ *
+ * So the defect's own shape is the one shape no type can see. A predicate that silently matched nothing
+ * would not fail to compile unless it is written somewhere checked, and it would not fail any test that
+ * merely asserts rows came back: it would quietly return other profiles' rows.
+ */
+function exampleScopeFilter(wanted: StyleScope | undefined, businessProfileId: string): Prisma.StyleExampleWhereInput {
   if (wanted === "WORKSPACE") {
     return { businessProfileId: null };
   }
@@ -574,6 +619,16 @@ function exampleScopeFilter(wanted: StyleScope | undefined, businessProfileId: s
     return { businessProfileId };
   }
   return { OR: [{ businessProfileId: null }, { businessProfileId }] };
+}
+
+/**
+ * Everything strictly after the cursor in `(createdAt desc, id desc)` order.
+ *
+ * Both halves travel for the reason `StyleExampleCursor` carries both: `createdAt` is not unique, and a
+ * cursor on an instant with no tiebreak repeats or skips rows.
+ */
+function exampleCursorFilter(cursor: StyleExampleCursor): Prisma.StyleExampleWhereInput {
+  return { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] };
 }
 
 export interface NewStyleExample {
