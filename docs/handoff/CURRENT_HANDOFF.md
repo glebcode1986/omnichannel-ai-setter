@@ -5240,8 +5240,22 @@ The same key, `tsc --noEmit` each time:
 
 Row two is the one worth knowing, and it corrects the usual account. Excess-property checking is described
 as reaching a direct property and not a spread, which holds against a plain annotated target — but **not**
-at a Prisma call site with no `satisfies`, because the generated argument type reaches `where` through a
-generic and the check never applies either way.
+at a Prisma call site with no `satisfies`. The generated signature is
+`findMany<T extends StyleExampleFindManyArgs>(args?: Prisma.SelectSubset<T, …>)`: the target type is
+*inferred from the argument*, so there is no fixed type for the check to bite on.
+
+**The control that makes row two mean something.** A silent `tsc` is also what a target resolved to `any`
+looks like, which is how a peer session's independent attempt at this table failed. So, in row two's exact
+configuration — no `satisfies`, written as a direct property — a **real** key was given a **wrong value
+type** (`workspaceId: 12345`):
+
+```
+error TS2322: Type 'number' is not assignable to type 'string | StringFilter<"StyleExample"> | undefined'.
+```
+
+The value types are fully checked there, so the types resolved and the compiler ran. Prisma rejects a bad
+*value* for a known key in the same position where it accepts an unknown *key* without comment. Rows one,
+three and four firing in the same configuration say the same thing from the other direction.
 
 So both halves of the fix are load-bearing: `satisfies` makes a wrong column fail when it is written in
 the literal or in its `AND`, and the named helpers with declared return types cover the two disjunctions,
