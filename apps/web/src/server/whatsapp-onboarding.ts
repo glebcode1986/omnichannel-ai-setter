@@ -50,7 +50,7 @@ import {
   type WhatsAppOnboardingMode,
   type WhatsAppSignupConfig,
 } from "@omnichannel/channel-whatsapp";
-import { ChannelConnectError, type BusinessProfileContext, type WhatsAppOnboardingStore } from "@omnichannel/db";
+import { ChannelConnectError, type BusinessProfileContext, type ConnectWhatsAppInput, type WhatsAppOnboardingStore } from "@omnichannel/db";
 import type { Logger } from "@omnichannel/observability";
 
 /** How long the operator has to finish Embedded Signup before the state expires. */
@@ -303,7 +303,13 @@ export async function completeWhatsAppConnect(
     const connected = await dependencies.store.connectWhatsAppAccount(context, {
       phoneNumberId: notice.phoneNumberId,
       wabaId: notice.wabaId,
-      ...(notice.businessPortfolioId === undefined ? {} : { businessPortfolioId: notice.businessPortfolioId }),
+      // `satisfies` on each branch below, not on the literal as a whole: excess-property checking does
+      // not apply to the result of a spread, so without it a misspelled key compiles and the field is
+      // silently dropped. Note this only works where the key set is declared — `satisfies LogFields` on
+      // the `logger` calls in this file would be a no-op, since `LogFields` admits any string key.
+      ...(notice.businessPortfolioId === undefined
+        ? {}
+        : ({ businessPortfolioId: notice.businessPortfolioId } satisfies Pick<ConnectWhatsAppInput, "businessPortfolioId">)),
       asset: asset.value,
       onboardingMode: notice.mode,
       // Per account rather than per channel: whether replies a person sends outside this product are
@@ -315,8 +321,12 @@ export async function completeWhatsAppConnect(
       token: accessToken,
       expiresAt: access.value.expiresAt ?? expiryOf(exchanged.value.expiresInSeconds, now),
       webhookSubscribedAt,
-      ...(phoneRegisteredAt === undefined ? {} : { phoneRegisteredAt }),
-      ...(catalogue.ok ? { templates: { records: catalogue.value.templates, complete: catalogue.value.complete, syncedAt: dependencies.now() } } : {}),
+      ...(phoneRegisteredAt === undefined ? {} : ({ phoneRegisteredAt } satisfies Pick<ConnectWhatsAppInput, "phoneRegisteredAt">)),
+      ...(catalogue.ok
+        ? ({
+            templates: { records: catalogue.value.templates, complete: catalogue.value.complete, syncedAt: dependencies.now() },
+          } satisfies Pick<ConnectWhatsAppInput, "templates">)
+        : {}),
       // Degraded only when the *provider* says the number is in trouble. A red quality rating is Meta
       // warning that the next unattended message is the risky one, and the policy layer holds every
       // automated reply for a flagged account until somebody looks.

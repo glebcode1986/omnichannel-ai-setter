@@ -19,6 +19,7 @@ import { createLogger } from "@omnichannel/observability";
 import { describe, expect, it } from "vitest";
 
 import {
+  BUSINESS_ID,
   BUSINESS_TOKEN,
   cancelNotice,
   debugToken,
@@ -79,6 +80,7 @@ interface FakeAccount {
 interface FakeConnection {
   channelAccountId: string;
   wabaId: string;
+  businessPortfolioId: string | undefined;
   onboardingMode: string;
   webhookSubscribedAt: Date | undefined;
   phoneRegisteredAt: Date | undefined;
@@ -152,6 +154,7 @@ function fakeStore(options: { readonly liveElsewhere?: string } = {}) {
       const connection: FakeConnection = {
         channelAccountId,
         wabaId: input.wabaId,
+        businessPortfolioId: input.businessPortfolioId,
         onboardingMode: input.onboardingMode,
         webhookSubscribedAt: input.webhookSubscribedAt,
         phoneRegisteredAt: input.phoneRegisteredAt,
@@ -180,7 +183,7 @@ function fakeStore(options: { readonly liveElsewhere?: string } = {}) {
               channelAccountId,
               credentialId: account.credentialId,
               wabaId: row.wabaId,
-              businessPortfolioId: undefined,
+              businessPortfolioId: row.businessPortfolioId,
               displayPhoneNumber: undefined,
               verifiedName: undefined,
               qualityRating: undefined,
@@ -366,6 +369,14 @@ describe("a valid onboarding", () => {
     expect(connection?.webhookSubscribedAt).toEqual(NOW);
     expect(connection?.phoneRegisteredAt).toEqual(NOW);
     expect(connection?.templateCount).toBe(2);
+    // The three fields that reach the store through a conditional spread — `phoneRegisteredAt` and
+    // `templates` above, `businessPortfolioId` here — are read back from the write rather than
+    // recomputed beside it, because a key misspelled in one of those spreads is dropped in silence and
+    // a field nothing asserts has no guard at all. `businessPortfolioId` had none until now: the fake
+    // answered `undefined` for it, so its only assertion was in packages/db's integration test, which
+    // calls the store directly and never exercises the spread.
+    expect(connection?.businessPortfolioId).toBe(BUSINESS_ID);
+    expect(connection?.templatesSyncedAt).toEqual(NOW);
     expect(connection?.status).toBe("CONNECTED");
   });
 
