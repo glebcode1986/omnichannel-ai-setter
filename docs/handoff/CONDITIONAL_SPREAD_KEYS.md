@@ -74,15 +74,28 @@ for a target that resolved to `any` — the failure mode `89bce19` warns about:
 
 So the compiler ran, the generated types resolved, and the hole is specifically the **key**.
 
-**The two guards are not interchangeable**, which decides where this change puts them:
+**The two guards compose, and the boundary between them is exact.** A `satisfies` on the whole `where`
+reaches further than "the keys written directly" — measured against the generated client, every unknown
+key below having a companion inside its own literal:
 
-| guard | a misspelled key written directly | a misspelled key inside a spread |
+| where the unknown key is | no annotation | `satisfies` on the whole `where` |
 |---|---|---|
-| `} satisfies Prisma.…WhereInput` on the **whole `where`** | caught, `TS2561` | **0 errors** |
-| `satisfies` on the **spread's branch** | not covered | caught, `TS2561` |
+| a direct key of `where` | 0 errors | **`TS2561`** |
+| inside an `OR` element | 0 errors | **`TS2561`** |
+| inside an `AND` element | 0 errors | **`TS2561`** |
+| an `AND` element arriving by an **array** spread | 0 errors | **`TS2322`** |
+| **spread into the `where` object itself** | 0 errors | **0 errors** |
 
-This change applies the second, because the spread half is the class it was asked to close. The direct
-half needs the first, at a different set of sites, and is left to its own change.
+So one annotation on the literal buys everything except the last row — and the last row is exactly what
+`satisfies` on the spread's **branch** catches. Neither guard is a substitute for the other, and together
+they are complete. This change applies the branch form, the class it was asked to close; the whole-`where`
+form is the other half and belongs to its own change.
+
+**Why a control here is easy to get wrong** — the check applies to the **literal**, not to the call, and
+at the depth being measured. A companion added to the outer `where` makes *that* literal two-keyed and
+silences it, while an `AND` element one level down stays single-keyed and is still caught. The companion
+has to sit inside the literal whose behaviour is under test. Two sessions measuring this got confident and
+opposite answers before noticing that.
 
 ## The guard, and a form that looks like one but is not
 

@@ -5328,9 +5328,12 @@ at `89bce19`, this branch's base, with the `SelectSubset` signature that explain
 the control that commit asks for (a real key given a wrong value type fails with `TS2322`, so the silence
 is the key and not an `any`). And the duplicate-key collision is the class `09280cf` had just fixed by
 hand in `listStyleExamples`, where scope and cursor both wrote `OR` and the scope lost. What is added is
-the boundary between the two guards, measured: `satisfies` on the whole `where` catches a misspelled key
-written directly and **not** one inside a spread, and `satisfies` on the branch is the reverse. This change
-applies the branch form, which is the half the task names; the direct half is left to its own change.
+the boundary between the two guards, measured in both directions: a `satisfies` on the whole `where`
+catches an unknown key written directly, inside an `OR` element, inside an `AND` element and even in an
+element arriving by an array spread — everything except a key **spread into the `where` object itself**,
+which is exactly what `satisfies` on the spread's branch catches. The two compose and together are
+complete. This change applies the branch form, the half the task names; the whole-`where` form is the
+other half and belongs to its own change.
 
 Two defect-shaped pairs were found by the same audit, one real:
 
