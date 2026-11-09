@@ -28,6 +28,13 @@
  * Being all-optional costs this type its last fallback rather than causing the hole. A target with a
  * required property at least fails as a missing property once every key is misspelled; `Partial<Record<…>>`
  * only trips TypeScript's weak-type check, which needs *no* key in common — and a sibling always leaves one.
+ *
+ * The class is wider than this file — 124 of these spreads in `apps/web/src` reach a declared key set —
+ * but two things decide whether any one of them matters, and neither is the key's name. **The verdict
+ * belongs to the site:** `whatsapp-account-events.ts` spreads the same `reason` nine lines apart into a
+ * declared type and into `LogFields`, which is `Readonly<Record<string, unknown>>` and admits any key, so
+ * `satisfies` there would be a no-op that merely looks like hardening. **And a test defends only a field
+ * it asserts** — a value computed in the flow rather than read back proves nothing about the key landing.
  */
 import { WORKSPACE_ADMIN_ROLES, type BusinessProfileContext } from "@omnichannel/db";
 import type { ChannelType } from "@omnichannel/domain";
