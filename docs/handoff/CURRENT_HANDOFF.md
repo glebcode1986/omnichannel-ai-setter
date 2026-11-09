@@ -5185,3 +5185,118 @@ does exist (the deadlock is that only an existing platform admin may use it).
 Until the delivery defect is confirmed fixed, no real business conversations in the pilot. The delivery
 fix takes priority over inviting any company, and is listed as F1 in the plan — not started from this
 task.
+
+## The Style screen lost its Business-Profile scope from page two — 2026-11-09
+
+**Branch `fix/style-example-cursor-scope`, based on `feat/pilot-invitation-gate` (PR #134 at
+`708c880f4a9c698ba19025289902f11de0250fd2`).** One defect, one query, with its regression.
+
+### What was wrong
+
+`listStyleExamples` in `packages/db/src/style-store.ts` built its Prisma `where` by spreading four
+sources into one object literal. Two of them contribute an `OR`: `exampleScopeFilter(undefined, …)`
+returns `OR: [{ businessProfileId: null }, { businessProfileId }]` — that disjunction **is** the
+Business-Profile scoping — and the keyset cursor returns an `OR` of its own. In a single object literal
+the later key wins, so the scope was discarded on every read that carried a cursor, leaving `workspaceId`
+as the only tenancy predicate.
+
+All three production callers are in `apps/web/src/server/style-screen.ts:87,88,101` — the verified,
+suggested and retired lists. Each passes a filter of `status` only, so `filter.scope` is `undefined` and
+the `OR` branch is the one taken, and each passes `{ cursor: styleCursorOf(searchParams, …) }`, which is
+`undefined` only while the query parameter is absent. **Page one was correctly scoped and every page after
+it was not**: the screen listed style examples belonging to other Business Profiles in the same workspace.
+It matters beyond correctness because a member may hold `businessProfileScope = SELECTED` (#57), so the
+rows shown were ones that member had deliberately not been granted.
+
+### Why no test saw it
+
+Every existing test in `style-store.integration.test.ts` reads a **first** page. With the defect restored
+and the new test removed, all 50 of them pass. A tenancy test that never asks for a second page cannot see
+a predicate that only the second page drops.
+
+### The fix
+
+Every predicate in that `where` is now a member of one `AND`, the shape `inbox-store.ts` documents and
+`listKillSwitches` in `platform-actions-store.ts` was repaired for. The three single-key contributions are
+members too, and deliberately: as bare keys their safety depends on which keys each helper happens to
+return, which is a property of code elsewhere that changes with no diagnostic. As `AND` members a
+collision is not possible to write.
+
+The cursor predicate moved into a named `exampleCursorFilter`; both it and `exampleScopeFilter` now
+declare `Prisma.StyleExampleWhereInput`; and the `where` literal itself gained `satisfies
+Prisma.StyleExampleWhereInput`.
+
+### What was measured about the type system, because it decides where the safety has to live
+
+The same key, `tsc --noEmit` each time:
+
+| `ZZ_businessProfileId` placed | result |
+| --- | --- |
+| in a helper's return position, against its declared `StyleExampleWhereInput` | `TS2561`, naming the column it meant |
+| as a direct property of `findMany`'s `where`, **no** `satisfies` | **silent, exit 0** |
+| as a direct property, **with** `satisfies` | `TS2561` |
+| inside the `AND` array, **with** `satisfies` | `TS2322` |
+| inside a conditional **spread** into the `where` | **silent, exit 0, with or without `satisfies`** |
+
+Row two is the one worth knowing, and it corrects the usual account. Excess-property checking is described
+as reaching a direct property and not a spread, which holds against a plain annotated target — but **not**
+at a Prisma call site with no `satisfies`. The generated signature is
+`findMany<T extends StyleExampleFindManyArgs>(args?: Prisma.SelectSubset<T, …>)`: the target type is
+*inferred from the argument*, so there is no fixed type for the check to bite on.
+
+**The control that makes row two mean something.** A silent `tsc` is also what a target resolved to `any`
+looks like, which is how a peer session's independent attempt at this table failed. So, in row two's exact
+configuration — no `satisfies`, written as a direct property — a **real** key was given a **wrong value
+type** (`workspaceId: 12345`):
+
+```
+error TS2322: Type 'number' is not assignable to type 'string | StringFilter<"StyleExample"> | undefined'.
+```
+
+The value types are fully checked there, so the types resolved and the compiler ran. Prisma rejects a bad
+*value* for a known key in the same position where it accepts an unknown *key* without comment. Rows one,
+three and four firing in the same configuration say the same thing from the other direction.
+
+So both halves of the fix are load-bearing: `satisfies` makes a wrong column fail when it is written in
+the literal or in its `AND`, and the named helpers with declared return types cover the two disjunctions,
+which are the contributions a spread would otherwise hide. The defect's own shape — a key arriving through
+a spread — remains the one shape no type can see, which is why the regression below is the real guard.
+
+### The regression
+
+`style-store.integration.test.ts` gains one case, in its own seeded workspace because it asserts the exact
+contents of exact pages. Three examples in one profile and one in its sibling, with `created_at` stamped
+rather than left to the clock — the column is millisecond precision and the tiebreak is a v7 id whose
+order inside one millisecond is random, so four quick creates do not reliably sort in creation order. The
+arrangement puts the sibling's example **inside the window page two reads**; created in any other order
+the test passes with the defect present, because the leaked row falls outside the page that was asked for.
+
+Three controls, so the assertion cannot hold vacuously: the sibling's own profile reads its example (it
+exists and is ACTIVE), page one returns exactly the profile's two newest (not empty, and correct with the
+defect present too), and page two is asserted to **equal** `[oldest]` rather than merely to exclude the
+sibling. Mutation-checked: with the parent's `style-store.ts` restored verbatim, the new test fails on
+`expected [ …(2) ] to not include` the sibling's id, which is the predicted `[sibling, oldest]`.
+
+### Scope, and what was deliberately not done
+
+The earliest branch carrying this code is PR #78 (`feat/p5-06-style-training`), which is **APPROVED**.
+The owner was asked before anything was committed and chose a separate follow-up branch off the queue
+tip — the route Issue #111 records as `PR110_POST_PASS_FIX_ROUTE=SEPARATE_FOLLOW_UP_PR`. **No approved
+head was moved and nothing was propagated.** #78 and every branch between it and #134 still carry the
+defect; they are fixed only once this branch is merged down into whatever supersedes them.
+
+This was **not** folded into PR #102's review round, whose remediation directive says not to broaden
+scope.
+
+A repeat of the `duplicate-OR` sweep over the current tip found this and nothing else: 452 `where`
+literals in `packages/db/src` and `apps/*/src`, one suspect. The scan was validated by a positive control
+— run against the pre-fix file it names `style-store.ts:361`, so its zero is a measurement rather than a
+silence. The scanner is not committed.
+
+### Disclosure
+
+This defect was found on 2026-10-22 during the PR #102 sweep and recorded only in this author's own
+working notes, which claimed it had been "filed as a separate task". It had not been: a sweep of every
+PR thread and every issue finds no mention of it. It therefore sat unreported for eighteen days while the
+chain grew by nine branches. The finding was sound; the handoff of it was not, and the lesson is that a
+defect is not filed until it is somewhere the owner can read.
