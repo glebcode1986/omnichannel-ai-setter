@@ -14,6 +14,7 @@
  * Display labels are a Workspace's own; the internal `LeadStage` is a contract with the draft engine,
  * which returns one in its structured output. Nothing here lets a rename change what a stage means.
  */
+import type { Prisma } from "./generated/prisma/client";
 import { LEAD_STAGES, type LeadStage } from "@omnichannel/domain";
 
 import type { DbClient, DbExecutor } from "./client";
@@ -179,17 +180,17 @@ export async function listLeads(db: DbExecutor, context: BusinessProfileContext,
   const rows = await db.conversation.findMany({
     where: {
       ...scope,
-      ...(filter.stage === undefined ? {} : { leadStage: filter.stage }),
-      ...(filter.assignedUserId === undefined ? {} : { assignedUserId: filter.assignedUserId }),
-      ...(filter.tag === undefined ? {} : { leadTags: { has: filter.tag } }),
+      ...(filter.stage === undefined ? {} : ({ leadStage: filter.stage } satisfies Prisma.ConversationWhereInput)),
+      ...(filter.assignedUserId === undefined ? {} : ({ assignedUserId: filter.assignedUserId } satisfies Prisma.ConversationWhereInput)),
+      ...(filter.tag === undefined ? {} : ({ leadTags: { has: filter.tag } } satisfies Prisma.ConversationWhereInput)),
       ...(filter.search === undefined || filter.search.trim() === ""
         ? {}
-        : {
+        : ({
             OR: [
               { contact: { displayName: { contains: filter.search.trim(), mode: "insensitive" as const } } },
               { channelIdentity: { username: { contains: filter.search.trim(), mode: "insensitive" as const } } },
             ],
-          }),
+          } satisfies Prisma.ConversationWhereInput)),
     },
     orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
     take: 500,

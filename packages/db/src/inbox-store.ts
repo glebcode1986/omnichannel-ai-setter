@@ -193,10 +193,10 @@ function readBatch(
     where: {
       ...scope,
       status: filter.status ?? "OPEN",
-      ...(filter.channelAccountId === undefined ? {} : { channelAccountId: filter.channelAccountId }),
-      ...(filter.leadStage === undefined ? {} : { leadStage: filter.leadStage }),
-      ...(filter.takeover === undefined ? {} : { takeoverState: filter.takeover }),
-      ...(filter.takenOverByUserId === undefined ? {} : { takeoverActorUserId: filter.takenOverByUserId }),
+      ...(filter.channelAccountId === undefined ? {} : ({ channelAccountId: filter.channelAccountId } satisfies Prisma.ConversationWhereInput)),
+      ...(filter.leadStage === undefined ? {} : ({ leadStage: filter.leadStage } satisfies Prisma.ConversationWhereInput)),
+      ...(filter.takeover === undefined ? {} : ({ takeoverState: filter.takeover } satisfies Prisma.ConversationWhereInput)),
+      ...(filter.takenOverByUserId === undefined ? {} : ({ takeoverActorUserId: filter.takenOverByUserId } satisfies Prisma.ConversationWhereInput)),
       // `AND`, not two spreads. Search and the cursor are both disjunctions, and spreading them would
       // put `OR` in the object twice — the second silently replacing the first, so a search would stop
       // being applied the moment a second page was asked for. This is the bug the integration tests

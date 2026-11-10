@@ -3,6 +3,7 @@
  * and nothing here logs, returns or throws the secret. Reads are a *system* flow — webhook ingestion and the
  * token refresher have no user session — so they take an explicit Workspace scope instead of a context.
  */
+import type { Prisma } from "../generated/prisma/client";
 import { randomUUID } from "node:crypto";
 
 import type { DbExecutor } from "../client";
@@ -88,7 +89,7 @@ export async function rotateChannelCredential(
       workspaceId: input.workspaceId,
       id: input.credentialId,
       revokedAt: null,
-      ...(input.mintedAt === undefined ? {} : { OR: [{ refreshedAt: input.mintedAt }, { refreshedAt: null, createdAt: input.mintedAt }] }),
+      ...(input.mintedAt === undefined ? {} : ({ OR: [{ refreshedAt: input.mintedAt }, { refreshedAt: null, createdAt: input.mintedAt }] } satisfies Prisma.ChannelCredentialWhereInput)),
     },
     data: {
       purpose: input.purpose,

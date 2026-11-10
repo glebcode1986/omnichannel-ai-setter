@@ -666,6 +666,9 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
   });
 
   describe("the internal audit", () => {
+    /** Above the number of rows these tests write, so the assertions are about the filter. */
+    const MAX_AUDIT_ROWS = 200;
+
     it("derives severity from the kind, and refuses a row that disagrees", async () => {
       const member = await db().platformMember.findFirstOrThrow({ where: { role: "SUPPORT" }, select: { id: true } });
 
@@ -715,6 +718,37 @@ describe.skipIf(!databaseTestsEnabled())("the internal control plane (PostgreSQL
       expect(page.rows.some((row) => row.kind === "BREAK_GLASS_OPENED")).toBe(true);
       // And it names the actor's role as it was, not as it is now.
       expect(page.rows.every((row) => PLATFORM_ROLES.includes(row.actorRole))).toBe(true);
+    });
+
+    it("narrows to one workspace, which nothing asserted before this", async () => {
+      // The `workspaceId` filter is a conditional spread, and renaming its key compiled and left all 56
+      // tests in this file green — measured on 2026-11-09. The query simply widened to every workspace,
+      // which is what the admin console's workspace filter is for. A guard now makes the rename a type
+      // error; this makes the behaviour a tested fact rather than an unexercised parameter.
+      await recordPlatformAuditEvent(db(), support, {
+        kind: "WORKSPACE_INSPECTED",
+        subjectType: "Workspace",
+        subjectId: tenant.workspaceId,
+        workspaceId: tenant.workspaceId,
+        reason: "scoped search: this workspace",
+      });
+      await recordPlatformAuditEvent(db(), support, {
+        kind: "WORKSPACE_INSPECTED",
+        subjectType: "Workspace",
+        subjectId: otherTenant.workspaceId,
+        workspaceId: otherTenant.workspaceId,
+        reason: "scoped search: another workspace",
+      });
+
+      const scoped = await searchPlatformAuditEvents(db(), admin, { workspaceId: tenant.workspaceId, limit: MAX_AUDIT_ROWS });
+
+      expect(scoped.rows.length).toBeGreaterThan(0);
+      expect(scoped.rows.every((row) => row.workspaceId === tenant.workspaceId)).toBe(true);
+
+      // The control, without which the assertion above would also hold for a filter that returned
+      // nothing at all: unfiltered, the other workspace's row is visible to the same caller.
+      const everything = await searchPlatformAuditEvents(db(), admin, { limit: MAX_AUDIT_ROWS });
+      expect(everything.rows.some((row) => row.workspaceId === otherTenant.workspaceId)).toBe(true);
     });
 
     it("pages with a cursor rather than an offset", async () => {

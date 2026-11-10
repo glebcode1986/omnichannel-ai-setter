@@ -21,11 +21,36 @@ joined to the accepted #82 by an **ordinary non-rebase merge**, recorded below. 
 needs both segments; measure the graph with `git merge-base --is-ancestor` rather than inferring it from
 numbering.
 
-PRs #26 through #103 are accepted — #103 by AntiGravity at `d85733a863c72d1ddefba9f00f06a332a70b2c51`
-on 2026-10-26 — and this branch is #104. `docs/handoff/CURRENT_HANDOFF.md` carries the current list.
-Nothing is merged to `main`.
+PRs #26 through #128 are accepted. The chain's live tip is PR #134 (`feat/pilot-invitation-gate` at
+`708c880f4a9c698ba19025289902f11de0250fd2`), under exclusive AntiGravity review since 2026-11-06.
+`docs/handoff/CURRENT_HANDOFF.md` carries the current list. Nothing is merged to `main`.
 
-### Current work — P6-04 / Issue #41, the first concrete billing provider adapter
+### Current work — the Style screen's paged reads lost their Business-Profile scope
+
+**Branch `fix/style-example-cursor-scope`**, based on `feat/pilot-invitation-gate` (PR #134 at
+`708c880f4a9c698ba19025289902f11de0250fd2`), as the sole next child. One defect, one query, with its
+regression; no behaviour else is touched.
+
+Three things a supervisor should know without reading the diff.
+
+**It was a live cross-Business-Profile read, not a display bug.** `listStyleExamples` spread the
+Business-Profile scope and the keyset cursor into one Prisma `where` as two `OR` keys, and the later key
+wins — so from page two onward the only tenancy predicate left was `workspaceId`, and the Style screen
+listed other profiles' examples. A member may hold `businessProfileScope = SELECTED` (#57), so those were
+rows the member had deliberately not been granted. All three lists on that screen page.
+
+**No approved head was moved.** The earliest branch carrying the code is PR #78, which is APPROVED. The
+owner was asked before anything was committed and chose the separate follow-up route Issue #111 records
+(`PR110_POST_PASS_FIX_ROUTE=SEPARATE_FOLLOW_UP_PR`). #78 and every branch between it and #134 still carry
+the defect until this branch is merged down. Nothing was propagated, and this was not folded into PR
+#102's review round, whose directive says not to broaden scope.
+
+**The existing suite could not have caught it.** With the defect restored, all 50 pre-existing tests in
+`style-store.integration.test.ts` pass; every one of them reads a first page. The new test pages, and
+fails against the parent's code. `docs/handoff/CURRENT_HANDOFF.md` carries the evidence, the controls that
+keep the assertion from holding vacuously, and a disclosure about how long this sat unreported.
+
+### Earlier — P6-04 / Issue #41, the first concrete billing provider adapter
 
 **Branch `feat/p6-04-billing-provider-port`**, based on `feat/p7-02-launch-readiness`. The owner's
 decision of 2026-10-09 settled the blocked product choice: **Stripe** first, against the **Ukrainian-FOP**

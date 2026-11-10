@@ -152,18 +152,18 @@ export async function listReviewQueue(
     where: {
       ...scope,
       status: "PENDING",
-      ...(filter.reasonCode === undefined ? {} : { reasonCodes: { has: filter.reasonCode } }),
-      ...(filter.channelAccountId === undefined ? {} : { conversation: { channelAccountId: filter.channelAccountId } }),
-      ...(filter.reviewMode === undefined ? {} : { conversation: { takeoverReviewMode: filter.reviewMode } }),
+      ...(filter.reasonCode === undefined ? {} : ({ reasonCodes: { has: filter.reasonCode } } satisfies Prisma.AiDraftWhereInput)),
+      ...(filter.channelAccountId === undefined ? {} : ({ conversation: { channelAccountId: filter.channelAccountId } } satisfies Prisma.AiDraftWhereInput)),
+      ...(filter.reviewMode === undefined ? {} : ({ conversation: { takeoverReviewMode: filter.reviewMode } } satisfies Prisma.AiDraftWhereInput)),
       ...(page.cursor === undefined
         ? {}
-        : {
+        : ({
             OR: [
               { createdAt: { gt: page.cursor.createdAt } },
               // Same instant, higher id: the tie-break that keeps a cursor from repeating or skipping.
               { createdAt: page.cursor.createdAt, id: { gt: page.cursor.id } },
             ],
-          }),
+          } satisfies Prisma.AiDraftWhereInput)),
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     // One more than asked for, so "is there another page" is a fact rather than a guess.

@@ -1,3 +1,4 @@
+import type { Prisma } from "../generated/prisma/client";
 import {
   capacityVerdict,
   isValidIdentifier,
@@ -254,7 +255,7 @@ export async function listAuthorizedBusinessProfiles(db: DbExecutor, context: Wo
   const workspaceId = scopeOf(context);
   const filter = authorizedBusinessProfileFilter(context);
   const profiles = await db.businessProfile.findMany({
-    where: { workspaceId, ...(filter.businessProfileId === undefined ? {} : { id: filter.businessProfileId }) },
+    where: { workspaceId, ...(filter.businessProfileId === undefined ? {} : ({ id: filter.businessProfileId } satisfies Prisma.BusinessProfileWhereInput)) },
     select: { id: true, name: true, status: true },
     orderBy: { createdAt: "asc" },
   });

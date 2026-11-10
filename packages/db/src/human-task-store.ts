@@ -12,6 +12,7 @@
  * messages to customers. That asymmetry is deliberate: the product's model may ask people to do things,
  * and may not ask customers for anything without the gates.
  */
+import type { Prisma } from "./generated/prisma/client";
 import type { HumanTaskKind, HumanTaskStatus } from "@omnichannel/domain";
 
 import type { DbExecutor } from "./client";
@@ -291,10 +292,10 @@ export async function listTasks(
   const rows = await db.humanTask.findMany({
     where: {
       ...scope,
-      ...(filter.status === undefined ? {} : { status: filter.status }),
-      ...(filter.assignedUserId === undefined ? {} : { assignedUserId: filter.assignedUserId }),
-      ...(filter.conversationId === undefined ? {} : { conversationId: filter.conversationId }),
-      ...(filter.kind === undefined ? {} : { kind: filter.kind }),
+      ...(filter.status === undefined ? {} : ({ status: filter.status } satisfies Prisma.HumanTaskWhereInput)),
+      ...(filter.assignedUserId === undefined ? {} : ({ assignedUserId: filter.assignedUserId } satisfies Prisma.HumanTaskWhereInput)),
+      ...(filter.conversationId === undefined ? {} : ({ conversationId: filter.conversationId } satisfies Prisma.HumanTaskWhereInput)),
+      ...(filter.kind === undefined ? {} : ({ kind: filter.kind } satisfies Prisma.HumanTaskWhereInput)),
     },
     // Undated tasks last rather than first: a task with no deadline is not the most urgent one.
     orderBy: [{ dueAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
