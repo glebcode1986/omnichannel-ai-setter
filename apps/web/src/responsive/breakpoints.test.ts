@@ -720,6 +720,75 @@ describe("the supported widths", () => {
     expect(exempt.every(({ selector }) => scrollBoundaries.some((container) => selector.startsWith(container)))).toBe(true);
   });
 
+  it("gives a field whose options are sentences the whole row, and only those", () => {
+    // The stylesheet states this rule itself — `.form-grid > [data-span="full"]` carries the comment
+    // "anything that holds sentences, and anything that is not a field at all" — and four fields on the
+    // settings form broke it. At 1024px that form's column is 744px against two tracks of about 366, and
+    // the chosen value of each was truncated by 4 to 36 pixels. The truncation is deliberate and
+    // documented twice next to `.select-value`; sitting in a half-width cell was not.
+    //
+    // Each select is attributed to the nearest field div that precedes it, which is exact here because a
+    // field declares one `htmlFor` and its options follow it — and the control for that is below: all
+    // eleven must resolve to *distinct* fields, so a collapsed attribution cannot pass.
+    const settings = readFileSync(path.join(srcRoot, "app/workspaces/[workspaceId]/profiles/[businessProfileId]/settings/page.tsx"), "utf8");
+    const catalogue = readFileSync(path.join(srcRoot, "i18n/catalogue.ts"), "utf8");
+    const THRESHOLD = 40;
+
+    // The longest label under each prefix, over both halves of the catalogue, because the worst case is
+    // what has to fit and Russian is the longer of the two for every one of these.
+    const longest = new Map<string, number>();
+    for (const found of catalogue.matchAll(/^[ \t]*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/gmu)) {
+      const key = found[1] ?? "";
+      const prefix = key.slice(0, key.indexOf("."));
+      longest.set(prefix, Math.max(longest.get(prefix) ?? 0, (found[2] ?? "").length));
+    }
+
+    const fields = [...settings.matchAll(/<div className="field"([^>]*)>/gu)].map((found) => ({
+      at: found.index ?? 0,
+      spansTheRow: (found[1] ?? "").includes('data-span="full"'),
+      control: /htmlFor="([^"]+)"/u.exec(settings.slice(found.index ?? 0, (found.index ?? 0) + 400))?.[1] ?? "?",
+    }));
+    const selects = [...settings.matchAll(/t\.t\(`([A-Za-z]+)\.\$\{[A-Za-z]+\}`\)/gu)].map((found) => {
+      const prefix = found[1] ?? "";
+      const owner = fields.filter((field) => field.at < (found.index ?? 0)).at(-1);
+      return {
+        chars: longest.get(prefix) ?? 0,
+        control: owner?.control ?? "?",
+        spansTheRow: owner?.spansTheRow ?? false,
+      };
+    });
+
+    expect(selects.length, "every enum-backed select on the form").toBe(11);
+    expect(new Set(selects.map((select) => select.control)).size, "each attributed to its own field").toBe(11);
+
+    const sentences = selects.filter((select) => select.chars >= THRESHOLD);
+    const words = selects.filter((select) => select.chars < THRESHOLD);
+
+    // Both kinds are present, so neither half of the rule is satisfied by finding nothing.
+    expect(sentences.map((select) => select.control).toSorted()).toEqual([
+      "settings-confidence",
+      "settings-instagram",
+      "settings-presence",
+      "settings-whatsapp",
+    ]);
+    expect(words.length, "and the short ones the rule must leave alone").toBe(7);
+
+    expect(
+      sentences.filter((select) => !select.spansTheRow).map((select) => `${select.control} (${String(select.chars)} characters)`),
+    ).toEqual([]);
+
+    // The threshold sits in a gap rather than on a knife edge. Wedged between two adjacent measurements
+    // it would make the next label somebody adds a coin toss, and this is the assertion that notices.
+    const widestWord = Math.max(...words.map((select) => select.chars));
+    const narrowestSentence = Math.min(...sentences.map((select) => select.chars));
+
+    expect(narrowestSentence - widestWord, `${String(widestWord)} characters, then ${String(narrowestSentence)}`).toBeGreaterThanOrEqual(8);
+
+    // And the stylesheet's half of the contract, so this cannot stay green while the rule it leans on is
+    // renamed or removed.
+    expect(declarationsFor('.form-grid > [data-span="full"]', css)).toMatch(/grid-column:\s*1\s*\/\s*-1/u);
+  });
+
   it("gives a free-text filter a placeholder wherever the labels are hidden", () => {
     // `.inbox-search label` is visually hidden on purpose: every select in that row names what it
     // filters in its own first option — "Every channel", "Any status". A text box names nothing, so in

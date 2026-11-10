@@ -272,7 +272,7 @@ export default async function SettingsPage({
               <fieldset className="form-group">
                 <legend>{t.t("settings.groupCaution")}</legend>
                 <div className="form-grid">
-                  <div className="field">
+                  <div className="field" data-span="full">
                     <label htmlFor="settings-confidence">{t.t("settings.confidence")}</label>
                     {/* An owner who tuned values by hand is told so rather than shown a preset that no
                         longer describes them. Choosing a preset then replaces those values.
@@ -403,7 +403,7 @@ export default async function SettingsPage({
                   {/* `disabled` like every other control here. These two were the only ones without it, so a
                       reader shown the settings read-only could type into them and press a button that was
                       greyed out — and the store would have refused the save in any case. */}
-                  <div className="field">
+                  <div className="field" data-span="full">
                     <label htmlFor="settings-presence">{t.t("settings.presence")}</label>
                     <Select
                       id="settings-presence"
@@ -433,7 +433,7 @@ export default async function SettingsPage({
               <fieldset className="form-group">
                 <legend>{t.t("settings.groupChannels")}</legend>
                 <div className="form-grid">
-                  <div className="field">
+                  <div className="field" data-span="full">
                     <label htmlFor="settings-instagram">{t.t("settings.instagram")}</label>
                     <Select
                       id="settings-instagram"
@@ -444,7 +444,7 @@ export default async function SettingsPage({
                     />
                   </div>
 
-                  <div className="field">
+                  <div className="field" data-span="full">
                     <label htmlFor="settings-whatsapp">{t.t("settings.whatsapp")}</label>
                     <Select
                       id="settings-whatsapp"
