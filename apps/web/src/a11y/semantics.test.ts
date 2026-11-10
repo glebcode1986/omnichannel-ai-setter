@@ -11,7 +11,7 @@
  * So: every production file, every time. Contrast is handled by `contrast.test.ts`, which computes real
  * WCAG ratios from the tokens. What neither can do is stated in `docs/specs/UX_VERIFICATION.md`.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -340,6 +340,89 @@ describe("the production UI's semantics", () => {
     }
 
     expect(report(findings)).toEqual([]);
+  });
+
+  it("gives every screen a top-level heading, from the route or from something above it", () => {
+    // The Inbox and its thread were the only two screens in the console whose outline began at `<h2>`:
+    // three sibling panes and no name for the page holding them. Nothing here noticed, and the reason is
+    // structural rather than an oversight — every other assertion in this file is about one file, and an
+    // `<h1>` is a property of a *route*. It may be written in the page, in any layout above it, or in the
+    // component the page delegates to, and all three are correct.
+    //
+    // So this one resolves the route instead of reading a file: the page's own source, the `layout.tsx`
+    // files from its directory up to `app/`, and the local components it imports. A page whose whole body
+    // is a `redirect(` renders no heading and needs none.
+    //
+    // Read through `lines`, which drops comments, and that is load-bearing: `subscription-card.tsx`
+    // contains the text `<h1>` only inside a doc comment explaining that the route owns it. Matching raw
+    // source would let any page that imports it pass on prose.
+    const appRoot = path.join(uiRoot, "app");
+    const declaresAnH1 = (text: string): boolean => lines(text).some(({ text: code }) => /<h1[\s>]/u.test(code));
+    const read = (file: string): string => (existsSync(file) ? readFileSync(file, "utf8") : "");
+
+    /**
+     * Every local module the route can render, followed to the end.
+     *
+     * One level was not enough and the shortfall was concrete: `app/privacy/page.tsx` renders
+     * `@/ui/legal/legal-page`, which renders `@/ui/legal/legal-document`, and the `<h1>` is in the
+     * second. A route delegates as far as it likes, so the closure is followed rather than sampled —
+     * and the two controls below are what keep that from turning into a check that cannot fail.
+     */
+    const reachable = (entry: string): readonly string[] => {
+      const seen = new Set<string>();
+      const texts: string[] = [];
+      const queue = [entry];
+      while (queue.length > 0) {
+        const text = queue.shift() ?? "";
+        for (const match of text.matchAll(/from "@\/([^"]+)"/gu)) {
+          for (const extension of [".tsx", ".ts"]) {
+            const file = path.join(uiRoot, `${match[1] ?? ""}${extension}`);
+            if (seen.has(file) || !existsSync(file)) {
+              continue;
+            }
+            seen.add(file);
+            const found = readFileSync(file, "utf8");
+            texts.push(found);
+            queue.push(found);
+          }
+        }
+      }
+      return texts;
+    };
+
+    const screensWithNoHeading = (layoutCounts: (file: string) => boolean): readonly string[] => {
+      const found: string[] = [];
+      for (const { file, source } of productionFiles()) {
+        if (path.basename(file) !== "page.tsx" || /\bredirect\(/u.test(source)) {
+          continue;
+        }
+        const chain: string[] = [];
+        for (let at = path.dirname(path.join(uiRoot, file)); at.startsWith(appRoot); at = path.dirname(at)) {
+          chain.push(path.join(at, "layout.tsx"));
+        }
+        const sources = [source, ...chain.filter(layoutCounts).map(read), ...reachable(source)];
+        if (!sources.some(declaresAnH1)) {
+          found.push(file);
+        }
+      }
+      return found;
+    };
+
+    expect(screensWithNoHeading(() => true)).toEqual([]);
+
+    // Counted, so an empty result is a fact about the routes and not about the walk.
+    expect(productionFiles().filter(({ file }) => path.basename(file) === "page.tsx").length).toBeGreaterThan(15);
+
+    // And the control that matters: the Inbox's heading comes from a layout, so with that one layout
+    // discounted both of its routes must come back. This is the state the console shipped in until now,
+    // and it is the only thing that proves the check can still say no.
+    const inbox = path.join("app", "workspaces", "[workspaceId]", "profiles", "[businessProfileId]", "inbox");
+    const withoutIt = screensWithNoHeading((file) => !file.endsWith(path.join("inbox", "layout.tsx")));
+
+    expect(withoutIt).toContain(path.join(inbox, "page.tsx"));
+    expect(withoutIt).toContain(path.join(inbox, "[conversationId]", "page.tsx"));
+    // Nothing else depends on that file, so discounting it may not disturb any other screen.
+    expect(withoutIt).toHaveLength(2);
   });
 
   it("keeps a table a table where the stylesheet stops it being one", () => {
