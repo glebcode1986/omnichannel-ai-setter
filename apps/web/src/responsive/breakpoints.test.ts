@@ -426,6 +426,32 @@ describe("the supported widths", () => {
     expect(css).toContain("--shell-nav-width");
   });
 
+  it("stacks the bar's two names on a phone, where a row loses both of them", () => {
+    // The bar's other two items can give nothing back: a 36px menu button, and controls whose automatic
+    // minimum size is their content. At 390px the row spends 16 + 36 + 12 + 184 + 16 and leaves the crumb
+    // 114px — and flexbox shares a deficit in proportion to what each child asked for, so both names
+    // ellipsize rather than only the longer one. Measured whole from 471px up, so every phone clipped, and
+    // at that width the workspace name is on no other part of the screen.
+    const phone = declarationsFor(".shell-crumb", rulesAt(375));
+
+    expect(phone.trim(), "the phone block must declare the crumb at all").not.toBe("");
+    expect(phone, "and it must stop being a row").toMatch(/flex-direction:\s*column/u);
+    // `align-items` is the load-bearing half rather than tidiness: the base rule declares `baseline`,
+    // which has no meaning on a column container's cross axis — it resolves to flex-start and sizes each
+    // name to its own max-content instead of to the crumb, so a long profile name runs out past the
+    // controls and takes the document sideways with it. Measured at 82px of horizontal scroll with a
+    // 44-character name, which is why the ellipsis has to keep doing the work.
+    expect(phone, "with each name pinned to the crumb's width rather than its own").toMatch(/align-items:\s*stretch/u);
+
+    // The control, and the reason this is not a grep for three declarations: specificity is equal and a
+    // media query adds none, so source order alone decides which wins. A desktop must still be served the
+    // row — if the override were moved into the base rule, or written above it, this is what notices.
+    const desktop = declarationsFor(".shell-crumb", baseCss);
+
+    expect(desktop, "a desktop still gets the row").toMatch(/align-items:\s*baseline/u);
+    expect(desktop, "and the column belongs to the phone block alone").not.toMatch(/flex-direction/u);
+  });
+
   it("gives the two-pane surface a one-pane rule, and nothing claims a pane it does not render", () => {
     const rules = rulesAt(375);
     const components = componentSources();

@@ -950,6 +950,29 @@ details[open] > summary::before {
     padding: 0 var(--space-4);
   }
 
+  /* Two lines on a phone, because in one row both halves of the answer are lost.
+     The bar's other two items can give nothing back: a 36px menu button, and controls whose automatic
+     minimum size is their content -- an 82px appearance pill beside an 86px language pill. At 390px the
+     row spends 16 + 36 + 12 + 184 + 16 and leaves the crumb 114px; in a row flexbox shares a deficit in
+     proportion to what each child asked for, so neither name is privileged and both ellipsize to about
+     four characters. Measured whole only from 471px up, so every phone clipped -- and the workspace name
+     is nowhere else at that width: the drawer carries the setup link and "switch workspace", not the name.
+
+     `align-items: stretch` is load-bearing and not tidiness. The base rule declares `baseline`, which has
+     no meaning on a column container's cross axis: it resolves to flex-start and sizes each child to its
+     own max-content instead of to the crumb, so a long profile name runs out past the controls and takes
+     the document sideways with it -- 82px of horizontal scroll with a 44-character name.
+
+     Below the base rule, and inside this block, on purpose. Specificity is equal and a media query adds
+     none, so source order alone decides -- and written above it this would be *half* applied rather than
+     inert, which is worse: the base rule declares no `flex-direction`, so the column would survive while
+     `align-items` and `gap` were overridden. */
+  .shell-crumb {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
   .shell-main {
     padding: var(--space-4);
   }
