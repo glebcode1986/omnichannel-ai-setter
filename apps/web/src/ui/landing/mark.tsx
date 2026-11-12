@@ -21,7 +21,14 @@
  * - **plain** — two level ovals. Calm, attentive, nothing withheld. It wears this when the run is reset
  *   and nothing is pending.
  *
- * Both are drawn from the same body, so the switch is an eye swap rather than a different drawing.
+ * Both sets are in the markup at once and `data-eyes` says which one is forward. That is the whole
+ * reason the change reads as a change of expression rather than a flicker: a component that rendered one
+ * set or the other replaced a shape with a different shape between two frames, and no easing can soften
+ * a swap that the stylesheet never sees. With both drawn, the stylesheet has two layers to move between.
+ *
+ * Each set nests its shapes in a second group, `mark-lids`, for a duller reason that matters: the
+ * crossfade and the blink are both `transform`, and one element can only run one. The outer group owns
+ * the change of expression, the inner one owns what the eyes do while an expression is held.
  */
 export type MarkEyes = "sly" | "plain";
 
@@ -42,8 +49,10 @@ export function Mark({ eyes = "sly", title, className }: MarkProps) {
     >
       <g className="mark-body">
         {/* The tail, its own shape in the same fill: overlapping the body it merges with it, and it can
-            be adjusted without touching the main form. */}
+            be adjusted — or moved on its own, which is what makes the character tap its foot — without
+            touching the main form. */}
         <path
+          className="mark-tail"
           d="M479 820 L479 944
              C470 946 437 953 423 958 C409 963 404 967 396 972 C388 977 380 981 372 986
              C364 991 356 995 347 1000 C338 1005 332 1009 321 1014 C310 1019 288 1026 281 1028
@@ -54,8 +63,8 @@ export function Mark({ eyes = "sly", title, className }: MarkProps) {
         <rect x="166" y="240" width="906" height="703" rx="332" ry="283" />
       </g>
 
-      {eyes === "sly" ? (
-        <g className="mark-eyes">
+      <g className="mark-eyes" data-set="sly">
+        <g className="mark-lids">
           {/* Левый: верх прямой, наклон 0.306 на пиксель — снят по замерам. Первая версия шла
               вдвое положе и глаз читался раскрытым, а не прищуренным. */}
           <path d="M386 471 L542 519 C540 543 535 634 530 662 C525 690 517 681 510 687
@@ -69,13 +78,15 @@ export function Mark({ eyes = "sly", title, className }: MarkProps) {
                    C753 709 747 709 740 709 C733 709 727 708 720 706 C713 704 707 702 700 696
                    C693 690 684 684 680 673 C676 662 673 646 673 630 C673 614 677 584 678 575 Z" />
         </g>
-      ) : (
-        <g className="mark-eyes">
+      </g>
+
+      <g className="mark-eyes" data-set="plain">
+        <g className="mark-lids">
           {/* Level, equal, unhurried. Sized and spaced to the sly pair so the swap does not jump. */}
           <ellipse cx="464" cy="560" rx="62" ry="78" />
           <ellipse cx="761" cy="560" rx="62" ry="78" />
         </g>
-      )}
+      </g>
     </svg>
   );
 }

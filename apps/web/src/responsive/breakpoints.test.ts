@@ -399,10 +399,23 @@ describe("the supported widths", () => {
     // whoever adds it. `repeat(auto-fit, …)` collapses by itself and `1fr auto` is two flexible columns,
     // so neither is at risk. What remains must be overridden in a narrow block — and the search runs over
     // the base rules only, since a grid declared inside a narrow block is already the override.
+    // `auto-fill` is admitted on the same terms as `auto-fit`, and only on them: when its floor is capped
+    // at `100%` the track cannot keep a width the container does not have, so the grid collapses to one
+    // column on a phone exactly as `auto-fit` does. The difference between the two is whether *empty*
+    // tracks collapse, which is not a question about width. An `auto-fill` with an uncapped floor is still
+    // a fixed grid and is still caught — asserted below.
+    const collapsesByItself = (columns: string): boolean =>
+      columns.includes("repeat(auto-fit") ||
+      (columns.includes("repeat(auto-fill") && /minmax\(\s*min\(.+,\s*100%\)\s*,/u.test(columns));
     const fixed = [...baseCss.matchAll(/grid-template-columns:\s*(?<columns>[^;]+);/gu)].filter((found) => {
       const columns = found.groups?.columns ?? "";
-      return !columns.includes("repeat(auto-fit") && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
+      return !collapsesByItself(columns) && (/\d(?:px|rem|em|ch)/u.test(columns) || columns.includes("var(--"));
     });
+
+    // The control for the sentence above: the shapes this must keep catching.
+    expect(collapsesByItself("repeat(auto-fill, minmax(min(max(14rem, 48%), 100%), 1fr))")).toBe(true);
+    expect(collapsesByItself("repeat(auto-fill, minmax(14rem, 1fr))")).toBe(false);
+    expect(collapsesByItself("repeat(3, 12rem)")).toBe(false);
 
     // Asked as a set of owners rather than a count of declarations. A count said 2 and broke the moment
     // the Inbox declared its three-pane track list a second time inside a container query — which is an
@@ -559,13 +572,46 @@ describe("the supported widths", () => {
     // 1124px) {` as a declared minimum width of `1124px) { .inbox { grid-template-columns: …` and
     // demanded that a container query's threshold be capped at 100% of a container. A query condition is
     // not a width an element is given.
-    const widths = [...declarations.matchAll(/min-width:\s*(?<floor>[^;{]+);/gu)].map((found) => (found.groups?.floor ?? "").trim());
+    //
+    // Read inside the rule it belongs to rather than across the whole sheet, because one shape is safe for
+    // a reason a bare value cannot carry: an element taken out of flow — the select's own dropdown is the
+    // case — asks `min-width: 100%` to mean "no narrower than the control I hang from", and caps itself
+    // with a `max-width` measured against the viewport. Out of flow it cannot widen its parent at all, and
+    // capped it cannot exceed the screen. The in-flow shape this test was written for, a textarea asking
+    // for 18rem inside a 262px card, is unchanged and still caught.
+    const safeMinWidth = (floor: string, body: string): boolean => {
+      if (floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor)) {
+        return true;
+      }
+      if (floor !== "100%") {
+        return false;
+      }
+      const outOfFlow = /position:\s*(?:absolute|fixed)\s*;/u.test(body);
+      const capped = /max-width:\s*[^;{]*(?:100vw|min\()/u.test(body);
+      return outOfFlow && capped;
+    };
+
+    const rules = [...declarations.matchAll(/(?<selector>[^{};]+)\{(?<body>[^{}]*)\}/gu)];
+    const widths = rules.flatMap((rule) =>
+      [...(rule.groups?.body ?? "").matchAll(/min-width:\s*(?<floor>[^;{]+);/gu)].map((found) => ({
+        floor: (found.groups?.floor ?? "").trim(),
+        body: rule.groups?.body ?? "",
+        selector: (rule.groups?.selector ?? "").trim(),
+      })),
+    );
     expect(widths.length, "the declared minimum widths").toBeGreaterThan(0);
-    for (const floor of widths) {
-      expect(floor === "0" || /^min\(.+,\s*100%\)$/u.test(floor), `min-width: ${floor} is a width this element may not fit in`).toBe(
-        true,
-      );
+    for (const { floor, body, selector } of widths) {
+      expect(safeMinWidth(floor, body), `${selector} declares min-width: ${floor}, a width this element may not fit in`).toBe(true);
     }
+
+    // The controls. Without these the exemption above could be widened to anything and this test would
+    // still pass, which is the failure mode an exemption invites.
+    expect(safeMinWidth("0", "")).toBe(true);
+    expect(safeMinWidth("min(20rem, 100%)", "")).toBe(true);
+    expect(safeMinWidth("18rem", "position: absolute; max-width: 100vw;")).toBe(false);
+    expect(safeMinWidth("100%", "position: absolute;")).toBe(false);
+    expect(safeMinWidth("100%", "max-width: min(22rem, 100vw);")).toBe(false);
+    expect(safeMinWidth("100%", "position: absolute; max-width: min(22rem, calc(100vw - 16px));")).toBe(true);
   });
 
   it("keeps each label and its control one element, which is what lets the row wrap", () => {

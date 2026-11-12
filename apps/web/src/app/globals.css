@@ -21,6 +21,16 @@
  */
 
 :root {
+  /* Added with the onboarding shell. The extracted rules below read these, and a rule reading an
+     undefined custom property does not fail — it renders with nothing, which is the quiet wrong. */
+  --brand: #1c4ed8;
+  --leading-l: 28px;
+  --leading-m: 20px;
+  --leading-s: 16px;
+  --shell-bar-height: 56px;
+  --surface-selected: #ededed;
+  --weight-medium: 500;
+  --weight-semibold: 600;
   --surface: #ffffff;
   --surface-sunken: #f5f6f8;
   --surface-raised: #ffffff;
@@ -75,7 +85,12 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  /* Guarded, now that a reader can choose. Without `:not([data-theme="light"])` an explicit
+     light choice would lose to the system preference, which is the one case a switch exists
+     for. A machine set to dark with nothing chosen still wins, which is what this concedes. */
+  :root:not([data-theme="light"]) {
+    --brand: #7aa2ff;
+    --surface-selected: #292929;
     --surface: #14171b;
     --surface-sunken: #0e1013;
     --surface-raised: #1c2026;
@@ -2578,4 +2593,587 @@ body {
 
 .landing-logo .mark-eyes {
   fill: var(--accent-contrast);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────────────────────────────
+   The authenticated onboarding surface: the shell frame, the panels and forms the workspace and
+   business-profile screens are built from, the two preference controls in the bar, and the select and
+   switch they use.
+
+   Extracted rule by rule from the branch that wrote them rather than copied wholesale: 37 of the 55
+   classes these screens use were undefined here, and the sheet they came from is 4849 lines serving the
+   public, legal and marketing surfaces too. Only selectors naming those 37 classes are below, with
+   their media queries kept around them — a narrow-screen rule hoisted out of its query would apply at
+   every width.
+
+   The decision is made on the selector with its comments removed, and a comma-separated list is filtered
+   to the parts that name one of the 37. The first attempt judged the whole span before the brace, so a
+   paragraph above an unrelated rule that merely *discussed* `.select` pulled that rule in: the cascade
+   gate then found twelve properties declared twice, each a second spelling of a value this sheet already
+   had. Filtering by selector also recovered a media query the first attempt had dropped.
+   ─────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme="dark"] {
+    /* Resend's own dark scale, read from their stylesheet: twelve steps of a neutral with a faint cool
+       cast. The accent inverts, white on black, which is what their own accent token says too.
+       (Written without a custom-property literal on purpose: an unterminated one inside a comment is
+       swallowed by the extraction in `theme-palette.test.ts`, which is how this comment first broke
+       the palette it was describing.) */
+    /* Three levels, because a card has to lift off the column it sits on and in the dark the two were
+       the same grey. The house style has the same three: canvas, sidebar, card. */
+    --surface: #141414;
+    --surface-sunken: #121212;
+    --surface-raised: #1a1a1a;
+    --border: #242424;
+    --border-strong: #666666;
+    --text: #ebebeb;
+    --text-muted: #8c8c8c;
+    --accent: #d1d1d1;
+    --surface-selected: #292929;
+    --landing-hero: #10141b;
+    --landing-band: #11151b;
+    --accent-contrast: #121212;
+    --brand: #7aa2ff;
+    --ok: #62d29a;
+    --warn: #e0b054;
+    --stop: #ff8f9a;
+    /* A shadow over a dark surface has to be darker than the surface, not lighter. */
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-2: 0 2px 10px rgb(0 0 0 / 45%);
+}
+
+.select {
+  position: relative;
+  min-width: 0;
+}
+
+.select-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--field-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.select-button:hover,
+.select[data-open="true"] .select-button {
+  border-color: var(--border-strong);
+}
+
+.select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.select-mark {
+  flex: none;
+  width: 10px;
+  height: 6px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: 0 0, 5px 0;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.select-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  /* At least the control's width and never narrower, but free to grow for a long option — and capped
+     at the viewport so a long one cannot push the page sideways. */
+  min-width: 100%;
+  max-width: min(22rem, calc(100vw - var(--space-5) * 2));
+  /* Eight rows and then it scrolls, which is roughly where a list stops being scannable. */
+  max-height: calc(var(--field-height) * 8);
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-2);
+}
+
+.select-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.select-option[data-active="true"] {
+  background: var(--surface-selected);
+}
+
+.select-option[aria-selected="true"] {
+  font-weight: var(--weight-medium);
+}
+
+.select-option[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.select-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+label > .select {
+  margin-top: var(--space-1);
+}
+
+.shell-topbar {
+  grid-area: bar;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--shell-bar-height);
+  padding: 0 var(--space-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-crumb {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.shell-crumb-name {
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.shell-crumb-muted {
+  color: var(--text-muted);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.shell-topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+.shell-topbar-controls .switch-select {
+  min-height: 36px;
+}
+
+.shell-brand {
+  display: flex;
+  align-items: center;
+  min-height: var(--shell-bar-height);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  text-decoration: none;
+  color: var(--text);
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.shell-brand-mark {
+  width: 22px;
+  height: auto;
+  flex: none;
+}
+
+.shell-brand-link .mark-body {
+  fill: var(--brand);
+}
+
+.shell-brand-link .mark-eyes {
+  fill: var(--surface);
+}
+
+.shell-sections {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-group-label {
+  margin: 0 0 var(--space-1);
+  padding: 0 var(--space-3);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.shell-account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+.shell-account a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.shell-account a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.shell-account-setup {
+  font-weight: var(--weight-medium);
+}
+
+.shell-scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  border: 0;
+  padding: 0;
+  background: rgb(0 0 0 / 45%);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-1);
+  /* A grid item's automatic minimum size is its content, and the content here is a table or a caption
+     that may not break. Zero lets the box shrink to its track instead of widening the page. */
+  min-width: 0;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+.empty-state-title {
+  margin: 0;
+  font-size: var(--text-m);
+  line-height: var(--leading-m);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.empty-state-body {
+  margin: 0;
+  max-width: 22rem;
+  color: var(--text-muted);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(max(14rem, 48%), 100%), 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.form-grid .field {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.form-grid .field > label {
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+}
+
+.form-grid .field > .muted {
+  margin: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+}
+
+.form-grid > [data-span="full"] {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.form-group > .form-grid,
+.form-group > .form-stack {
+  margin-top: var(--space-3);
+}
+
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lead-move .select {
+  flex: 1 1 8rem;
+  min-width: 0;
+}
+
+.page-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.panel > * {
+  margin-top: var(--space-3);
+  margin-bottom: 0;
+}
+
+.panel > :first-child {
+  margin-top: 0;
+}
+
+.panel > h3 {
+  margin-top: var(--space-5);
+}
+
+.panel > h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-l);
+  line-height: var(--leading-l);
+  font-weight: var(--weight-semibold);
+}
+
+.mark-lids {
+  /* Веки смыкаются к середине собственного глаза, как они и смыкаются. */
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+.mark-tail {
+  /* Поворот вокруг верхнего края ножки — там, где она входит в корпус. Край при этом стоит на
+     месте, а качается низ, поэтому стык не раскрывается: верх ножки на y=820, низ корпуса на
+     y=943, перекрытие в 123px никуда не девается. */
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+}
+
+.surface-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.switch form {
+  display: flex;
+  margin: 0;
+}
+
+.switch-option {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  /* Above the 24px floor WCAG 2.2 sets for a target, and short enough to sit in a corner without
+     shouting. The pill around it comes out at 44. */
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.switch-option:hover {
+  color: var(--text);
+}
+
+.switch-icon {
+  width: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.switch-icon svg {
+  display: block;
+}
+
+.switch-option[aria-pressed="true"],
+.switch[data-following-system] .switch-option[data-public-theme="light"] {
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.switch-field {
+  padding: 2px;
+}
+
+.switch .select-button {
+  appearance: auto;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-s);
+  font-weight: var(--weight-medium);
+  min-height: 36px;
+  height: 36px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.switch .select-button:hover,
+.switch .select[data-open="true"] .select-button {
+  background: var(--surface-raised);
+  border-color: transparent;
+}
+
+.switch .select-list {
+  left: auto;
+  right: 0;
+}
+
+@media (max-width: 720px) {
+  .shell[data-nav-open="true"] .shell-scrim {
+    display: block;
+  }
+  .shell-topbar {
+    padding: 0 var(--space-4);
+  }
+  .shell-crumb {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .keeper[data-phase="drafting"] .mark-lids {
+    animation: mark-search 4.6s ease-in-out infinite;
+  }
+  .keeper[data-phase="waiting"] .mark-lids {
+    animation: mark-blink 7s ease-in-out infinite;
+  }
+  .keeper[data-phase="sent"] .mark-lids {
+    animation: mark-glad 680ms ease-out 1 both;
+  }
+  .keeper[data-phase="cancelled"] .mark-lids {
+    animation: mark-droop 900ms ease-in-out 1 both;
+  }
+  .keeper[data-phase="waiting"] .mark-tail {
+    animation: mark-tap 1.9s ease-in-out infinite;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .switch[data-following-system] .switch-option[data-public-theme="light"] {
+    background: transparent;
+    color: var(--text-muted);
+    box-shadow: none;
+  }
+  .switch[data-following-system] .switch-option[data-public-theme="dark"] {
+    background: var(--surface-raised);
+    color: var(--text);
+    box-shadow: var(--shadow-1);
+  }
+}
+
+/* Two classes the branch's components name and no stylesheet defines — measured against both sheets, not
+   missed by the extraction. Repaired here rather than carried across unstyled, because each one is the
+   only thing standing where it stands.
+
+   `.select-native` is the select rendered before enhancement applies and when it cannot: the no-script and
+   first-paint path, i.e. the accessible fallback. Unstyled it is a raw browser control in the middle of a
+   panel of fields, so it is given the enhanced control's own box.
+
+   `.shell-account-switch` is the way back to the workspace list from inside a profile. Unstyled it is a
+   default link under a bordered block that sets small type, so it is given that block's scale. It sets no
+   colour on purpose: `a { color: var(--accent) }` already decides what a link looks like here, and a
+   second opinion in one rule is how a product ends up with two link colours. */
+.select-native {
+  width: 100%;
+  min-height: var(--field-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+}
+
+.shell-account-switch {
+  align-self: flex-start;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
 }

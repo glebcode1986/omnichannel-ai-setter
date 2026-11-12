@@ -64,7 +64,7 @@ export function SetupChecklist({
               <span className="badge" data-tone={stepStateTones[status.state]}>
                 {t.t(`stepState.${status.state}` as MessageKey)}
               </span>
-              <span className="muted" style={{ flexBasis: "100%" }}>
+              <span className="muted step-description">
                 {t.t(`stepDescription.${status.step}` as MessageKey)}
               </span>
               {renderSkipControl(t, status.step, status.state, status.skippable, canConfigure, skipAction, unskipAction)}
