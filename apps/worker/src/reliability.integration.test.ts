@@ -117,7 +117,15 @@ describe.skipIf(!endToEndTestsEnabled())("reliability controls (end to end)", ()
     let sends = 0;
     const handler = createDeliveryHandler({
       engine: {
-        store: createDeliveryStore(infra.db),
+        // The same clock the engine judges by, so this suite's claim decides in the era the suite froze.
+        //
+        // No test here fails without it, and that was measured rather than assumed: taking it off leaves
+        // all 21 green, because the backlog cases are already refused by the coordinator's own gate before
+        // a claim is ever reached. It is kept because the alternative is a harness whose engine judges in
+        // 2026-09 while its claim judges by the wall clock, and whose backlog switches — their `until`
+        // measured from the fixture instant — are therefore long expired to the one and in force to the
+        // other. That is a trap for whoever next writes a case here, not a guard for the cases that exist.
+        store: createDeliveryStore(infra.db, () => now),
         sender: {
           send: () => {
             sends += 1;

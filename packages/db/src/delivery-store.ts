@@ -152,7 +152,20 @@ interface SendStateGuard {
 const sealGuard = (guard: SendStateGuard): DeliveryStateGuard => guard as unknown as DeliveryStateGuard;
 const openGuard = (guard: DeliveryStateGuard): SendStateGuard => guard as unknown as SendStateGuard;
 
-export function createDeliveryStore(db: DbClient): DeliveryStore {
+/**
+ * The delivery store, reading and writing one operation's send.
+ *
+ * `now` is the clock the claim consults at the moment it decides, and it belongs here rather than only at
+ * the call site because of what a claim does between the two: it waits. The coordinator captures its
+ * instant, the claim then opens a transaction and blocks on the kill-switch keys until a switch writer
+ * ahead of it commits, and only then judges. Judging that with the captured instant describes a moment
+ * that has already passed — see the claim itself for the whole account.
+ *
+ * It defaults to the real clock so that no caller is obliged to supply one, and `createDeliveryEngine`
+ * passes the same clock it gives the sender and the channel resolver: a store deciding by one clock while
+ * the engine judges by another is two moments in one guard.
+ */
+export function createDeliveryStore(db: DbClient, now: () => Date = () => new Date()): DeliveryStore {
   return {
     async loadForSend(operationId, at) {
       const job = await db.deliveryJobRecord.findUnique({
@@ -330,7 +343,7 @@ export function createDeliveryStore(db: DbClient): DeliveryStore {
     async claim(context, claimedAt) {
       const guard = openGuard(context.guard);
       try {
-        return await claimInside(db, context, guard, claimedAt);
+        return await claimInside(db, context, guard, claimedAt, now);
       } catch (error) {
         // Postgres broke a deadlock, or the transaction lost a write conflict. Either way this worker
         // established nothing: it has not claimed and it has not sent. Reporting it as a moved state is
@@ -470,6 +483,7 @@ async function claimInside(
   context: DeliverySendContext,
   guard: SendStateGuard,
   claimedAt: Date,
+  now: () => Date,
 ): Promise<ClaimOutcome> {
   return db.$transaction(
   async (tx) => {
@@ -545,7 +559,27 @@ async function claimInside(
     // appear. A switch found here is a state change like any other — the coordinator re-reads and
     // re-judges, and the policy engine is what turns it into a held delivery with a named reason. This
     // path deliberately produces no send and no attempt.
-    if ((await coveringSuspension(tx, target, claimedAt)) !== undefined) {
+    //
+    // Judged at `decidedAt` and not at `claimedAt` (#138). `claimedAt` was read by the coordinator before
+    // this transaction existed, and what happens in between is the whole point: this claim blocks on the
+    // kill-switch keys above until a switch writer ahead of it commits. The lock therefore does its job
+    // and hands the read the very row it waited for — and bounding the judgement by the earlier instant
+    // throws that row away again, because the domain keeps only a suspension whose `since` is at or
+    // before the moment asked about, and an operator stamps `since` when they pull it. The longer the
+    // lock correctly makes a claim wait, the wider that interval. There is no second pass to recover it:
+    // the claim succeeds and the reply goes out.
+    //
+    // Read from the clock here rather than taken from the server, because `now()` and
+    // `transaction_timestamp()` in PostgreSQL are fixed at the *start* of the transaction — before the
+    // wait — and so reproduce the same staleness this line exists to end; `clock_timestamp()` would move,
+    // but it answers from a different clock than the one that stamped `since`.
+    //
+    // And not by dropping the time bound the way the release catalogue below does. That is right for a
+    // record with no window and wrong here: `suspension-covering.ts` documents a sweep where ignoring the
+    // window made a lapsed switch, and one scheduled to start later, read as in force for ever. The
+    // window stays the domain's to judge; only the instant it is judged at is corrected.
+    const decidedAt = now();
+    if ((await coveringSuspension(tx, target, decidedAt)) !== undefined) {
       return { kind: "STATE_CHANGED" };
     }
 

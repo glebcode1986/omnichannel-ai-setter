@@ -121,8 +121,8 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
    * `release` then holds the delivery at the claim, so the switch commits inside the window and not by
    * luck.
    */
-  const storeAroundTheWindow = (hasRead: () => void, release: Promise<void>) => {
-    const store = createDeliveryStore(infra.db);
+  const storeAroundTheWindow = (hasRead: () => void, release: Promise<void>, clock?: () => Date) => {
+    const store = createDeliveryStore(infra.db, clock);
     let reads = 0;
     return {
       ...store,
@@ -142,20 +142,20 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
     };
   };
 
-  const deliver = (conversationId: string, operationId: string, hasRead: () => void, release: Promise<void>) => {
+  const deliver = (conversationId: string, operationId: string, hasRead: () => void, release: Promise<void>, clock?: () => Date) => {
     const sends: string[] = [];
     const handler = createDeliveryHandler({
       engine: {
-        store: storeAroundTheWindow(hasRead, release),
+        store: storeAroundTheWindow(hasRead, release, clock),
         sender: {
           send: () => {
             sends.push(operationId);
             return Promise.resolve({ outcome: "ACCEPTED", platformMessageId: `mid-race-${operationId}` });
           },
         },
-        channel: createChannelStateResolver(() => NOW),
+        channel: createChannelStateResolver(clock ?? (() => NOW)),
         log: infra.logger,
-        now: () => NOW,
+        now: clock ?? (() => NOW),
       },
       logger: infra.logger,
     });
@@ -219,6 +219,124 @@ describe.skipIf(!endToEndTestsEnabled())("a switch pulled while a send is alread
       expect(held.lastErrorMessage).toContain("AUTOMATION_SUSPENDED");
     }, 180_000);
   }
+
+  /**
+   * The same window, with the one detail the cases above all happen to avoid: the switch is stamped
+   * *after* the moment the coordinator read its clock (Issue #138).
+   *
+   * Every case above gives the suspension `since: NOW`, which is the same instant the engine hands the
+   * claim as `claimedAt`, and `since <= claimedAt` is what makes the domain keep it. That equality is a
+   * property of the fixture, not of an incident. An operator pulls the switch while a pass is already
+   * under way: the coordinator captured its instant first, the operator's row is stamped a moment later,
+   * and the claim reaches its decision later still — having *waited on the kill-switch key for that very
+   * writer*. So the longer the lock correctly makes the claim wait, the wider the interval in which
+   * `since` lands after the captured instant.
+   *
+   * One clock, shared by the engine and the store, advanced exactly once and by this test rather than by
+   * elapsed time: `claimedAt` is read from it before the operator writes, and the claim's decision after.
+   * No sleeps, no wall clock, and both reads are the same function, so this cannot be dismissed as two
+   * clocks disagreeing.
+   */
+  const PULLED_AT = new Date(NOW.getTime() + 1);
+  const JUDGED_AT = new Date(NOW.getTime() + 2);
+
+  /** The window, held open, with the clock moved on before the claim is let go. */
+  const racedBy = async (
+    write: (at: Date) => Promise<unknown>,
+    options: { readonly advanceTo?: Date } = {},
+  ): Promise<{ sends: string[]; operationId: string }> => {
+    const { conversationId, operationId } = await readyToSend();
+    let at = NOW;
+    let go = (): void => undefined;
+    let read = (): void => undefined;
+    const release = new Promise<void>((resolve) => {
+      go = resolve;
+    });
+    const hasRead = new Promise<void>((resolve) => {
+      read = resolve;
+    });
+    const { run, sends } = deliver(conversationId, operationId, read, release, () => at);
+
+    const running = run();
+    // The read has returned and the delivery is waiting at the claim, so `claimedAt` is already fixed at
+    // NOW and anything written from here commits after it.
+    await hasRead;
+    await write(PULLED_AT);
+    // Time passes while the claim waits on the key the writer above holds.
+    at = options.advanceTo ?? JUDGED_AT;
+    go();
+    await running;
+    return { sends, operationId };
+  };
+
+  for (const { name, input } of scopes) {
+    it(`stops a send whose ${name} switch is stamped after the coordinator read its clock`, async () => {
+      const { sends, operationId } = await racedBy((at) =>
+        createSuspensionStore(infra.db).suspend({ ...input(), reason: "OPERATOR", since: at, byUserId: ownerUserId }),
+      );
+
+      expect(sends).toEqual([]);
+      const held = await heldStateOf(operationId);
+      expect(held.status).toBe("HELD_REVIEW");
+      // For this reason: a delivery held by any of the several other gates would satisfy the two
+      // assertions above while leaving the switch as broken as it was.
+      expect(held.lastErrorMessage).toContain("AUTOMATION_SUSPENDED");
+    }, 180_000);
+  }
+
+  it("still sends when nothing commits in that window at all", async () => {
+    // The control without which every case above would pass against a claim that had simply stopped
+    // sending: the identical interleaving and the identical advanced clock, with no switch written.
+    const { sends, operationId } = await racedBy(() => Promise.resolve());
+
+    expect(sends).toEqual([operationId]);
+    expect((await heldStateOf(operationId)).status).toBe("SENT");
+  }, 180_000);
+
+  it("still sends when the switch that commits is not in force yet", async () => {
+    // The window is still the domain's to judge, and this is the control that says so. The release
+    // catalogue in the same transaction answers "what is committed now" by dropping its time bound
+    // altogether, which is right for a record that has no window and wrong for a switch that has two:
+    // this file's own module documents a sweep where ignoring the window made a lapsed or not-yet-started
+    // switch read as in force for ever. A switch scheduled to begin after the moment being decided must
+    // leave the send alone.
+    const { sends, operationId } = await racedBy((at) =>
+      createSuspensionStore(infra.db).suspend({
+        scope: "GLOBAL",
+        reason: "OPERATOR",
+        since: new Date(at.getTime() + 60_000),
+        byUserId: ownerUserId,
+      }),
+    );
+
+    expect(sends).toEqual([operationId]);
+    expect((await heldStateOf(operationId)).status).toBe("SENT");
+  }, 180_000);
+
+  it("sends once a switch that commits in that window has already lapsed", async () => {
+    // The upper half of the window: a switch whose `until` has passed by the moment the claim decides
+    // covers nothing, even though it had not passed when the coordinator read its clock.
+    //
+    // This one is green before the fix as well as after, and measurement is what established that rather
+    // than the reasoning that predicted otherwise. A claim that refuses is recoverable: it returns a
+    // state change, the coordinator re-reads and re-judges on a later pass, and by then the clock has
+    // moved past the lapse. That asymmetry is the shape of the defect — a refusal costs a pass, while
+    // the missing refusal the four cases above exercise costs a message nobody can take back.
+    const { sends, operationId } = await racedBy(
+      (at) =>
+        createSuspensionStore(infra.db).suspend({
+          scope: "GLOBAL",
+          reason: "OPERATOR",
+          since: new Date(at.getTime() - 1_000),
+          until: new Date(at.getTime() + 1),
+          byUserId: ownerUserId,
+        }),
+      { advanceTo: new Date(NOW.getTime() + 10_000) },
+    );
+
+    expect(sends).toEqual([operationId]);
+    expect((await heldStateOf(operationId)).status).toBe("SENT");
+  }, 180_000);
 
   /**
    * An entitlement that lapses inside the same window (#40).
