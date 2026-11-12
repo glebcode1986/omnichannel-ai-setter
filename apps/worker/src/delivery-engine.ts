@@ -144,7 +144,7 @@ export function deliverableChannels(env: DeliveryEnv): ReadonlySet<string> {
 export function createDeliveryEngine(env: DeliveryEnv, db: DbClient, logger: Logger, overrides: DeliveryEngineOverrides = {}) {
   const now = overrides.now ?? ((): Date => new Date());
   return {
-    store: createDeliveryStore(db),
+    store: createDeliveryStore(db, now),
     sender: createSender(env, db, logger, now, overrides),
     // The same live answer the transport above is given. Two gates that could disagree about whether the
     // exception exists is the bug this function exists to make impossible.
