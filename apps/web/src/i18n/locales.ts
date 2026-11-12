@@ -22,6 +22,7 @@ export const localeNames: Readonly<Record<UiLocale, string>> = {
   ru: "Русский",
 };
 
+
 /**
  * The stored preference, resolved to a locale this product actually has.
  *

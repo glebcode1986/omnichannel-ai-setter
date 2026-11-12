@@ -75,6 +75,75 @@ describe("the business profile creation form", () => {
   });
 });
 
+describe("the frame the first screen after signing in is drawn in", () => {
+  /*
+   * These were the complaint — "очень сыро" — and they are the part no other test here could notice,
+   * because every case above asks what the words say. The screen said the right things inside a bare
+   * `<ul>` carrying its own `listStyle`/`margin`/`padding`, under a lone `h2`, with its one form wearing
+   * a class named after the Knowledge editor.
+   */
+  const profile: OnboardingProfileState = {
+    businessProfileId: toBusinessProfileId("bp_1"),
+    name: "Main",
+    status: "SETUP",
+    connectedChannels: [],
+  };
+
+  it("puts the profiles in a panel with a heading, not loose on the page", () => {
+    const { container } = render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state({ profiles: [profile] })} />);
+
+    const panel = container.querySelector("section.panel");
+    expect(panel, "the list is framed like every other section in the product").not.toBeNull();
+    expect(panel?.querySelector("h2")?.textContent).toBe(text("workspaces.profilesYours"));
+    // A card title is `h3`: it sits under the section's heading, not beside it.
+    expect(panel?.querySelector("ul.card-grid li.card h3")?.textContent).toBe("Main");
+  });
+
+  it("explains what a business profile is when there are none, instead of only reporting that there are none", () => {
+    render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state({ profiles: [] })} />);
+
+    // Somebody seeing this has nothing else on the screen, and has never had one of these.
+    expect(screen.getByText(text("workspaces.profilesEmpty"))).toBeDefined();
+    expect(screen.getByText(text("workspaces.profilesEmptyBody"))).toBeDefined();
+    expect(document.querySelector("section.panel .empty-state")).not.toBeNull();
+  });
+
+  it("draws the next step as a control rather than as a word in a sentence", () => {
+    render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state({ profiles: [profile] })} />);
+
+    const next = screen.getByRole("link", { name: text("onboarding.continueSetup") });
+    expect(next.className).toContain("button");
+    expect(next.getAttribute("data-variant")).toBe("primary");
+  });
+
+  it("carries no inline style, on either branch", () => {
+    // Three of them lived here: the grid's list reset and the card title's size and margin, all written
+    // as numbers on the element where no stylesheet and no media query can reach them.
+    const withProfiles = render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state({ profiles: [profile] })} />);
+    expect(withProfiles.container.querySelectorAll("[style]")).toHaveLength(0);
+    cleanup();
+
+    const withNone = render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state({ profiles: [] })} />);
+    expect(withNone.container.querySelectorAll("[style]")).toHaveLength(0);
+  });
+
+  it.each([
+    ["the workspace form", <CreateWorkspaceForm key="w" t={t} action={action} />, "create-workspace"],
+    ["the profile form", <CreateProfileForm key="p" t={t} action={action} allowed />, "create-profile"],
+  ])("gives %s the product's own field frame", (_name, element, formName) => {
+    const { container } = render(element);
+
+    // `form-stack` holding a `form-grid` of `field`s, which is what every other form in the product is.
+    // Both used to be `knowledge-editor` — a class named after a different feature, on the two forms a
+    // new customer submits before they have seen any other screen.
+    const form = container.querySelector(`form[data-form="${formName}"]`);
+    expect(form?.className).toBe("form-stack");
+    expect(form?.querySelector(".form-grid .field > label")).not.toBeNull();
+    expect(form?.querySelector(".form-grid .field > input")).not.toBeNull();
+    expect(form?.querySelector(".form-actions > button")).not.toBeNull();
+  });
+});
+
 describe("what the workspace entry says about the trial", () => {
   it("promises the trial on first connection when a trial plan exists to start", () => {
     render(<WorkspaceEntry t={t} workspaceId="ws_1" state={state()} />);

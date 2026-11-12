@@ -66,31 +66,47 @@ export function WorkspaceEntry({ t, workspaceId, state }: WorkspaceEntryProps) {
   return (
     <>
       <TrialLine t={t} state={state} />
-      {state.profiles.length === 0 ? <p>{t.t("workspaces.profilesEmpty")}</p> : undefined}
-      <ul className="card-grid" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-        {state.profiles.map((profile) => (
-          <li className="card" key={profile.businessProfileId} data-profile={profile.businessProfileId}>
-            <h2 style={{ margin: "0 0 4px", fontSize: "1.1rem" }}>
-              <Link href={`/workspaces/${workspaceId}/profiles/${profile.businessProfileId}`}>{profile.name}</Link>
-            </h2>
-            <p>
-              <span className="badge" data-tone={profile.status === "ACTIVE" ? "ok" : "warn"}>
-                {t.t(`profileStatus.${profile.status}` as MessageKey)}
-              </span>
+      {state.profiles.length === 0 ? (
+        <section aria-labelledby="profiles-empty" className="panel">
+          <div className="empty-state">
+            <p className="empty-state-title" id="profiles-empty">
+              {t.t("workspaces.profilesEmpty")}
             </p>
-            <p className="muted" data-channels={profile.connectedChannels.join(",")}>
-              {profile.connectedChannels.length === 0
-                ? t.t("onboarding.noChannelConnected")
-                : t.t("onboarding.channelsConnected", {
-                    channels: profile.connectedChannels.map((channel) => t.t(`channel.${channel}` as MessageKey)).join(", "),
-                  })}
-            </p>
-            <p>
-              <Link href={`/workspaces/${workspaceId}/profiles/${profile.businessProfileId}/setup`}>{t.t("onboarding.continueSetup")}</Link>
-            </p>
-          </li>
-        ))}
-      </ul>
+            <p className="empty-state-body">{t.t("workspaces.profilesEmptyBody")}</p>
+          </div>
+        </section>
+      ) : (
+        <section aria-labelledby="profiles-yours" className="panel">
+          <h2 id="profiles-yours">{t.t("workspaces.profilesYours")}</h2>
+          <ul className="card-grid">
+            {state.profiles.map((profile) => (
+              <li className="card" key={profile.businessProfileId} data-profile={profile.businessProfileId}>
+                <h3>
+                  <Link href={`/workspaces/${workspaceId}/profiles/${profile.businessProfileId}`}>{profile.name}</Link>
+                </h3>
+                <p>
+                  <span className="badge" data-tone={profile.status === "ACTIVE" ? "ok" : "warn"}>
+                    {t.t(`profileStatus.${profile.status}` as MessageKey)}
+                  </span>
+                </p>
+                <p className="muted" data-channels={profile.connectedChannels.join(",")}>
+                  {profile.connectedChannels.length === 0
+                    ? t.t("onboarding.noChannelConnected")
+                    : t.t("onboarding.channelsConnected", {
+                        channels: profile.connectedChannels.map((channel) => t.t(`channel.${channel}` as MessageKey)).join(", "),
+                      })}
+                </p>
+                {/* The one thing to do next, drawn as the one thing to do next. */}
+                <p>
+                  <Link className="button" data-variant="primary" href={`/workspaces/${workspaceId}/profiles/${profile.businessProfileId}/setup`}>
+                    {t.t("onboarding.continueSetup")}
+                  </Link>
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   );
 }

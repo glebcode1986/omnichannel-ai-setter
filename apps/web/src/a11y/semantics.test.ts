@@ -54,10 +54,50 @@ function lines(source: string): readonly { readonly line: number; readonly text:
   });
 }
 
+/**
+ * The source with its comments blanked out, line numbers intact.
+ *
+ * Every rule below matches source text, so a comment that *names* a forbidden pattern was reported as the
+ * pattern. That is not hypothetical: the shell's scrim carries a paragraph explaining that it no longer
+ * uses `tabIndex={-1}` precisely because this test refuses it, and this test then failed on that sentence.
+ * A gate that cannot be explained in a comment is a gate that punishes its own documentation.
+ *
+ * Only `/* … *\/` regions are blanked, plus a `//` that begins a line. A `//` in the middle of a line is
+ * left alone on purpose: `href="https://…"` would otherwise blank the rest of that line, and a real
+ * violation after it would vanish. Over-reporting is an argument; under-reporting is a false clean bill.
+ */
+export function withoutComments(source: string): string {
+  let out = "";
+  let inBlock = false;
+  for (const line of source.split("\n")) {
+    const text = line;
+    if (!inBlock && text.trimStart().startsWith("//")) {
+      out += "\n";
+      continue;
+    }
+    let result = "";
+    let i = 0;
+    while (i < text.length) {
+      if (!inBlock && text.startsWith("/*", i)) {
+        inBlock = true;
+        i += 2;
+      } else if (inBlock && text.startsWith("*/", i)) {
+        inBlock = false;
+        i += 2;
+      } else {
+        result += inBlock ? " " : text[i];
+        i += 1;
+      }
+    }
+    out += result + "\n";
+  }
+  return out;
+}
+
 function scan(pattern: RegExp, describeMatch: (match: RegExpMatchArray) => string | undefined): readonly Finding[] {
   const findings: Finding[] = [];
   for (const { file, source } of productionFiles()) {
-    for (const { line, text } of lines(source)) {
+    for (const { line, text } of lines(withoutComments(source))) {
       for (const match of text.matchAll(pattern)) {
         const what = describeMatch(match);
         if (what !== undefined) {
@@ -114,7 +154,7 @@ describe("the production UI's semantics", () => {
     // The commonest real shape in this codebase is `<label>Text<input …/></label>`, which needs no id.
     // A control that is neither wrapped nor referenced is one whose purpose a screen reader announces as
     // "edit text, blank".
-    const orphans = productionFiles().flatMap(({ file, source }) => orphanControls(source).map((what) => `${file}:${what}`));
+    const orphans = productionFiles().flatMap(({ file, source }) => orphanControls(withoutComments(source)).map((what) => `${file}:${what}`));
 
     expect(orphans).toEqual([]);
   });
@@ -219,7 +259,19 @@ describe("the production UI's semantics", () => {
     const labelled = '      <label>\n        Search\n        <input type="search" name="q" />\n      </label>';
     const referenced = '      <label htmlFor="named">Search</label>\n      <input id="named" type="search" />';
 
+    const explained = [
+      '      {/*',
+      '        A disabled <select> sends nothing at all, which is why the hidden input carries the value.',
+      '      */}',
+      '      <input type="hidden" name="carried" />',
+    ].join("\n");
+
     expect(orphanControls(loose)).toEqual(["2 <input> is neither inside a <label> nor referenced by one"]);
+    // The rule reads prose through the same stripping as everything else. Without it this gate reported a
+    // paragraph explaining a control as a control with no name — which is how it failed on `select.tsx`.
+    expect(orphanControls(withoutComments(explained))).toEqual([]);
+    // And the stripping has not simply silenced the rule: the real orphan above is still found.
+    expect(orphanControls(withoutComments(loose))).toEqual(["2 <input> is neither inside a <label> nor referenced by one"]);
     expect(orphanControls(labelled)).toEqual([]);
     expect(orphanControls(referenced)).toEqual([]);
   });
@@ -243,5 +295,28 @@ describe("the production UI's semantics", () => {
     expect(/<(button|a|input|select|textarea)\b[^>]*aria-hidden="true"/.test(sample)).toBe(true);
     expect(/role="(button|link)"/.test(sample)).toBe(true);
     expect(/<a\b(?![^>]*\bhref=)[^>]*>/.test(sample)).toBe(true);
+  });
+
+  it("does not report a forbidden pattern that a comment merely names", () => {
+    // The other direction of the same honesty. Every rule here matches text, so without this the gate
+    // reports the paragraph that explains why a pattern was removed — which is how it failed on the
+    // shell's scrim. Both controls are asserted: the real occurrence must survive the stripping, and the
+    // explained one must not, or a filter that blanked everything would read as a clean repository.
+    const real = '      <span tabIndex={-1}>Taken out of reach</span>';
+    const explained = [
+      '      {/*',
+      '        It was `aria-hidden` with `tabIndex={-1}`, which this test refuses.',
+      '      */}',
+      '      <button type="button">Close</button>',
+    ].join("\n");
+    const lineComment = '      // tabIndex={-1} is refused here';
+
+    expect(/tabIndex=\{(-?\d+)\}/.test(withoutComments(real))).toBe(true);
+    expect(/tabIndex=\{(-?\d+)\}/.test(withoutComments(explained))).toBe(false);
+    expect(/tabIndex=\{(-?\d+)\}/.test(withoutComments(lineComment))).toBe(false);
+    // The stripping keeps the line count, so a finding's line number still points at the right place.
+    expect(withoutComments(explained).split("\n").length).toBe(explained.split("\n").length + 1);
+    // And it does not eat a line because a URL happens to contain a double slash.
+    expect(withoutComments('      <a href="https://example.test" tabIndex={-1}>x</a>')).toContain("tabIndex={-1}");
   });
 });

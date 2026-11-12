@@ -15,6 +15,7 @@ import {
   createWorkspaceWithOwner,
   addWorkspaceMember,
   readOnboarding,
+  readWorkspaceOnboarding,
   skipOnboardingStep,
   WORKSPACE_ADMIN_ROLES,
 } from "@omnichannel/db";
@@ -103,6 +104,32 @@ describe.skipIf(!databaseTestsEnabled())("the shell's authorization", () => {
     await expect(resolveBusinessProfileContext(as(agentId), workspaceId, ungrantedProfileId)).rejects.toThrow(
       BusinessProfileAccessDeniedError,
     );
+  }, 180_000);
+
+  it("tells a workspace with nothing in it apart from one the request may not see", async () => {
+    // Both answers put no business profiles on the screen, and only one of them is a refusal: an
+    // unauthorized read here is `notFound()`, a page that is not there. So a test asserting that the
+    // screen listed no profiles passes whether the isolation held or a legitimate read broke, and the
+    // onboarding screen's empty state — the one that explains what a business profile is to somebody who
+    // has never had one — is exactly where the two look alike. The pair is asserted together for that
+    // reason: while both outcomes are named, neither can stand in for the other.
+    const { workspaceId: emptyWorkspaceId } = await createWorkspaceWithOwner(database.db, {
+      name: "Shell Empty Workspace",
+      ownerUserId: ownerId,
+    });
+
+    const mine = await resolveWorkspaceContext(as(ownerId), emptyWorkspaceId);
+    const entry = await readWorkspaceOnboarding(database.db, mine);
+
+    // The authorized read succeeded and is genuinely empty. This is the empty state.
+    expect(entry.profiles).toEqual([]);
+
+    // The same emptiness on screen, from a request with no membership in it. This is the refusal.
+    await expect(resolveWorkspaceContext(as(outsiderId), emptyWorkspaceId)).rejects.toThrow();
+
+    // And the control for that refusal: the store still answers for a workspace this reader is in, so the
+    // rejection above is about this tenant rather than about a read that had stopped working.
+    await expect(resolveWorkspaceContext(as(ownerId), workspaceId)).resolves.toBeDefined();
   }, 180_000);
 
   it("returns the role the shell gates its controls on", async () => {

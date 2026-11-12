@@ -46,17 +46,24 @@ export default async function WorkspacePage({
     <main className="shell-main">
       <div className="page-header">
         <h1>{t.t("workspaces.profilesTitle")}</h1>
-        <Link href="/workspaces">{t.t("workspaces.title")}</Link>
+        {/* A way back, drawn as a control. It was a bare link in the header, which on a screen made of
+            panels reads as body text that happens to be blue. */}
+        <Link className="button" href="/workspaces">
+          {t.t("workspaces.title")}
+        </Link>
       </div>
 
       <OutcomeNotice t={t} outcome={one(query["outcome"])} />
 
-      <WorkspaceEntry t={t} workspaceId={workspaceId} state={state} />
+      <div className="page-sections">
+        <WorkspaceEntry t={t} workspaceId={workspaceId} state={state} />
 
-      <section>
-        <h2>{t.t("onboarding.createProfileTitle")}</h2>
-        <CreateProfileForm t={t} action={createProfile} allowed={mayWriteWorkspaceWide(context)} />
-      </section>
+        <section aria-labelledby="profiles-create" className="panel">
+          <h2 id="profiles-create">{t.t("onboarding.createProfileTitle")}</h2>
+          <p className="muted">{t.t("onboarding.createProfileBody")}</p>
+          <CreateProfileForm t={t} action={createProfile} allowed={mayWriteWorkspaceWide(context)} />
+        </section>
+      </div>
     </main>
   );
 }
