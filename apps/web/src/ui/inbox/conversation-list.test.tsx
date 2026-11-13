@@ -105,7 +105,7 @@ describe("the conversation list", () => {
     expect(document.querySelectorAll('[data-takeover="REVIEW_REQUIRED"]')).toHaveLength(1);
   });
 
-  it("shows the AI mode in force on each row", () => {
+  it("draws the AI mode in force only when it is AUTOPILOT, and announces the rest", () => {
     render(
       <ConversationList
         t={t}
@@ -117,8 +117,18 @@ describe("the conversation list", () => {
 
     // Inherited AUTOPILOT has to show as AUTOPILOT: a badge built from the override would say OFF here,
     // on the one conversation that is replying to customers unattended.
-    expect(document.querySelector('.conversation-row[data-selected="false"] [data-mode="AUTOPILOT"]')).not.toBeNull();
-    expect(document.querySelectorAll('[data-mode="OFF"]')).toHaveLength(1);
+    const autopilot = document.querySelector('.conversation-row[data-selected="false"] [data-mode="AUTOPILOT"]');
+    const off = document.querySelector('[data-mode="OFF"]');
+    expect(autopilot).not.toBeNull();
+    expect(off).not.toBeNull();
+
+    // The classes, not the presence. Both modes are in the DOM, and after this row stopped drawing a
+    // badge for every mode, presence stopped being able to tell "drawn" from "announced" -- a mode
+    // switched to `hidden` or `display: none` would satisfy a presence check while no reader of any
+    // kind could perceive it. What is asserted is the thing that decides which of the two it is.
+    expect(autopilot?.className).toContain("badge");
+    expect(off?.className).toBe("visually-hidden");
+    expect(off?.textContent).toBe(text("aiMode.OFF"));
   });
 
   it("shows the lead stage as a word, not a code", () => {
@@ -358,16 +368,29 @@ describe("the shared query string", () => {
 describe("keyboard operation", () => {
   it("reaches the search, the filters and the conversations by tabbing, in that order", async () => {
     const user = userEvent.setup();
-    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
+    // Rendered with the group OPEN, which is what makes the order below one a browser also produces. A
+    // closed `details` takes its subtree out of the tab order, so in the default view focus runs search
+    // -> summary -> apply and never reaches these two controls; jsdom does not implement that hiding, so
+    // a closed render here would certify a path the product does not have. The closed case is the
+    // browser's own behaviour and is deliberately not asserted in this environment.
+    render(
+      <ConversationList
+        t={t}
+        rows={mixedChannels}
+        view={{ leadStage: "QUALIFIED" }}
+        basePath={BASE}
+        accounts={ACCOUNTS}
+        nextCursor="Q2"
+      />,
+    );
+
+    // The premise, asserted rather than assumed: if the group ever stops opening for a set filter, the
+    // order below goes back to being one no browser produces, and this test should say so by failing.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
 
     // The two value filters are folded into a disclosure, so the summary is a stop between the search box
     // and them. Everything is still in reading order, which is the invariant: search, the control that
     // reveals the refinements, the refinements, the submit, then the state filters.
-    //
-    // What this cannot tell you is whether a *closed* disclosure takes its contents out of the tab order.
-    // jsdom does not implement the rendering that makes a browser skip them, so they are focusable here
-    // whatever `open` says, and asserting that they are skipped would be asserting the environment rather
-    // than the markup. The order below is the DOM's order, and that is all it claims.
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
     await user.tab();
@@ -410,6 +433,27 @@ describe("keyboard operation", () => {
 
     // The control above is the other half: without it, a disclosure hard-coded open would satisfy that
     // one and this suite would never notice that the fold had stopped folding.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(false);
+  });
+
+  it("opens it for a channel filter too, not only for a lead stage", () => {
+    // The stage case above exercises one side of an `||`. Without this, the whole channel half of the
+    // expression -- the half an operator reaches by following a shared link -- was never rendered, and a
+    // filter that narrowed the list to three of thirty could sit behind a closed fold.
+    render(
+      <ConversationList t={t} rows={mixedChannels} view={{ channelAccountId: "ca_wa" }} basePath={BASE} accounts={ACCOUNTS} />,
+    );
+
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("stays closed for a channel filter on a profile that has no channels, because the group does not hold it", () => {
+    // This is the shipped defect the component's own comment records. With no connected accounts the
+    // channel select is not rendered at all, so keying the fold to `channelAccountId` alone opened a
+    // group containing only the stage select and announced a filter that is not in it.
+    render(<ConversationList t={t} rows={mixedChannels} view={{ channelAccountId: "ca_wa" }} basePath={BASE} accounts={[]} />);
+
+    expect(screen.queryByLabelText(text("inbox.filterChannel"))).toBeNull();
     expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(false);
   });
 

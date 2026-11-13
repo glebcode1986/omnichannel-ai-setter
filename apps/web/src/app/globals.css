@@ -3241,10 +3241,13 @@ label > .select {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-2);
-  /* The name inside truncates, and truncating does not reduce a cell's min-content contribution — so
-     the full nowrap width travelled up through this flex box, which is itself a grid item with an
-     automatic minimum. Measured at a 901px window: 83px of a 34-character handle painted under the
-     thread column with nothing to scroll it. */
+  /* A guard, and inert as this sheet stands: `.conversation-name` carries `overflow-wrap: anywhere`,
+     which already reduces the cell's min-content contribution to one character, so nothing reaches
+     this flex box's automatic minimum to be clamped. It is kept because the thing that makes it inert
+     is one declaration in another rule: give the name `white-space: nowrap` with an ellipsis — the
+     ordinary way to write a list row — and the full untruncated width travels up through here into a
+     grid item with an automatic minimum, which is the shape that painted a long handle under the
+     thread column before the name rule above was written. */
   min-width: 0;
 }
 

@@ -267,8 +267,17 @@ export function Select({ name, options, value, ariaLabel, id, disabled = false, 
         not edit from absent into present — the same values, but "the form did not carry this" and "the
         form carried the stored value" are different facts, and a partial update or an audit of what was
         submitted reads them differently. Measured against a native control side by side, not assumed.
+
+        It carries the *resolved* selection rather than `chosen`, so that what this submits is what the
+        button says. The two part when the value matches no option, which a caller cannot always prevent
+        -- the Inbox's channel filter reads `?account=` from the URL and its valid set is a database row,
+        not a literal union -- and a native select does not have the problem: with no matching `option`
+        the browser falls back to the first one that is not disabled, so the DOM value, the visible label
+        and what is submitted stay the same fact. Sending `chosen` instead showed "every channel" above a list
+        narrowed to nothing and re-submitted the unknown id, so the filter could not be cleared from the
+        form that appeared to have already cleared it.
       */}
-      <input type="hidden" name={name} value={chosen} disabled={disabled} />
+      <input type="hidden" name={name} value={selected?.value ?? ""} disabled={disabled} />
       <button
         className="select-button"
         type="button"
