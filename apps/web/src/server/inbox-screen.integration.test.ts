@@ -167,6 +167,72 @@ describe.skipIf(!databaseTestsEnabled())("the Inbox screen's query", () => {
     expect((await screen({ q: "Replied To" })).ids).toContain(id);
   }, 180_000);
 
+  it("creates no delivery by being read, which is what DRAFT-first means at the screen", async () => {
+    const id = await conversation({ name: "Read Only", occurredAt: at(500) });
+    const scope = { workspaceId: context.workspaceId, businessProfileId: context.businessProfileId };
+    const before = await db().deliveryJobRecord.count({ where: scope });
+
+    // Everything opening the Inbox does: the list, a filtered list, and reading one conversation with
+    // its thread and its latest decision — the page that shows a draft waiting for a person.
+    await screen({});
+    await screen({ q: "Read Only" });
+    expect(await readConversation(db(), context, id)).toBeDefined();
+
+    expect(await db().deliveryJobRecord.count({ where: scope })).toBe(before);
+
+    // The control, without which the assertion above is satisfied by a count that cannot count. A reply
+    // in somebody's own words is the shape with no draft behind it, which is the one a CHECK admits
+    // alongside `conversationId`; and that same wording obliges every field a human authority carries,
+    // so this row is also the schema's answer to what a send from this screen would have to be.
+    await db().deliveryJobRecord.create({
+      data: {
+        ...scope,
+        conversationId: id,
+        humanText: "Counted on purpose",
+        composedByUserId: viewerUserId,
+        authority: "HUMAN_APPROVED",
+        approvedByUserId: viewerUserId,
+        approvedAt: at(501),
+        approvedReviewMode: "NORMAL",
+        decisionKey: `decision_read_only_${String(seq)}`,
+        operationId: `op_read_only_${String(seq)}`,
+        correlationId: `corr_read_only_${String(seq)}`,
+        scheduledFor: at(501),
+        selectedDelayMs: 0,
+      },
+    });
+    expect(await db().deliveryJobRecord.count({ where: scope })).toBe(before + 1);
+  }, 180_000);
+
+  it("tells a profile with nothing in it apart from one holding somebody else's conversations", async () => {
+    // Both put an empty list on the screen, and the Inbox draws the same empty state for each. Only one
+    // of them is emptiness; the other is a boundary. Asserted as a pair, because a list that returned
+    // nothing for every profile would satisfy either half alone.
+    const workspace = await authorizeWorkspaceAccess(db(), { userId: viewerUserId, workspaceId: context.workspaceId });
+    const fresh = await createBusinessProfile(db(), workspace, { name: `Fresh ${String(seq)}` });
+    const freshContext = await authorizeBusinessProfileAccess(db(), {
+      userId: viewerUserId,
+      workspaceId: context.workspaceId,
+      businessProfileId: fresh.businessProfileId,
+    });
+
+    const theirs = await conversation({
+      ctx: neighbour,
+      channelAccountId: neighbourAccountId,
+      name: "Not Yours",
+      occurredAt: at(510),
+    });
+
+    // Authorized and genuinely empty: this profile has no conversations, and the read succeeded.
+    expect((await screen({}, freshContext)).ids).toEqual([]);
+    // Authorized elsewhere, and that elsewhere can see it — so the absence below is a boundary and not a
+    // store that stopped answering.
+    expect((await screen({}, neighbour)).ids).toContain(theirs);
+    // And the boundary itself: not listed here, and not readable here either.
+    expect((await screen({}, freshContext)).ids).not.toContain(theirs);
+    expect(await readConversation(db(), freshContext, theirs)).toBeUndefined();
+  }, 180_000);
+
   it("cannot be pointed at another Business Profile by editing the URL", async () => {
     const mine = await conversation({ name: "Mine Alone", occurredAt: at(400) });
     const theirs = await conversation({ ctx: neighbour, channelAccountId: neighbourAccountId, name: "Theirs Alone", occurredAt: at(401) });

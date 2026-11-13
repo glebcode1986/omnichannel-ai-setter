@@ -7,7 +7,7 @@
  * drops the active filter (widening the list without saying so), and a "load older" control that appears
  * when there is nothing older to load.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InboxRow } from "@omnichannel/db";
@@ -105,7 +105,7 @@ describe("the conversation list", () => {
     expect(document.querySelectorAll('[data-takeover="REVIEW_REQUIRED"]')).toHaveLength(1);
   });
 
-  it("shows the AI mode in force on each row", () => {
+  it("draws the AI mode in force only when it is AUTOPILOT, and announces the rest", () => {
     render(
       <ConversationList
         t={t}
@@ -117,8 +117,18 @@ describe("the conversation list", () => {
 
     // Inherited AUTOPILOT has to show as AUTOPILOT: a badge built from the override would say OFF here,
     // on the one conversation that is replying to customers unattended.
-    expect(document.querySelector('.conversation-row[data-selected="false"] [data-mode="AUTOPILOT"]')).not.toBeNull();
-    expect(document.querySelectorAll('[data-mode="OFF"]')).toHaveLength(1);
+    const autopilot = document.querySelector('.conversation-row[data-selected="false"] [data-mode="AUTOPILOT"]');
+    const off = document.querySelector('[data-mode="OFF"]');
+    expect(autopilot).not.toBeNull();
+    expect(off).not.toBeNull();
+
+    // The classes, not the presence. Both modes are in the DOM, and after this row stopped drawing a
+    // badge for every mode, presence stopped being able to tell "drawn" from "announced" -- a mode
+    // switched to `hidden` or `display: none` would satisfy a presence check while no reader of any
+    // kind could perceive it. What is asserted is the thing that decides which of the two it is.
+    expect(autopilot?.className).toContain("badge");
+    expect(off?.className).toBe("visually-hidden");
+    expect(off?.textContent).toBe(text("aiMode.OFF"));
   });
 
   it("shows the lead stage as a word, not a code", () => {
@@ -187,17 +197,30 @@ describe("the filters", () => {
     const form = screen.getByRole("search");
     // The state filter is a link, so it rides along as a hidden field; the account and the stage are the
     // form's own controls and have to come back pre-selected or applying a search would reset them.
+    //
+    // Read off the hidden inputs because the two filters are the product's own select now: what the form
+    // submits is that input, and what the reader sees is the combobox's label. Both are asserted — a
+    // value the form carries while the control shows something else is the failure this pair exists for.
     expect(form.querySelector('input[name="filter"]')?.getAttribute("value")).toBe("mine");
-    expect(screen.getByLabelText(text("inbox.filterChannel"))).toHaveProperty("value", "ca_wa");
-    expect(screen.getByLabelText(text("inbox.filterLeadStage"))).toHaveProperty("value", "QUALIFIED");
+    expect(form.querySelector('input[name="account"]')).toHaveProperty("value", "ca_wa");
+    expect(form.querySelector('input[name="stage"]')).toHaveProperty("value", "QUALIFIED");
+    expect(screen.getByLabelText(text("inbox.filterChannel")).textContent).toContain(ACCOUNTS[1]?.label ?? "");
+    expect(screen.getByLabelText(text("inbox.filterLeadStage")).textContent).toContain(text("leadStage.QUALIFIED"));
   });
 
   it("offers every connected account, and every channel as the default", () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} />);
 
+    // The listbox renders its options only while open, so the choices are read after opening it. They
+    // carry `data-value` for exactly this reason — a native `<select>` put the value in the markup and a
+    // listbox does not, and without it this assertion would weaken into one about words on screen.
     const select = screen.getByLabelText(text("inbox.filterChannel"));
-    expect([...select.querySelectorAll("option")].map((option) => option.getAttribute("value"))).toEqual(["", "ca_ig", "ca_wa"]);
-    expect(select).toHaveProperty("value", "");
+    fireEvent.click(select);
+    const options = [...screen.getByRole("listbox").querySelectorAll('[role="option"]')];
+    expect(options.map((option) => option.getAttribute("data-value"))).toEqual(["", "ca_ig", "ca_wa"]);
+    // The default is the empty value, asserted where the form reads it and where the reader sees it.
+    expect(screen.getByRole("search").querySelector('input[name="account"]')).toHaveProperty("value", "");
+    expect(options.find((option) => option.getAttribute("aria-selected") === "true")?.getAttribute("data-value")).toBe("");
   });
 
   it("hides the channel filter when the profile has no connected account to filter by", () => {
@@ -209,8 +232,11 @@ describe("the filters", () => {
   it("offers every lead stage the domain defines, in the domain's order", () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} />);
 
-    const options = [...screen.getByLabelText(text("inbox.filterLeadStage")).querySelectorAll("option")];
-    expect(options.map((option) => option.getAttribute("value"))).toEqual(["", ...LEAD_STAGES]);
+    // Opened first: a listbox has no options in the markup until it is. The order is the assertion —
+    // the domain's order, not an alphabetical one a component happened to produce.
+    fireEvent.click(screen.getByLabelText(text("inbox.filterLeadStage")));
+    const options = [...screen.getByRole("listbox").querySelectorAll('[role="option"]')];
+    expect(options.map((option) => option.getAttribute("data-value"))).toEqual(["", ...LEAD_STAGES]);
   });
 
   it("does not carry the cursor through a search", () => {
@@ -342,10 +368,34 @@ describe("the shared query string", () => {
 describe("keyboard operation", () => {
   it("reaches the search, the filters and the conversations by tabbing, in that order", async () => {
     const user = userEvent.setup();
-    render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
+    // Rendered with the group OPEN, which is what makes the order below one a browser also produces. A
+    // closed `details` takes its subtree out of the tab order, so in the default view focus runs search
+    // -> summary -> apply and never reaches these two controls; jsdom does not implement that hiding, so
+    // a closed render here would certify a path the product does not have. The closed case is the
+    // browser's own behaviour and is deliberately not asserted in this environment.
+    render(
+      <ConversationList
+        t={t}
+        rows={mixedChannels}
+        view={{ leadStage: "QUALIFIED" }}
+        basePath={BASE}
+        accounts={ACCOUNTS}
+        nextCursor="Q2"
+      />,
+    );
 
+    // The premise, asserted rather than assumed: if the group ever stops opening for a set filter, the
+    // order below goes back to being one no browser produces, and this test should say so by failing.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
+
+    // The two value filters are folded into a disclosure, so the summary is a stop between the search box
+    // and them. Everything is still in reading order, which is the invariant: search, the control that
+    // reveals the refinements, the refinements, the submit, then the state filters.
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
+    await user.tab();
+    expect(document.activeElement?.tagName.toLowerCase()).toBe("summary");
+    expect(document.activeElement?.textContent).toBe(text("inbox.refine"));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByLabelText(text("inbox.filterChannel")));
     await user.tab();
@@ -360,6 +410,51 @@ describe("keyboard operation", () => {
       await user.tab();
     }
     expect(document.activeElement?.getAttribute("href")).toBe(`${BASE}/cv_ig`);
+  });
+
+  /*
+   * There is no test here that the summary opens the group from the keyboard, and that is a measured
+   * absence rather than an oversight: jsdom does not implement `details` toggling at all. Probed both
+   * ways — a click at the summary and Enter on it leave `open` unset — so a test of either would be
+   * asserting the environment, and would pass or fail for reasons that have nothing to do with this
+   * markup. What is ours to get right is which state the group is rendered in, and that is below.
+   */
+  it("opens the disclosure itself when a filter inside it is set, so a narrowed list is not unexplained", () => {
+    render(
+      <ConversationList t={t} rows={mixedChannels} view={{ leadStage: "QUALIFIED" }} basePath={BASE} accounts={ACCOUNTS} />,
+    );
+
+    // A list showing three of thirty conversations with the reason folded away reads as a broken list.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("leaves the disclosure closed when nothing inside it is set", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{ filter: "mine" }} basePath={BASE} accounts={ACCOUNTS} />);
+
+    // The control above is the other half: without it, a disclosure hard-coded open would satisfy that
+    // one and this suite would never notice that the fold had stopped folding.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(false);
+  });
+
+  it("opens it for a channel filter too, not only for a lead stage", () => {
+    // The stage case above exercises one side of an `||`. Without this, the whole channel half of the
+    // expression -- the half an operator reaches by following a shared link -- was never rendered, and a
+    // filter that narrowed the list to three of thirty could sit behind a closed fold.
+    render(
+      <ConversationList t={t} rows={mixedChannels} view={{ channelAccountId: "ca_wa" }} basePath={BASE} accounts={ACCOUNTS} />,
+    );
+
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("stays closed for a channel filter on a profile that has no channels, because the group does not hold it", () => {
+    // This is the shipped defect the component's own comment records. With no connected accounts the
+    // channel select is not rendered at all, so keying the fold to `channelAccountId` alone opened a
+    // group containing only the stage select and announced a filter that is not in it.
+    render(<ConversationList t={t} rows={mixedChannels} view={{ channelAccountId: "ca_wa" }} basePath={BASE} accounts={[]} />);
+
+    expect(screen.queryByLabelText(text("inbox.filterChannel"))).toBeNull();
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(false);
   });
 
   it("gives the search box a real label rather than only a placeholder", () => {
