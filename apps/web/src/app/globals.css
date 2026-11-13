@@ -571,7 +571,8 @@ details[open] > summary::before {
   font-weight: 600;
 }
 
-.button {
+.button,
+.inbox-refine > summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3176,4 +3177,126 @@ label > .select {
   align-self: flex-start;
   font-size: var(--text-s);
   line-height: var(--leading-s);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────────────────────────────
+   The Inbox list's row, its filter toolbar and the two empty states beside it.
+
+   Ten classes these screens name had no rule here. Extracted selector by selector from the branch that
+   wrote them, deciding on the selector with its comments removed — judging the whole span before the
+   brace once pulled in unrelated rules because the prose above them discussed a class being added.
+
+   No media query carries any of the ten, checked against all 19 in that sheet rather than inferred from
+   an extractor returning none, and every custom property they read is already defined above.
+   ─────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+.inbox-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.inbox-toolbar .inbox-search,
+.inbox-toolbar .filter-row {
+  margin-bottom: 0;
+}
+
+.inbox-refine {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+}
+
+.inbox-refine[open] {
+  padding-bottom: 0;
+}
+
+.inbox-refine > summary {
+  justify-content: flex-start;
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+}
+
+.inbox-refine > summary:hover {
+  color: var(--text);
+}
+
+.inbox-refine > .field {
+  margin-top: var(--space-2);
+}
+
+.inbox-list-empty {
+  margin: var(--space-5) 0;
+  padding: 0 var(--space-3);
+  text-align: center;
+}
+
+.conversation-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  /* The name inside truncates, and truncating does not reduce a cell's min-content contribution — so
+     the full nowrap width travelled up through this flex box, which is itself a grid item with an
+     automatic minimum. Measured at a 901px window: 83px of a 34-character handle painted under the
+     thread column with nothing to scroll it. */
+  min-width: 0;
+}
+
+.conversation-time {
+  flex: none;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-s);
+  line-height: var(--leading-s);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.conversation-meta > .badge {
+  flex: none;
+}
+
+.conversation-channel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-meta-dot {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.inbox-empty {
+  flex: 1;
+}
+
+.empty-state-mark {
+  display: inline-flex;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.empty-state-mark svg {
+  width: 32px;
+  height: 32px;
 }

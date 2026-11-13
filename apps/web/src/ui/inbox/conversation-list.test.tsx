@@ -7,7 +7,7 @@
  * drops the active filter (widening the list without saying so), and a "load older" control that appears
  * when there is nothing older to load.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InboxRow } from "@omnichannel/db";
@@ -187,17 +187,30 @@ describe("the filters", () => {
     const form = screen.getByRole("search");
     // The state filter is a link, so it rides along as a hidden field; the account and the stage are the
     // form's own controls and have to come back pre-selected or applying a search would reset them.
+    //
+    // Read off the hidden inputs because the two filters are the product's own select now: what the form
+    // submits is that input, and what the reader sees is the combobox's label. Both are asserted — a
+    // value the form carries while the control shows something else is the failure this pair exists for.
     expect(form.querySelector('input[name="filter"]')?.getAttribute("value")).toBe("mine");
-    expect(screen.getByLabelText(text("inbox.filterChannel"))).toHaveProperty("value", "ca_wa");
-    expect(screen.getByLabelText(text("inbox.filterLeadStage"))).toHaveProperty("value", "QUALIFIED");
+    expect(form.querySelector('input[name="account"]')).toHaveProperty("value", "ca_wa");
+    expect(form.querySelector('input[name="stage"]')).toHaveProperty("value", "QUALIFIED");
+    expect(screen.getByLabelText(text("inbox.filterChannel")).textContent).toContain(ACCOUNTS[1]?.label ?? "");
+    expect(screen.getByLabelText(text("inbox.filterLeadStage")).textContent).toContain(text("leadStage.QUALIFIED"));
   });
 
   it("offers every connected account, and every channel as the default", () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} />);
 
+    // The listbox renders its options only while open, so the choices are read after opening it. They
+    // carry `data-value` for exactly this reason — a native `<select>` put the value in the markup and a
+    // listbox does not, and without it this assertion would weaken into one about words on screen.
     const select = screen.getByLabelText(text("inbox.filterChannel"));
-    expect([...select.querySelectorAll("option")].map((option) => option.getAttribute("value"))).toEqual(["", "ca_ig", "ca_wa"]);
-    expect(select).toHaveProperty("value", "");
+    fireEvent.click(select);
+    const options = [...screen.getByRole("listbox").querySelectorAll('[role="option"]')];
+    expect(options.map((option) => option.getAttribute("data-value"))).toEqual(["", "ca_ig", "ca_wa"]);
+    // The default is the empty value, asserted where the form reads it and where the reader sees it.
+    expect(screen.getByRole("search").querySelector('input[name="account"]')).toHaveProperty("value", "");
+    expect(options.find((option) => option.getAttribute("aria-selected") === "true")?.getAttribute("data-value")).toBe("");
   });
 
   it("hides the channel filter when the profile has no connected account to filter by", () => {
@@ -209,8 +222,11 @@ describe("the filters", () => {
   it("offers every lead stage the domain defines, in the domain's order", () => {
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} />);
 
-    const options = [...screen.getByLabelText(text("inbox.filterLeadStage")).querySelectorAll("option")];
-    expect(options.map((option) => option.getAttribute("value"))).toEqual(["", ...LEAD_STAGES]);
+    // Opened first: a listbox has no options in the markup until it is. The order is the assertion —
+    // the domain's order, not an alphabetical one a component happened to produce.
+    fireEvent.click(screen.getByLabelText(text("inbox.filterLeadStage")));
+    const options = [...screen.getByRole("listbox").querySelectorAll('[role="option"]')];
+    expect(options.map((option) => option.getAttribute("data-value"))).toEqual(["", ...LEAD_STAGES]);
   });
 
   it("does not carry the cursor through a search", () => {
@@ -344,8 +360,19 @@ describe("keyboard operation", () => {
     const user = userEvent.setup();
     render(<ConversationList t={t} rows={mixedChannels} view={{}} basePath={BASE} accounts={ACCOUNTS} nextCursor="Q2" />);
 
+    // The two value filters are folded into a disclosure, so the summary is a stop between the search box
+    // and them. Everything is still in reading order, which is the invariant: search, the control that
+    // reveals the refinements, the refinements, the submit, then the state filters.
+    //
+    // What this cannot tell you is whether a *closed* disclosure takes its contents out of the tab order.
+    // jsdom does not implement the rendering that makes a browser skip them, so they are focusable here
+    // whatever `open` says, and asserting that they are skipped would be asserting the environment rather
+    // than the markup. The order below is the DOM's order, and that is all it claims.
     await user.tab();
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
+    await user.tab();
+    expect(document.activeElement?.tagName.toLowerCase()).toBe("summary");
+    expect(document.activeElement?.textContent).toBe(text("inbox.refine"));
     await user.tab();
     expect(document.activeElement).toBe(screen.getByLabelText(text("inbox.filterChannel")));
     await user.tab();
@@ -360,6 +387,30 @@ describe("keyboard operation", () => {
       await user.tab();
     }
     expect(document.activeElement?.getAttribute("href")).toBe(`${BASE}/cv_ig`);
+  });
+
+  /*
+   * There is no test here that the summary opens the group from the keyboard, and that is a measured
+   * absence rather than an oversight: jsdom does not implement `details` toggling at all. Probed both
+   * ways — a click at the summary and Enter on it leave `open` unset — so a test of either would be
+   * asserting the environment, and would pass or fail for reasons that have nothing to do with this
+   * markup. What is ours to get right is which state the group is rendered in, and that is below.
+   */
+  it("opens the disclosure itself when a filter inside it is set, so a narrowed list is not unexplained", () => {
+    render(
+      <ConversationList t={t} rows={mixedChannels} view={{ leadStage: "QUALIFIED" }} basePath={BASE} accounts={ACCOUNTS} />,
+    );
+
+    // A list showing three of thirty conversations with the reason folded away reads as a broken list.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(true);
+  });
+
+  it("leaves the disclosure closed when nothing inside it is set", () => {
+    render(<ConversationList t={t} rows={mixedChannels} view={{ filter: "mine" }} basePath={BASE} accounts={ACCOUNTS} />);
+
+    // The control above is the other half: without it, a disclosure hard-coded open would satisfy that
+    // one and this suite would never notice that the fold had stopped folding.
+    expect(screen.getByText(text("inbox.refine")).closest("details")?.hasAttribute("open")).toBe(false);
   });
 
   it("gives the search box a real label rather than only a placeholder", () => {

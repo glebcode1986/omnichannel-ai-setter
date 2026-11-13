@@ -12,6 +12,7 @@ import Link from "next/link";
 import { REASON_CODES } from "@omnichannel/domain";
 
 import { ReviewCard } from "@/ui/review/review-card";
+import { Select } from "@/ui/select";
 import { OutcomeNotice } from "@/ui/outcome-notice";
 import { approveDraftAction, claimDraftAction, dismissDraftAction, editAndSendAction } from "@/server/review-actions";
 import { loadReviewScreen } from "@/server/review-page";
@@ -51,14 +52,12 @@ export default async function ReviewPage({
       <form action={reviewPath} method="get" className="inbox-search" role="search">
         <div className="field">
           <label htmlFor="review-reason">{t.t("review.filterReason")}</label>
-          <select id="review-reason" name="reason" defaultValue={view.reasonCode ?? ""}>
-            <option value="">{t.t("review.allReasons")}</option>
-            {REASON_CODES.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </select>
+          <Select
+            id="review-reason"
+            name="reason"
+            value={view.reasonCode ?? ""}
+            options={[{ value: "", label: t.t("review.allReasons") }, ...REASON_CODES.map((code) => ({ value: code, label: code }))]}
+          />
         </div>
         {view.view === undefined ? undefined : <input type="hidden" name="view" value={view.view} />}
         <button className="button" type="submit">

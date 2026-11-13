@@ -269,7 +269,14 @@ function declarationsFor(selector: string, within: string = css): string {
  * one outside a field costs nothing. Every filter bar here has at least one.
  */
 function visibleControls(text: string): number {
-  return [...text.matchAll(/<(?:input|select|textarea)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"')).length;
+  const native = [...text.matchAll(/<(?:input|select|textarea)\b[^>]*>/gu)].filter((found) => !found[0].includes('type="hidden"'));
+  // The product's own select counts as one, because that is what it is: `<Select>` renders a wrapper with
+  // a button and a hidden input, which is a single grid item in the field exactly as a native control is.
+  // This scan reads source text, so a component is invisible to it unless named — and a field holding one
+  // was counted as holding nothing, which reads as the pairing being broken when it is the gate that
+  // cannot see. Named rather than matched loosely: an arbitrary `<Capitalised …/>` is not a control.
+  const product = [...text.matchAll(/<Select\b/gu)];
+  return native.length + product.length;
 }
 
 /** The bodies of the `field` wrappers in one form, read to their matching closing tag. */
@@ -639,6 +646,16 @@ describe("the supported widths", () => {
       const outside = visibleControls(form) - inside;
       expect(outside, "a control outside a field is a column of its own again").toBe(0);
     }
+
+    // The counter still refuses the shapes it was written for. Without these the clause above could be
+    // widened to anything and every assertion in this test would keep passing.
+    expect(visibleControls('<div className="field"><label htmlFor="a">A</label></div>')).toBe(0);
+    expect(visibleControls('<Select id="a" name="a" />')).toBe(1);
+    expect(visibleControls('<Select id="a" /><input type="text" />')).toBe(2);
+    expect(visibleControls('<input type="hidden" name="filter" value="mine" />')).toBe(0);
+    // A component that is not the select is not a control, however capitalised.
+    expect(visibleControls('<SelectionSummary />')).toBe(0);
+    expect(visibleControls('<OutcomeNotice t={t} />')).toBe(0);
   });
 
   it("gives every row that cannot wrap a way out", () => {
